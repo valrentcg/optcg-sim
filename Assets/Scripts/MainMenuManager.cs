@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Unity.Services.Multiplayer;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
@@ -47,7 +48,7 @@ public class MainMenuManager : MonoBehaviour
         new MenuMode { Id = "soloAi",      Parent = "SOLO PLAY",   Label = "Versus A.I.",   Status = ModeStatus.Dev,   Launch = "START MATCH"   },
         new MenuMode { Id = "ranked",      Parent = "MULTIPLAYER", Label = "Ranked Match",  Status = ModeStatus.Soon,  Launch = "FIND MATCH"    },
         new MenuMode { Id = "casual",      Parent = "MULTIPLAYER", Label = "Casual Match",  Status = ModeStatus.Soon,  Launch = "FIND MATCH"    },
-        new MenuMode { Id = "privateRoom", Parent = "MULTIPLAYER", Label = "Private Room",  Status = ModeStatus.Soon,  Launch = "CREATE ROOM"   },
+        new MenuMode { Id = "privateRoom", Parent = "MULTIPLAYER", Label = "Private Room",  Status = ModeStatus.Ready, Launch = "CREATE ROOM"   },
     };
 
     // ── Runtime state ──────────────────────────────────────────────────────────
@@ -63,6 +64,23 @@ public class MainMenuManager : MonoBehaviour
     // once both are valid (recomputed fresh every BuildLaunchBar), so it doesn't
     // need its own timer — it just flags whichever slot(s) are still empty.
     private bool enterAlert;
+
+    // When true, the stage shows the replay browser instead of the game-mode portals.
+    private bool showingReplays;
+
+    // When true, the stage shows the private-room lobby hub (create/browse/join, then
+    // the in-lobby waiting room) instead of the game-mode portals.
+    private bool showingLobbyHub;
+    private string lobbyNameInput = "";
+    private bool lobbyIsPrivate = true;
+    private string joinCodeInput = "";
+    private List<ISessionInfo> browsedLobbies = new List<ISessionInfo>();
+    private bool lobbyBusy;
+    private string lobbyError;
+    // Tracks which session we're currently subscribed to for live updates (player joins/
+    // leaves, etc.), so the waiting room repaints itself instead of going stale until the
+    // local player happens to click something else.
+    private ISession subscribedLobbySession;
 
     private Canvas   canvas;
     private RectTransform menuRoot;
@@ -383,7 +401,553 @@ public class MainMenuManager : MonoBehaviour
         // ── Stage (fills rest, 20px gap from rail) ──────────────────────────
         var stage = PanelObject("Stage", body, new Color(0, 0, 0, 0));
         Stretch(stage, Vector2.zero, Vector2.one, new Vector2(254f, 0f), Vector2.zero);
-        BuildStage(stage);
+        if (showingReplays) BuildReplayStage(stage);
+        else if (showingLobbyHub) BuildLobbyStage(stage);
+        else BuildStage(stage);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Replay browser (stage swapped in for "Replays" nav row)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private void BuildReplayStage(RectTransform stage)
+    {
+        const float titleH = 60f;
+
+        var titleRow = PanelObject("Replay Title Row", stage, new Color(0, 0, 0, 0));
+        Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
+
+        var titleText = TextObject("Title", titleRow, "Match History", 26, Ink, TextAnchor.MiddleLeft);
+        titleText.fontStyle = FontStyle.Bold;
+        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
+
+        var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
+        Stretch(backHolder, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        backHlg.childAlignment = TextAnchor.MiddleRight;
+        backHlg.childControlWidth = false;
+        backHlg.childControlHeight = false;
+        AddButton(backHolder, "< Back", () => { showingReplays = false; RenderMenu(); }, true, false);
+
+        var listArea = PanelObject("Replay List", stage, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
+
+        var replays = ReplayStore.ListAll();
+        if (replays.Count == 0)
+        {
+            var empty = TextObject("Empty", listArea, "No match history yet — finish a match to save one.",
+                13, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f),
+                new Vector2(4f, -34f), Vector2.zero);
+            return;
+        }
+
+        const float rowH = 56f, gap = 8f;
+        int shown = Mathf.Min(replays.Count, 10);
+        for (int i = 0; i < shown; i++)
+        {
+            var row = PanelObject("Replay Row " + i, listArea, new Color32(8, 16, 24, 153));
+            row.anchorMin = new Vector2(0f, 1f);
+            row.anchorMax = new Vector2(1f, 1f);
+            row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(0f, rowH);
+            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
+            BuildReplayRow(row, replays[i]);
+        }
+    }
+
+    private void BuildReplayRow(RectTransform row, ReplayRecord r)
+    {
+        Round(row);
+        AddRoundedCardBorder(row, MenuB, 1f);
+
+        string south = string.IsNullOrEmpty(r.SouthDeckName) ? "South" : r.SouthDeckName;
+        string north = string.IsNullOrEmpty(r.NorthDeckName) ? "North" : r.NorthDeckName;
+        var title = TextObject("Matchup", row, $"{south}  vs  {north}", 14, Ink, TextAnchor.UpperLeft);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.6f, 1f),
+            new Vector2(14f, 0f), new Vector2(-4f, -6f));
+
+        string when = FormatWhen(r.SavedAtIso);
+        string sub = $"{r.TurnCount} turns"
+            + (!string.IsNullOrEmpty(r.WinnerName) ? $"  ·  {r.WinnerName} won" : "")
+            + (!string.IsNullOrEmpty(when) ? $"  ·  {when}" : "");
+        var subText = TextObject("Sub", row, sub, 11, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(subText.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 0.5f),
+            new Vector2(14f, 6f), new Vector2(-4f, 0f));
+
+        var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
+        Stretch(btnHolder, new Vector2(0.6f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
+        var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 8f;
+        hlg.childAlignment = TextAnchor.MiddleRight;
+        hlg.childControlWidth = false;
+        hlg.childControlHeight = false;
+        AddButton(btnHolder, "Delete", () => { ReplayStore.Delete(r.Id); RenderMenu(); }, true, false);
+        AddButton(btnHolder, "Watch", () => WatchReplay(r), true, false);
+    }
+
+    private string FormatWhen(string iso)
+    {
+        if (DateTime.TryParse(iso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            return dt.ToLocalTime().ToString("MMM d, HH:mm");
+        return "";
+    }
+
+    private void WatchReplay(ReplayRecord r)
+    {
+        CancelInvoke();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        GameManager.PendingReplayLoad = r;
+        GameManager.EnsureBoard();
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Private-room lobby hub (stage swapped in for "Private Room" mode).
+    // Session/data layer lives in LobbyManager.cs (Unity Gaming Services Sessions API).
+    // NOTE: this wires up lobby hosting/browsing/joining only — actual in-match command
+    // sync between the two connected players is a separate follow-up (INetworkHandler).
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private void OpenLobbyHub()
+    {
+        showingLobbyHub = true;
+        lobbyError = null;
+        RenderMenu();
+        if (LobbyManager.CurrentSession == null) RefreshLobbyBrowser();
+    }
+
+    private void CloseLobbyHub()
+    {
+        showingLobbyHub = false;
+        lobbyError = null;
+        RenderMenu();
+    }
+
+    private void BuildLobbyStage(RectTransform stage)
+    {
+        if (LobbyManager.CurrentSession != null)
+            BuildLobbyWaitingRoom(stage, LobbyManager.CurrentSession);
+        else
+            BuildLobbyHub(stage);
+    }
+
+    private void BuildLobbyHub(RectTransform stage)
+    {
+        const float titleH = 60f;
+
+        var titleRow = PanelObject("Lobby Title Row", stage, new Color(0, 0, 0, 0));
+        Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
+
+        var titleText = TextObject("Title", titleRow, "Private Room", 26, Ink, TextAnchor.MiddleLeft);
+        titleText.fontStyle = FontStyle.Bold;
+        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
+
+        var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
+        Stretch(backHolder, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        backHlg.childAlignment = TextAnchor.MiddleRight;
+        backHlg.childControlWidth = false;
+        backHlg.childControlHeight = false;
+        AddButton(backHolder, "< Back", CloseLobbyHub, true, false);
+
+        var body = PanelObject("Lobby Body", stage, new Color(0, 0, 0, 0));
+        Stretch(body, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
+
+        // Left half: create a lobby.
+        var createPanel = PanelObject("Create Panel", body, new Color32(8, 16, 24, 153));
+        Stretch(createPanel, Vector2.zero, new Vector2(0.48f, 1f), Vector2.zero, Vector2.zero);
+        Round(createPanel);
+        AddRoundedCardBorder(createPanel, MenuB, 1f);
+        BuildCreateLobbyPanel(createPanel);
+
+        // Right half: join a lobby (by code, or browse public ones).
+        var joinPanel = PanelObject("Join Panel", body, new Color32(8, 16, 24, 153));
+        Stretch(joinPanel, new Vector2(0.52f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        Round(joinPanel);
+        AddRoundedCardBorder(joinPanel, MenuB, 1f);
+        BuildJoinLobbyPanel(joinPanel);
+    }
+
+    private void BuildCreateLobbyPanel(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "HOST A LOBBY", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var nameLabel = TextObject("Name Label", panel, "Lobby name", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(nameLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -62f), new Vector2(-16f, -46f));
+
+        var nameField = MakeInput(panel, "e.g. Vere's Table", lobbyNameInput,
+            s => lobbyNameInput = s, null);
+        Stretch(nameField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -98f), new Vector2(-16f, -66f));
+
+        var visLabel = TextObject("Vis Label", panel, "Visibility", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(visLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -128f), new Vector2(-16f, -112f));
+
+        var visRow = PanelObject("Vis Row", panel, new Color(0, 0, 0, 0));
+        Stretch(visRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -166f), new Vector2(-16f, -132f));
+        var visHlg = visRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        visHlg.spacing = 8f;
+        visHlg.childAlignment = TextAnchor.MiddleLeft;
+        visHlg.childControlWidth = false;
+        visHlg.childControlHeight = false;
+        BuildVisibilityOption(visRow, "Private", true);
+        BuildVisibilityOption(visRow, "Public", false);
+
+        if (!string.IsNullOrEmpty(lobbyError))
+        {
+            var err = TextObject("Error", panel, lobbyError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 92f));
+        }
+
+        var createHolder = PanelObject("Create Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(createHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
+        AddButton(createHolder, lobbyBusy ? "Working..." : "Create Lobby", CreateLobbyClicked, !lobbyBusy, false);
+    }
+
+    private void BuildVisibilityOption(RectTransform parent, string label, bool isPrivateOption)
+    {
+        bool selected = lobbyIsPrivate == isPrivateOption;
+        var tile = PanelObject(label + " Option", parent,
+            selected ? new Color(Accent.r, Accent.g, Accent.b, 0.16f) : new Color32(20, 30, 42, 200));
+        SetPreferred(tile, new Vector2(110, 30));
+        tile.sizeDelta = new Vector2(110, 30);
+        Round(tile);
+        AddRoundedCardBorder(tile, selected ? Accent : MenuB, selected ? 1.6f : 1f);
+        var t = TextObject("Text", tile, label, 11, selected ? Ink : Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = tile.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { lobbyIsPrivate = isPrivateOption; RenderMenu(); });
+    }
+
+    private void BuildJoinLobbyPanel(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "JOIN A LOBBY", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var codeField = MakeInput(panel, "Enter join code", joinCodeInput, s => joinCodeInput = s, null);
+        Stretch(codeField, new Vector2(0f, 1f), new Vector2(0.68f, 1f), new Vector2(16f, -70f), new Vector2(0f, -46f));
+
+        var joinCodeHolder = PanelObject("Join Code Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(joinCodeHolder, new Vector2(0.68f, 1f), new Vector2(1f, 1f), new Vector2(0f, -70f), new Vector2(-16f, -46f));
+        AddButton(joinCodeHolder, "Join", JoinLobbyByCodeClicked, !lobbyBusy, false);
+
+        var listHeader = PanelObject("List Header Row", panel, new Color(0, 0, 0, 0));
+        Stretch(listHeader, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -102f), new Vector2(-16f, -78f));
+        var listHeaderText = TextObject("List Header", listHeader, "PUBLIC LOBBIES", 11, Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(listHeaderText.rectTransform, Vector2.zero, new Vector2(0.7f, 1f), Vector2.zero, Vector2.zero);
+        var refreshHolder = PanelObject("Refresh Holder", listHeader, new Color(0, 0, 0, 0));
+        Stretch(refreshHolder, new Vector2(0.7f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var refreshHlg = refreshHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        refreshHlg.childAlignment = TextAnchor.MiddleRight;
+        refreshHlg.childControlWidth = false;
+        refreshHlg.childControlHeight = false;
+        AddButton(refreshHolder, lobbyBusy ? "..." : "Refresh", RefreshLobbyBrowser, !lobbyBusy, false);
+
+        var listArea = PanelObject("List Area", panel, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -108f));
+
+        if (browsedLobbies.Count == 0)
+        {
+            var empty = TextObject("Empty", listArea,
+                lobbyBusy ? "Searching..." : "No public lobbies right now.",
+                12, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, new Vector2(0f, -24f));
+            return;
+        }
+
+        const float rowH = 48f, gap = 6f;
+        int shown = Mathf.Min(browsedLobbies.Count, 8);
+        for (int i = 0; i < shown; i++)
+        {
+            var info = browsedLobbies[i];
+            var row = PanelObject("Lobby Row " + i, listArea, new Color32(14, 22, 32, 180));
+            row.anchorMin = new Vector2(0f, 1f);
+            row.anchorMax = new Vector2(1f, 1f);
+            row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(0f, rowH);
+            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
+            Round(row);
+
+            var name = TextObject("Name", row, string.IsNullOrEmpty(info.Name) ? "Untitled Lobby" : info.Name,
+                13, Ink, TextAnchor.UpperLeft);
+            name.fontStyle = FontStyle.Bold;
+            Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.62f, 1f), new Vector2(10f, 0f), new Vector2(-4f, -4f));
+
+            int playerCount = Mathf.Max(0, info.MaxPlayers - info.AvailableSlots);
+            var sub = TextObject("Sub", row, $"{LobbyManager.GetOwnerName(info)}  ·  {playerCount}/{info.MaxPlayers}",
+                10, Muted, TextAnchor.LowerLeft, monoFont);
+            Stretch(sub.rectTransform, new Vector2(0f, 0f), new Vector2(0.62f, 0.5f), new Vector2(10f, 4f), new Vector2(-4f, 0f));
+
+            bool full = info.AvailableSlots <= 0;
+            var joinHolder = PanelObject("Join Holder", row, new Color(0, 0, 0, 0));
+            Stretch(joinHolder, new Vector2(0.62f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-8f, 0f));
+            var jhlg = joinHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+            jhlg.childAlignment = TextAnchor.MiddleRight;
+            jhlg.childControlWidth = false;
+            jhlg.childControlHeight = false;
+            AddButton(joinHolder, full ? "Full" : "Join", () => JoinLobbyClicked(info), !full && !lobbyBusy, false);
+        }
+    }
+
+    private void BuildLobbyWaitingRoom(RectTransform stage, ISession session)
+    {
+        const float titleH = 60f;
+
+        var titleRow = PanelObject("Waiting Title Row", stage, new Color(0, 0, 0, 0));
+        Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
+        var titleText = TextObject("Title", titleRow,
+            string.IsNullOrEmpty(session.Name) ? "Lobby" : session.Name, 26, Ink, TextAnchor.MiddleLeft);
+        titleText.fontStyle = FontStyle.Bold;
+        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
+
+        var panel = PanelObject("Waiting Panel", stage, new Color32(8, 16, 24, 153));
+        Stretch(panel, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
+        Round(panel);
+        AddRoundedCardBorder(panel, MenuB, 1f);
+
+        string vis = session.IsPrivate ? "Private" : "Public";
+        string info = $"{vis}  ·  Owner: {LobbyManager.GetOwnerName(session)}  ·  {session.PlayerCount}/{session.MaxPlayers} players";
+        var infoText = TextObject("Info", panel, info, 13, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(infoText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -40f), new Vector2(-16f, -16f));
+
+        float y = -70f;
+        // Join codes work for any session regardless of public/private - private just
+        // means it won't also show up in the public browse list.
+        if (session.IsHost && !string.IsNullOrEmpty(session.Code))
+        {
+            var codeLabel = TextObject("Code Label", panel, $"Join code: {session.Code}", 14, Accent, TextAnchor.UpperLeft, monoFont);
+            codeLabel.fontStyle = FontStyle.Bold;
+            Stretch(codeLabel.rectTransform, new Vector2(0f, 1f), new Vector2(0.7f, 1f), new Vector2(16f, y - 26f), new Vector2(-16f, y));
+
+            var copyHolder = PanelObject("Copy Holder", panel, new Color(0, 0, 0, 0));
+            Stretch(copyHolder, new Vector2(0.7f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 30f), new Vector2(-16f, y + 4f));
+            AddButton(copyHolder, "Copy Code", () => GUIUtility.systemCopyBuffer = session.Code, true, false);
+            y -= 40f;
+        }
+
+        var playersHeader = TextObject("Players Header", panel, "PLAYERS", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(playersHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 20f), new Vector2(-16f, y));
+        y -= 26f;
+        foreach (var p in session.Players)
+        {
+            string role = p.Id == session.Host ? "Host" : "Guest";
+            string who = p.Id == session.CurrentPlayer?.Id ? $"{role} (You)" : role;
+            var pText = TextObject("Player " + p.Id, panel, who, 12, Ink, TextAnchor.UpperLeft);
+            Stretch(pText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 20f), new Vector2(-16f, y));
+            y -= 24f;
+        }
+
+        bool bothPresent = session.PlayerCount >= session.MaxPlayers;
+        var noteText = TextObject("Note", panel,
+            bothPresent
+                ? "Both players are here. Live match sync isn't wired up yet — this is the next step."
+                : "Waiting for another player to join...",
+            11, Muted, TextAnchor.UpperLeft, monoFont);
+        noteText.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(noteText.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 56f), new Vector2(-16f, 96f));
+
+        var actionRow = PanelObject("Action Row", panel, new Color(0, 0, 0, 0));
+        Stretch(actionRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
+        var ahlg = actionRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        ahlg.spacing = 8f;
+        ahlg.childAlignment = TextAnchor.MiddleLeft;
+        ahlg.childControlWidth = false;
+        ahlg.childControlHeight = false;
+        AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false);
+        if (session.IsHost)
+            AddButton(actionRow, "Start Match", () => { }, false, false);
+    }
+
+    // ISession.Changed fires on any update to the session (players joining/leaving,
+    // properties changing, etc.) - both the host's and each guest's local ISession object
+    // raise it independently once their client syncs the update, so this is what keeps
+    // the waiting room live instead of frozen at whatever it looked like when first drawn.
+    private void SubscribeToSessionEvents(ISession session)
+    {
+        if (session == null || subscribedLobbySession == session) return;
+        UnsubscribeFromSessionEvents();
+        subscribedLobbySession = session;
+        session.Changed += OnLobbySessionChanged;
+        session.Deleted += OnLobbySessionChanged;
+    }
+
+    private void UnsubscribeFromSessionEvents()
+    {
+        if (subscribedLobbySession == null) return;
+        subscribedLobbySession.Changed -= OnLobbySessionChanged;
+        subscribedLobbySession.Deleted -= OnLobbySessionChanged;
+        subscribedLobbySession = null;
+    }
+
+    private void OnLobbySessionChanged()
+    {
+        if (this == null || menuRoot == null) return;
+        RenderMenu();
+    }
+
+    private void OnDestroy()
+    {
+        UnsubscribeFromSessionEvents();
+    }
+
+    private async void RefreshLobbyBrowser()
+    {
+        lobbyBusy = true;
+        lobbyError = null;
+        RenderMenu();
+        try
+        {
+            var results = await LobbyManager.BrowsePublicLobbiesAsync();
+            if (this == null || menuRoot == null) return;
+            browsedLobbies = results;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            lobbyError = $"Couldn't load lobbies: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                lobbyBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void CreateLobbyClicked()
+    {
+        lobbyBusy = true;
+        lobbyError = null;
+        RenderMenu();
+        try
+        {
+            var session = await LobbyManager.CreateLobbyAsync(lobbyNameInput, lobbyIsPrivate, DefaultPlayerName);
+            if (this == null || menuRoot == null) return;
+            SubscribeToSessionEvents(session);
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            lobbyError = $"Couldn't create lobby: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                lobbyBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void JoinLobbyByCodeClicked()
+    {
+        if (string.IsNullOrWhiteSpace(joinCodeInput)) { lobbyError = "Enter a join code first."; RenderMenu(); return; }
+        lobbyBusy = true;
+        lobbyError = null;
+        RenderMenu();
+        try
+        {
+            var session = await LobbyManager.JoinByCodeAsync(joinCodeInput);
+            if (this == null || menuRoot == null) return;
+            SubscribeToSessionEvents(session);
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            lobbyError = $"Couldn't join lobby: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                lobbyBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void JoinLobbyClicked(ISessionInfo info)
+    {
+        lobbyBusy = true;
+        lobbyError = null;
+        RenderMenu();
+        try
+        {
+            var session = await LobbyManager.JoinByIdAsync(info.Id);
+            if (this == null || menuRoot == null) return;
+            SubscribeToSessionEvents(session);
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            lobbyError = $"Couldn't join lobby: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                lobbyBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void LeaveLobbyClicked()
+    {
+        lobbyBusy = true;
+        RenderMenu();
+        try
+        {
+            UnsubscribeFromSessionEvents();
+            await LobbyManager.LeaveCurrentAsync();
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                lobbyBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    // Legacy uGUI InputField with placeholder, themed to match this file's palette
+    // (ported from DeckBuilderManager.MakeInput).
+    private RectTransform MakeInput(RectTransform parent, string placeholder, string initial,
+        UnityEngine.Events.UnityAction<string> onChanged, UnityEngine.Events.UnityAction<string> onEnd)
+    {
+        var holder = PanelObject("Input", parent, new Color32(8, 16, 26, 255));
+        Round(holder);
+        AddRoundedCardBorder(holder, MenuB, 1f);
+
+        var textComp = TextObject("Text", holder, "", 13, Ink, TextAnchor.MiddleLeft);
+        Stretch(textComp.rectTransform, Vector2.zero, Vector2.one, new Vector2(12f, 0f), new Vector2(-10f, 0f));
+        textComp.supportRichText = false;
+
+        var ph = TextObject("Placeholder", holder, placeholder, 13,
+            new Color(Muted.r, Muted.g, Muted.b, 0.7f), TextAnchor.MiddleLeft);
+        Stretch(ph.rectTransform, Vector2.zero, Vector2.one, new Vector2(12f, 0f), new Vector2(-10f, 0f));
+        ph.fontStyle = FontStyle.Italic;
+
+        var field = holder.gameObject.AddComponent<InputField>();
+        field.textComponent = textComp;
+        field.placeholder = ph;
+        field.text = initial ?? "";
+        field.lineType = InputField.LineType.SingleLine;
+        field.caretColor = Accent;
+        field.customCaretColor = true;
+        if (onChanged != null) field.onValueChanged.AddListener(s => onChanged(s));
+        if (onEnd != null) field.onEndEdit.AddListener(s => onEnd(s));
+        return holder;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -410,19 +974,21 @@ public class MainMenuManager : MonoBehaviour
         hLE.preferredHeight = 22f;
         hLE.minHeight = 22f;
 
-        // Four nav rows
+        // Five nav rows
         var rows = new (string title, string subtitle, string tag, bool active)[]
         {
-            ("Play",     "Game modes",          null,       true),
+            ("Play",     "Game modes",          null,       !showingReplays),
             ("Decks",    "Build & edit",        null,       false),
+            ("Match History", "Watch past matches", null,   showingReplays),
             ("Friends",  "Crew & invites",      "3 online", false),
             ("Settings", "Preferences & audio", null,       false),
         };
 
         UnityEngine.Events.UnityAction[] actions =
         {
-            () => { /* Play — current view */ },
+            () => { showingReplays = false; RenderMenu(); },
             () => OpenDeckBuilder(),
+            () => { showingReplays = true; RenderMenu(); },
             () => { /* TODO: open friends */ },
             () => { /* TODO: open settings */ },
         };
@@ -675,7 +1241,7 @@ public class MainMenuManager : MonoBehaviour
 
         for (int i = 0; i < duelSubs.Length; i++)
             BuildMultiSubTile(subRow, duelSubs[i].label, duelSubs[i].modeId,
-                ModeStatus.Soon, i, duelSubs.Length, 9f);
+                FindMode(duelSubs[i].modeId).Status, i, duelSubs.Length, 9f);
     }
 
     // ── Solo portal ───────────────────────────────────────────────────────────
@@ -995,7 +1561,9 @@ public class MainMenuManager : MonoBehaviour
             {
                 if (mode.Id == "soloSelf")
                     EnterVersusSelf();
-                // TODO: soloAi, ranked, casual, privateRoom when implemented
+                else if (mode.Id == "privateRoom")
+                    OpenLobbyHub();
+                // TODO: soloAi, ranked, casual when implemented
             });
         }
     }

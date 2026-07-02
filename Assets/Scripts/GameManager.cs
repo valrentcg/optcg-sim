@@ -50,6 +50,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private static readonly Color ZoneFaintFill = new Color32(120, 180, 230, 11); // rgba(120,180,230,.045) - small zones
 
     private GameState state;
+    private MatchConfig currentMatchConfig;
+    private bool replaySaved;
+    private bool isReplayMode;
+    private ReplayRecord loadedReplay;
+    private int replayCursor;
+    // Set by MainMenuManager's replay browser before EnsureBoard(); when populated,
+    // Start() enters read-only replay playback instead of starting a new match.
+    public static ReplayRecord PendingReplayLoad;
     private string selectedId;
     private string selectedSeat;
     private string selectedDonSeat;
@@ -171,7 +179,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void Start()
     {
         LoadOfficialCardLibrary();
-        NewMatch();
+        if (PendingReplayLoad != null)
+        {
+            var record = PendingReplayLoad;
+            PendingReplayLoad = null;
+            EnterReplayMode(record);
+        }
+        else
+        {
+            NewMatch();
+        }
     }
 
     private void Update()
@@ -277,6 +294,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void NewMatch()
     {
+        isReplayMode = false;
+        loadedReplay = null;
+        replaySaved = false;
         var config = new MatchConfig { Seed = System.Guid.NewGuid().ToString("N") };
         if (!string.IsNullOrEmpty(PendingSouthDeckId) && !string.IsNullOrEmpty(PendingNorthDeckId))
         {
@@ -288,6 +308,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 config.NorthDeckDef = northDef;
             }
         }
+        currentMatchConfig = config;
         state = GameEngine.CreateMatch(config);
         selectedId = null;
         selectedSeat = null;
@@ -298,9 +319,63 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void Dispatch(GameCommand command)
     {
+        if (isReplayMode) return; // read-only playback: ignore stray interactive input
         state = GameEngine.ApplyCommand(state, command);
         NormalizeSelection();
+        if (state.Status == "finished" && !replaySaved)
+        {
+            replaySaved = true;
+            ReplayStore.Save(state, currentMatchConfig);
+        }
         Render();
+    }
+
+    // ── Replay playback ──────────────────────────────────────────────────────
+    // A finished match is fully reproducible from {Seed, deck ids, CommandHistory}
+    // (see ReplayStore.cs), so "scrubbing" to any point just resimulates from a
+    // fresh CreateMatch up to that command index through the same ApplyCommand
+    // path live play uses — no separate undo/snapshot machinery needed.
+
+    private void EnterReplayMode(ReplayRecord record)
+    {
+        isReplayMode = true;
+        loadedReplay = record;
+        var config = new MatchConfig { Seed = record.Seed };
+        if (!string.IsNullOrEmpty(record.SouthDeckId))
+        {
+            var def = BuildDeckDef(DeckStore.Get(record.SouthDeckId));
+            if (def != null) config.SouthDeckDef = def;
+        }
+        if (!string.IsNullOrEmpty(record.NorthDeckId))
+        {
+            var def = BuildDeckDef(DeckStore.Get(record.NorthDeckId));
+            if (def != null) config.NorthDeckDef = def;
+        }
+        currentMatchConfig = config;
+        previewLockCard = null;
+        ClearDonSelection(false);
+        ResimulateReplayTo(record.CommandHistory.Count);
+    }
+
+    private void ResimulateReplayTo(int index)
+    {
+        if (loadedReplay == null) return;
+        replayCursor = Mathf.Clamp(index, 0, loadedReplay.CommandHistory.Count);
+        state = GameEngine.CreateMatch(currentMatchConfig);
+        for (int i = 0; i < replayCursor; i++)
+            state = GameEngine.ApplyCommand(state, loadedReplay.CommandHistory[i].ToCommand());
+        selectedId = null;
+        selectedSeat = null;
+        Render();
+    }
+
+    private void ExitReplayToMenu()
+    {
+        isReplayMode = false;
+        loadedReplay = null;
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+        MainMenuManager.EnsureMenu();
     }
 
     private void NormalizeSelection()
@@ -835,6 +910,44 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         DrawResolvedTargetingArrows();
         DrawSidePanel();
         DrawLeftPanel();
+        if (isReplayMode) DrawReplayBar();
+    }
+
+    // Thin control strip across the top of the board, only shown during replay playback.
+    private void DrawReplayBar()
+    {
+        var bar = PanelObject("Replay Bar", boardRoot, new Color32(8, 14, 21, 220));
+        bar.anchorMin = new Vector2(0f, 1f);
+        bar.anchorMax = new Vector2(1f, 1f);
+        bar.pivot = new Vector2(0.5f, 1f);
+        bar.sizeDelta = new Vector2(0f, 40f);
+        bar.anchoredPosition = Vector2.zero;
+
+        int total = loadedReplay?.CommandHistory.Count ?? 0;
+        var label = TextObject("Replay Label", bar,
+            $"MATCH HISTORY  ·  step {replayCursor}/{total}  ·  turn {state.TurnNumber}",
+            12, Ink, TextAnchor.MiddleLeft, monoFont);
+        Stretch(label.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 1f), new Vector2(16f, 0f), Vector2.zero);
+
+        var controls = PanelObject("Replay Controls", bar, new Color(0, 0, 0, 0));
+        controls.anchorMin = new Vector2(1f, 0f);
+        controls.anchorMax = new Vector2(1f, 1f);
+        controls.pivot = new Vector2(1f, 0.5f);
+        controls.sizeDelta = new Vector2(420f, 0f);
+        controls.anchoredPosition = new Vector2(-12f, 0f);
+        var hlg = controls.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 8f;
+        hlg.childAlignment = TextAnchor.MiddleRight;
+        hlg.childControlWidth = false;
+        hlg.childControlHeight = false;
+        hlg.childForceExpandWidth = false;
+        hlg.childForceExpandHeight = false;
+
+        AddButton(controls, "|< Start", () => ResimulateReplayTo(0), replayCursor > 0, false);
+        AddButton(controls, "< Prev", () => ResimulateReplayTo(replayCursor - 1), replayCursor > 0, false);
+        AddButton(controls, "Next >", () => ResimulateReplayTo(replayCursor + 1), replayCursor < total, false);
+        AddButton(controls, "End >|", () => ResimulateReplayTo(total), replayCursor < total, false);
+        AddButton(controls, "Exit", () => ExitReplayToMenu(), true, false);
     }
 
     // "Look at top N cards" overlay (e.g. Jewelry Bonney) - cards pop out extremely large across
