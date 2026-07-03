@@ -14,6 +14,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using OnePieceTcg.Engine;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem.UI;
@@ -353,9 +354,14 @@ public class DeckBuilderManager : MonoBehaviour
     };
 
     // ── State ─────────────────────────────────────────────────────────────────
-    private enum View { Library, Editor, Select }
+    private enum View { Library, Editor, Select, Starter }
     private View view = View.Library;
     private static bool _openAsSelect = false;
+    // Starter-deck browser (ST01, ST02, ...): same leader/hex/decklist format as the
+    // Select screen, but the hexes are a fixed, non-draggable, read-order roster instead
+    // of the player's own movable deck collection.
+    private string selectedStarterId;
+    private readonly Dictionary<string, RectTransform> starterHexCells = new Dictionary<string, RectTransform>();
 
     private DeckData editing;          // deck currently open in the editor
     private string selectedDeckId;     // deck shown in the Select view
@@ -888,6 +894,7 @@ public class DeckBuilderManager : MonoBehaviour
 
         if      (view == View.Library) RenderLibrary();
         else if (view == View.Select)  RenderSelect();
+        else if (view == View.Starter) RenderStarter();
         else                           RenderEditor();
 
         Canvas.ForceUpdateCanvases();
@@ -1147,6 +1154,22 @@ public class DeckBuilderManager : MonoBehaviour
             });
         }
 
+        // STARTER DECKS (top-right, just left of + NEW DECK)
+        var starterBtn = Panel("Starter Decks", root, new Color32(24, 38, 52, 200));
+        starterBtn.anchorMin = starterBtn.anchorMax = new Vector2(1f, 1f);
+        starterBtn.pivot = new Vector2(1f, 1f);
+        starterBtn.sizeDelta = new Vector2(150f, 38f);
+        starterBtn.anchoredPosition = new Vector2(-24f - 170f - 10f, -13f);
+        Round(starterBtn);
+        AddBorder(starterBtn, MenuB, 1f);
+        var sbt = Text_("t", starterBtn, "STARTER DECKS", 12, Ink, TextAnchor.MiddleCenter, monoFont);
+        sbt.fontStyle = FontStyle.Bold;
+        Stretch(sbt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        starterBtn.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+        {
+            view = View.Starter; Render();
+        });
+
         // CLEAR ALL DECKS (bottom-left, out of the way). Unarmed: a single muted
         // button. Armed: transforms into a dual CLEAR ALL (commit) / CANCEL bar.
         if (!pendingClearAll)
@@ -1244,6 +1267,468 @@ public class DeckBuilderManager : MonoBehaviour
         BuildSelectLeaderCard(leftPanel, selected);
         BuildSelectHexRoster(centerPanel, allDecks);
         BuildSelectDecklist(rightPanel, selected);
+    }
+
+    // ════════════════════════════════════════════════════════════════════════
+    // Starter deck browser (ST01, ST02, ...). Same leader-left / hex-middle /
+    // decklist-right format as the Select screen, but sourced from
+    // CardData.StarterDecks (fixed, not user-owned) instead of DeckStore, so the
+    // hexes are read-order and non-draggable, and the leader panel offers a
+    // "copy to my decks" action instead of edit/delete/favorite.
+    // ════════════════════════════════════════════════════════════════════════
+
+    private DeckData FromStarterDef(DeckDef def)
+    {
+        if (def == null) return null;
+        return new DeckData
+        {
+            id = def.Id,
+            name = def.Name,
+            leaderId = def.Leader,
+            cards = def.List?.Select(t => new DeckEntry { id = t.cardId, count = t.qty }).ToList()
+                ?? new List<DeckEntry>(),
+        };
+    }
+
+    private void RenderStarter()
+    {
+        var starterDecks = CardData.StarterDecks.Values
+            .OrderBy(d => d.Id, StringComparer.OrdinalIgnoreCase).ToList();
+
+        if (string.IsNullOrEmpty(selectedStarterId) || !starterDecks.Any(d => d.Id == selectedStarterId))
+            selectedStarterId = starterDecks.Count > 0 ? starterDecks[0].Id : null;
+
+        TopBar("STARTER DECKS", $"{starterDecks.Count} official starter deck(s)  ·  browse & copy",
+            () => { view = View.Select; Render(); });
+
+        var body = Panel("Body", root, new Color(0, 0, 0, 0));
+        Stretch(body, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -64f));
+        body.GetComponent<Image>().raycastTarget = false;
+
+        const float LeftW = 470f, RightW = 480f;
+
+        var leftPanel = Panel("Left", body, new Color(0, 0, 0, 0));
+        Stretch(leftPanel, Vector2.zero, new Vector2(0f, 1f), Vector2.zero, new Vector2(LeftW, 0f));
+        leftPanel.GetComponent<Image>().raycastTarget = false;
+        var ldiv = Panel("LDiv", leftPanel, new Color(120f / 255f, 180f / 255f, 220f / 255f, 0.10f));
+        ldiv.anchorMin = new Vector2(1f, 0.05f); ldiv.anchorMax = new Vector2(1f, 0.95f);
+        ldiv.pivot = new Vector2(1f, 0.5f); ldiv.sizeDelta = new Vector2(1f, 0f);
+        ldiv.GetComponent<Image>().raycastTarget = false;
+
+        var rightPanel = Panel("Right", body, new Color(0, 0, 0, 0));
+        Stretch(rightPanel, new Vector2(1f, 0f), Vector2.one, new Vector2(-RightW, 0f), Vector2.zero);
+        rightPanel.GetComponent<Image>().raycastTarget = false;
+        var rdiv = Panel("RDiv", rightPanel, new Color(120f / 255f, 180f / 255f, 220f / 255f, 0.10f));
+        rdiv.anchorMin = new Vector2(0f, 0.05f); rdiv.anchorMax = new Vector2(0f, 0.95f);
+        rdiv.pivot = new Vector2(0f, 0.5f); rdiv.sizeDelta = new Vector2(1f, 0f);
+        rdiv.GetComponent<Image>().raycastTarget = false;
+
+        var centerPanel = Panel("Center", body, new Color(0, 0, 0, 0));
+        Stretch(centerPanel, Vector2.zero, Vector2.one, new Vector2(LeftW, 0f), new Vector2(-RightW, 0f));
+        centerPanel.GetComponent<Image>().raycastTarget = false;
+
+        var selectedDef = starterDecks.FirstOrDefault(d => d.Id == selectedStarterId);
+        BuildStarterLeaderCard(leftPanel, selectedDef);
+        BuildStarterHexRoster(centerPanel, starterDecks);
+        BuildSelectDecklist(rightPanel, FromStarterDef(selectedDef));
+    }
+
+    private void BuildStarterLeaderCard(RectTransform panel, DeckDef def)
+    {
+        const float CARD_W = 300f, CARD_H = 418f, CONTENT_W = 300f;
+        const float HDR_H = 30f, NAME_H = 28f, CHIP_H = 20f, BADGE_H = 26f, BTN_H = 40f;
+        const float GAP = 14f;
+        float totalH = HDR_H + 10f + CARD_H + GAP + NAME_H + 6f + CHIP_H + 16f + BADGE_H + GAP + BTN_H;
+        float startY = totalH / 2f;
+
+        if (def == null)
+        {
+            var noSel = Text_("NoSel", panel,
+                "Select a starter deck from the roster to preview it here.",
+                13, Muted, TextAnchor.MiddleCenter);
+            noSel.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(noSel.rectTransform, new Vector2(0.1f, 0.35f), new Vector2(0.9f, 0.65f),
+                Vector2.zero, Vector2.zero);
+            return;
+        }
+
+        var deck = FromStarterDef(def);
+
+        // ── Header: deck code + name (no favorite star - not applicable here) ──
+        var nameT = Text_("DName", panel, string.IsNullOrEmpty(def.Name) ? def.Id : $"{def.Id} — {def.Name}",
+            19, Ink, TextAnchor.MiddleLeft);
+        nameT.fontStyle = FontStyle.Bold;
+        nameT.rectTransform.anchorMin = nameT.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+        nameT.rectTransform.pivot = new Vector2(0f, 1f);
+        nameT.rectTransform.sizeDelta = new Vector2(CONTENT_W, HDR_H);
+        nameT.rectTransform.anchoredPosition = new Vector2(-CONTENT_W / 2f, startY);
+
+        // ── Leader card visual ──
+        float cardY = startY - HDR_H - 10f;
+        var card = Panel("Card", panel, new Color32(4, 9, 18, 255));
+        card.anchorMin = card.anchorMax = new Vector2(0.5f, 0.5f);
+        card.pivot = new Vector2(0.5f, 1f);
+        card.sizeDelta = new Vector2(CARD_W, CARD_H);
+        card.anchoredPosition = new Vector2(0f, cardY);
+        RoundBig(card);
+
+        var lead = Card(def.Leader);
+        if (lead != null)
+        {
+            var artSp = LoadArt(def.Leader);
+            if (artSp != null)
+            {
+                var pimg = MakeRoundedCard(card, true, out _);
+                pimg.sprite = artSp;
+            }
+            else
+            {
+                if (lead.Colors().Length > 0 && ColorSwatch.TryGetValue(lead.Colors()[0], out var sc))
+                {
+                    var cg = Panel("ColorBg", card, new Color(sc.r, sc.g, sc.b, 0.18f));
+                    cg.GetComponent<Image>().raycastTarget = false;
+                    Stretch(cg, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+                }
+                var mono = Text_("Mono", card,
+                    !string.IsNullOrEmpty(lead.name) ? lead.name[0].ToString().ToUpper() : "?",
+                    72, new Color(1f, 1f, 1f, 0.10f), TextAnchor.MiddleCenter);
+                Stretch(mono.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            }
+        }
+        else
+        {
+            var nd = Text_("ND", card, "◇", 40, Muted, TextAnchor.MiddleCenter);
+            Stretch(nd.rectTransform, new Vector2(0f, 0.5f), new Vector2(1f, 0.72f), Vector2.zero, Vector2.zero);
+            var nl = Text_("NL", card, "NO LEADER", 14, Muted, TextAnchor.MiddleCenter, monoFont);
+            nl.fontStyle = FontStyle.Bold;
+            Stretch(nl.rectTransform, new Vector2(0f, 0.36f), new Vector2(1f, 0.5f), Vector2.zero, Vector2.zero);
+        }
+        AddBorder(card, new Color(120f / 255f, 180f / 255f, 220f / 255f, 0.5f), 1f);
+
+        // ── Caption under the card ──
+        float nameY = cardY - CARD_H - GAP;
+        var capName = Text_("LeadName", panel, lead != null ? lead.name : "No leader set",
+            22, lead != null ? Ink : Muted, TextAnchor.UpperCenter);
+        capName.fontStyle = FontStyle.Bold;
+        capName.horizontalOverflow = HorizontalWrapMode.Wrap;
+        capName.rectTransform.anchorMin = capName.rectTransform.anchorMax = new Vector2(0.5f, 0.5f);
+        capName.rectTransform.pivot = new Vector2(0.5f, 1f);
+        capName.rectTransform.sizeDelta = new Vector2(CONTENT_W, NAME_H);
+        capName.rectTransform.anchoredPosition = new Vector2(0f, nameY);
+
+        float chipsY = nameY - NAME_H - 6f;
+        if (lead != null)
+        {
+            var chips = Row("LeadChips", panel, 6f, TextAnchor.MiddleCenter);
+            chips.anchorMin = chips.anchorMax = new Vector2(0.5f, 0.5f);
+            chips.pivot = new Vector2(0.5f, 1f);
+            chips.sizeDelta = new Vector2(CONTENT_W, CHIP_H);
+            chips.anchoredPosition = new Vector2(0f, chipsY);
+            foreach (var col in lead.Colors()) AddColorChip(chips, col);
+            AddPreviewChip(chips, "LIFE " + lead.life, false);
+            AddPreviewChip(chips, "POWER " + lead.power, false);
+            AddNicheRuleChips(chips, def.Leader);
+        }
+
+        // ── Legal badge ──
+        float badgeY = chipsY - CHIP_H - 16f;
+        var (ok, total, _) = Validate(deck);
+        var badge = Panel("Badge", panel, ok
+            ? new Color(GoodGreen.r, GoodGreen.g, GoodGreen.b, 0.16f)
+            : new Color(RedAccent.r, RedAccent.g, RedAccent.b, 0.14f));
+        badge.anchorMin = badge.anchorMax = new Vector2(0.5f, 0.5f);
+        badge.pivot = new Vector2(0.5f, 1f);
+        badge.sizeDelta = new Vector2(210f, BADGE_H);
+        badge.anchoredPosition = new Vector2(0f, badgeY);
+        Round(badge);
+        AddBorder(badge, ok ? GoodGreen : RedAccent, 1f);
+        var badgeT = Text_("BT", badge,
+            (ok ? "● LEGAL  ·  " : "● INVALID  ·  ") + total + " / 50",
+            10, ok ? GoodGreen : RedAccent, TextAnchor.MiddleCenter, monoFont);
+        badgeT.fontStyle = FontStyle.Bold;
+        Stretch(badgeT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        // ── COPY TO MY DECKS (single button - no edit/delete/favorite; starter
+        // decks aren't user-owned data) ──
+        float btnY = badgeY - BADGE_H - GAP;
+        bool canAdd = DeckStore.CanAddNew();
+        var copyBtn = Panel("Copy", panel, canAdd ? (Color)Accent : (Color)new Color32(40, 60, 78, 220));
+        copyBtn.anchorMin = copyBtn.anchorMax = new Vector2(0.5f, 0.5f);
+        copyBtn.pivot = new Vector2(0f, 1f);
+        copyBtn.sizeDelta = new Vector2(220f, BTN_H);
+        copyBtn.anchoredPosition = new Vector2(-110f, btnY);
+        Round(copyBtn);
+        if (!canAdd) AddBorder(copyBtn, MenuB, 1f);
+        var copyT = Text_("t", copyBtn, canAdd ? "COPY TO MY DECKS" : "DECK LIMIT REACHED", 13,
+            canAdd ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
+        copyT.fontStyle = FontStyle.Bold;
+        Stretch(copyT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        if (canAdd)
+        {
+            var capturedDef = def;
+            copyBtn.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+            {
+                var copy = FromStarterDef(capturedDef);
+                copy.id = DeckStore.NewId();
+                copy.name = capturedDef.Name;
+                copy.slot = -1;
+                DeckStore.Save(copy);
+                selectedDeckId = copy.id;
+                view = View.Select;
+                Render();
+            });
+        }
+    }
+
+    // ── Center: hex roster (fixed, read-order, non-draggable) ──────────────────
+    private void BuildStarterHexRoster(RectTransform parent, List<DeckDef> starterDecks)
+    {
+        const int RINGS = 3;   // same visual size/shape as the movable deck roster
+
+        float availW = parent.rect.width, availH = parent.rect.height;
+        if (availW <= 0f) availW = 1920f - 470f - 480f;
+        if (availH <= 0f) availH = 1080f - 64f;
+        availH -= 56f;
+        float S = Mathf.Min(56f,
+            (availW - 24f) / (3f * RINGS + 2f),
+            availH / ((2f * RINGS + 1f) * Mathf.Sqrt(3f) + 0.6f));
+        hexFontScale = S / 72f;
+
+        float HW = 2f * S;
+        float HH = Mathf.Sqrt(3f) * S;
+
+        var container = new GameObject("StarterHexContainer").AddComponent<RectTransform>();
+        container.SetParent(parent, false);
+        container.anchorMin = container.anchorMax = new Vector2(0.5f, 0.5f);
+        container.pivot = new Vector2(0.5f, 0.5f);
+        container.sizeDelta = Vector2.zero;
+        container.anchoredPosition = new Vector2(0f, 18f);
+
+        var cells = new List<(int q, int r, float x, float y)>();
+        for (int q = -RINGS; q <= RINGS; q++)
+            for (int r = -RINGS; r <= RINGS; r++)
+            {
+                int s = -q - r;
+                if (Mathf.Max(Mathf.Abs(q), Mathf.Abs(r), Mathf.Abs(s)) <= RINGS)
+                {
+                    float px = 1.5f * S * q;
+                    float py = -HH * (r + q * 0.5f);
+                    cells.Add((q, r, px, py));
+                }
+            }
+
+        // Reading order: topmost hex first, then down, left to right within a row -
+        // NOT the "outward from center" order the movable deck-select grid uses. The
+        // (0,0) center cell is still detected independently below regardless of where
+        // it lands in this order, so it stays reserved for RANDOM either way.
+        cells.Sort((a, b) =>
+        {
+            int cmp = b.y.CompareTo(a.y);
+            return cmp != 0 ? cmp : a.x.CompareTo(b.x);
+        });
+
+        var hexSp = HexSprite();
+        var metalSp = HexMetalSprite();
+
+        // Static socket underlay, same as the movable grid - purely cosmetic backdrop.
+        foreach (var (sq, sr, scx, scy) in cells)
+        {
+            var sock = Panel("Socket", container, new Color(SteelDim.r, SteelDim.g, SteelDim.b, 0.55f));
+            sock.anchorMin = sock.anchorMax = new Vector2(0.5f, 0.5f);
+            sock.pivot = new Vector2(0.5f, 0.5f);
+            sock.sizeDelta = new Vector2(HW, HH);
+            sock.anchoredPosition = new Vector2(scx, scy);
+            var si = sock.GetComponent<Image>();
+            si.sprite = hexSp; si.type = Image.Type.Simple; si.raycastTarget = false;
+            var fill = Panel("Fill", sock, new Color(0x0B / 255f, 0x15 / 255f, 0x22 / 255f, 1f));
+            Stretch(fill, Vector2.zero, Vector2.one, new Vector2(2f, 2f), new Vector2(-2f, -2f));
+            var fi = fill.GetComponent<Image>();
+            fi.sprite = hexSp; fi.type = Image.Type.Simple; fi.raycastTarget = false;
+        }
+
+        starterHexCells.Clear();
+
+        int slotIdx = 0;
+        foreach (var (q, r, cx, cy) in cells)
+        {
+            bool isCenter = (q == 0 && r == 0);
+
+            var cellGo = new GameObject(isCenter ? "Cell_RANDOM" : $"StarterCell_{slotIdx}");
+            var cell = cellGo.AddComponent<RectTransform>();
+            var hitImg = cellGo.AddComponent<Image>();
+            hitImg.color = Color.clear;
+            hitImg.sprite = hexSp;
+            hitImg.alphaHitTestMinimumThreshold = 0.5f;
+            cell.SetParent(container, false);
+            cell.anchorMin = cell.anchorMax = new Vector2(0.5f, 0.5f);
+            cell.pivot = new Vector2(0.5f, 0.5f);
+            cell.sizeDelta = new Vector2(HW, HH);
+            cell.anchoredPosition = new Vector2(cx, cy);
+
+            if (isCenter)
+            {
+                BuildStarterRandomHexCell(cell, hexSp, metalSp, starterDecks);
+            }
+            else
+            {
+                DeckDef def = slotIdx < starterDecks.Count ? starterDecks[slotIdx] : null;
+                if (def != null) starterHexCells[def.Id] = cell;
+                BuildStarterDeckHexCell(cell, hexSp, metalSp, def);
+                slotIdx++;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(selectedStarterId) &&
+            starterHexCells.TryGetValue(selectedStarterId, out var selCell) && selCell != null)
+            selCell.SetAsLastSibling();
+
+        var hint = Text_("Hint", parent,
+            "click to preview  ·  ? for a random starter deck",
+            11, new Color(0x7F / 255f, 0x8C / 255f, 0xA0 / 255f, 1f),
+            TextAnchor.MiddleCenter, monoFont);
+        Stretch(hint.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(0f, 10f), new Vector2(0f, 36f));
+    }
+
+    private void BuildStarterDeckHexCell(RectTransform cell, Sprite hexSp, Sprite metalSp, DeckDef def)
+    {
+        bool isEmpty = def == null;
+        bool isSelected = def != null && def.Id == selectedStarterId;
+        const float pad = 3f;
+
+        if (isSelected)
+        {
+            cell.SetAsLastSibling();
+            AddHexSelectionGlow(cell);
+        }
+
+        var ring = Panel("Ring", cell, isEmpty ? SteelDim : Steel);
+        ring.GetComponent<Image>().sprite = metalSp;
+        ring.GetComponent<Image>().type = Image.Type.Simple;
+        ring.GetComponent<Image>().raycastTarget = false;
+        Stretch(ring, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        if (isEmpty)
+        {
+            // Unlike the movable deck grid, an unpopulated starter-deck slot isn't a
+            // "click here to create a new deck" invite - just a blank socket, no "+".
+            var innerE = Panel("InnerE", cell, new Color(0x0B / 255f, 0x15 / 255f, 0x22 / 255f, 0.9f));
+            innerE.GetComponent<Image>().sprite = hexSp;
+            innerE.GetComponent<Image>().type = Image.Type.Simple;
+            innerE.GetComponent<Image>().raycastTarget = false;
+            Stretch(innerE, Vector2.zero, Vector2.one, new Vector2(3f, 3f), new Vector2(-3f, -3f));
+            return;
+        }
+
+        var artMask = Panel("ArtMask", cell, new Color32(8, 16, 24, 255));
+        var amImg = artMask.GetComponent<Image>();
+        amImg.sprite = hexSp; amImg.type = Image.Type.Simple; amImg.raycastTarget = false;
+        Stretch(artMask, Vector2.zero, Vector2.one, new Vector2(pad, pad), new Vector2(-pad, -pad));
+        var maskComp = artMask.gameObject.AddComponent<Mask>();
+        maskComp.showMaskGraphic = false;
+
+        var lead = Card(def.Leader);
+        var artSp = LoadArt(def.Leader);
+        if (artSp != null)
+        {
+            const float SAFE_L = 0.06f, SAFE_R = 0.94f;
+            const float SAFE_T = 0.05f, SAFE_B = 0.62f;
+            const float BLEED = 1.03f;
+
+            float mW = cell.sizeDelta.x - 2f * pad, mH = cell.sizeDelta.y - 2f * pad;
+            float aspect = artSp.rect.height > 0f ? artSp.rect.width / artSp.rect.height : 0.716f;
+            float hexAspect = mH > 0f ? mW / mH : 1.1547f;
+
+            float visH = 0.44f;
+            float visW = visH * hexAspect / Mathf.Max(aspect, 0.01f);
+            if (visW > SAFE_R - SAFE_L) { visW = SAFE_R - SAFE_L; visH = visW * aspect / hexAspect; }
+
+            Vector2 face = FaceCenter(def.Leader, lead != null ? lead.type : null);
+            float cxFrac = Mathf.Clamp(face.x, SAFE_L + visW * 0.5f, SAFE_R - visW * 0.5f);
+            float cyFrac = Mathf.Clamp(face.y + visH * 0.05f, SAFE_T + visH * 0.5f, SAFE_B - visH * 0.5f);
+
+            float aw = (mW / visW) * BLEED;
+            float ah = aw / aspect;
+
+            var artImg = Panel("Art", artMask, Color.white);
+            var ai = artImg.GetComponent<Image>();
+            ai.sprite = artSp; ai.type = Image.Type.Simple;
+            ai.preserveAspect = false; ai.raycastTarget = false;
+            artImg.anchorMin = artImg.anchorMax = new Vector2(0.5f, 0.5f);
+            artImg.pivot = new Vector2(0.5f, 0.5f);
+            artImg.sizeDelta = new Vector2(aw, ah);
+            artImg.anchoredPosition = new Vector2(-(cxFrac - 0.5f) * aw, (cyFrac - 0.5f) * ah);
+        }
+        else
+        {
+            string init = (lead != null && !string.IsNullOrEmpty(lead.name))
+                ? lead.name[0].ToString().ToUpper() : "?";
+            var mono = Text_("Mono", artMask, init, HexFont(32),
+                new Color(1f, 1f, 1f, 0.16f), TextAnchor.MiddleCenter);
+            Stretch(mono.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+
+        // Deck code (e.g. "ST01") occupies the slot the favorite star uses on the
+        // movable grid - starter decks have no favorite concept.
+        var idLabel = Text_("IdLabel", cell, def.Id, HexFont(13), Gold, TextAnchor.UpperCenter, monoFont);
+        idLabel.fontStyle = FontStyle.Bold;
+        idLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
+        idLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
+        idLabel.rectTransform.pivot = new Vector2(0.5f, 1f);
+        idLabel.rectTransform.sizeDelta = new Vector2(0f, 18f);
+        idLabel.rectTransform.anchoredPosition = new Vector2(0f, 0f);
+
+        // Click -> preview only. No HexDragReorder component: starter-deck hexes
+        // are fixed in place, never draggable.
+        var btn = cell.gameObject.AddComponent<Button>();
+        var capturedId = def.Id;
+        btn.onClick.AddListener(() =>
+        {
+            selectedStarterId = capturedId;
+            Render();
+        });
+    }
+
+    private void BuildStarterRandomHexCell(RectTransform cell, Sprite hexSp, Sprite metalSp, List<DeckDef> starterDecks)
+    {
+        var outer = Panel("Outer", cell, DeepBlueMetal);
+        outer.GetComponent<Image>().sprite = metalSp;
+        outer.GetComponent<Image>().type = Image.Type.Simple;
+        outer.GetComponent<Image>().raycastTarget = false;
+        Stretch(outer, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        var inner = Panel("Inner", cell, new Color(0x0B / 255f, 0x1C / 255f, 0x2E / 255f, 1f));
+        inner.GetComponent<Image>().sprite = hexSp;
+        inner.GetComponent<Image>().type = Image.Type.Simple;
+        inner.GetComponent<Image>().raycastTarget = false;
+        Stretch(inner, Vector2.zero, Vector2.one, new Vector2(3f, 3f), new Vector2(-3f, -3f));
+
+        var qMark = Text_("Q", cell, "?", HexFont(48), Bronze, TextAnchor.MiddleCenter, bronzeFont);
+        qMark.fontStyle = FontStyle.Bold;
+        Stretch(qMark.rectTransform, Vector2.zero, Vector2.one, new Vector2(0f, -4f), new Vector2(0f, -4f));
+        var qOutline = qMark.gameObject.AddComponent<Outline>();
+        qOutline.effectColor = new Color32(46, 26, 12, 235);
+        qOutline.effectDistance = new Vector2(1.4f, -1.4f);
+        qOutline.useGraphicAlpha = false;
+        qMark.gameObject.AddComponent<Mask>().showMaskGraphic = true;
+
+        var qSheen = Panel("QSheen", qMark.rectTransform, Color.white);
+        var qSheenImg = qSheen.GetComponent<Image>();
+        qSheenImg.sprite = GetVGradientSprite();
+        qSheenImg.type = Image.Type.Simple;
+        qSheenImg.color = new Color(1f, 0.87f, 0.62f, 0.65f);
+        qSheenImg.raycastTarget = false;
+        Stretch(qSheen, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        var btn = cell.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() =>
+        {
+            if (starterDecks.Count > 0)
+            {
+                selectedStarterId = starterDecks[UnityEngine.Random.Range(0, starterDecks.Count)].Id;
+                Render();
+            }
+        });
     }
 
     // ── Left column: large leader card + name/legal/buttons ─────────────────

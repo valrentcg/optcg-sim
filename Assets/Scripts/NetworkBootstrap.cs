@@ -1,0 +1,29 @@
+// One Piece TCG - Creates the persistent NetworkManager + UnityTransport that
+// com.unity.services.multiplayer's Sessions API wires up automatically once
+// SessionOptions.WithRelayNetwork() is used (see LobbyManager.CreateLobbyAsync).
+// NetworkManager.Singleton must exist BEFORE any session create/join call - the
+// SDK's built-in Netcode-for-GameObjects handler throws otherwise.
+
+using Unity.Netcode;
+using Unity.Netcode.Transports.UTP;
+using UnityEngine;
+
+public static class NetworkBootstrap
+{
+    public static void EnsureNetworkManager()
+    {
+        if (NetworkManager.Singleton != null) return;
+
+        var go = new GameObject("NetworkManager");
+        Object.DontDestroyOnLoad(go);
+        var transport = go.AddComponent<UnityTransport>();
+        var manager = go.AddComponent<NetworkManager>();
+        // NetworkConfig is a plain field with no inline initializer, so a NetworkManager
+        // added purely at runtime (no scene/prefab data backing it) can come up with it
+        // still null, unlike one placed in the Editor where serialization fills it in.
+        if (manager.NetworkConfig == null) manager.NetworkConfig = new NetworkConfig();
+        manager.NetworkConfig.NetworkTransport = transport;
+
+        MatchNetworkSync.EnsureHandlersRegistered();
+    }
+}

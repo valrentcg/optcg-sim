@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Unity.Netcode;
 using Unity.Services.Multiplayer;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -135,6 +136,12 @@ public class MainMenuManager : MonoBehaviour
         EnsureEventSystem();
         BuildCanvas();
         RenderMenu();
+
+        // Subscribed for this object's whole lifetime (not just while the lobby hub is
+        // open) so the guest still gets launched into the match if they've wandered
+        // elsewhere in the menu when the host clicks Start Match.
+        MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
+        MatchNetworkSync.MatchStartReceived += OnNetworkMatchStartReceived;
     }
 
     // ── Leader art (versus-self deck-slot thumbnails) ───────────────────────────
@@ -743,11 +750,18 @@ public class MainMenuManager : MonoBehaviour
             y -= 24f;
         }
 
+        // session.PlayerCount is the LOBBY's view (session/matchmaking membership) - it can say
+        // 2/2 before Netcode's own Relay connection between host and guest has actually finished
+        // establishing. Gate Start Match on the real Netcode connection too, not just the lobby,
+        // so a click can't fire before there's an actual peer to send the match-start message to.
         bool bothPresent = session.PlayerCount >= session.MaxPlayers;
-        var noteText = TextObject("Note", panel,
-            bothPresent
-                ? "Both players are here. Live match sync isn't wired up yet — this is the next step."
-                : "Waiting for another player to join...",
+        bool networkReady = MatchNetworkSync.IsPeerConnected;
+        string noteMessage;
+        if (!bothPresent) noteMessage = "Waiting for another player to join...";
+        else if (!networkReady) noteMessage = "Both players are here. Finishing connection...";
+        else if (session.IsHost) noteMessage = "Both players are here — click Start Match when ready. (Starter decks only for now.)";
+        else noteMessage = "Both players are here. Waiting for the host to start the match...";
+        var noteText = TextObject("Note", panel, noteMessage,
             11, Muted, TextAnchor.UpperLeft, monoFont);
         noteText.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(noteText.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 56f), new Vector2(-16f, 96f));
@@ -761,7 +775,37 @@ public class MainMenuManager : MonoBehaviour
         ahlg.childControlHeight = false;
         AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false);
         if (session.IsHost)
-            AddButton(actionRow, "Start Match", () => { }, false, false);
+            AddButton(actionRow, "Start Match", StartMatchClicked, bothPresent && networkReady && !lobbyBusy, false);
+    }
+
+    // Host: generates the shared seed, sends it once to the guest, then both clients
+    // independently call GameEngine.CreateMatch with that seed - no game state itself
+    // is transmitted here, just the seed each side needs to build an identical match.
+    private void StartMatchClicked()
+    {
+        string seed = Guid.NewGuid().ToString("N");
+        MatchNetworkSync.SendMatchStart(seed);
+        LaunchNetworkedMatch(seed, "south");
+    }
+
+    private void OnNetworkMatchStartReceived(string seed)
+    {
+        LaunchNetworkedMatch(seed, "north");
+    }
+
+    // Host is always "south" (ST01), guest is always "north" (ST02) for now - custom
+    // deck selection for networked matches is a follow-up; this reuses the same
+    // starter-deck defaults hotseat play already falls back to.
+    private void LaunchNetworkedMatch(string seed, string localSeat)
+    {
+        CancelInvoke();
+        UnsubscribeFromSessionEvents();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        GameManager.PendingNetworkedSeed = seed;
+        GameManager.PendingNetworkedSeat = localSeat;
+        GameManager.EnsureBoard();
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
     }
 
     // ISession.Changed fires on any update to the session (players joining/leaving,
@@ -775,14 +819,33 @@ public class MainMenuManager : MonoBehaviour
         subscribedLobbySession = session;
         session.Changed += OnLobbySessionChanged;
         session.Deleted += OnLobbySessionChanged;
+
+        // Session membership (session.PlayerCount) and Netcode's actual peer connection can
+        // land at slightly different times - repaint again once Netcode itself confirms a
+        // peer, so "Start Match" enabling isn't stuck on whichever one lags behind.
+        if (NetworkManager.Singleton != null)
+        {
+            NetworkManager.Singleton.OnClientConnectedCallback -= OnLobbyNetworkClientConnected;
+            NetworkManager.Singleton.OnClientConnectedCallback += OnLobbyNetworkClientConnected;
+        }
     }
 
     private void UnsubscribeFromSessionEvents()
     {
-        if (subscribedLobbySession == null) return;
-        subscribedLobbySession.Changed -= OnLobbySessionChanged;
-        subscribedLobbySession.Deleted -= OnLobbySessionChanged;
-        subscribedLobbySession = null;
+        if (subscribedLobbySession != null)
+        {
+            subscribedLobbySession.Changed -= OnLobbySessionChanged;
+            subscribedLobbySession.Deleted -= OnLobbySessionChanged;
+            subscribedLobbySession = null;
+        }
+        if (NetworkManager.Singleton != null)
+            NetworkManager.Singleton.OnClientConnectedCallback -= OnLobbyNetworkClientConnected;
+    }
+
+    private void OnLobbyNetworkClientConnected(ulong clientId)
+    {
+        if (this == null || menuRoot == null) return;
+        RenderMenu();
     }
 
     private void OnLobbySessionChanged()
@@ -794,6 +857,7 @@ public class MainMenuManager : MonoBehaviour
     private void OnDestroy()
     {
         UnsubscribeFromSessionEvents();
+        MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
     }
 
     private async void RefreshLobbyBrowser()

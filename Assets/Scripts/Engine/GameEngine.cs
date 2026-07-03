@@ -687,8 +687,8 @@ namespace OnePieceTcg.Engine
             }
             Log(state, seat, $"{p.Name} plays {NameId(def)}.");
             if (HasKeyword(instance, "Rush")) Log(state, seat, $"{NameId(def)} has [Rush] and can attack this turn.");
-            if (def.Type == "event" && HasTiming(def.Effect, "Main")) QueueEffect(state, seat, instance, "main", def.Effect, true);
-            else if (HasTiming(def.Effect, "On Play")) QueueEffect(state, seat, instance, "onPlay", def.Effect, true);
+            if (def.Type == "event" && HasTiming(def.Effect, "Main")) QueueAndAutoResolve(state, seat, instance, "main", def.Effect, true);
+            else if (HasTiming(def.Effect, "On Play")) QueueAndAutoResolve(state, seat, instance, "onPlay", def.Effect, true);
         }
 
         private static void AttachDon(GameState state, string seat, string target, int amount, List<string> donInstanceIds = null)
@@ -1586,6 +1586,23 @@ namespace OnePieceTcg.Engine
             Log(state, seat, $"{NameId(GetCard(source))} {TimingLabel(timing)} effect is pending.");
         }
 
+        // Queues an effect exactly like QueueEffect, then immediately resolves it if
+        // TryResolveKnownEffect can handle it without a player-chosen target (e.g. "Search
+        // your deck for a card and add it to hand", "Look at N from the top of your deck").
+        // Matches the immediate feel Activate:Main abilities already have (e.g. Jewelry
+        // Bonney's deck-look opens right away) instead of making the player click
+        // "Resolve / Manual" first for something that needed no decision. Reuses ResolveEffect
+        // itself, which already safely leaves the effect pending if a target is genuinely
+        // required (EffectResolution.WaitingForTarget short-circuits before removal).
+        private static void QueueAndAutoResolve(GameState state, string seat, CardInstance source, string timing, string text, bool optional,
+            EffectScope scope = EffectScope.Instant, EffectTargetZone targetZone = EffectTargetZone.Play)
+        {
+            QueueEffect(state, seat, source, timing, text, optional, scope, targetZone);
+            if (!IsAutomatedEffectPattern(text)) return;
+            var queued = state.PendingEffects[state.PendingEffects.Count - 1];
+            ResolveEffect(state, seat, queued.EffectId, null);
+        }
+
         // Returns true if `def` satisfies the feature-tag requirement stated in `effectText`.
         // Feature tags appear as {Feature Name} in card text, e.g. {Straw Hat Crew}, {Supernovas}.
         // When multiple tags are listed with "or" (e.g. {Supernovas} or {Heart Pirates}) the card
@@ -2176,7 +2193,7 @@ namespace OnePieceTcg.Engine
                     trashCard.Zone = "character";
                     p4.CharacterArea[openSlot2] = trashCard;
                     if (HasTiming(trashDef.Effect, "On Play"))
-                        QueueEffect(state, effect.Seat, trashCard, "onPlay", trashDef.Effect, true);
+                        QueueAndAutoResolve(state, effect.Seat, trashCard, "onPlay", trashDef.Effect, true);
                 }
                 else
                 {
@@ -2184,7 +2201,7 @@ namespace OnePieceTcg.Engine
                     trashCard.Zone = "stage";
                     p4.Stage = trashCard;
                     if (HasTiming(trashDef.Effect, "On Play"))
-                        QueueEffect(state, effect.Seat, trashCard, "onPlay", trashDef.Effect, true);
+                        QueueAndAutoResolve(state, effect.Seat, trashCard, "onPlay", trashDef.Effect, true);
                 }
                 Log(state, effect.Seat, $"{sourceName} plays {NameId(trashDef)} from trash.");
                 return EffectResolution.Resolved;

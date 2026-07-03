@@ -42,21 +42,23 @@ public static class LobbyManager
     {
         if (UnityServices.State != ServicesInitializationState.Initialized)
             await UnityServices.InitializeAsync();
+        // Must exist before CreateSessionAsync/JoinSessionBy*Async - com.unity.services.multiplayer's
+        // built-in Netcode-for-GameObjects handler (triggered by .WithRelayNetwork() below) requires
+        // NetworkManager.Singleton to already be present, and throws otherwise.
+        NetworkBootstrap.EnsureNetworkManager();
     }
 
     public static async Task<IHostSession> CreateLobbyAsync(string lobbyName, bool isPrivate, string ownerDisplayName)
     {
         await EnsureSignedInAsync();
-        // No .WithRelayNetwork() yet: that requires a registered INetworkHandler (we're
-        // deliberately not using Netcode for GameObjects/Entities - see file header), which
-        // is the separate match-sync follow-up. Plain sessions are enough for lobby
-        // create/browse/join/leave; the relay connection gets added alongside that handler.
+        // Netcode for GameObjects is installed, so .WithRelayNetwork() auto-wires
+        // NetworkManager/UnityTransport/Relay - no custom INetworkHandler needed.
         var options = new SessionOptions
         {
             Name = string.IsNullOrWhiteSpace(lobbyName) ? "Untitled Lobby" : lobbyName.Trim(),
             MaxPlayers = DefaultMaxPlayers,
             IsPrivate = isPrivate,
-        };
+        }.WithRelayNetwork();
         options.SessionProperties[OwnerNameKey] = new SessionProperty(
             string.IsNullOrWhiteSpace(ownerDisplayName) ? "Captain" : ownerDisplayName.Trim());
 

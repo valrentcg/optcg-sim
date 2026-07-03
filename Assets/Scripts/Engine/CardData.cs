@@ -236,6 +236,367 @@ namespace OnePieceTcg.Engine
                     ("ST02-017", 2),
                 },
             },
+            ["st03"] = new DeckDef
+            {
+                Id = "st03",
+                Name = "ST03 - The Seven Warlords of the Sea",
+                Leader = "ST03-001",
+                List = new List<(string, int)>
+                {
+                    ("ST03-002", 4), ("ST03-003", 2), ("ST03-004", 2), ("ST03-005", 2),
+                    ("ST03-006", 4), ("ST03-007", 2), ("ST03-008", 4), ("ST03-009", 2),
+                    ("ST03-010", 4), ("ST03-011", 4), ("ST03-012", 4), ("ST03-013", 4),
+                    ("ST03-014", 2), ("ST03-015", 4), ("ST03-016", 4), ("ST03-017", 2),
+                },
+            },
+            ["st04"] = new DeckDef
+            {
+                Id = "st04",
+                Name = "ST04 - Animal Kingdom Pirates",
+                Leader = "ST04-001",
+                List = new List<(string, int)>
+                {
+                    ("ST04-002", 4), ("ST04-003", 2), ("ST04-004", 2), ("ST04-005", 2),
+                    ("ST04-006", 4), ("ST04-007", 4), ("ST04-008", 2), ("ST04-009", 4),
+                    ("ST04-010", 2), ("ST04-011", 4), ("ST04-012", 4), ("ST04-013", 4),
+                    ("ST04-014", 2), ("ST04-015", 2), ("ST04-016", 4), ("ST04-017", 4),
+                },
+            },
+            ["st05"] = new DeckDef
+            {
+                Id = "st05",
+                Name = "ST05 - ONE PIECE FILM edition",
+                Leader = "ST05-001",
+                List = new List<(string, int)>
+                {
+                    ("ST05-002", 4), ("ST05-003", 4), ("ST05-004", 2), ("ST05-005", 2),
+                    ("ST05-006", 2), ("ST05-007", 4), ("ST05-008", 2), ("ST05-009", 4),
+                    ("ST05-010", 2), ("ST05-011", 2), ("ST05-012", 4), ("ST05-013", 4),
+                    ("ST05-014", 4), ("ST05-015", 4), ("ST05-016", 2), ("ST05-017", 4),
+                },
+            },
+            ["st06"] = new DeckDef
+            {
+                Id = "st06",
+                Name = "ST06 - Absolute Justice",
+                Leader = "ST06-001",
+                List = new List<(string, int)>
+                {
+                    ("ST06-002", 2), ("ST06-003", 4), ("ST06-004", 2), ("ST06-005", 4),
+                    ("ST06-006", 4), ("ST06-007", 4), ("ST06-008", 2), ("ST06-009", 4),
+                    ("ST06-010", 4), ("ST06-011", 4), ("ST06-012", 2), ("ST06-013", 4),
+                    ("ST06-014", 2), ("ST06-015", 2), ("ST06-016", 4), ("ST06-017", 2),
+                },
+            },
+            ["st07"] = new DeckDef
+            {
+                Id = "st07",
+                Name = "ST07 - Big Mom Pirates",
+                Leader = "ST07-001",
+                List = new List<(string, int)>
+                {
+                    ("ST07-002", 4), ("ST07-003", 2), ("ST07-004", 4), ("ST07-005", 2),
+                    ("ST07-006", 4), ("ST07-007", 2), ("ST07-008", 4), ("ST07-009", 2),
+                    ("ST07-010", 2), ("ST07-011", 4), ("ST07-012", 4), ("ST07-013", 4),
+                    ("ST07-014", 4), ("ST07-015", 4), ("ST07-016", 2), ("ST07-017", 2),
+                },
+            },
+            ["st08"] = new DeckDef
+            {
+                Id = "st08",
+                Name = "ST08 - Monkey D. Luffy",
+                Leader = "ST08-001",
+                List = new List<(string, int)>
+                {
+                    ("ST08-002", 2), ("ST08-003", 4), ("ST08-004", 4), ("ST08-005", 2),
+                    ("ST08-006", 4), ("ST08-007", 4), ("ST08-008", 4), ("ST08-009", 4),
+                    ("ST08-010", 4), ("ST08-011", 4), ("ST08-012", 4), ("ST08-013", 4),
+                    ("ST08-014", 4), ("ST08-015", 2),
+                },
+            },
+            ["st09"] = new DeckDef
+            {
+                Id = "st09",
+                Name = "ST09 - Yamato",
+                Leader = "ST09-001",
+                List = new List<(string, int)>
+                {
+                    ("ST09-002", 4), ("ST09-003", 4), ("ST09-004", 4), ("ST09-005", 2),
+                    ("ST09-006", 4), ("ST09-007", 4), ("ST09-008", 4), ("ST09-009", 4),
+                    ("ST09-010", 2), ("ST09-011", 4), ("ST09-012", 4), ("ST09-013", 4),
+                    ("ST09-014", 2), ("ST09-015", 4),
+                },
+            },
+            // ST10 and ST13 are "ULTRA DECK" boxes shipping 3 interchangeable leader cards
+            // (Law/Luffy/Kid for ST10, Sabo/Ace/Luffy for ST13) sharing one 50-card main deck.
+            // DeckDef only models a single Leader, so the first-numbered one is used here.
+            ["st10"] = new DeckDef
+            {
+                Id = "st10",
+                Name = "ST10 - The Three Captains",
+                Leader = "ST10-001",
+                List = new List<(string, int)>
+                {
+                    ("ST10-004", 4), ("ST10-005", 2), ("ST10-006", 2), ("ST10-007", 4),
+                    ("ST10-008", 4), ("ST10-009", 4), ("ST10-010", 2), ("ST10-011", 4),
+                    ("ST10-012", 4), ("ST10-013", 2), ("ST10-014", 4), ("ST10-015", 2),
+                    ("ST10-016", 2), ("ST10-017", 2), ("OP01-016", 4), ("OP01-025", 4),
+                },
+            },
+            ["st11"] = new DeckDef
+            {
+                Id = "st11",
+                Name = "ST11 - Uta",
+                Leader = "ST11-001",
+                List = new List<(string, int)>
+                {
+                    ("ST11-002", 2), ("ST11-003", 2), ("ST11-004", 2), ("ST11-005", 4),
+                    ("OP02-028", 4), ("OP02-033", 4), ("OP02-034", 4), ("OP02-035", 4),
+                    ("OP02-037", 4), ("OP02-039", 4), ("OP02-040", 4), ("OP02-041", 4),
+                    ("OP02-043", 4), ("OP02-045", 4),
+                },
+            },
+            ["st12"] = new DeckDef
+            {
+                Id = "st12",
+                Name = "ST12 - Zoro and Sanji",
+                Leader = "ST12-001",
+                List = new List<(string, int)>
+                {
+                    ("ST12-002", 4), ("ST12-003", 2), ("ST12-004", 4), ("ST12-005", 4),
+                    ("ST12-006", 4), ("ST12-007", 4), ("ST12-008", 2), ("ST12-009", 4),
+                    ("ST12-010", 2), ("ST12-011", 2), ("ST12-012", 4), ("ST12-013", 4),
+                    ("ST12-014", 2), ("ST12-015", 4), ("ST12-016", 2), ("ST12-017", 2),
+                },
+            },
+            ["st13"] = new DeckDef
+            {
+                Id = "st13",
+                Name = "ST13 - The Three Brothers",
+                Leader = "ST13-001",
+                List = new List<(string, int)>
+                {
+                    ("ST13-004", 4), ("ST13-005", 2), ("ST13-006", 4), ("ST13-007", 4),
+                    ("ST13-008", 2), ("ST13-009", 4), ("ST13-010", 4), ("ST13-011", 2),
+                    ("ST13-012", 4), ("ST13-013", 2), ("ST13-014", 4), ("ST13-015", 2),
+                    ("ST13-016", 4), ("ST13-017", 2), ("ST13-018", 2), ("ST13-019", 4),
+                },
+            },
+            ["st14"] = new DeckDef
+            {
+                Id = "st14",
+                Name = "ST14 - 3D2Y",
+                Leader = "ST14-001",
+                List = new List<(string, int)>
+                {
+                    ("ST14-002", 4), ("ST14-003", 2), ("ST14-004", 4), ("ST14-005", 4),
+                    ("ST14-006", 2), ("ST14-007", 4), ("ST14-008", 4), ("ST14-009", 4),
+                    ("ST14-010", 4), ("ST14-011", 4), ("ST14-012", 2), ("ST14-013", 4),
+                    ("ST14-014", 2), ("ST14-015", 2), ("ST14-016", 2), ("ST14-017", 2),
+                },
+            },
+            // ST15's leader is the reprinted OP02-001 Edward.Newgate, not a native ST15-001
+            // card (verified against the official Bandai cardlist) - ST15-001 is an ordinary
+            // non-leader character in this deck.
+            ["st15"] = new DeckDef
+            {
+                Id = "st15",
+                Name = "ST15 - Edward.Newgate",
+                Leader = "OP02-001",
+                List = new List<(string, int)>
+                {
+                    ("OP02-008", 4), ("OP02-018", 4), ("OP02-019", 4), ("OP02-023", 4),
+                    ("OP03-003", 4), ("OP03-006", 4), ("OP03-007", 4), ("OP03-009", 4),
+                    ("OP03-010", 4), ("ST15-001", 4), ("ST15-002", 2), ("ST15-003", 4),
+                    ("ST15-004", 2), ("ST15-005", 2),
+                },
+            },
+            // ST16's leader is the reprinted ST11-001 Uta, not a native ST16-001 card
+            // (verified against the official Bandai cardlist).
+            ["st16"] = new DeckDef
+            {
+                Id = "st16",
+                Name = "ST16 - GREEN Uta",
+                Leader = "ST11-001",
+                List = new List<(string, int)>
+                {
+                    ("P-029", 4), ("P-057", 4), ("P-058", 4), ("P-059", 4),
+                    ("P-060", 4), ("P-061", 4), ("ST11-003", 4), ("ST11-004", 4),
+                    ("ST11-005", 4), ("ST16-001", 2), ("ST16-002", 4), ("ST16-003", 4),
+                    ("ST16-004", 2), ("ST16-005", 2),
+                },
+            },
+            // ST17-ST20 are "reprint" starter decks: the Leader is a reprinted card from an
+            // earlier booster set (confirmed against official-card-library.json - ST17-001 etc.
+            // are type "character", not "leader"), not a native ST-001 card like ST01-ST09/ST21/ST22.
+            ["st17"] = new DeckDef
+            {
+                Id = "st17",
+                Name = "ST17 - Blue Donquixote Doflamingo",
+                Leader = "OP01-060",
+                List = new List<(string, int)>
+                {
+                    ("ST17-001", 4), ("ST17-002", 2), ("ST17-003", 2), ("ST17-004", 2), ("ST17-005", 4),
+                    ("OP01-073", 4), ("OP01-086", 4), ("OP02-054", 4), ("OP02-057", 4),
+                    ("ST03-002", 4), ("ST03-004", 4), ("ST03-005", 4), ("ST03-008", 4), ("P-030", 4),
+                },
+            },
+            ["st18"] = new DeckDef
+            {
+                Id = "st18",
+                Name = "ST18 - Purple Monkey.D.Luffy",
+                Leader = "OP05-060",
+                List = new List<(string, int)>
+                {
+                    ("ST18-001", 2), ("ST18-002", 4), ("ST18-003", 4), ("ST18-004", 2), ("ST18-005", 2),
+                    ("OP05-061", 4), ("OP05-063", 4), ("OP05-066", 4), ("OP05-067", 4), ("OP05-068", 4),
+                    ("OP05-070", 4), ("OP05-072", 4), ("OP05-076", 4), ("P-041", 4),
+                },
+            },
+            ["st19"] = new DeckDef
+            {
+                Id = "st19",
+                Name = "ST19 - Black Smoker",
+                Leader = "OP02-093",
+                List = new List<(string, int)>
+                {
+                    ("ST19-001", 4), ("ST19-002", 2), ("ST19-003", 2), ("ST19-004", 2), ("ST19-005", 4),
+                    ("OP02-098", 4), ("OP02-106", 4), ("OP02-108", 4), ("OP02-109", 4), ("OP02-113", 4),
+                    ("OP02-116", 4), ("OP02-117", 4), ("OP03-079", 4), ("OP03-089", 4),
+                },
+            },
+            ["st20"] = new DeckDef
+            {
+                Id = "st20",
+                Name = "ST20 - Yellow Charlotte Katakuri",
+                Leader = "OP03-099",
+                List = new List<(string, int)>
+                {
+                    ("ST20-001", 2), ("ST20-002", 4), ("ST20-003", 4), ("ST20-004", 2), ("ST20-005", 2),
+                    ("OP03-106", 4), ("OP03-107", 4), ("OP03-110", 4), ("OP03-112", 4), ("OP03-115", 4),
+                    ("OP03-118", 4), ("OP03-121", 4), ("ST07-005", 4), ("ST07-014", 4),
+                },
+            },
+            ["st21"] = new DeckDef
+            {
+                Id = "st21",
+                Name = "ST21 - Starter Deck EX -GEAR5-",
+                Leader = "ST21-001",
+                List = new List<(string, int)>
+                {
+                    ("ST21-002", 2), ("ST21-003", 2), ("ST21-004", 4), ("ST21-005", 4),
+                    ("ST21-006", 4), ("ST21-007", 4), ("ST21-008", 4), ("ST21-009", 4),
+                    ("ST21-010", 2), ("ST21-011", 4), ("ST21-012", 4), ("ST21-013", 4),
+                    ("ST21-014", 2), ("ST21-015", 2), ("ST21-016", 2), ("ST21-017", 2),
+                },
+            },
+            ["st22"] = new DeckDef
+            {
+                Id = "st22",
+                Name = "ST22 - Ace & Newgate",
+                Leader = "ST22-001",
+                List = new List<(string, int)>
+                {
+                    ("ST22-002", 2), ("ST22-003", 2), ("ST22-004", 4), ("ST22-005", 4),
+                    ("ST22-006", 4), ("ST22-007", 4), ("ST22-008", 4), ("ST22-009", 4),
+                    ("ST22-010", 2), ("ST22-011", 4), ("ST22-012", 4), ("ST22-013", 4),
+                    ("ST22-014", 2), ("ST22-015", 2), ("ST22-016", 2), ("ST22-017", 2),
+                },
+            },
+            // ST23 deliberately omitted for now: the research agent confirmed the leader
+            // (OP09-001, reprint) and the 14-card pool, but could not verify which single
+            // non-SR card is x2 vs x4 (everything else is fixed at x2/x4 per the SR pattern).
+            // Add once that's confirmed rather than guessing a specific card's count.
+            //
+            // ST24-ST28 are precon decks that reuse original booster-set numbers for most
+            // reprinted cards (only ~5 cards per deck get fresh ST2X-0YY numbers); ST29/ST30
+            // use full dedicated numbering like the classic starter decks.
+            ["st24"] = new DeckDef
+            {
+                Id = "st24",
+                Name = "ST24 - GREEN Jewelry Bonney",
+                Leader = "OP07-019",
+                List = new List<(string, int)>
+                {
+                    ("ST24-001", 4), ("ST24-002", 2), ("ST24-003", 2), ("ST24-004", 2), ("ST24-005", 4),
+                    ("EB01-015", 4), ("OP07-021", 4), ("OP07-023", 4), ("OP07-025", 4), ("OP07-031", 4),
+                    ("OP07-033", 4), ("OP07-034", 4), ("OP07-036", 4), ("OP07-037", 4),
+                },
+            },
+            ["st25"] = new DeckDef
+            {
+                Id = "st25",
+                Name = "ST25 - BLUE Buggy",
+                Leader = "OP09-042",
+                List = new List<(string, int)>
+                {
+                    ("ST25-001", 2), ("ST25-002", 4), ("ST25-003", 2), ("ST25-004", 2), ("ST25-005", 4),
+                    ("OP09-043", 4), ("OP09-045", 4), ("OP09-051", 4), ("OP09-053", 4), ("OP09-054", 4),
+                    ("OP09-055", 4), ("OP09-056", 4), ("P-084", 4), ("OP09-057", 4),
+                },
+            },
+            ["st26"] = new DeckDef
+            {
+                Id = "st26",
+                Name = "ST26 - PURPLE/BLACK Monkey.D.Luffy",
+                Leader = "OP09-061",
+                List = new List<(string, int)>
+                {
+                    ("ST26-001", 4), ("ST26-002", 2), ("ST26-003", 2), ("ST26-004", 4), ("ST26-005", 2),
+                    ("OP05-065", 4), ("OP05-066", 4), ("OP05-070", 4), ("OP09-063", 4), ("OP09-070", 4),
+                    ("OP09-076", 4), ("ST14-010", 4), ("OP09-077", 4), ("OP09-078", 4),
+                },
+            },
+            ["st27"] = new DeckDef
+            {
+                Id = "st27",
+                Name = "ST27 - BLACK Marshall.D.Teach",
+                Leader = "OP09-081",
+                List = new List<(string, int)>
+                {
+                    ("ST27-001", 4), ("ST27-002", 4), ("ST27-003", 2), ("ST27-004", 2), ("ST27-005", 2),
+                    ("OP09-083", 4), ("OP10-084", 4), ("OP09-086", 4), ("OP09-088", 4), ("OP09-089", 4),
+                    ("OP09-090", 4), ("OP09-091", 4), ("OP09-095", 4), ("OP09-099", 4),
+                },
+            },
+            ["st28"] = new DeckDef
+            {
+                Id = "st28",
+                Name = "ST28 - GREEN/YELLOW Yamato",
+                Leader = "OP06-022",
+                List = new List<(string, int)>
+                {
+                    ("ST28-001", 4), ("ST28-002", 4), ("ST28-003", 2), ("ST28-004", 2), ("ST28-005", 2),
+                    ("OP06-100", 4), ("OP06-103", 4), ("OP06-104", 4), ("OP06-109", 4), ("OP06-110", 4),
+                    ("OP06-112", 4), ("OP09-035", 4), ("ST13-016", 4), ("OP07-116", 4),
+                },
+            },
+            ["st29"] = new DeckDef
+            {
+                Id = "st29",
+                Name = "ST29 - Egghead",
+                Leader = "ST29-001",
+                List = new List<(string, int)>
+                {
+                    ("ST29-002", 4), ("ST29-003", 4), ("ST29-004", 2), ("ST29-005", 2),
+                    ("ST29-006", 4), ("ST29-007", 2), ("ST29-008", 2), ("ST29-009", 2),
+                    ("ST29-010", 4), ("ST29-011", 4), ("ST29-012", 4), ("ST29-013", 4),
+                    ("ST29-014", 2), ("ST29-015", 4), ("ST29-016", 2), ("ST29-017", 4),
+                },
+            },
+            ["st30"] = new DeckDef
+            {
+                Id = "st30",
+                Name = "ST30 - Luffy & Ace",
+                Leader = "ST30-001",
+                List = new List<(string, int)>
+                {
+                    ("ST30-002", 2), ("ST30-003", 4), ("ST30-004", 2), ("ST30-005", 4),
+                    ("ST30-006", 4), ("ST30-007", 2), ("ST30-008", 4), ("ST30-009", 4),
+                    ("ST30-010", 4), ("ST30-011", 2), ("ST30-012", 2), ("ST30-013", 4),
+                    ("ST30-014", 2), ("ST30-015", 4), ("ST30-016", 2), ("ST30-017", 4),
+                },
+            },
         };
 
         // Ruleset constants (mirrors OP_RULESET).

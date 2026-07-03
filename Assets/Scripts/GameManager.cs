@@ -58,6 +58,27 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Set by MainMenuManager's replay browser before EnsureBoard(); when populated,
     // Start() enters read-only replay playback instead of starting a new match.
     public static ReplayRecord PendingReplayLoad;
+    // Set by MainMenuManager's lobby hub before EnsureBoard(); when populated, Start()
+    // enters a networked match instead of local hotseat play. LocalSeat restricts
+    // interaction to the seat this client actually controls (see Dispatch()).
+    public static string PendingNetworkedSeed;
+    public static string PendingNetworkedSeat;
+    private bool isNetworked;
+    private string localSeat;
+    // Cached label for the coin-flip "waiting on opponent" state (networked only); Update()
+    // mutates its text directly for the blinking-dots animation instead of re-rendering the
+    // whole board every frame. Unity's fake-null makes the null-check safe even after the
+    // overlay's GameObject gets torn down by the next Render() pass.
+    private Text coinFlipWaitingText;
+    private string coinFlipWaitingBaseMessage;
+    // Which seat renders at the bottom/top of THIS client's screen. "south" for hotseat and
+    // Versus Self (unchanged, matches every existing hardcoded assumption in this file) -
+    // for a networked match, the locally-controlled seat is always drawn at the bottom
+    // regardless of whether that's "south" or "north" in the shared GameState, since the
+    // underlying seat identity must stay the same on both clients for the deterministic
+    // command-replay sync to work (see MatchNetworkSync.cs) - only the rendering flips.
+    private string BottomSeat => isNetworked ? localSeat : "south";
+    private string TopSeat => BottomSeat == "south" ? "north" : "south";
     private string selectedId;
     private string selectedSeat;
     private string selectedDonSeat;
@@ -185,14 +206,33 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             PendingReplayLoad = null;
             EnterReplayMode(record);
         }
+        else if (PendingNetworkedSeed != null)
+        {
+            var seed = PendingNetworkedSeed;
+            var seat = PendingNetworkedSeat;
+            PendingNetworkedSeed = null;
+            PendingNetworkedSeat = null;
+            EnterNetworkedMatch(seed, seat);
+        }
         else
         {
             NewMatch();
         }
     }
 
+    private void OnDestroy()
+    {
+        MatchNetworkSync.CommandReceived -= OnNetworkCommandReceived;
+    }
+
     private void Update()
     {
+        if (coinFlipWaitingText != null)
+        {
+            int dots = (int)(Time.unscaledTime * 2f) % 4;
+            coinFlipWaitingText.text = coinFlipWaitingBaseMessage + new string('.', dots);
+        }
+
         if (selectedDonIds.Count == 0) return;
 
         var mouse = UnityEngine.InputSystem.Mouse.current;
@@ -320,6 +360,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void Dispatch(GameCommand command)
     {
         if (isReplayMode) return; // read-only playback: ignore stray interactive input
+        // Networked match: block acting as the other seat (e.g. a stray click reaching a
+        // handler before UI catches up) rather than auditing every call site individually.
+        if (isNetworked && !string.IsNullOrEmpty(command.Seat) && command.Seat != localSeat) return;
         state = GameEngine.ApplyCommand(state, command);
         NormalizeSelection();
         if (state.Status == "finished" && !replaySaved)
@@ -327,6 +370,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             replaySaved = true;
             ReplayStore.Save(state, currentMatchConfig);
         }
+        if (isNetworked) MatchNetworkSync.SendCommand(command);
         Render();
     }
 
@@ -376,6 +420,47 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
         MainMenuManager.EnsureMenu();
+    }
+
+    // ── Networked match ──────────────────────────────────────────────────────
+    // Both clients call GameEngine.CreateMatch with the same Seed (the host
+    // generates it and sends it once via MatchNetworkSync.SendMatchStart), so both
+    // start from an identical state without transmitting any state itself - only
+    // the Seed, then each subsequent GameCommand as it's dispatched. See
+    // MatchNetworkSync.cs and Dispatch() above for the send/receive halves.
+
+    private void EnterNetworkedMatch(string seed, string seat)
+    {
+        isReplayMode = false;
+        loadedReplay = null;
+        replaySaved = false;
+        isNetworked = true;
+        localSeat = seat;
+
+        var config = new MatchConfig { Seed = seed };
+        currentMatchConfig = config;
+        state = GameEngine.CreateMatch(config);
+        selectedId = null;
+        selectedSeat = null;
+        previewLockCard = null;
+        ClearDonSelection(false);
+
+        MatchNetworkSync.CommandReceived -= OnNetworkCommandReceived;
+        MatchNetworkSync.CommandReceived += OnNetworkCommandReceived;
+        Render();
+    }
+
+    private void OnNetworkCommandReceived(GameCommand command)
+    {
+        if (!isNetworked || state == null) return;
+        state = GameEngine.ApplyCommand(state, command);
+        NormalizeSelection();
+        if (state.Status == "finished" && !replaySaved)
+        {
+            replaySaved = true;
+            ReplayStore.Save(state, currentMatchConfig);
+        }
+        Render();
     }
 
     private void NormalizeSelection()
@@ -901,8 +986,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var _praw = playRoot.GetComponent<Image>();
         if (_praw != null) _praw.raycastTarget = false;
         DrawReferencePlaymat();
-        DrawExternalHand(state.Players["north"], "north", true);
-        DrawExternalHand(state.Players["south"], "south", false);
+        DrawExternalHand(state.Players[TopSeat], TopSeat, true);
+        DrawExternalHand(state.Players[BottomSeat], BottomSeat, false);
         // Battle status banner removed - the live power badges on the cards convey the same info now.
         DrawCoinFlipOverlay();
         DrawMulliganOverlay();
@@ -1615,10 +1700,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var label = TextObject("Mulligan Text", panel, "Look at your hand. Each player may mulligan once for a fresh 5.", 15, Ink, TextAnchor.MiddleCenter, titleFont);
         Stretch(label.rectTransform, new Vector2(0.04f, 0.72f), new Vector2(0.96f, 0.96f), Vector2.zero, Vector2.zero);
 
-        foreach (var seat in new[] { "south", "north" })
+        // Networked PvP: each client only sees/controls their own mulligan choice - showing
+        // the opponent's here would leak whether they kept or mulliganed before it matters.
+        // Hotseat/Versus Self still shows both side by side, unchanged.
+        var mulliganSeats = isNetworked ? new[] { BottomSeat } : new[] { "south", "north" };
+        foreach (var seat in mulliganSeats)
         {
             var p = state.Players[seat];
-            var half = seat == "south" ? new Vector2(0.06f, 0.54f) : new Vector2(0.54f, 0.94f);
+            var half = mulliganSeats.Length == 1
+                ? new Vector2(0.06f, 0.94f)
+                : (seat == BottomSeat ? new Vector2(0.06f, 0.54f) : new Vector2(0.54f, 0.94f));
 
             var name = TextObject(seat + " Mulligan Name", panel, p.MulliganDecided ? $"{p.Name}: ready" : $"{p.Name}: deciding...", 13, Muted, TextAnchor.MiddleCenter, monoFont);
             Stretch(name.rectTransform, new Vector2(half.x, 0.42f), new Vector2(half.y, 0.68f), Vector2.zero, Vector2.zero);
@@ -1633,7 +1724,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void DrawCoinFlipOverlay()
     {
-        if (state.Status != "coinflip") return;
+        if (state.Status != "coinflip") { coinFlipWaitingText = null; return; }
 
         var dim = PanelObject("Coin Flip Dim", boardRoot, new Color32(8, 10, 14, 200));
         Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -1644,6 +1735,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddRoundedCardBorder(panel, Accent, 2f);
 
         var winner = state.Players[state.CoinFlipWinner];
+
+        // Networked PvP: only the coin-flip winner sees the Go First/Second choice - the other
+        // client gets a waiting message (with an animated ellipsis, see Update()) instead of a
+        // second copy of buttons they have no business clicking. Hotseat/Versus Self is
+        // unaffected (isNetworked is false there), matching how mulligan was scoped earlier.
+        if (isNetworked && state.CoinFlipWinner != localSeat)
+        {
+            coinFlipWaitingBaseMessage = $"Waiting for {winner.Name} to decide going first or second";
+            var waitLabel = TextObject("Coin Flip Text", panel, coinFlipWaitingBaseMessage,
+                16, Ink, TextAnchor.MiddleCenter, titleFont);
+            waitLabel.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(waitLabel.rectTransform, new Vector2(0.06f, 0.30f), new Vector2(0.94f, 0.95f), Vector2.zero, Vector2.zero);
+            coinFlipWaitingText = waitLabel;
+            return;
+        }
+
+        coinFlipWaitingText = null;
         var label = TextObject("Coin Flip Text", panel, $"{winner.Name} won the coin flip!\nGoing first or second?", 16, Ink, TextAnchor.MiddleCenter, titleFont);
         Stretch(label.rectTransform, new Vector2(0.04f, 0.55f), new Vector2(0.96f, 0.95f), Vector2.zero, Vector2.zero);
 
@@ -1791,16 +1899,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var topHalf = PanelObject("North Playmat Half", mat, new Color(0, 0, 0, 0));
         Stretch(topHalf, new Vector2(0, 0.50f), new Vector2(1, 1), Vector2.zero, Vector2.zero);
         AddBoardCancel(topHalf);
-        var northEventDrop = topHalf.gameObject.AddComponent<EventDrop>();
-        northEventDrop.Init(this, "north");
+        var topEventDrop = topHalf.gameObject.AddComponent<EventDrop>();
+        topEventDrop.Init(this, TopSeat);
         var bottomHalf = PanelObject("South Playmat Half", mat, new Color(0, 0, 0, 0));
         Stretch(bottomHalf, Vector2.zero, new Vector2(1, 0.50f), Vector2.zero, Vector2.zero);
         AddBoardCancel(bottomHalf);
-        var southEventDrop = bottomHalf.gameObject.AddComponent<EventDrop>();
-        southEventDrop.Init(this, "south");
+        var bottomEventDrop = bottomHalf.gameObject.AddComponent<EventDrop>();
+        bottomEventDrop.Init(this, BottomSeat);
 
-        DrawMatHalf(topHalf, state.Players["north"], "north", true);
-        DrawMatHalf(bottomHalf, state.Players["south"], "south", false);
+        DrawMatHalf(topHalf, state.Players[TopSeat], TopSeat, true);
+        DrawMatHalf(bottomHalf, state.Players[BottomSeat], BottomSeat, false);
     }
 
     private void DrawMatHalf(RectTransform half, PlayerState p, string seat, bool top)
@@ -1926,13 +2034,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawLeftPanel()
     {
         // Opponent plate up top.
-        DrawPlayerPlate(leftRoot, state.Players.ContainsKey("north") ? state.Players["north"] : null, "north", state.ActiveSeat == "north",
+        DrawPlayerPlate(leftRoot, state.Players.ContainsKey(TopSeat) ? state.Players[TopSeat] : null, TopSeat, state.ActiveSeat == TopSeat,
             new Vector2(0.06f, 0.938f), new Vector2(0.94f, 0.982f));
 
         // Docked card preview: the selected card, else your leader.
         // The docked preview locks to the last left-clicked card; defaults to your leader.
         CardInstance focus = previewLockCard;
-        if (focus == null && state.Players.TryGetValue("south", out var sp)) focus = sp.Leader;
+        if (focus == null && state.Players.TryGetValue(BottomSeat, out var sp)) focus = sp.Leader;
 
         var pvLabel = TextObject("Card Preview Label", leftRoot, "CARD PREVIEW", 9, Muted, TextAnchor.LowerLeft, monoFont);
         Stretch(pvLabel.rectTransform, new Vector2(0.06f, 0.912f), new Vector2(0.94f, 0.93f), Vector2.zero, Vector2.zero);
@@ -2645,7 +2753,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         var sub = TextObject("Subtitle", sideRoot, $"TURN {state.TurnNumber}  ·  ROOM LOCAL", 10, Muted, TextAnchor.MiddleLeft, monoFont);
         Stretch(sub.rectTransform, new Vector2(0.06f, 0.938f), new Vector2(0.62f, 0.956f), Vector2.zero, Vector2.zero);
-        bool youActive = state.ActiveSeat == "south";
+        bool youActive = state.ActiveSeat == BottomSeat;
         var turnBadge = TextObject("Turn Badge", sideRoot, youActive ? "Your turn" : "Opp turn", 10, Accent2, TextAnchor.MiddleRight);
         Stretch(turnBadge.rectTransform, new Vector2(0.62f, 0.938f), new Vector2(0.94f, 0.956f), Vector2.zero, Vector2.zero);
 
@@ -2665,7 +2773,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         DrawContextActions(actionPanel);
 
         DrawChatPanel();
-        DrawPlayerPlate(sideRoot, state.Players.ContainsKey("south") ? state.Players["south"] : null, "south", state.ActiveSeat == "south", new Vector2(0.06f, 0.094f), new Vector2(0.94f, 0.138f));
+        DrawPlayerPlate(sideRoot, state.Players.ContainsKey(BottomSeat) ? state.Players[BottomSeat] : null, BottomSeat, state.ActiveSeat == BottomSeat, new Vector2(0.06f, 0.094f), new Vector2(0.94f, 0.138f));
         AddEndTurnPanel();
 
         // Built last so the dropdown overlays everything else in the side panel.
@@ -2782,7 +2890,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // South sits on the player's side: mirror the avatar to the right edge and
         // right-align the name so the plate reads as a reflection of the opponent's.
-        bool mirror = seat == "south";
+        bool mirror = seat == BottomSeat;
 
         float dotX = mirror ? 0.945f : 0.055f;
         // Show the leader's color-identity hex icon; fall back to a plain dot if unavailable.
@@ -3831,7 +3939,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var screenPoint = RectTransformUtility.WorldToScreenPoint(null, source.TransformPoint(source.rect.center));
         if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(canvasRect, screenPoint, null, out var localPoint)) return;
 
-        var liftDirection = card.Owner == "north" ? -1f : 1f;
+        var liftDirection = card.Owner == TopSeat ? -1f : 1f;
         var target = localPoint + new Vector2(0, (size.y * 0.5f + 70f) * liftDirection);
         target = ClampToCanvas(target, size, canvasRect.rect, 12f);
 
@@ -4075,7 +4183,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             holder.sizeDelta = new Vector2(geo.CardWidth, geo.CardHeight);
 
             ApplyFanSlot(holder, geo, i, count, top);
-            AddCard(holder, cards[i], seat, true, Vector2.zero, true, top, count - 1 - i);
+            // In a networked match the top-rendered hand is always the remote opponent's (see
+            // BottomSeat/TopSeat) - hide it as card backs, same as any other face-down pile.
+            // Hotseat/Versus Self is unaffected (isNetworked is false there).
+            bool handFaceUp = !(isNetworked && top);
+            AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top, count - 1 - i);
             holders[i] = holder;
         }
 
@@ -6583,7 +6695,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             manager.HidePreview();
             manager.ShowHandHoverPreview(card, transform as RectTransform);
             stackRoot.SetAsLastSibling();
-            var liftDirection = card != null && card.Owner == "north" ? -1f : 1f;
+            var liftDirection = card != null && card.Owner == manager.TopSeat ? -1f : 1f;
             visualRoot.localScale = originalScale * 1.08f;
             visualRoot.localPosition = originalLocalPosition + new Vector3(0, 10f * liftDirection, 0);
         }
