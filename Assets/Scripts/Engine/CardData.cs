@@ -215,7 +215,7 @@ namespace OnePieceTcg.Engine
                 Leader = "ST01-001",
                 List = new List<(string, int)>
                 {
-                    ("ST01-001", 1), ("ST01-002", 4), ("ST01-003", 4), ("ST01-004", 4),
+                    ("ST01-002", 4), ("ST01-003", 4), ("ST01-004", 4),
                     ("ST01-005", 4), ("ST01-006", 4), ("ST01-007", 4), ("ST01-008", 4),
                     ("ST01-009", 4), ("ST01-010", 4), ("ST01-011", 2), ("ST01-012", 2),
                     ("ST01-013", 2), ("ST01-014", 2), ("ST01-015", 2), ("ST01-016", 2),
@@ -229,7 +229,7 @@ namespace OnePieceTcg.Engine
                 Leader = "ST02-001",
                 List = new List<(string, int)>
                 {
-                    ("ST02-001", 1), ("ST02-002", 4), ("ST02-003", 2), ("ST02-004", 4),
+                    ("ST02-002", 4), ("ST02-003", 2), ("ST02-004", 4),
                     ("ST02-005", 2), ("ST02-006", 4), ("ST02-007", 4), ("ST02-008", 4),
                     ("ST02-009", 2), ("ST02-010", 2), ("ST02-011", 4), ("ST02-012", 4),
                     ("ST02-013", 2), ("ST02-014", 4), ("ST02-015", 2), ("ST02-016", 4),
@@ -503,14 +503,22 @@ namespace OnePieceTcg.Engine
                     ("ST22-014", 2), ("ST22-015", 2), ("ST22-016", 2), ("ST22-017", 2),
                 },
             },
-            // ST23 deliberately omitted for now: the research agent confirmed the leader
-            // (OP09-001, reprint) and the 14-card pool, but could not verify which single
-            // non-SR card is x2 vs x4 (everything else is fixed at x2/x4 per the SR pattern).
-            // Add once that's confirmed rather than guessing a specific card's count.
-            //
             // ST24-ST28 are precon decks that reuse original booster-set numbers for most
             // reprinted cards (only ~5 cards per deck get fresh ST2X-0YY numbers); ST29/ST30
-            // use full dedicated numbering like the classic starter decks.
+            // use full dedicated numbering like the classic starter decks. ST23 follows the
+            // same reprint pattern (leader is the OP09-001 Shanks reprint).
+            ["st23"] = new DeckDef
+            {
+                Id = "st23",
+                Name = "ST23 - RED Shanks",
+                Leader = "OP09-001",
+                List = new List<(string, int)>
+                {
+                    ("ST23-001", 2), ("ST23-002", 2), ("ST23-003", 2), ("ST23-004", 4), ("ST23-005", 4),
+                    ("OP09-006", 4), ("OP09-010", 4), ("OP09-011", 4), ("OP09-012", 4), ("OP09-013", 4),
+                    ("OP09-014", 4), ("OP09-015", 4), ("OP09-016", 4), ("OP09-020", 4),
+                },
+            },
             ["st24"] = new DeckDef
             {
                 Id = "st24",
@@ -595,6 +603,48 @@ namespace OnePieceTcg.Engine
                     ("ST30-006", 4), ("ST30-007", 2), ("ST30-008", 4), ("ST30-009", 4),
                     ("ST30-010", 4), ("ST30-011", 2), ("ST30-012", 2), ("ST30-013", 4),
                     ("ST30-014", 2), ("ST30-015", 4), ("ST30-016", 2), ("ST30-017", 4),
+                },
+            },
+            // Learn Together Deck Set (LT-01, released 2025-10-03): three 2-player-intro
+            // decks built almost entirely from reprints spanning EB01/EB02/OP01/OP06-12/
+            // ST10/ST12/ST21/promo cards, rather than a dedicated STxx-numbered card pool.
+            ["lt01luffy"] = new DeckDef
+            {
+                Id = "lt01luffy",
+                Name = "LT01 - Luffy (Learn Together)",
+                Leader = "ST21-001",
+                List = new List<(string, int)>
+                {
+                    ("P-069", 4), ("ST21-015", 2), ("ST21-014", 2), ("OP11-003", 4),
+                    ("ST21-017", 2), ("OP06-018", 2), ("ST21-008", 4), ("OP11-016", 4),
+                    ("OP10-013", 4), ("ST21-003", 4), ("ST21-010", 4), ("OP01-016", 4),
+                    ("OP10-019", 2), ("OP09-005", 4), ("OP10-011", 4),
+                },
+            },
+            ["lt01zoro"] = new DeckDef
+            {
+                Id = "lt01zoro",
+                Name = "LT01 - Zoro (Learn Together)",
+                Leader = "OP12-020",
+                List = new List<(string, int)>
+                {
+                    ("OP12-028", 4), ("OP12-027", 4), ("OP12-023", 4), ("OP12-025", 4),
+                    ("OP12-039", 4), ("OP06-036", 4), ("OP12-032", 4), ("OP12-036", 4),
+                    ("OP12-029", 4), ("OP06-038", 2), ("EB01-012", 2), ("OP10-030", 2),
+                    ("OP12-031", 4), ("EB02-019", 4),
+                },
+            },
+            ["lt01nami"] = new DeckDef
+            {
+                Id = "lt01nami",
+                Name = "LT01 - Nami (Learn Together)",
+                Leader = "OP11-041",
+                List = new List<(string, int)>
+                {
+                    ("OP11-048", 4), ("P-053", 4), ("OP11-056", 4), ("EB02-022", 4),
+                    ("P-056", 4), ("OP11-058", 4), ("OP11-052", 2), ("OP11-053", 4),
+                    ("OP11-051", 2), ("OP11-118", 2), ("OP11-105", 4), ("OP09-107", 4),
+                    ("OP11-060", 4), ("OP11-114", 4),
                 },
             },
         };

@@ -597,9 +597,41 @@ public class DeckBuilderManager : MonoBehaviour
     private int gridCols;
 
     // async art decoding (off the main thread via UnityWebRequestTexture)
+    //
+    // Loading a card's art has two phases with very different costs: FETCH
+    // (UnityWebRequest reading the file off disk - cheap, yields normally, fine
+    // to run several at once) and DECODE (Texture2D.LoadImage + mip chain, NOT
+    // yieldable, runs fully synchronously the instant a fetch resolves). Capping
+    // only fetch concurrency doesn't bound decode cost: local file:// reads tend
+    // to resolve close together, so several un-yielded decodes can still land in
+    // the same frame and stutter. So the two are throttled separately per tier
+    // below (MaxConcurrentLoads/MaxConcurrentThumbLoads bound how many ids are
+    // anywhere in the fetch-or-awaiting-decode pipeline - generous, fetching
+    // itself is cheap), but decoding is throttled ONCE, jointly, for both tiers
+    // (see MaxDecodeCostPerFrame / DrainDecodeQueue near the shared _decodeQueue)
+    // - two independently-budgeted decode steps running every frame would be
+    // additive on any frame both have work, silently blowing the real per-frame
+    // cost bound this whole scheme exists to enforce.
+    //
+    // Two tiers: MASTER (full-resolution card art, ~715x1000 - leader previews,
+    // hover preview, the card-library tile pool) and THUMB (pre-generated
+    // downscaled ~448x626 copies under StreamingAssets/Cards/Thumbs/, see
+    // generate_thumbnails.py - hex cells, decklist rows, library thumbnail
+    // cards: contexts that only ever display art small, where full-res decode
+    // cost was being paid for pixels the GPU immediately throws away). Each
+    // tier's fetch-stage state is fully separate (simple, low-risk, keeps the
+    // master pipeline untouched); an id's slot in _artLoading/activeArtLoads (or
+    // _thumbLoading/activeThumbLoads) is held for its WHOLE fetch+decode
+    // lifetime, not just the fetch - that's what keeps the decode queue's depth
+    // bounded instead of growing unboundedly under a burst.
     private static readonly HashSet<string> _artLoading = new HashSet<string>();
     private int activeArtLoads;
     private const int MaxConcurrentLoads = 8;
+
+    private static readonly Dictionary<string, Sprite> _thumbCache = new Dictionary<string, Sprite>();
+    private static readonly HashSet<string> _thumbLoading = new HashSet<string>();
+    private int activeThumbLoads;
+    private const int MaxConcurrentThumbLoads = 12;   // thumbnails are smaller to fetch too
 
     private Canvas canvas;
     private RectTransform root;
@@ -711,7 +743,8 @@ public class DeckBuilderManager : MonoBehaviour
             new[] { "Copperplate Gothic Bold", "Perpetua Titling MT", "Constantia", "Cambria", "Georgia" }, 14); }
         catch { bronzeFont = null; }
 
-        _artLoading.Clear();   // any in-flight markers from a prior session are dead
+        _artLoading.Clear();    // any in-flight markers from a prior session are dead
+        _thumbLoading.Clear();  // same reason - static HashSet, coroutines don't survive scene teardown
         LoadLibrary();
         LoadFaceData();
         EnsureEventSystem();
@@ -823,10 +856,14 @@ public class DeckBuilderManager : MonoBehaviour
     {
         if (previewRoot == null) return;
         var rec = Card(id);
-        var sp  = LoadArt(id);
-        if (rec == null || sp == null) { HideCardPreview(); return; }
-        previewImage.sprite = sp;
-        previewImage.color  = Color.white;
+        if (rec == null) { HideCardPreview(); return; }
+
+        bool haveEntry = _artCache.TryGetValue(id, out var cachedSp);
+        if (haveEntry && cachedSp == null) { HideCardPreview(); return; }   // confirmed: no art for this card
+
+        if (cachedSp != null) { previewImage.sprite = cachedSp; previewImage.color = Color.white; }
+        else { previewImage.sprite = null; previewImage.color = new Color(1f, 1f, 1f, 0.06f); RequestArt(previewImage, id); }
+
         if (previewName != null) previewName.text = rec.name ?? "";
         previewRoot.gameObject.SetActive(true);
         previewRoot.SetAsLastSibling();   // keep it above everything just drawn
@@ -1018,13 +1055,16 @@ public class DeckBuilderManager : MonoBehaviour
         thumb.anchoredPosition = new Vector2(14f, 0f);
         Round(thumb); AddBorder(thumb, MenuB, 1f);
         var lead = Card(d.leaderId);
-        var lsp = LoadArt(d.leaderId);
-        if (lsp != null)
+        bool haveEntry  = _thumbCache.TryGetValue(d.leaderId, out var cachedLsp);
+        bool knownNoArt = haveEntry && cachedLsp == null;
+        if (!knownNoArt)
         {
-            var im = Panel("Art", thumb, Color.white);
-            im.GetComponent<Image>().sprite = lsp;
-            im.GetComponent<Image>().preserveAspect = true;
+            var im = Panel("Art", thumb, cachedLsp != null ? Color.white : new Color(0f, 0f, 0f, 0f));
+            var imImg = im.GetComponent<Image>();
+            imImg.preserveAspect = true;
             Stretch(im, Vector2.zero, Vector2.one, new Vector2(3, 3), new Vector2(-3, -3));
+            if (cachedLsp != null) imImg.sprite = cachedLsp;
+            else RequestThumbArt(imImg, d.leaderId);
         }
         else
         {
@@ -1265,8 +1305,11 @@ public class DeckBuilderManager : MonoBehaviour
 
         var selected = DeckStore.Get(selectedDeckId);
         BuildSelectLeaderCard(leftPanel, selected);
-        BuildSelectHexRoster(centerPanel, allDecks);
+        // Decklist before the hex roster: art requests queue in build order, and
+        // the ~15-19 rows you're actually reading matter more than the ~37
+        // peripheral hex thumbnails, so they should win the race to decode first.
         BuildSelectDecklist(rightPanel, selected);
+        BuildSelectHexRoster(centerPanel, allDecks);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -1329,8 +1372,11 @@ public class DeckBuilderManager : MonoBehaviour
 
         var selectedDef = starterDecks.FirstOrDefault(d => d.Id == selectedStarterId);
         BuildStarterLeaderCard(leftPanel, selectedDef);
-        BuildStarterHexRoster(centerPanel, starterDecks);
+        // Decklist before the hex roster - see the matching comment in
+        // RenderSelect(): art requests queue in build order, and the selected
+        // deck's own list matters more than the peripheral hex thumbnails.
         BuildSelectDecklist(rightPanel, FromStarterDef(selectedDef));
+        BuildStarterHexRoster(centerPanel, starterDecks);
     }
 
     private void BuildStarterLeaderCard(RectTransform panel, DeckDef def)
@@ -1375,11 +1421,13 @@ public class DeckBuilderManager : MonoBehaviour
         var lead = Card(def.Leader);
         if (lead != null)
         {
-            var artSp = LoadArt(def.Leader);
-            if (artSp != null)
+            bool haveEntry  = _artCache.TryGetValue(def.Leader, out var cachedArtSp);
+            bool knownNoArt = haveEntry && cachedArtSp == null;
+            if (!knownNoArt)
             {
                 var pimg = MakeRoundedCard(card, true, out _);
-                pimg.sprite = artSp;
+                if (cachedArtSp != null) pimg.sprite = cachedArtSp;
+                else { pimg.color = new Color32(10, 20, 32, 255); RequestArt(pimg, def.Leader); }
             }
             else
             {
@@ -1448,8 +1496,11 @@ public class DeckBuilderManager : MonoBehaviour
         badgeT.fontStyle = FontStyle.Bold;
         Stretch(badgeT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-        // ── COPY TO MY DECKS (single button - no edit/delete/favorite; starter
-        // decks aren't user-owned data) ──
+        // ── Primary action: in picker mode (Solo/PvP deck selection) this deck
+        // can be used directly - copy it into DeckStore (so match setup can
+        // resolve it the same way as any owned deck) and hand it straight back
+        // to the picker. Outside picker mode it's just COPY TO MY DECKS, since
+        // starter decks aren't user-owned data and can't be played from here. ──
         float btnY = badgeY - BADGE_H - GAP;
         bool canAdd = DeckStore.CanAddNew();
         var copyBtn = Panel("Copy", panel, canAdd ? (Color)Accent : (Color)new Color32(40, 60, 78, 220));
@@ -1459,13 +1510,15 @@ public class DeckBuilderManager : MonoBehaviour
         copyBtn.anchoredPosition = new Vector2(-110f, btnY);
         Round(copyBtn);
         if (!canAdd) AddBorder(copyBtn, MenuB, 1f);
-        var copyT = Text_("t", copyBtn, canAdd ? "COPY TO MY DECKS" : "DECK LIMIT REACHED", 13,
+        string btnLabel = canAdd ? (pickerActive ? "USE THIS DECK ▸" : "COPY TO MY DECKS") : "DECK LIMIT REACHED";
+        var copyT = Text_("t", copyBtn, btnLabel, 13,
             canAdd ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
         copyT.fontStyle = FontStyle.Bold;
         Stretch(copyT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         if (canAdd)
         {
             var capturedDef = def;
+            bool wasPicking = pickerActive;
             copyBtn.gameObject.AddComponent<Button>().onClick.AddListener(() =>
             {
                 var copy = FromStarterDef(capturedDef);
@@ -1473,6 +1526,11 @@ public class DeckBuilderManager : MonoBehaviour
                 copy.name = capturedDef.Name;
                 copy.slot = -1;
                 DeckStore.Save(copy);
+                if (wasPicking)
+                {
+                    ConfirmPicker(copy.id);
+                    return;
+                }
                 selectedDeckId = copy.id;
                 view = View.Select;
                 Render();
@@ -1628,15 +1686,18 @@ public class DeckBuilderManager : MonoBehaviour
         maskComp.showMaskGraphic = false;
 
         var lead = Card(def.Leader);
-        var artSp = LoadArt(def.Leader);
-        if (artSp != null)
+        bool haveEntry  = _thumbCache.TryGetValue(def.Leader, out var cachedArtSp);
+        bool knownNoArt = haveEntry && cachedArtSp == null;
+
+        if (!knownNoArt)
         {
             const float SAFE_L = 0.06f, SAFE_R = 0.94f;
             const float SAFE_T = 0.05f, SAFE_B = 0.62f;
             const float BLEED = 1.03f;
 
             float mW = cell.sizeDelta.x - 2f * pad, mH = cell.sizeDelta.y - 2f * pad;
-            float aspect = artSp.rect.height > 0f ? artSp.rect.width / artSp.rect.height : 0.716f;
+            float aspect = (cachedArtSp != null && cachedArtSp.rect.height > 0f)
+                ? cachedArtSp.rect.width / cachedArtSp.rect.height : 0.716f;
             float hexAspect = mH > 0f ? mW / mH : 1.1547f;
 
             float visH = 0.44f;
@@ -1650,14 +1711,21 @@ public class DeckBuilderManager : MonoBehaviour
             float aw = (mW / visW) * BLEED;
             float ah = aw / aspect;
 
-            var artImg = Panel("Art", artMask, Color.white);
+            // Loading placeholder must be OPAQUE and match artMask's own fill
+            // (8,16,24) - artMask's own graphic is hidden (showMaskGraphic =
+            // false, it's stencil-only), so a transparent Art child here would
+            // let the steel Ring panel underneath show through as grey across
+            // the whole hex interior instead of just its intended thin rim.
+            var artImg = Panel("Art", artMask, cachedArtSp != null ? Color.white : new Color32(8, 16, 24, 255));
             var ai = artImg.GetComponent<Image>();
-            ai.sprite = artSp; ai.type = Image.Type.Simple;
-            ai.preserveAspect = false; ai.raycastTarget = false;
+            ai.raycastTarget = false;
             artImg.anchorMin = artImg.anchorMax = new Vector2(0.5f, 0.5f);
             artImg.pivot = new Vector2(0.5f, 0.5f);
             artImg.sizeDelta = new Vector2(aw, ah);
             artImg.anchoredPosition = new Vector2(-(cxFrac - 0.5f) * aw, (cyFrac - 0.5f) * ah);
+
+            if (cachedArtSp != null) { ai.sprite = cachedArtSp; ai.type = Image.Type.Simple; ai.preserveAspect = false; }
+            else RequestThumbArt(ai, def.Leader);
         }
         else
         {
@@ -1667,16 +1735,6 @@ public class DeckBuilderManager : MonoBehaviour
                 new Color(1f, 1f, 1f, 0.16f), TextAnchor.MiddleCenter);
             Stretch(mono.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         }
-
-        // Deck code (e.g. "ST01") occupies the slot the favorite star uses on the
-        // movable grid - starter decks have no favorite concept.
-        var idLabel = Text_("IdLabel", cell, def.Id, HexFont(13), Gold, TextAnchor.UpperCenter, monoFont);
-        idLabel.fontStyle = FontStyle.Bold;
-        idLabel.rectTransform.anchorMin = new Vector2(0f, 1f);
-        idLabel.rectTransform.anchorMax = new Vector2(1f, 1f);
-        idLabel.rectTransform.pivot = new Vector2(0.5f, 1f);
-        idLabel.rectTransform.sizeDelta = new Vector2(0f, 18f);
-        idLabel.rectTransform.anchoredPosition = new Vector2(0f, 0f);
 
         // Click -> preview only. No HexDragReorder component: starter-deck hexes
         // are fixed in place, never draggable.
@@ -1787,11 +1845,13 @@ public class DeckBuilderManager : MonoBehaviour
         var lead = Card(deck.leaderId);
         if (lead != null)
         {
-            var artSp = LoadArt(deck.leaderId);
-            if (artSp != null)
+            bool haveEntry  = _artCache.TryGetValue(deck.leaderId, out var cachedArtSp);
+            bool knownNoArt = haveEntry && cachedArtSp == null;
+            if (!knownNoArt)
             {
                 var pimg = MakeRoundedCard(card, true, out _);
-                pimg.sprite = artSp;   // the full leader card, shown clean
+                if (cachedArtSp != null) pimg.sprite = cachedArtSp;   // the full leader card, shown clean
+                else { pimg.color = new Color32(10, 20, 32, 255); RequestArt(pimg, deck.leaderId); }
             }
             else
             {
@@ -2336,9 +2396,18 @@ public class DeckBuilderManager : MonoBehaviour
         var maskComp = artMask.gameObject.AddComponent<Mask>();
         maskComp.showMaskGraphic = false;
 
-        var lead   = Card(deck.leaderId);
-        var artSp  = LoadArt(deck.leaderId);
-        if (artSp != null)
+        var lead = Card(deck.leaderId);
+        // Cache-only lookup against the small pre-generated thumbnail tier
+        // (_thumbCache, not the full-res _artCache - a hex cell never needs the
+        // master). A cache MISS that's still `false` (never attempted) queues
+        // an async fetch and shows a placeholder that RequestThumbArt() fades
+        // the real art into once decoded; a cache HIT of null means the art was
+        // already tried and truly doesn't exist, so the mono-initial placeholder
+        // is permanent, not a loading state.
+        bool haveEntry  = _thumbCache.TryGetValue(deck.leaderId, out var cachedArtSp);
+        bool knownNoArt = haveEntry && cachedArtSp == null;
+
+        if (!knownNoArt)
         {
             // Face-CENTRED framing: the hex shows a window whose centre aims at
             // the detected face (face-data.json, else the skin-tone heuristic) in
@@ -2349,7 +2418,10 @@ public class DeckBuilderManager : MonoBehaviour
             const float BLEED  = 1.03f;
 
             float mW = cell.sizeDelta.x - 2f * pad, mH = cell.sizeDelta.y - 2f * pad;
-            float aspect    = artSp.rect.height > 0f ? artSp.rect.width / artSp.rect.height : 0.716f;
+            // Every OPTCG card art shares this aspect, so the framing math needs
+            // no change once the real texture lands - only the sprite swaps in.
+            float aspect    = (cachedArtSp != null && cachedArtSp.rect.height > 0f)
+                ? cachedArtSp.rect.width / cachedArtSp.rect.height : 0.716f;
             float hexAspect = mH > 0f ? mW / mH : 1.1547f;
 
             // Window height (fraction of card shown); 0.44 keeps the whole head
@@ -2365,15 +2437,22 @@ public class DeckBuilderManager : MonoBehaviour
             float aw = (mW / visW) * BLEED;
             float ah = aw / aspect;
 
-            var artImg = Panel("Art", artMask, Color.white);
+            // Loading placeholder must be OPAQUE and match artMask's own fill
+            // (8,16,24) - artMask's own graphic is hidden (showMaskGraphic =
+            // false, it's stencil-only), so a transparent Art child here would
+            // let the steel Ring panel underneath show through as grey across
+            // the whole hex interior instead of just its intended thin rim.
+            var artImg = Panel("Art", artMask, cachedArtSp != null ? Color.white : new Color32(8, 16, 24, 255));
             var ai = artImg.GetComponent<Image>();
-            ai.sprite = artSp; ai.type = Image.Type.Simple;
-            ai.preserveAspect = false; ai.raycastTarget = false;
+            ai.raycastTarget = false;
             artImg.anchorMin = artImg.anchorMax = new Vector2(0.5f, 0.5f);   // hex centre
             artImg.pivot = new Vector2(0.5f, 0.5f);
             artImg.sizeDelta = new Vector2(aw, ah);
             // Slide the card so the illustration window's centre sits at the hex centre.
             artImg.anchoredPosition = new Vector2(-(cxFrac - 0.5f) * aw, (cyFrac - 0.5f) * ah);
+
+            if (cachedArtSp != null) { ai.sprite = cachedArtSp; ai.type = Image.Type.Simple; ai.preserveAspect = false; }
+            else RequestThumbArt(ai, deck.leaderId);   // still loading - fades in once decoded
         }
         else
         {
@@ -2503,10 +2582,14 @@ public class DeckBuilderManager : MonoBehaviour
         var row = Panel(rec.id + " SR", parent, RowBg);
         SetPref(row, new Vector2(0f, 34f));
         Round(row);
+        // Hovering a deck row pops the same right-side preview (same as editor BuildDeckRow).
+        var rowHov = row.gameObject.AddComponent<HoverPreview>();
+        rowHov.mgr = this; rowHov.cardId = rec.id;
 
-        // Art bleed (same pattern as editor BuildDeckRow, minus ± controls)
-        var artSp = LoadArt(rec.id);
-        if (artSp != null)
+        // Art bleed (same pattern as editor BuildDeckRow, minus ± controls) -
+        // small pre-generated thumbnail tier, this never needs the master.
+        bool rowKnownNoArt = _thumbCache.TryGetValue(rec.id, out var rowCachedArt) && rowCachedArt == null;
+        if (!rowKnownNoArt)
         {
             var clip = Panel("ArtClip", row, Color.white);
             clip.anchorMin = new Vector2(1f, 0f); clip.anchorMax = new Vector2(1f, 1f);
@@ -2520,16 +2603,23 @@ public class DeckBuilderManager : MonoBehaviour
 
             const float aspect = 0.716f, rowH = 34f, zoom = 1.5f;
             float w = 180f * zoom, h = w / aspect;
-            var art = Panel("Art", clip, new Color(1f, 1f, 1f, 0.5f));
-            art.GetComponent<Image>().sprite = artSp;
-            art.GetComponent<Image>().type = Image.Type.Simple;
-            art.GetComponent<Image>().preserveAspect = false;
-            art.GetComponent<Image>().raycastTarget = false;
+            var artTint = new Color(1f, 1f, 1f, 0.5f);
+            // Same reasoning as the hex cells: clip's own graphic is stencil-only
+            // (showMaskGraphic = false), so the loading placeholder must be an
+            // opaque colour rather than transparent, or whatever sits behind the
+            // row could show through unexpectedly instead of a clean fill.
+            var art = Panel("Art", clip, rowCachedArt != null ? artTint : RowBg);
+            var artImg = art.GetComponent<Image>();
+            artImg.preserveAspect = false;
+            artImg.raycastTarget = false;
             art.anchorMin = art.anchorMax = new Vector2(0.5f, 1f);
             art.pivot = new Vector2(0.5f, 1f);
             art.sizeDelta = new Vector2(w, h);
             float band = FaceBand(rec.id, rec.type);
             art.anchoredPosition = new Vector2(0f, band * h - rowH / 2f);
+
+            if (rowCachedArt != null) { artImg.sprite = rowCachedArt; artImg.type = Image.Type.Simple; }
+            else RequestThumbArt(artImg, rec.id, artTint);
 
             EdgeFade(clip, GetHGradientSprite(),  1f,  1f, Vector2.zero,           new Vector2(0.55f, 1f));
             EdgeFade(clip, GetVGradientSprite(),  1f,  1f, new Vector2(0f, 0.74f), Vector2.one);
@@ -2742,7 +2832,14 @@ public class DeckBuilderManager : MonoBehaviour
         AddBorder(leaderSlot, pickingLeader ? Accent : MenuB, pickingLeader ? 1.6f : 1f);
 
         var lead = Card(editing.leaderId);
-        var art  = LoadArt(editing.leaderId);
+        Sprite cachedArt = null;
+        bool knownNoArt;
+        if (string.IsNullOrEmpty(editing.leaderId)) knownNoArt = true;
+        else
+        {
+            bool haveEntry = _artCache.TryGetValue(editing.leaderId, out cachedArt);
+            knownNoArt = haveEntry && cachedArt == null;
+        }
 
         // Section label, top-left.
         var lbl = Text_("LeadLbl", leaderSlot, "LEADER", 9, Accent, TextAnchor.UpperLeft, monoFont);
@@ -2757,10 +2854,11 @@ public class DeckBuilderManager : MonoBehaviour
         cardRegion.sizeDelta = new Vector2(150f, 210f);
         cardRegion.anchoredPosition = new Vector2(0f, -28f);
         cardRegion.GetComponent<Image>().raycastTarget = false;
-        if (art != null)
+        if (!knownNoArt)
         {
             var pimg = MakeRoundedCard(cardRegion, false, out _);
-            pimg.sprite = art;
+            if (cachedArt != null) pimg.sprite = cachedArt;
+            else { pimg.color = new Color32(10, 20, 32, 255); RequestArt(pimg, editing.leaderId); }
         }
         else
         {
@@ -2924,8 +3022,9 @@ public class DeckBuilderManager : MonoBehaviour
 
         // Hearthstone-style flavour: the card art bleeds in from the right, behind
         // the controls, and fades into the row so the name/cost stay readable.
-        var artSp = LoadArt(rec.id);
-        if (artSp != null)
+        // Small pre-generated thumbnail tier - this never needs the master.
+        bool rowKnownNoArt = _thumbCache.TryGetValue(rec.id, out var rowCachedArt) && rowCachedArt == null;
+        if (!rowKnownNoArt)
         {
             // Clip fills the full row and is masked to the row's rounded shape, so
             // the art reaches every edge without poking past the rounded corners.
@@ -2943,9 +3042,14 @@ public class DeckBuilderManager : MonoBehaviour
             // inner illustration fills the strip.
             const float aspect = 0.716f, rowH = 34f, zoom = 1.5f;
             float w = 232f * zoom, h = w / aspect;
-            var art = Panel("Art", clip, new Color(1f, 1f, 1f, 0.5f));
+            var artTint = new Color(1f, 1f, 1f, 0.5f);
+            // Same reasoning as the hex cells: clip's own graphic is stencil-only
+            // (showMaskGraphic = false), so the loading placeholder must be an
+            // opaque colour rather than transparent, or whatever sits behind the
+            // row could show through unexpectedly instead of a clean fill.
+            var art = Panel("Art", clip, rowCachedArt != null ? artTint : RowBg);
             var aim = art.GetComponent<Image>();
-            aim.sprite = artSp; aim.type = Image.Type.Simple; aim.preserveAspect = false;
+            aim.preserveAspect = false;
             aim.raycastTarget = false;
             art.anchorMin = art.anchorMax = new Vector2(0.5f, 1f);   // top-centre of clip
             art.pivot = new Vector2(0.5f, 1f);
@@ -2954,6 +3058,9 @@ public class DeckBuilderManager : MonoBehaviour
             // characters/leaders (cached per card); centre for events/stages.
             float band = FaceBand(rec.id, rec.type);
             art.anchoredPosition = new Vector2(0f, band * h - rowH / 2f);
+
+            if (rowCachedArt != null) { aim.sprite = rowCachedArt; aim.type = Image.Type.Simple; }
+            else RequestThumbArt(aim, rec.id, artTint);
 
             // Feather only the left (for text) and a touch of top/bottom so the
             // horizontal mask cut blends; the art now fills the strip edge-to-edge.
@@ -3329,34 +3436,148 @@ public class DeckBuilderManager : MonoBehaviour
     // scroll only ever requests what's actually on screen.
     private void Update()
     {
-        if (poolContent == null || tilePool.Count == 0) return;
-
-        foreach (var tv in tilePool)
+        if (poolContent != null && tilePool.Count > 0)
         {
-            if (tv == null || tv.root == null) continue;             // destroyed tile
-            if (!tv.root.gameObject.activeSelf || string.IsNullOrEmpty(tv.boundId)) continue;
-            if (tv.artId == tv.boundId) continue;                    // already correct
-
-            if (_artCache.TryGetValue(tv.boundId, out var sp))
+            foreach (var tv in tilePool)
             {
-                ApplyArt(tv, sp); tv.artId = tv.boundId;             // cached → instant
-                continue;
+                if (tv == null || tv.root == null) continue;             // destroyed tile
+                if (!tv.root.gameObject.activeSelf || string.IsNullOrEmpty(tv.boundId)) continue;
+                if (tv.artId == tv.boundId) continue;                    // already correct
+
+                if (_artCache.TryGetValue(tv.boundId, out var sp))
+                {
+                    ApplyArt(tv, sp); tv.artId = tv.boundId;             // cached → instant
+                    continue;
+                }
+                if (activeArtLoads < MaxConcurrentLoads && !_artLoading.Contains(tv.boundId))
+                    StartCoroutine(LoadArtAsync(tv.boundId));            // decode off-thread
             }
-            if (activeArtLoads < MaxConcurrentLoads && !_artLoading.Contains(tv.boundId))
-                StartCoroutine(LoadArtAsync(tv.boundId));            // decode off-thread
+        }
+
+        // One shared decode budget for BOTH tiers, drained once per frame
+        // regardless of how many Pump*Requests calls follow - see the comment
+        // on MaxDecodeCostPerFrame for why this can't be two independent steps.
+        DrainDecodeQueue();
+        PumpArtRequests();
+        PumpThumbArtRequests();
+    }
+
+    // ── Generic async art delivery for one-off Images (leader preview, hover
+    // preview) — the non-pooled counterpart to the tile-pool loop above.
+    // RequestArt() queues a fetch and remembers which Image wants it; this
+    // drains that queue under the same concurrency cap and hands off finished
+    // art the moment it lands in _artCache, including art finished by the tile
+    // pool's own loading. Hex cells / decklist rows / library thumbnail cards
+    // use the parallel RequestThumbArt()/_thumbCache tier below instead (see
+    // the comment on _thumbCache further up). A destroyed Image (its owning
+    // row/panel got torn down by the next Render() before art arrived) is just
+    // dropped — Unity's overridden null-check makes that a plain `== null`.
+    private readonly List<(Image img, string id, Color tint)> _artWaiters = new List<(Image, string, Color)>();
+    private readonly Queue<string> _artQueue = new Queue<string>();
+    private readonly HashSet<string> _artQueued = new HashSet<string>();
+
+    private readonly List<(Image img, string id, Color tint)> _thumbWaiters = new List<(Image, string, Color)>();
+    private readonly Queue<string> _thumbQueue = new Queue<string>();
+    private readonly HashSet<string> _thumbQueued = new HashSet<string>();
+
+    // `tint` is the colour the Image should end up at once art lands - most
+    // callers want opaque white, but a few (decklist row art-bleed) intentionally
+    // render art at partial opacity, so that final tint has to survive the swap.
+    private void RequestArt(Image img, string id, Color? tint = null)
+    {
+        if (img == null || string.IsNullOrEmpty(id)) return;
+        // Supersede any older pending request on this same Image (matters for
+        // long-lived Images like the hover preview, which gets re-requested
+        // rapidly as the pointer moves - without this, a stale slow load could
+        // land after a newer one and clobber it with the wrong card's art).
+        _artWaiters.RemoveAll(w => w.img == img);
+        Color finalTint = tint ?? Color.white;
+        if (_artCache.TryGetValue(id, out var cached))
+        {
+            if (cached != null) ApplyLoadedArt(img, cached, finalTint);
+            return;
+        }
+        _artWaiters.Add((img, id, finalTint));
+        if (_artQueued.Add(id)) _artQueue.Enqueue(id);
+    }
+
+    // Same shape as RequestArt, but for the small pre-generated thumbnail tier.
+    private void RequestThumbArt(Image img, string id, Color? tint = null)
+    {
+        if (img == null || string.IsNullOrEmpty(id)) return;
+        _thumbWaiters.RemoveAll(w => w.img == img);
+        Color finalTint = tint ?? Color.white;
+        if (_thumbCache.TryGetValue(id, out var cached))
+        {
+            if (cached != null) ApplyLoadedArt(img, cached, finalTint);
+            return;
+        }
+        _thumbWaiters.Add((img, id, finalTint));
+        if (_thumbQueued.Add(id)) _thumbQueue.Enqueue(id);
+    }
+
+    private void ApplyLoadedArt(Image img, Sprite sp, Color tint)
+    {
+        // preserveAspect is left alone - every caller already sets it correctly
+        // on the Image before requesting art, and Unity doesn't reset it on a
+        // sprite swap, so touching it here would silently fight callers like
+        // the library-card thumbnail that want preserveAspect = true.
+        img.sprite = sp; img.type = Image.Type.Simple; img.color = tint;
+    }
+
+    private void PumpArtRequests()
+    {
+        while (_artQueue.Count > 0 && activeArtLoads < MaxConcurrentLoads)
+        {
+            string id = _artQueue.Dequeue();
+            _artQueued.Remove(id);
+            if (_artCache.ContainsKey(id) || _artLoading.Contains(id)) continue;
+            StartCoroutine(LoadArtAsync(id));
+        }
+        DeliverWaiters(_artWaiters, _artCache);
+    }
+
+    private void PumpThumbArtRequests()
+    {
+        while (_thumbQueue.Count > 0 && activeThumbLoads < MaxConcurrentThumbLoads)
+        {
+            string id = _thumbQueue.Dequeue();
+            _thumbQueued.Remove(id);
+            if (_thumbCache.ContainsKey(id) || _thumbLoading.Contains(id)) continue;
+            StartCoroutine(LoadThumbArtAsync(id));
+        }
+        DeliverWaiters(_thumbWaiters, _thumbCache);
+    }
+
+    private void DeliverWaiters(List<(Image img, string id, Color tint)> waiters, Dictionary<string, Sprite> cache)
+    {
+        if (waiters.Count == 0) return;
+        for (int i = waiters.Count - 1; i >= 0; i--)
+        {
+            var (img, id, tint) = waiters[i];
+            if (img == null) { waiters.RemoveAt(i); continue; }      // owner torn down
+            if (cache.TryGetValue(id, out var sp))
+            {
+                if (sp != null) ApplyLoadedArt(img, sp, tint);
+                waiters.RemoveAt(i);
+            }
         }
     }
 
-    // Reads the card image bytes off the main thread, then decodes them into a
-    // mipmapped, trilinear-filtered texture so the small pool tiles (a ~5x
-    // downscale from the 600x838 masters) sample cleanly instead of looking
-    // blurry/aliased. Only the decode itself touches the main thread.
+    // Fetches the card image bytes off the main thread (UnityWebRequest yields
+    // normally here, cheap). On success the bytes go on the shared decode queue
+    // instead of being decoded immediately - see MaxDecodeCostPerFrame below for
+    // why. The id's slot in _artLoading/activeArtLoads is intentionally NOT
+    // released here; it stays reserved until DrainDecodeQueue() actually decodes
+    // it, so nothing else can start a duplicate fetch for the same id while it's
+    // queued waiting for its turn to decode.
     private IEnumerator LoadArtAsync(string id)
     {
         _artLoading.Add(id);
         activeArtLoads++;
 
         string path = ArtPath(id);
+        byte[] fetched = null;
         if (path != null)
         {
             string url = new System.Uri(path).AbsoluteUri;          // handles spaces in the project path
@@ -3364,31 +3585,124 @@ public class DeckBuilderManager : MonoBehaviour
             {
                 req.downloadHandler = new DownloadHandlerBuffer();
                 yield return req.SendWebRequest();
-                Sprite made = null;
-                if (req.result == UnityWebRequest.Result.Success)
-                {
-                    var data = req.downloadHandler.data;
-                    var tex = new Texture2D(2, 2, TextureFormat.RGBA32, true);   // mipChain = true
-                    if (data != null && tex.LoadImage(data, true))              // builds mips, then non-readable
-                    {
-                        tex.filterMode = FilterMode.Trilinear;
-                        tex.anisoLevel = 4;
-                        made = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
-                    }
-                }
-                _artCache[id] = made;
+                if (req.result == UnityWebRequest.Result.Success) fetched = req.downloadHandler.data;
             }
         }
-        else _artCache[id] = null;
 
+        if (fetched != null)
+            _decodeQueue.Enqueue(new PendingDecode
+            {
+                id = id, data = fetched, cost = MasterDecodeCost,
+                targetCache = _artCache, onFinish = FinishArtLoad,
+            });
+        else { _artCache[id] = null; FinishArtLoad(id, null); }   // nothing to decode - finalize now
+    }
+
+    // Same fetch shape as LoadArtAsync, but resolves through ResolveThumbPath
+    // (falling back to the full-resolution master if no thumbnail has been
+    // generated yet for this id). A fallback decode is a full master even
+    // though it was requested through the thumb tier, so it's charged the
+    // MASTER cost, not the thumbnail cost - see PendingDecode.cost below.
+    private IEnumerator LoadThumbArtAsync(string id)
+    {
+        _thumbLoading.Add(id);
+        activeThumbLoads++;
+
+        var (path, isRealThumb) = ResolveThumbPath(id);
+        byte[] fetched = null;
+        if (path != null)
+        {
+            string url = new System.Uri(path).AbsoluteUri;
+            using (var req = UnityWebRequest.Get(url))
+            {
+                req.downloadHandler = new DownloadHandlerBuffer();
+                yield return req.SendWebRequest();
+                if (req.result == UnityWebRequest.Result.Success) fetched = req.downloadHandler.data;
+            }
+        }
+
+        if (fetched != null)
+            _decodeQueue.Enqueue(new PendingDecode
+            {
+                id = id, data = fetched, cost = isRealThumb ? ThumbDecodeCost : MasterDecodeCost,
+                targetCache = _thumbCache, onFinish = FinishThumbLoad,
+            });
+        else { _thumbCache[id] = null; FinishThumbLoad(id, null); }
+    }
+
+    // The one real per-frame cost bound: Texture2D.LoadImage (+ mip chain) must
+    // run on the main thread and can't be yielded. A full ~715x1000 master
+    // costs roughly 10-30ms; a ~448x626 thumbnail is estimated at roughly a
+    // third of that given the ~2.5-3x fewer pixels (decode cost doesn't scale
+    // perfectly linearly with pixel count - there's some fixed per-call
+    // overhead - so this is a reasoned estimate, not a measurement; tune after
+    // testing). MaxDecodeCostPerFrame=12 with these weights allows either 2
+    // masters' worth (matches the previously-tuned, proven-safe ceiling
+    // exactly, so a frame with only master-tier work can't regress) or up to 6
+    // thumbnails, or any mix. Both tiers share this ONE budget (see
+    // DrainDecodeQueue, called once per frame from Update()) specifically so
+    // they can never add up to more than this in a single frame - two
+    // independently-budgeted decode steps would be additive on any frame both
+    // have work, which is exactly the bug this design avoids.
+    private const int MasterDecodeCost = 6;
+    private const int ThumbDecodeCost = 2;
+    private const int MaxDecodeCostPerFrame = 12;
+
+    private struct PendingDecode
+    {
+        public string id;
+        public byte[] data;
+        public int cost;
+        public Dictionary<string, Sprite> targetCache;
+        public Action<string, Sprite> onFinish;   // releases the correct tier's loading-slot bookkeeping
+    }
+    private readonly Queue<PendingDecode> _decodeQueue = new Queue<PendingDecode>();
+
+    private void DrainDecodeQueue()
+    {
+        int budget = MaxDecodeCostPerFrame;
+        while (_decodeQueue.Count > 0 && _decodeQueue.Peek().cost <= budget)
+        {
+            var item = _decodeQueue.Dequeue();
+            budget -= item.cost;
+
+            // Mipmapped + trilinear so the many downscaled displays (pool tiles,
+            // hex crops, leader slots, previews) sample cleanly instead of
+            // aliasing/looking blurry.
+            Sprite made = null;
+            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, true);   // mipChain = true
+            if (tex.LoadImage(item.data, true))                          // builds mips, then non-readable
+            {
+                tex.filterMode = FilterMode.Trilinear;
+                tex.anisoLevel = 4;
+                made = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+            }
+            item.targetCache[item.id] = made;
+            item.onFinish(item.id, made);
+        }
+    }
+
+    // Common tail for both the "nothing to decode" and "just decoded" exits on
+    // the MASTER tier: releases the id's concurrency slot and pushes the result
+    // to any tile-pool binding still waiting on it (RequestArt's own waiters
+    // are delivered separately, from PumpArtRequests's waiter scan).
+    private void FinishArtLoad(string id, Sprite sprite)
+    {
         _artLoading.Remove(id);
         activeArtLoads--;
 
-        _artCache.TryGetValue(id, out var sprite);
         foreach (var tv in tilePool)
             if (tv != null && tv.root != null &&
                 tv.root.gameObject.activeSelf && tv.boundId == id && tv.artId != id)
             { ApplyArt(tv, sprite); tv.artId = id; }
+    }
+
+    // THUMB-tier counterpart to FinishArtLoad - no tile-pool notification
+    // needed, the tile pool never uses thumbnails.
+    private void FinishThumbLoad(string id, Sprite sprite)
+    {
+        _thumbLoading.Remove(id);
+        activeThumbLoads--;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -4143,34 +4457,19 @@ public class DeckBuilderManager : MonoBehaviour
         return null;
     }
 
-    // Synchronous load — used only for the few thumbnails (library cards, leader
-    // slot). The card grid uses LoadArtAsync instead so it never blocks the frame.
-    private Sprite LoadArt(string id)
+    // Resolves the pre-generated small thumbnail for a card (see
+    // generate_thumbnails.py), falling back to the full-res master via
+    // ArtPath() if no thumbnail exists yet for this id (e.g. a newly added set
+    // before the script is rerun). The bool tells the caller which one it got,
+    // since a fallback decode must be charged the master's decode cost, not
+    // the thumbnail's - see MasterDecodeCost/ThumbDecodeCost.
+    private static (string path, bool isRealThumb) ResolveThumbPath(string id)
     {
-        if (string.IsNullOrWhiteSpace(id)) return null;
-        if (_artCache.TryGetValue(id, out var cached)) return cached;
-
-        Sprite sprite = null;
-        string p = ArtPath(id);
-        if (p != null)
-        {
-            try
-            {
-                // mipChain = true so the many downscaled displays (tiles, leader slot,
-                // previews, hex crops) sample from mipmaps and stay crisp instead of
-                // aliasing. Trilinear smooths mip transitions during hover scaling.
-                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, true);
-                if (tex.LoadImage(File.ReadAllBytes(p)))
-                {
-                    tex.filterMode = FilterMode.Trilinear;
-                    tex.anisoLevel = 4;
-                    sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
-                }
-            }
-            catch { /* ignore */ }
-        }
-        _artCache[id] = sprite;   // cache misses too (null) to avoid repeated disk hits
-        return sprite;
+        if (string.IsNullOrWhiteSpace(id)) return (null, false);
+        string safe = id.Trim();
+        string set = safe.Contains("-") ? safe.Split('-')[0] : "";
+        string thumbPath = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "Thumbs", set, safe + ".jpg");
+        return File.Exists(thumbPath) ? (thumbPath, true) : (ArtPath(id), false);
     }
 
     // Vertical framing fraction (0 = top of card) used to slice the deck-row art.
