@@ -116,6 +116,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private CardInstance previewLockCard;   // last left-clicked card, shown in the docked left preview
     private bool menuOpen;                   // game menu (upper-right) open/closed
     private RectTransform deckLookOverlay;    // full-screen search/look overlay (lives on the canvas)
+    private bool deckLookPeeking;              // true while the player has toggled the overlay away to check the board/hand
+    private DeckLookState deckLookRevealSession; // which DeckLookState (by reference) we've already started/finished revealing
+    private bool deckLookRevealing;              // true while cards are still being drawn in one at a time; selection is disabled meanwhile
     private RectTransform handHoverRoot;
     private Image previewImage;
     private Text previewTitle;
@@ -1035,6 +1038,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddButton(controls, "Exit", () => ExitReplayToMenu(), true, false);
     }
 
+    // Human-readable description of a DeckLookState's eligibility filter, with a trailing space
+    // if non-empty (so callers can splice it directly before "card"). Never renders bare "{}" —
+    // each filter is only interpolated when actually present.
+    private string DeckLookFilterDesc(DeckLookState dl)
+    {
+        if (!string.IsNullOrEmpty(dl.NamedCardFilter))
+        {
+            string typePart = !string.IsNullOrEmpty(dl.CardTypeFilter) ? $" or {dl.CardTypeFilter}" : "";
+            return $"[{dl.NamedCardFilter}]{typePart} ";
+        }
+        string filterDesc = !string.IsNullOrEmpty(dl.FeatureFilter) ? $"{{{dl.FeatureFilter}}} " : "";
+        string typeDesc   = !string.IsNullOrEmpty(dl.CardTypeFilter) ? dl.CardTypeFilter + " " : "";
+        return filterDesc + typeDesc;
+    }
+
     // "Look at top N cards" overlay (e.g. Jewelry Bonney) - cards pop out extremely large across
     // the center of the screen (augment-pick-screen style). "select" is click-driven (handled by
     // OnCardClick's DeckLook branch); "rearrange" is drag-to-reorder (DeckLookCardDrag) against a
@@ -1054,10 +1072,32 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             deckLookWorkingOrder = null;
             deckLookAnimating = false;
+            deckLookPeeking = false;
+            deckLookRevealSession = null;
+            deckLookRevealing = false;
             return;
         }
         var dl = state.DeckLook;
         bool selecting = dl.Step == "select";
+
+        // Peeking: player toggled the overlay away to check the board/hand before deciding.
+        // Skip the dim + cards entirely so the board underneath (already drawn this Render pass)
+        // stays visible; just leave a small button up to bring the overlay back.
+        if (deckLookPeeking)
+        {
+            var peekBtn = PanelObject("Deck Look Peek Btn", canvas.transform, (Color)new Color32(34, 58, 78, 245));
+            Stretch(peekBtn, new Vector2(0.80f, 0.918f), new Vector2(0.935f, 0.965f), Vector2.zero, Vector2.zero);
+            peekBtn.SetAsLastSibling();
+            RoundBig(peekBtn);
+            AddRoundedCardBorder(peekBtn, Accent, 1.4f);
+            var peekText = TextObject("Text", peekBtn, "Show Cards", 15, Ink, TextAnchor.MiddleCenter, monoFont);
+            peekText.fontStyle = FontStyle.Bold;
+            Stretch(peekText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var peekButton = peekBtn.gameObject.AddComponent<Button>();
+            peekButton.onClick.AddListener(() => { deckLookPeeking = false; Render(); });
+            deckLookOverlay = peekBtn;
+            return;
+        }
 
         if (!selecting)
         {
@@ -1069,6 +1109,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             deckLookWorkingOrder = null;
         }
 
+        // Brand new search/look session: reveal cards one at a time from the deck before the
+        // player can select, instead of popping all of them into view at once. Guarded by
+        // reference identity on dl (a fresh DeckLookState instance per StartDeckLook/StartDeckSearch
+        // call), so re-entering this step later (e.g. after the reveal finishes) doesn't restart it.
+        bool isNewRevealSession = selecting && dl != deckLookRevealSession;
+        if (isNewRevealSession)
+        {
+            deckLookRevealSession = dl;
+            deckLookRevealing = true;
+            deckLookPeeking = false;
+        }
+        bool revealingNow = selecting && deckLookRevealing;
+
         // Parent to the canvas (not boardRoot) and pin to the very top so the overlay covers the
         // entire game - including the left/side panels - and nothing masks the spread of cards.
         var dim = PanelObject("Deck Look Dim", canvas.transform, new Color32(5, 7, 10, 225));
@@ -1077,21 +1130,34 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         deckLookOverlay = dim;
 
         string titleText;
-        if (dl.SearchMode)
+        if (revealingNow)
         {
-            string filterDesc = !string.IsNullOrEmpty(dl.FeatureFilter) ? $"{{{dl.FeatureFilter}}} " : "";
-            string typeDesc   = !string.IsNullOrEmpty(dl.CardTypeFilter) ? dl.CardTypeFilter + " " : "";
+            titleText = $"{dl.SourceName} draws from the deck...";
+        }
+        else if (dl.SearchMode)
+        {
+            string filterDesc = DeckLookFilterDesc(dl);
             string costDesc   = dl.MaxCost >= 0 ? $" (cost ≤ {dl.MaxCost})" : "";
-            titleText = $"{dl.SourceName}: search — choose 1 {filterDesc}{typeDesc}card to add to hand{costDesc}";
+            titleText = $"{dl.SourceName}: search — choose 1 {filterDesc}card to add to hand{costDesc}";
         }
         else
         {
             titleText = selecting
-                ? $"{dl.SourceName}: choose up to 1 {{{dl.FeatureFilter}}} card to add to your hand"
+                ? $"{dl.SourceName}: choose up to 1 {DeckLookFilterDesc(dl)}card to add to your hand"
                 : "Drag to set the order these return to the bottom of the deck, then Confirm";
         }
         var title = TextObject("Deck Look Title", dim, titleText, 25, Ink, TextAnchor.MiddleCenter);
-        Stretch(title.rectTransform, new Vector2(0.06f, 0.90f), new Vector2(0.94f, 0.985f), Vector2.zero, Vector2.zero);
+        Stretch(title.rectTransform, new Vector2(0.06f, 0.90f), new Vector2(0.78f, 0.985f), Vector2.zero, Vector2.zero);
+
+        // Lets the player dismiss the overlay to check the board/hand before deciding; reopens
+        // via the small "Show Cards" button drawn above when deckLookPeeking is true. Hidden while
+        // cards are still being drawn in, since toggling it would call Render() and tear down the
+        // in-flight animation (see DrawDeckLookOverlay's teardown at the very top of this method).
+        if (!revealingNow)
+        {
+            AddOverlayButton(dim, "View Board / Hand", new Vector2(0.80f, 0.918f), new Vector2(0.935f, 0.965f),
+                () => { deckLookPeeking = true; Render(); });
+        }
 
         deckLookCardRects.Clear();
 
@@ -1102,6 +1168,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var cardSize = DeckLookCardSize(displayCards?.Count ?? 0, selecting || dl.SearchMode);
         Stretch(row, new Vector2(0.03f, 0.07f), new Vector2(0.97f, 0.875f), Vector2.zero, Vector2.zero);
         DrawDeckLookCards(row, displayCards, selecting || dl.SearchMode, cardSize);
+
+        if (revealingNow)
+        {
+            // Hide every card behind a CanvasGroup; the draw coroutine reveals them one at a time
+            // and flips deckLookRevealing off (letting the normal select UI take over) once done.
+            var holders = new List<RectTransform>(dl.Cards.Count);
+            foreach (var card in dl.Cards)
+            {
+                deckLookCardRects.TryGetValue(card.InstanceId, out var holder);
+                if (holder != null)
+                {
+                    var group = holder.GetComponent<CanvasGroup>();
+                    if (group == null) group = holder.gameObject.AddComponent<CanvasGroup>();
+                    group.alpha = 0f;
+                    group.blocksRaycasts = false;
+                    group.interactable = false;
+                }
+                holders.Add(holder);
+            }
+            if (isNewRevealSession) StartCoroutine(AnimateDeckLookDraw(dl, holders, cardSize));
+            return; // no Take None / Confirm buttons until every card has landed
+        }
 
         // Resolve buttons live ON the overlay (it covers the side-panel actions, so those aren't
         // reachable while a search/look is up).
@@ -1286,12 +1374,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddDeckLookChoiceFrame(holder, selecting, selectable);
         AddCard(holder, card, null, true, Vector2.zero, true, false, -1, true);
         holder.gameObject.AddComponent<DeckLookSlot>().InstanceId = card.InstanceId;
+        // Always tracked (not just during rearrange-drag) so the draw-in-progress reveal animation
+        // can look up each card's on-screen holder to hide/reveal and fly a ghost toward.
+        deckLookCardRects[card.InstanceId] = holder;
 
         if (!selecting)
         {
             var drag = holder.gameObject.AddComponent<DeckLookCardDrag>();
             drag.Init(this, card.InstanceId, cardSize);
-            deckLookCardRects[card.InstanceId] = holder;
         }
     }
 
@@ -1301,9 +1391,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (dl == null || dl.Step != "select" || card == null) return false;
         var def = GameEngine.GetCard(card);
         if (def == null) return false;
-        if (!string.IsNullOrEmpty(dl.FeatureFilter) && !def.HasFeature(dl.FeatureFilter)) return false;
+        if (!string.IsNullOrEmpty(dl.NamedCardFilter))
+        {
+            // "[Name] or Type card" effects (e.g. Charlotte Pudding: "[Sanji] or Event card") — OR, not AND.
+            bool nameMatch = string.Equals(GameEngine.GetEffectiveName(state, card), dl.NamedCardFilter, System.StringComparison.OrdinalIgnoreCase);
+            bool typeMatch = !string.IsNullOrEmpty(dl.CardTypeFilter) && string.Equals(def.Type, dl.CardTypeFilter, System.StringComparison.OrdinalIgnoreCase);
+            if (!nameMatch && !typeMatch) return false;
+        }
+        else
+        {
+            if (!string.IsNullOrEmpty(dl.FeatureFilter) && !def.HasFeature(dl.FeatureFilter)) return false;
+            if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !string.Equals(def.Type, dl.CardTypeFilter, System.StringComparison.OrdinalIgnoreCase)) return false;
+        }
         if (dl.MaxCost >= 0 && def.Cost > dl.MaxCost) return false;
-        if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !string.Equals(def.Type, dl.CardTypeFilter, System.StringComparison.OrdinalIgnoreCase)) return false;
         return true;
     }
 
@@ -1561,6 +1661,114 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         t = Mathf.Clamp01(t);
         return t * t * (3f - 2f * t);
+    }
+
+    // Reverse of the return-to-deck flight above: cards fly OUT of the deck pile and into their
+    // reveal slot, one at a time, before the player is allowed to select anything. The slots
+    // themselves are already laid out normally (via DrawDeckLookCards) and hidden behind a
+    // CanvasGroup by the caller; each ghost's arrival simply reveals its slot and self-destructs.
+    private IEnumerator AnimateDeckLookDraw(DeckLookState dl, List<RectTransform> holders, Vector2 cardSize)
+    {
+        const float stagger = 0.22f;
+        const float duration = 0.5f;
+
+        var deckSource = GetBoardDeckTarget(dl.Seat);
+        if (deckSource != null)
+        {
+            for (int i = 0; i < holders.Count; i++)
+            {
+                if (holders[i] == null || i >= dl.Cards.Count) continue;
+                var ghost = CreateDeckLookDrawGhost(deckSource, cardSize);
+                var frontSprite = GetCardSprite(dl.Cards[i].CardId);
+                if (ghost != null) StartCoroutine(AnimateCardFromDeck(ghost, holders[i], frontSprite, i * stagger, duration));
+            }
+            yield return new WaitForSeconds(stagger * Mathf.Max(0, holders.Count - 1));
+            yield return new WaitForSeconds(duration + 0.15f);
+        }
+        else
+        {
+            // No deck pile rect to fly from (shouldn't normally happen) - just reveal everything.
+            foreach (var holder in holders)
+            {
+                var group = holder != null ? holder.GetComponent<CanvasGroup>() : null;
+                if (group != null) { group.alpha = 1f; group.blocksRaycasts = true; group.interactable = true; }
+            }
+        }
+
+        // Only this method's own session gets to clear deckLookRevealing - if a newer search/look
+        // has since replaced state.DeckLook, that session's own coroutine owns the flag instead.
+        if (state != null && state.DeckLook == dl)
+        {
+            deckLookRevealing = false;
+            Render();
+        }
+    }
+
+    private RectTransform CreateDeckLookDrawGhost(RectTransform deckSource, Vector2 cardSize)
+    {
+        if (deckSource == null) return null;
+        var ghost = new GameObject("Deck Look Draw Ghost").AddComponent<RectTransform>();
+        ghost.SetParent(boardRoot, false);
+        ghost.SetAsLastSibling();
+        ghost.sizeDelta = cardSize;
+        ghost.position = deckSource.position;
+        ghost.rotation = deckSource.rotation;
+        ghost.localScale = Vector3.one * 0.34f;
+        AddDeckLookChoiceFrame(ghost, false);
+        var art = AddRoundedCardImage(ghost, "Art", GetBackSprite());
+        art.raycastTarget = false;
+        var group = ghost.gameObject.AddComponent<CanvasGroup>();
+        group.blocksRaycasts = false;
+        group.interactable = false;
+        return ghost;
+    }
+
+    private IEnumerator AnimateCardFromDeck(RectTransform rect, RectTransform targetHolder, Sprite frontSprite, float delay, float duration)
+    {
+        if (rect == null) yield break;
+        if (delay > 0f) yield return new WaitForSeconds(delay);
+        if (rect == null) yield break;
+
+        var startPos = rect.position;
+        var startRotation = rect.rotation;
+        var endPos = targetHolder != null ? targetHolder.position : startPos;
+        var endRotation = targetHolder != null ? targetHolder.rotation : startRotation;
+
+        Image artImage = null;
+        foreach (var img in rect.GetComponentsInChildren<Image>(true))
+        {
+            if (img.gameObject.name == "Art") { artImage = img; break; }
+        }
+
+        bool flipped = false;
+        float t = 0f;
+        while (t < duration && rect != null)
+        {
+            t += Time.deltaTime;
+            float frac = Mathf.Clamp01(t / duration);
+            rect.position = Vector3.Lerp(startPos, endPos, SmoothStep(frac));
+            rect.rotation = Quaternion.Slerp(startRotation, endRotation, SmoothStep(frac));
+
+            // Mirrors the return-to-deck flip, reversed: the card opens up from edge-on (thin) as
+            // it leaves the deck, swapping from its back to its face right at the midpoint.
+            float grow = Mathf.Lerp(0.34f, 1f, frac);
+            float squash = frac < 0.5f ? Mathf.Lerp(0.04f, 1f, frac / 0.5f) : 1f;
+            rect.localScale = new Vector3(grow * squash, grow, 1f);
+
+            if (!flipped && frac >= 0.5f)
+            {
+                flipped = true;
+                if (artImage != null) artImage.sprite = frontSprite;
+            }
+            yield return null;
+        }
+
+        if (targetHolder != null)
+        {
+            var group = targetHolder.GetComponent<CanvasGroup>();
+            if (group != null) { group.alpha = 1f; group.blocksRaycasts = true; group.interactable = true; }
+        }
+        if (rect != null) Destroy(rect.gameObject);
     }
 
     private sealed class DeckLookSlot : MonoBehaviour

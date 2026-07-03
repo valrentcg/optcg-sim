@@ -194,6 +194,7 @@ namespace OnePieceTcg.Engine
         public string SourceInstanceId;
         public string SourceName;
         public string FeatureFilter;             // type-tag required to be eligible, e.g. "Supernovas"
+        public string NamedCardFilter;            // specific card name required, e.g. "Sanji" (ORed with CardTypeFilter below when both set — "[Sanji] or Event card" style effects)
         public string Step;                       // "select" | "rearrange"
         public List<CardInstance> Cards = new List<CardInstance>();    // cards still pending placement
         public List<CardInstance> Ordered = new List<CardInstance>();  // bottom-of-deck order built during "rearrange"

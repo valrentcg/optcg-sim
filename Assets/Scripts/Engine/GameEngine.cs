@@ -388,6 +388,17 @@ namespace OnePieceTcg.Engine
             return text.Substring(open + 1, close - open - 1).Trim();
         }
 
+        // Parses "[Name] or Event/Character/Stage card" (e.g. "reveal up to 1 [Sanji] or Event card")
+        // into (name, type). Returns (null, null) if the text doesn't contain this pattern.
+        private static (string name, string type) ParseNamedOrTypeFilter(string text)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(text,
+                @"\[([^\]]+)\]\s+or\s+(Event|Character|Stage)\s+card",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!m.Success) return (null, null);
+            return (m.Groups[1].Value.Trim(), m.Groups[2].Value.ToLowerInvariant());
+        }
+
         // Parse the count after "Draw " — handles "Draw 1 card", "Draw 2 cards", "Draw a card".
         private static int ParseDrawCount(string text)
         {
@@ -811,8 +822,9 @@ namespace OnePieceTcg.Engine
                     else if (ContainsAll(def.Effect, "Look at", "from the top of your deck") && ContainsAll(def.Effect, "to your hand"))
                     {
                         int lookN = ParseLookCount(def.Effect);
-                        string filter = ParseCurlyBraceTag(def.Effect);
-                        StartDeckLook(state, seat, card, filter, lookN);
+                        var (namedFilter, typeFilter) = ParseNamedOrTypeFilter(def.Effect);
+                        string filter = namedFilter == null ? ParseCurlyBraceTag(def.Effect) : null;
+                        StartDeckLook(state, seat, card, filter, lookN, namedFilter, typeFilter);
                     }
                     else
                     {
@@ -823,7 +835,8 @@ namespace OnePieceTcg.Engine
             }
         }
 
-        private static void StartDeckLook(GameState state, string seat, CardInstance source, string featureFilter, int count)
+        private static void StartDeckLook(GameState state, string seat, CardInstance source, string featureFilter, int count,
+            string namedCardFilter = null, string cardTypeFilter = null)
         {
             var p = Player(state, seat);
             var looked = new List<CardInstance>();
@@ -834,6 +847,8 @@ namespace OnePieceTcg.Engine
                 SourceInstanceId = source.InstanceId,
                 SourceName = GetCard(source).Name,
                 FeatureFilter = featureFilter,
+                NamedCardFilter = namedCardFilter,
+                CardTypeFilter = cardTypeFilter,
                 Step = "select",
                 Cards = looked,
                 MaxCost = -1,
@@ -881,22 +896,36 @@ namespace OnePieceTcg.Engine
                 var idx = dl.Cards.FindIndex(c => c.InstanceId == targetInstanceId);
                 if (idx < 0) return;
                 var def = GetCard(dl.Cards[idx]);
-                // Feature filter
-                if (!string.IsNullOrEmpty(dl.FeatureFilter) && !FeatureMatches(def, dl.FeatureFilter))
+                if (!string.IsNullOrEmpty(dl.NamedCardFilter))
                 {
-                    Log(state, seat, $"{NameId(def)} does not match the required {{{dl.FeatureFilter}}} type.");
-                    return;
+                    // "[Name] or Type card" effects (e.g. Charlotte Pudding: "[Sanji] or Event card") — OR, not AND.
+                    bool nameMatch = string.Equals(GetEffectiveName(state, dl.Cards[idx]), dl.NamedCardFilter, StringComparison.OrdinalIgnoreCase);
+                    bool typeMatch = !string.IsNullOrEmpty(dl.CardTypeFilter) && def.Type.Equals(dl.CardTypeFilter, StringComparison.OrdinalIgnoreCase);
+                    if (!nameMatch && !typeMatch)
+                    {
+                        Log(state, seat, $"{NameId(def)} is not [{dl.NamedCardFilter}] or a {dl.CardTypeFilter} card.");
+                        return;
+                    }
+                }
+                else
+                {
+                    // Feature filter
+                    if (!string.IsNullOrEmpty(dl.FeatureFilter) && !FeatureMatches(def, dl.FeatureFilter))
+                    {
+                        Log(state, seat, $"{NameId(def)} does not match the required {{{dl.FeatureFilter}}} type.");
+                        return;
+                    }
+                    // Card type filter (search mode)
+                    if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !def.Type.Equals(dl.CardTypeFilter, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log(state, seat, $"{NameId(def)} is not a valid type for this search.");
+                        return;
+                    }
                 }
                 // Cost filter (search mode)
                 if (dl.MaxCost >= 0 && def.Cost > dl.MaxCost)
                 {
                     Log(state, seat, $"{NameId(def)} costs too much (max cost {dl.MaxCost}).");
-                    return;
-                }
-                // Card type filter (search mode)
-                if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !def.Type.Equals(dl.CardTypeFilter, StringComparison.OrdinalIgnoreCase))
-                {
-                    Log(state, seat, $"{NameId(def)} is not a valid type for this search.");
                     return;
                 }
                 var taken = dl.Cards[idx];
@@ -2113,8 +2142,10 @@ namespace OnePieceTcg.Engine
             {
                 int lookN = ParseLookCount(text);
                 if (lookN < 1) lookN = 1;
+                var (namedFilter, typeFilter) = ParseNamedOrTypeFilter(text);
+                string featureFilter = namedFilter == null ? ParseCurlyBraceTag(text) : null;
                 var srcForLook = FindAnyInPlay(state, effect.SourceInstanceId, out _) ?? Player(state, effect.Seat).Leader;
-                if (srcForLook != null) StartDeckLook(state, effect.Seat, srcForLook, ParseCurlyBraceTag(text), lookN);
+                if (srcForLook != null) StartDeckLook(state, effect.Seat, srcForLook, featureFilter, lookN, namedFilter, typeFilter);
                 return EffectResolution.Resolved;
             }
 
