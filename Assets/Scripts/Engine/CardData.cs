@@ -649,6 +649,46 @@ namespace OnePieceTcg.Engine
             },
         };
 
+        // Some starter/ultra decks reprint a leader from an earlier booster set using a
+        // dedicated alternate-art print made for that deck (e.g. ST17's Doflamingo is
+        // OP01-060 but printed with the "_p2" art, seriesCode ST17 in
+        // official-card-library.json). DeckDef.Leader stays the plain stats id (OP01-060)
+        // so Card() lookups keep working; this table is consulted only when resolving
+        // which art file to display, keyed by DeckDef.Id.
+        public static readonly Dictionary<string, string> StarterLeaderArtOverride = new Dictionary<string, string>
+        {
+            ["st17"] = "OP01-060_p2",
+            ["st18"] = "OP05-060_p3",
+
+            // Learn Together Deck Set (LT-01): same situation - each deck's box leader is a
+            // dedicated alt-print distinct from the plain booster reprint DeckDef.Leader
+            // points at.
+            ["lt01luffy"] = "ST21-001_p2",
+            ["lt01zoro"] = "OP12-020_p3",
+
+            // st23-28: art reconstructed by geometrically aligning Bandai's own clean,
+            // high-res promo hero art (renewal/images/products/decks/{id}/mv.webp) onto
+            // the official card render and grafting it over the SAMPLE-watermarked region,
+            // keeping the card's own frame/power-badge/text-box/footer pixels intact.
+            ["st23"] = "OP09-001_p2",
+            ["st24"] = "OP07-019_p3",
+            ["st25"] = "OP09-042_p2",
+            ["st26"] = "OP09-061_p2",
+            ["st27"] = "OP09-081_p2",
+            ["st28"] = "OP06-022_p3",
+
+            // The following use Bandai's own SAMPLE-watermarked preview image - no clean
+            // source exists at adequate resolution: no glare-free photo anywhere, and the
+            // only promo art available (the older st15-20.php mv_01.jpg collage) is lower
+            // resolution than the card render itself, so warping it in would look blurry
+            // rather than clean. Watermark was judged the lesser evil.
+            ["st15"] = "OP02-001_p2",
+            ["st16"] = "ST11-001_p1",
+            ["st19"] = "OP02-093_p2",
+            ["st20"] = "OP03-099_p2",
+            ["lt01nami"] = "OP11-041_p2",
+        };
+
         // Ruleset constants (mirrors OP_RULESET).
         public const string RulesetSource = "ONE PIECE Card Game Comprehensive Rules";
         public const string RulesetSourceDate = "2026-01-16";

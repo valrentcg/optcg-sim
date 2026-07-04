@@ -2,32 +2,42 @@
 """
 One Piece TCG Deck Builder — anime face detector (run once).
 
-Writes  StreamingAssets/Cards/face-data.json  mapping each card id to the
-eye-line fraction y (0 = top of card, 1 = bottom) and the face centre x
-(0 = left). The deck builder reads this at startup to frame character art in
-deck rows and to centre the hex-roster crops on the character's face.
+Writes  StreamingAssets/Cards/face-data.json  with, per card id:
+    y — eye-line fraction (0 = top of card, 1 = bottom)
+    x — face centre fraction (0 = left)
+    z — hex zoom multiplier (1 = default 0.44-card-height window; <1 = tighter)
+The deck builder reads this at startup to frame character art in deck rows and
+to centre the hex-roster crops on the character's face. z lets the hex zoom in
+on small or off-centre faces and on ONE character of a duo (Luffy & Ace,
+Zoro & Sanji, ...) instead of splitting the frame between two half-faces.
 
-Detection pipeline (first hit wins):
-  1. Cascade (strict)   — minNeighbors 3-5, run at 1.0x / 1.6x / 2.2x upscale
-  2. Cascade (loose)    — minNeighbors 2, native scale only
-  3. Skin-blob fallback — connected skin components scored by size, height,
-                          centrality and face-like shape; head = top slice
+Detection pipeline:
+  1. Cascade sweep — strict passes (minNeighbors 3-5) at 1.0/1.6/2.2x upscale,
+     a loose pass (mn 2) at native scale, and an "ultra" rescue sweep (mn 2,
+     up to 3.2x, CLAHE + equalized) for dark/shadowed faces. ALL detections
+     become scored candidates — nothing is hard-rejected for being high or low
+     in the art; position only weighs the score. The best-scored box wins, so
+     a real face beats the belly-button/knuckle false positives that used to
+     hijack the crop whenever the true face was discarded.
+  2. Duo handling — if a second strong face exists far from the first, the
+     framer either includes both (when they genuinely fit in one hex window)
+     or picks the primary face and tightens z to focus it.
+  3. Skin-blob fallback — as before, for cards where the cascade finds nothing.
+  4. OVERRIDES — hand-tuned entries for art the detector can't read (dark
+     silhouettes, abstract cards). Applied last; survives re-runs.
 
 USAGE:
     python detect_faces.py
     python detect_faces.py "path/to/StreamingAssets/Cards"
 
     # Inspect specific cards (e.g. a leader whose hex crop looks wrong):
-    #   prints which tier detected the face + the eye-line fraction, and writes
-    #   an annotated PNG (face box green, face crosshair red, hex crop window
-    #   yellow) to face-debug/<ID>.png inside the Cards folder. Also refreshes
-    #   those ids inside the existing face-data.json so a single bad card can
-    #   be fixed without a full re-run.
+    #   prints tier + face + hex window, writes annotated PNGs (face boxes
+    #   green, chosen face crosshair red, hex crop window yellow) to
+    #   face-debug/<ID>.png, and patches those ids inside face-data.json.
     python detect_faces.py --card OP07-038 --card OP01-001
 
-    # Audit the whole deck-select roster: annotate EVERY leader card and
-    # refresh their face-data entries. Flip through face-debug/ afterwards —
-    # the yellow rectangle is exactly what each hex will show.
+    # Audit the whole deck-select roster (annotate EVERY leader card and
+    # refresh their face-data entries):
     python detect_faces.py --leaders
 
 Requires Python 3.  Auto-installs opencv-python if missing.
@@ -90,6 +100,40 @@ def get_cascade(cards_dir):
 # OPTCG illustration occupies the top 62% of the card; text box is below that.
 ART_FRACTION = 0.62
 
+# ── Hand-tuned entries for art the detector cannot read ─────────────────────
+# id: (eye_y, face_x, zoom). Checked visually against the actual hex render.
+# These are applied AFTER detection on every run, so they survive full re-runs
+# and --leaders refreshes. Add to this table rather than hand-editing the JSON.
+OVERRIDES = {
+    "EB01-021": (0.130, 0.370, 0.85),   # Hannyabal — bent-over pose, head upper-left
+    "EB01-040": (0.435, 0.420, 0.80),   # Kyros — dark screaming face low in the art
+    "OP02-001": (0.155, 0.310, 0.90),   # Edward Newgate — mustache hides the face from the model
+    "OP02-026": (0.105, 0.275, 0.85),   # Sanji — flames out-detect the face
+    "OP03-076": (0.135, 0.300, 0.90),   # Rob Lucci — dark face under hat; slash effect wins
+    "OP05-022": (0.145, 0.320, 0.85),   # Rosinante — flame false positive top-right
+    "OP06-020": (0.295, 0.600, 0.90),   # Hody Jones — big hand in front of the face
+    "OP06-080": (0.255, 0.720, 0.80),   # Gecko Moria — dark purple face, cascade-invisible
+    "OP07-038": (0.225, 0.160, 0.70),   # Boa Hancock — face far left, arm raised across frame
+    "OP08-002": (0.210, 0.465, 0.85),   # Marco — blue flames confuse the model
+    "OP09-062": (0.150, 0.600, 0.85),   # Nico Robin — tilted-up face, flower false positive
+    "OP10-003": (0.225, 0.300, 0.85),   # Sugar — crown detected instead of face
+    "OP11-021": (0.355, 0.630, 0.80),   # Jinbe — blue skin; poster art false positives
+    "OP11-040": (0.325, 0.475, 0.90),   # Luffy (nightmare) — very dark art
+    "OP12-020": (0.105, 0.460, 0.80),   # Zoro — bandana + sword-in-mouth, face at very top
+    "OP13-079": (0.300, 0.500, 1.00),   # Imu — dark silhouette + butterflies; centre the art
+    "OP01-061": (0.200, 0.635, 0.85),   # Kaido — dark face between the horns
+    "ST10-003": (0.130, 0.320, 0.85),   # Kid — screaming face upper-left, machinery right
+    "OP15-098": (0.370, 0.770, 0.80),   # Luffy — laughing head thrown back, lower right
+    "P-076":    (0.215, 0.280, 0.85),   # Sakazuki — magma reads as skin everywhere
+    "ST05-001": (0.145, 0.530, 0.85),   # Shanks — face high, hair blends into background
+    "ST12-001": (0.410, 0.330, 0.80),   # Zoro & Sanji duo — focus Zoro (sword in mouth, low-left)
+    "ST30-001": (0.280, 0.440, 1.00),   # Luffy & Ace duo — both faces fit one window
+    # Starter/LT alt-art leader prints (StarterLeaderArtOverride ids):
+    "OP12-020_p3": (0.430, 0.400, 0.78), # Zoro LT01 alt — head bent low, sword in mouth
+    "ST21-001_p2": (0.415, 0.315, 0.80), # G5 Luffy LT01 alt — face low-left under the hair swirls
+    "OP02-001_p2": (0.245, 0.720, 0.80), # Whitebeard ST15 alt — face upper-right (SAMPLE art)
+}
+
 
 def preprocess(gray_art):
     import cv2
@@ -97,50 +141,266 @@ def preprocess(gray_art):
     return clahe.apply(gray_art)
 
 
-def cascade_detect(cascade, gray_art, W, art_h, min_neighbors, min_size_frac, full_h):
-    """Run the cascade and return the largest usable detection in the upper art region."""
-    import numpy as np
-    ms = (int(W * min_size_frac), int(art_h * min_size_frac))
-    faces = cascade.detectMultiScale(gray_art, scaleFactor=1.03,
-                                     minNeighbors=min_neighbors, minSize=ms)
-    best = None
-    for (x, y, w, h) in (faces if len(faces) else []):
-        face_centre_y = y + h * 0.5
-        # Reject detections whose centre is in the lower 38% of the art region
-        # (empirically, real face boxes centre above 62% of art height; the false
-        # positives we see on action cards land at 63-70%).
-        if face_centre_y > art_h * 0.62:
-            continue
-        # Reject large boxes that start very near the top of the art: the
-        # 33% eye-offset rule breaks when lbpcascade spans from the hair
-        # crown (at y≈0) all the way to the chin.  For those cards the skin
-        # fallback gives a far more accurate result.
-        if y < art_h * 0.12 and h > full_h * 0.15:
-            continue
-        area = w * h
-        if best is None or area > best[0]:
-            best = (area, x, y, w, h)
-    return best
-
-
-def eye_fraction_from_box(y_art, h_face, full_h):
+def eye_fraction_from_box(box, full_h, art_h):
     """
     Eye line as a fraction of full card height.
-    lbpcascade bounding boxes include the hair crown, so eyes sit roughly
-    33% down from the top of the box (not 40% as you might guess).
+    lbpcascade boxes usually include the hair crown, so eyes sit ~33% down the
+    box. Very tall boxes that start right at the top of the art tend to span
+    crown-to-chin, where the eyes sit closer to 40% (this used to be a hard
+    reject, which silently handed those cards to the skin fallback — the main
+    source of "face cut off at the top of the hex" crops).
     """
-    return (y_art + 0.33 * h_face) / full_h
+    x, y, w, h = box
+    off = 0.40 if (y < art_h * 0.10 and h > full_h * 0.14) else 0.33
+    return (y + off * h) / full_h
+
+
+def skin_fraction(img_bgr, box):
+    """Fraction of warm skin-toned pixels inside a box (sanity check)."""
+    import cv2, numpy as np
+    x, y, w, h = box
+    H, W = img_bgr.shape[:2]
+    x0, y0 = max(0, x), max(0, y)
+    x1, y1 = min(W, x + w), min(H, y + h)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    hsv = cv2.cvtColor(img_bgr[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)
+    m = cv2.inRange(hsv, np.array([0, 12, 90], np.uint8), np.array([22, 210, 255], np.uint8))
+    m |= cv2.inRange(hsv, np.array([0, 3, 175], np.uint8), np.array([22, 55, 255], np.uint8))
+    return cv2.countNonZero(m) / float(m.size)
+
+
+def collect_candidates(cascade, img):
+    """
+    Run the cascade at several params/scales/enhancements and return deduped
+    face candidates as (x, y, w, h, tier, votes) in full-card pixels.
+    tier: 0 = strict, 1 = loose, 2 = ultra(rescue).
+    votes counts how many independent passes re-detected the same box — real
+    faces fire across several scales/param sets, false positives rarely do.
+    Only candidates of the BEST tier present survive: loose boxes are used
+    when nothing strict exists, ultra (skin-checked) when nothing else does,
+    so the rescue sweeps can never override a confident detection.
+    """
+    import cv2
+
+    full_h, W = img.shape[:2]
+    art_h = int(full_h * ART_FRACTION)
+    art_bgr = img[:art_h]
+    gray0 = cv2.cvtColor(art_bgr, cv2.COLOR_BGR2GRAY)
+    gray_c = preprocess(gray0)
+    gray_e = cv2.equalizeHist(gray0)
+
+    raw = []
+
+    def sweep(gray, nn, msf, scale, tier):
+        if scale == 1.0:
+            g = gray
+        else:
+            g = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        sw, sa = int(W * scale), int(art_h * scale)
+        ms = (int(sw * msf), int(sa * msf))
+        faces = cascade.detectMultiScale(g, scaleFactor=1.03, minNeighbors=nn, minSize=ms)
+        inv = 1.0 / scale
+        for (x, y, w, h) in (faces if len(faces) else []):
+            raw.append((int(x * inv), int(y * inv), int(w * inv), int(h * inv), tier))
+
+    # Strict: high confidence at multiple upscales (small faces need upscale
+    # to clear the LBP model's ~24px floor).
+    for (nn, msf) in [(4, 0.07), (3, 0.055), (5, 0.09)]:
+        for scale in (1.0, 1.6, 2.2):
+            sweep(gray_c, nn, msf, scale, 0)
+    # Loose: native scale only.
+    sweep(gray_c, 2, 0.05, 1.0, 1)
+    # Ultra rescue: dark/shadowed faces (Roger, Whitebeard...) — consulted only
+    # when the tiers above found nothing at all, and skin-validated.
+    for g in (gray_c, gray_e):
+        for scale in (1.6, 2.4, 3.2):
+            sweep(g, 2, 0.045, scale, 2)
+
+    def iou(a, b):
+        ax0, ay0, aw, ah = a[:4]; bx0, by0, bw, bh = b[:4]
+        ax1, ay1, bx1, by1 = ax0 + aw, ay0 + ah, bx0 + bw, by0 + bh
+        ix = max(0, min(ax1, bx1) - max(ax0, bx0))
+        iy = max(0, min(ay1, by1) - max(ay0, by0))
+        inter = ix * iy
+        return inter / float(aw * ah + bw * bh - inter + 1e-6)
+
+    # Merge overlapping raw hits into candidates, counting votes.
+    raw.sort(key=lambda c: (c[4], -(c[2] * c[3])))       # best tier first, then area
+    kept = []
+    for c in raw:
+        x, y, w, h, tier = c
+        # Speck / clearly-in-the-lower-art boxes are noise: real faces centre
+        # above 62% of art height (empirically; the false positives on action
+        # cards — fists, navels, effects — land at 63%+).
+        if w < W * 0.045 or (y + h * 0.5) > art_h * 0.62:
+            continue
+        merged = False
+        for k in kept:
+            if iou(c, k[0]) >= 0.35:
+                k[1] += (1.0, 0.6, 0.4)[tier]
+                merged = True
+                break
+        if not merged:
+            kept.append([c, (1.0, 0.6, 0.4)[tier]])
+
+    if not kept:
+        return []
+    best_tier = min(k[0][4] for k in kept)
+    out = []
+    for (x, y, w, h, tier), votes in kept:
+        if tier != best_tier:
+            continue
+        # Ultra hits are rescue-grade: require some skin inside the box so a
+        # texture fluke on clothing/effects can't hijack the crop.
+        if tier == 2 and skin_fraction(img, (x, y, w, h)) < 0.05:
+            continue
+        out.append((x, y, w, h, tier, votes))
+    return out
+
+
+def score_candidate(c, W, art_h):
+    """
+    Rank face boxes: bigger, higher, more central and more re-detected is
+    better. Soft weights only — a big central real face fairly low in the art
+    can still beat a small false positive up top, but belly buttons and
+    knuckles (small, low, weakly re-detected) reliably lose to the real face.
+    """
+    x, y, w, h, tier, votes = c
+    cx = (x + w * 0.5) / W
+    cy = (y + h * 0.5) / float(art_h)
+    area = (w * h) / float(W * art_h)
+    central = 1.0 - 0.45 * min(1.0, abs(cx - 0.5) * 2.0)
+    height = 1.0 if cy <= 0.45 else max(0.35, 1.0 - 1.2 * (cy - 0.45))
+    conf = 0.55 + 0.15 * min(votes, 5.0)
+    return (area ** 0.7) * central * height * conf
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hex framing — must mirror DeckBuilderManager.BuildDeckHexCell /
+# BuildStarterDeckHexCell: a window centred on the face in both axes, clamped
+# inside the card's illustration region so the hex only ever contains art and
+# NEVER reaches the card border or the text box.
+HEX_ASPECT = 2.0 / (3.0 ** 0.5)           # flat-top hex: width / height ≈ 1.1547
+SAFE_L, SAFE_R = 0.07, 0.93
+SAFE_T, SAFE_B = 0.05, 0.60
+HEX_VIS_H = 0.44                          # base zoom: fraction of card height shown
+ZOOM_MIN, ZOOM_MAX = 0.68, 1.00
+FACE_TARGET = 0.28                        # ideal face height as fraction of the window
+
+
+def hex_window(eye_frac, x_frac, card_aspect, zoom=1.0):
+    """The exact crop rectangle the hex will show, as card fractions."""
+    vis_h = HEX_VIS_H * zoom
+    vis_w = vis_h * HEX_ASPECT / max(card_aspect, 0.01)
+    if vis_w > SAFE_R - SAFE_L:
+        vis_w = SAFE_R - SAFE_L
+        vis_h = vis_w * card_aspect / HEX_ASPECT
+    # Face sits 45% down the window (a touch of headroom for hair/hats).
+    cx = min(max(x_frac, SAFE_L + vis_w / 2), SAFE_R - vis_w / 2)
+    cy = min(max(eye_frac + vis_h * 0.05, SAFE_T + vis_h / 2), SAFE_B - vis_h / 2)
+    return cx - vis_w / 2, cy - vis_h / 2, cx + vis_w / 2, cy + vis_h / 2
+
+
+def face_placement(eye, fx, card_aspect, zoom):
+    """Where the face lands inside the window (0..1 in each axis)."""
+    wl, wt, wr, wb = hex_window(eye, fx, card_aspect, zoom)
+    px = (fx - wl) / max(wr - wl, 1e-6)
+    py = (eye - wt) / max(wb - wt, 1e-6)
+    return px, py
+
+
+def choose_zoom(eye, fx, h_face_frac, card_aspect):
+    """
+    Pick z so the face reads at a good size AND lands well inside the hex.
+    Small faces (full-body poses) zoom in; faces near the card's left/right
+    edge zoom in until the SAFE-clamped window can keep them off the hex's
+    pointed corners. Never zooms out past the default window.
+    """
+    z = 1.0
+    if h_face_frac is not None and h_face_frac > 0:
+        z = (h_face_frac / FACE_TARGET) / HEX_VIS_H
+    z = min(max(z, ZOOM_MIN), ZOOM_MAX)
+    # Tighten until the face sits within the central 64% of the window
+    # horizontally (the hex's pointed corners eat the outer ~18% per side).
+    for _ in range(24):
+        px, _ = face_placement(eye, fx, card_aspect, z)
+        if 0.18 <= px <= 0.82 or z <= ZOOM_MIN:
+            break
+        z = max(ZOOM_MIN, z - 0.03)
+    return round(z, 3)
+
+
+def frame_faces(cands, img):
+    """
+    Turn scored candidates into (eye_y, x, zoom).
+
+    Zoom is CONFIDENCE-GATED: the wide default window is very forgiving of a
+    slightly-off detection, so we only tighten it when the face was
+    re-detected across several passes (votes) — a lone weak box keeps z = 1
+    and still lands in frame even if imprecise.
+
+    Duos: include both faces only when one default window genuinely holds
+    both; otherwise focus the primary face (bigger/better placed) and tighten
+    the zoom so the hex clearly features ONE character.
+    """
+    full_h, W = img.shape[:2]
+    art_h = int(full_h * ART_FRACTION)
+    aspect = W / float(full_h)
+
+    scored = sorted(((score_candidate(c, W, art_h), c) for c in cands), reverse=True)
+    s0, prim = scored[0]
+    eye0 = eye_fraction_from_box(prim[:4], full_h, art_h)
+    fx0 = (prim[0] + prim[2] * 0.5) / W
+    hf0 = prim[3] / float(full_h)
+    confident = prim[5] >= 3.0                        # re-detected ≥3 pass-votes
+
+    def zoom_for(eye, fx, hf):
+        return choose_zoom(eye, fx, hf, aspect) if confident else 1.0
+
+    # Secondary face: strong, comparable size, re-detected itself, and
+    # clearly a different character (far away horizontally).
+    second = None
+    for s, c in scored[1:]:
+        if s < s0 * 0.30 or (c[2] * c[3]) < (prim[2] * prim[3]) * 0.30:
+            continue
+        if c[5] < 2.0:
+            continue
+        if abs(((c[0] + c[2] * 0.5) / W) - fx0) < 0.18:
+            continue
+        second = c
+        break
+
+    if second is not None:
+        eye1 = eye_fraction_from_box(second[:4], full_h, art_h)
+        fx1 = (second[0] + second[2] * 0.5) / W
+        # Weighted midpoint (bigger face pulls harder).
+        a0, a1 = prim[2] * prim[3], second[2] * second[3]
+        mx = (fx0 * a0 + fx1 * a1) / (a0 + a1)
+        my = (eye0 * a0 + eye1 * a1) / (a0 + a1)
+        wl, wt, wr, wb = hex_window(my, mx, aspect, 1.0)
+        vis_w, vis_h = wr - wl, wb - wt
+        # Both faces must land inside the window's central region — heads
+        # whole, off the pointed corners. Otherwise: focus ONE character.
+        def inside(fx, ey, hf):
+            px = (fx - wl) / vis_w
+            py = (ey - wt) / vis_h
+            return 0.16 <= px <= 0.84 and 0.10 <= py <= 0.72 and hf < vis_h * 0.62
+        if inside(fx0, eye0, hf0) and inside(fx1, eye1, second[3] / float(full_h)):
+            return my, mx, 1.0, "duo-both"
+        return eye0, fx0, zoom_for(eye0, fx0, hf0), "duo-focus"
+
+    return eye0, fx0, zoom_for(eye0, fx0, hf0), None
 
 
 def skin_fallback(img_bgr_art, art_h, full_h):
     """
     Estimate the face position from skin-coloured regions when the cascade
-    fails. v2: instead of the centre-of-mass of ALL skin (which characters
-    showing a lot of skin — Boa! — drag down to the chest), find connected
-    skin BLOBS and pick the best "head" candidate: a reasonably large blob
-    that starts high in the art. The face estimate is the centroid of that
-    blob's TOP SLICE (the head part), not the whole blob, so face+neck+chest
-    merging into one component no longer pulls the estimate down.
+    fails. Finds connected skin BLOBS and picks the best "head" candidate: a
+    reasonably large blob that starts high in the art. The face estimate is
+    the centroid of that blob's TOP SLICE (the head part), not the whole
+    blob, so face+neck+chest merging into one component doesn't pull the
+    estimate down to the sternum.
 
     Returns (y_fraction, x_fraction) — both relative to the FULL card,
     0 = top/left — or None if no skin found (non-human characters like
@@ -196,9 +456,10 @@ def skin_fallback(img_bgr_art, art_h, full_h):
         # so an edge blob (background figure) must be much bigger to win.
         blob_cx = (cx0 + stats[i, cv2.CC_STAT_LEFT] + w_i * 0.5) / W
         central = 1.0 - 0.55 * min(1.0, abs(blob_cx - 0.5) * 2.4)
-        # HEIGHT — gentle preference for blobs starting higher (heads over
-        # torsos), but not so brutal that a low central face loses to an arm.
-        height = 1.0 - 0.5 * (top / float(search_h))
+        # HEIGHT — prefer blobs starting higher (heads over torsos). Slightly
+        # stronger than before: giant chest blobs on shirtless characters used
+        # to out-area the actual head and drag the crop to the sternum.
+        height = 1.0 - 0.62 * (top / float(search_h))
         # SHAPE — faces are compact and roughly round; swords/arms/legs are
         # elongated and sparse within their bounding box.
         aspect = w_i / float(h_i)
@@ -239,62 +500,26 @@ def skin_fallback(img_bgr_art, art_h, full_h):
 def detect_one(cascade, img):
     """
     Run the full pipeline on one card image (BGR).
-    Returns (eye_fraction or None, x_fraction or None, tier_name, face_box or
-    None) where face_box is (x, y, w, h) in full-card pixel coordinates when a
-    cascade tier hit. x_fraction is the face centre, 0 = left edge of the card.
+    Returns (eye_fraction, x_fraction, zoom, tier_name, boxes) where boxes is
+    the deduped candidate list (may be empty) in full-card pixel coordinates.
+    eye_fraction/x_fraction are None when nothing at all was found.
     """
-    import cv2
-
     full_h, W = img.shape[:2]
     art_h = int(full_h * ART_FRACTION)
-    art_bgr = img[:art_h]
-    gray_art = preprocess(cv2.cvtColor(art_bgr, cv2.COLOR_BGR2GRAY))
 
-    # Run the cascade at several UPSCALES too: the LBP model has an absolute
-    # minimum detectable size, so faces that are small relative to the art
-    # (full-body poses, chibi, distant characters) only get caught after the
-    # art is blown up. A strict pass at any scale beats any loose pass.
-    def run(nn, msf, scale):
-        if scale == 1.0:
-            g, sw, sa, sf = gray_art, W, art_h, full_h
-        else:
-            g = cv2.resize(gray_art, None, fx=scale, fy=scale,
-                           interpolation=cv2.INTER_CUBIC)
-            sw, sa, sf = int(W * scale), int(art_h * scale), int(full_h * scale)
-        best = cascade_detect(cascade, g, sw, sa, nn, msf, sf)
-        if best is None:
-            return None
-        _, x, y, w, h = best
-        inv = 1.0 / scale
-        return int(x * inv), int(y * inv), int(w * inv), int(h * inv)
+    cands = collect_candidates(cascade, img)
+    if cands:
+        ey, ex, z, duo = frame_faces(cands, img)
+        tiers = ("cascade-strict", "cascade-loose", "cascade-ultra")
+        best = min(c[4] for c in cands)
+        tier = duo if duo else tiers[best]
+        return ey, ex, z, tier, cands
 
-    SCALES = (1.0, 1.6, 2.2)
-
-    # ── Tier 1: strict cascade, all scales ───────────────────────────────────
-    for (nn, msf) in [(4, 0.07), (3, 0.055), (5, 0.09)]:
-        for scale in SCALES:
-            # Keep the RELATIVE min size at every scale: upscaling only lifts
-            # faces past the cascade's absolute ~24px floor. Letting relatively
-            # smaller boxes through produced tiny false positives (hair, ribbons).
-            box = run(nn, msf, scale)
-            if box is not None:
-                x, y, w, h = box
-                return (eye_fraction_from_box(y, h, full_h), (x + w * 0.5) / W,
-                        "cascade-strict", (x, y, w, h))
-
-    # ── Tier 2: loose cascade (minNeighbors=2), native scale only ────────────
-    box = run(2, 0.05, 1.0)
-    if box is not None:
-        x, y, w, h = box
-        return (eye_fraction_from_box(y, h, full_h), (x + w * 0.5) / W,
-                "cascade-loose", (x, y, w, h))
-
-    # ── Tier 3: skin-blob head finder ────────────────────────────────────────
-    res = skin_fallback(art_bgr, art_h, full_h)
+    res = skin_fallback(img[:art_h], art_h, full_h)
     if res is not None:
         ey, ex = res
-        return ey, ex, "skin-fallback", None
-    return None, None, "miss", None
+        return ey, ex, 1.0, "skin-fallback", []
+    return None, None, 1.0, "miss", []
 
 
 def clamp_frac(ey):
@@ -315,23 +540,39 @@ def find_card_png(cards, card_id):
     return None
 
 
-# Must match DeckBuilderManager.BuildDeckHexCell: a window CENTRED on the face
-# in both axes, clamped inside the card's illustration region so the hex only
-# ever contains art.
-HEX_ASPECT = 2.0 / (3.0 ** 0.5)          # flat-top hex: width / height ≈ 1.1547
-SAFE_L, SAFE_R = 0.06, 0.94
-SAFE_T, SAFE_B = 0.05, 0.62
-HEX_VIS_H = 0.44                          # zoom: fraction of card height shown
-def hex_crop_window(eye_frac, x_frac, card_aspect):
-    vis_h = HEX_VIS_H
-    vis_w = vis_h * HEX_ASPECT / max(card_aspect, 0.01)
-    if vis_w > SAFE_R - SAFE_L:
-        vis_w = SAFE_R - SAFE_L
-        vis_h = vis_w * card_aspect / HEX_ASPECT
-    # Face sits 45% down the window (a touch of headroom for hair/hats).
-    cx = min(max(x_frac, SAFE_L + vis_w / 2), SAFE_R - vis_w / 2)
-    cy = min(max(eye_frac + vis_h * 0.05, SAFE_T + vis_h / 2), SAFE_B - vis_h / 2)
-    return cx - vis_w / 2, cy - vis_h / 2, cx + vis_w / 2, cy + vis_h / 2
+def load_face_data(fpath):
+    data = {"ids": [], "y": [], "x": [], "z": []}
+    if os.path.isfile(fpath):
+        try:
+            with open(fpath) as f:
+                data = json.load(f)
+        except Exception as e:
+            print("face-data.json unreadable, rebuilding entries:", e)
+    ids = data.get("ids", [])
+    ys  = data.get("y", [])
+    xs  = data.get("x", [])
+    zs  = data.get("z", [])
+    if len(xs) != len(ids):                # older file without x
+        xs = [0.5] * len(ids)
+    if len(zs) != len(ids):                # older file without z
+        zs = [1.0] * len(ids)
+    return {i: (yy, xx, zz) for i, yy, xx, zz in zip(ids, ys, xs, zs)}
+
+
+def save_face_data(fpath, merged):
+    ids = sorted(merged)
+    with open(fpath, "w") as f:
+        json.dump({"ids": ids,
+                   "y": [merged[i][0] for i in ids],
+                   "x": [merged[i][1] for i in ids],
+                   "z": [merged[i][2] for i in ids]}, f)
+
+
+def apply_overrides(entries):
+    for cid, (oy, ox, oz) in OVERRIDES.items():
+        if cid in entries or True:   # overrides apply even if detection missed
+            entries[cid] = (round(oy, 3), round(ox, 3), round(oz, 3))
+    return entries
 
 
 def debug_cards(cascade, cards, card_ids):
@@ -352,24 +593,26 @@ def debug_cards(cascade, cards, card_ids):
             print(f"{cid}: could not read {p}")
             continue
 
-        ey, ex, tier, box = detect_one(cascade, img)
+        ey, ex, z, tier, boxes = detect_one(cascade, img)
+        if cid in OVERRIDES:
+            ey, ex, z = OVERRIDES[cid]
+            tier = "override"
         full_h, W = img.shape[:2]
         vis = img.copy()
 
-        if box is not None:                                   # face box (green)
-            x, y, w, h = box
+        for (x, y, w, h, _t, _v) in boxes:                    # face boxes (green)
             cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 255, 0), 3)
         if ey is not None:
             ey_c, ex_c = clamp_frac(ey), clamp_x(ex)
-            fixed[os.path.splitext(os.path.basename(p))[0]] = (ey_c, ex_c)
+            fixed[os.path.splitext(os.path.basename(p))[0]] = (ey_c, ex_c, z)
             ey_px, ex_px = int(ey_c * full_h), int(ex_c * W)  # face crosshair (red)
             cv2.line(vis, (0, ey_px), (W, ey_px), (0, 0, 255), 3)
             cv2.line(vis, (ex_px, 0), (ex_px, full_h), (0, 0, 255), 2)
             aspect = W / full_h
-            wl, wt, wr, wb = hex_crop_window(ey_c, ex_c, aspect)   # hex window (yellow)
+            wl, wt, wr, wb = hex_window(ey_c, ex_c, aspect, z)     # hex window (yellow)
             cv2.rectangle(vis, (int(wl * W), int(wt * full_h)),
                           (int(wr * W), int(wb * full_h)), (0, 220, 255), 3)
-            print(f"{cid}: tier={tier}  face=({ex_c:.3f}, {ey_c:.3f})"
+            print(f"{cid}: tier={tier}  face=({ex_c:.3f}, {ey_c:.3f})  z={z:.2f}"
                   f"  hex-crop=x {wl:.3f}..{wr:.3f}, y {wt:.3f}..{wb:.3f}")
         else:
             print(f"{cid}: tier={tier}  NO DETECTION — C# skin heuristic will apply")
@@ -380,25 +623,10 @@ def debug_cards(cascade, cards, card_ids):
     # Patch just these ids into the existing face-data.json (no full re-run).
     if fixed:
         fpath = os.path.join(cards, "face-data.json")
-        data = {"ids": [], "y": [], "x": []}
-        if os.path.isfile(fpath):
-            try:
-                with open(fpath) as f:
-                    data = json.load(f)
-            except Exception as e:
-                print("face-data.json unreadable, rebuilding entries:", e)
-        old_ids = data.get("ids", [])
-        old_y   = data.get("y", [])
-        old_x   = data.get("x", [])
-        if len(old_x) != len(old_ids):                # older file without x
-            old_x = [0.5] * len(old_ids)
-        merged = {i: (yy, xx) for i, yy, xx in zip(old_ids, old_y, old_x)}
+        merged = load_face_data(fpath)
         merged.update(fixed)
-        ids = sorted(merged)
-        with open(fpath, "w") as f:
-            json.dump({"ids": ids,
-                       "y": [merged[i][0] for i in ids],
-                       "x": [merged[i][1] for i in ids]}, f)
+        apply_overrides(merged)
+        save_face_data(fpath, merged)
         print(f"Updated {len(fixed)} entr{'y' if len(fixed)==1 else 'ies'} in {fpath}")
 
 
@@ -446,8 +674,21 @@ def main():
         if not ids:
             print("no leader cards found in official-card-library.json")
             return
-        print(f"Auditing {len(set(ids))} leader cards…")
-        debug_cards(cascade, cards, sorted(set(ids)))
+        # Include alt-art prints of leaders (e.g. ST21-001_p2, OP12-020_p3) —
+        # the starter-deck browser shows these via StarterLeaderArtOverride,
+        # so their hex crops need face data of their own.
+        idset = set(ids)
+        byid = os.path.join(cards, "OfficialById")
+        for root, _, files in os.walk(byid):
+            for fn in files:
+                stem, ext = os.path.splitext(fn)
+                if ext.lower() != ".png" or "_p" not in stem:
+                    continue
+                base = stem.split("_p")[0]
+                if base in idset:
+                    idset.add(stem)
+        print(f"Auditing {len(idset)} leader cards (incl. alt-art prints)…")
+        debug_cards(cascade, cards, sorted(idset))
         return
 
     if args.card:
@@ -463,8 +704,9 @@ def main():
     pngs.sort()
     print(f"Processing {len(pngs)} card images…")
 
-    ids_out, ys_out, xs_out = [], [], []
-    tiers = {"cascade-strict": 0, "cascade-loose": 0, "skin-fallback": 0, "miss": 0}
+    entries = {}
+    tiers = {"cascade-strict": 0, "cascade-loose": 0, "cascade-ultra": 0,
+             "duo-both": 0, "duo-focus": 0, "skin-fallback": 0, "miss": 0}
 
     for i, p in enumerate(pngs):
         cid = os.path.splitext(os.path.basename(p))[0]
@@ -472,30 +714,31 @@ def main():
         if img is None:
             continue
 
-        ey, ex, tier, _box = detect_one(cascade, img)
+        ey, ex, z, tier, _boxes = detect_one(cascade, img)
         tiers[tier] = tiers.get(tier, 0) + 1
 
         if ey is not None:
-            ids_out.append(cid)
-            ys_out.append(clamp_frac(ey))
-            xs_out.append(clamp_x(ex))
+            entries[cid] = (clamp_frac(ey), clamp_x(ex), z)
 
         if (i + 1) % 250 == 0:
-            print(f"  {i+1}/{len(pngs)}  cascade(strict)={tiers['cascade-strict']}"
-                  f"  cascade(loose)={tiers['cascade-loose']}"
+            print(f"  {i+1}/{len(pngs)}  strict={tiers['cascade-strict']}"
+                  f"  loose={tiers['cascade-loose']}  ultra={tiers['cascade-ultra']}"
+                  f"  duo={tiers['duo-both']+tiers['duo-focus']}"
                   f"  skin={tiers['skin-fallback']}  miss={tiers['miss']}")
 
+    apply_overrides(entries)
     out = os.path.join(cards, "face-data.json")
-    with open(out, "w") as f:
-        json.dump({"ids": ids_out, "y": ys_out, "x": xs_out}, f)
+    save_face_data(out, entries)
 
     total = len(pngs)
     print(f"\nDone.  {total} images:")
     print(f"  cascade (strict): {tiers['cascade-strict']}")
     print(f"  cascade (loose):  {tiers['cascade-loose']}")
+    print(f"  cascade (ultra):  {tiers['cascade-ultra']}")
+    print(f"  duo both/focus:   {tiers['duo-both']}/{tiers['duo-focus']}")
     print(f"  skin fallback:    {tiers['skin-fallback']}")
     print(f"  no detection:     {tiers['miss']}  (non-human/stage/event cards — C# heuristic applies)")
-    print(f"  face-data.json:   {len(ids_out)} entries")
+    print(f"  face-data.json:   {len(entries)} entries")
     print("Wrote:", out)
 
 

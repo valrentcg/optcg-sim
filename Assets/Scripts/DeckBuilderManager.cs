@@ -297,6 +297,7 @@ internal class FaceMapFile
     public string[] ids = new string[0];
     public float[]  y   = new float[0];   // eye-line fraction (0 = top of card)
     public float[]  x   = new float[0];   // face centre x fraction (0 = left) — optional, newer files
+    public float[]  z   = new float[0];   // hex zoom multiplier (1 = default window; <1 = tighter) — optional
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -666,6 +667,7 @@ public class DeckBuilderManager : MonoBehaviour
     private static readonly Dictionary<string, Vector2> _faceCenterCache = new Dictionary<string, Vector2>();
     private static Dictionary<string, float> _faceMap;    // face-data.json: eye-line y per card
     private static Dictionary<string, float> _faceMapX;   // face-data.json: face centre x per card (optional)
+    private static Dictionary<string, float> _faceMapZ;   // face-data.json: hex zoom per card (optional)
 
     // ══════════════════════════════════════════════════════════════════════════
     // Entry point — created on demand by the main menu (single-scene design)
@@ -1333,6 +1335,16 @@ public class DeckBuilderManager : MonoBehaviour
         };
     }
 
+    // Some starter decks (ST17/ST18/ST24/ST28, etc.) show a dedicated alt-art print of
+    // their leader on the physical box/card rather than the plain booster-set art -
+    // see CardData.StarterLeaderArtOverride. Stats lookups should still use def.Leader;
+    // only art loading should prefer this id when one is registered.
+    private static string StarterLeaderArtId(DeckDef def)
+    {
+        if (def == null) return null;
+        return CardData.StarterLeaderArtOverride.TryGetValue(def.Id, out var altId) ? altId : def.Leader;
+    }
+
     private void RenderStarter()
     {
         var starterDecks = CardData.StarterDecks.Values
@@ -1421,13 +1433,14 @@ public class DeckBuilderManager : MonoBehaviour
         var lead = Card(def.Leader);
         if (lead != null)
         {
-            bool haveEntry  = _artCache.TryGetValue(def.Leader, out var cachedArtSp);
+            string artId = StarterLeaderArtId(def);
+            bool haveEntry  = _artCache.TryGetValue(artId, out var cachedArtSp);
             bool knownNoArt = haveEntry && cachedArtSp == null;
             if (!knownNoArt)
             {
                 var pimg = MakeRoundedCard(card, true, out _);
                 if (cachedArtSp != null) pimg.sprite = cachedArtSp;
-                else { pimg.color = new Color32(10, 20, 32, 255); RequestArt(pimg, def.Leader); }
+                else { pimg.color = new Color32(10, 20, 32, 255); RequestArt(pimg, artId); }
             }
             else
             {
@@ -1686,13 +1699,14 @@ public class DeckBuilderManager : MonoBehaviour
         maskComp.showMaskGraphic = false;
 
         var lead = Card(def.Leader);
-        bool haveEntry  = _thumbCache.TryGetValue(def.Leader, out var cachedArtSp);
+        string artId = StarterLeaderArtId(def);
+        bool haveEntry  = _thumbCache.TryGetValue(artId, out var cachedArtSp);
         bool knownNoArt = haveEntry && cachedArtSp == null;
 
         if (!knownNoArt)
         {
-            const float SAFE_L = 0.06f, SAFE_R = 0.94f;
-            const float SAFE_T = 0.05f, SAFE_B = 0.62f;
+            const float SAFE_L = 0.07f, SAFE_R = 0.93f;   // stay clear of the card border
+            const float SAFE_T = 0.05f, SAFE_B = 0.60f;   // ...and of the text box below the art
             const float BLEED = 1.03f;
 
             float mW = cell.sizeDelta.x - 2f * pad, mH = cell.sizeDelta.y - 2f * pad;
@@ -1700,11 +1714,13 @@ public class DeckBuilderManager : MonoBehaviour
                 ? cachedArtSp.rect.width / cachedArtSp.rect.height : 0.716f;
             float hexAspect = mH > 0f ? mW / mH : 1.1547f;
 
-            float visH = 0.44f;
+            // Per-card zoom (face-data.json "z"): tightens the window on
+            // small/off-centre faces and on the focused half of duo leaders.
+            float visH = 0.44f * FaceZoom(artId);
             float visW = visH * hexAspect / Mathf.Max(aspect, 0.01f);
             if (visW > SAFE_R - SAFE_L) { visW = SAFE_R - SAFE_L; visH = visW * aspect / hexAspect; }
 
-            Vector2 face = FaceCenter(def.Leader, lead != null ? lead.type : null);
+            Vector2 face = FaceCenter(artId, lead != null ? lead.type : null);
             float cxFrac = Mathf.Clamp(face.x, SAFE_L + visW * 0.5f, SAFE_R - visW * 0.5f);
             float cyFrac = Mathf.Clamp(face.y + visH * 0.05f, SAFE_T + visH * 0.5f, SAFE_B - visH * 0.5f);
 
@@ -1725,7 +1741,7 @@ public class DeckBuilderManager : MonoBehaviour
             artImg.anchoredPosition = new Vector2(-(cxFrac - 0.5f) * aw, (cyFrac - 0.5f) * ah);
 
             if (cachedArtSp != null) { ai.sprite = cachedArtSp; ai.type = Image.Type.Simple; ai.preserveAspect = false; }
-            else RequestThumbArt(ai, def.Leader);
+            else RequestThumbArt(ai, artId);
         }
         else
         {
@@ -2413,8 +2429,8 @@ public class DeckBuilderManager : MonoBehaviour
             // the detected face (face-data.json, else the skin-tone heuristic) in
             // BOTH axes, clamped inside the card's illustration region so the hex
             // only ever contains art — no border, cost/power boxes, or text.
-            const float SAFE_L = 0.06f, SAFE_R = 0.94f;   // art-safe horizontal bounds
-            const float SAFE_T = 0.05f, SAFE_B = 0.62f;   // OPTCG illustration region
+            const float SAFE_L = 0.07f, SAFE_R = 0.93f;   // art-safe horizontal bounds (clear of the card border)
+            const float SAFE_T = 0.05f, SAFE_B = 0.60f;   // OPTCG illustration region (clear of the text box)
             const float BLEED  = 1.03f;
 
             float mW = cell.sizeDelta.x - 2f * pad, mH = cell.sizeDelta.y - 2f * pad;
@@ -2426,7 +2442,11 @@ public class DeckBuilderManager : MonoBehaviour
 
             // Window height (fraction of card shown); 0.44 keeps the whole head
             // in frame even when detection is imperfect. Width follows the hex.
-            float visH = 0.44f;
+            // Per-card zoom (face-data.json "z") tightens the window on
+            // small/off-centre faces and on the focused half of duo leaders
+            // (Luffy & Ace, Zoro & Sanji...), so the hex features ONE face
+            // instead of splitting the frame between two half-cropped ones.
+            float visH = 0.44f * FaceZoom(deck.leaderId);
             float visW = visH * hexAspect / Mathf.Max(aspect, 0.01f);
             if (visW > SAFE_R - SAFE_L) { visW = SAFE_R - SAFE_L; visH = visW * aspect / hexAspect; }
 
@@ -4480,6 +4500,7 @@ public class DeckBuilderManager : MonoBehaviour
         if (_faceMap != null) return;
         _faceMap  = new Dictionary<string, float>();
         _faceMapX = new Dictionary<string, float>();
+        _faceMapZ = new Dictionary<string, float>();
         try
         {
             string p = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "face-data.json");
@@ -4492,6 +4513,9 @@ public class DeckBuilderManager : MonoBehaviour
                 if (f != null && f.ids != null && f.x != null && f.x.Length == f.ids.Length)
                     for (int i = 0; i < f.ids.Length; i++)
                         _faceMapX[f.ids[i]] = f.x[i];
+                if (f != null && f.ids != null && f.z != null && f.z.Length == f.ids.Length)
+                    for (int i = 0; i < f.ids.Length; i++)
+                        _faceMapZ[f.ids[i]] = f.z[i];
             }
         }
         catch (Exception e) { Debug.LogWarning("face-data load failed: " + e.Message); }
@@ -4529,6 +4553,16 @@ public class DeckBuilderManager : MonoBehaviour
         catch { /* keep fallback */ }
         _faceCenterCache[id] = result;
         return result;
+    }
+
+    // Per-card hex zoom from detect_faces.py (1 = default 0.44-card-height
+    // window). <1 tightens the crop to feature a small, off-centre, or
+    // duo-focused face; clamped so a bad value can never zoom past sanity.
+    private float FaceZoom(string id)
+    {
+        if (_faceMapZ != null && _faceMapZ.TryGetValue(id, out var z))
+            return Mathf.Clamp(z, 0.60f, 1.0f);
+        return 1f;
     }
 
     // Estimates the face position from warm-toned skin pixels: anchors to the
