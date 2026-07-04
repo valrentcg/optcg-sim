@@ -128,6 +128,18 @@ OVERRIDES = {
     "ST05-001": (0.145, 0.530, 0.85),   # Shanks — face high, hair blends into background
     "ST12-001": (0.410, 0.330, 0.80),   # Zoro & Sanji duo — focus Zoro (sword in mouth, low-left)
     "ST30-001": (0.280, 0.440, 1.00),   # Luffy & Ace duo — both faces fit one window
+    "OP09-016": (0.300, 0.300, 0.85),   # Rockstar — wink + spiky hair confuses the eye-line
+    # Character cards whose art defeats the detector (hex + decklist rows):
+    "EB02-037": (0.150, 0.300, 0.90),   # Franky — grayscale art, hand covering face
+    "EB03-031": (0.235, 0.250, 0.85),   # Reiju — busy pink art, face upper-left
+    "OP04-063": (0.140, 0.470, 0.85),   # Franky — flexing, face at very top
+    "OP12-063": (0.210, 0.280, 0.85),   # Reiju — inverted kicking pose
+    "OP15-066": (0.135, 0.620, 0.85),   # Satori — tiny face under the hat, giant white body
+    "OP15-060": (0.430, 0.250, 0.85),   # Enel — dark art; white beast head lower-left
+    "OP10-067": (0.220, 0.420, 0.85),   # Senor Pink — dark noir art (SAMPLE print)
+    "OP15-089": (0.315, 0.500, 0.85),   # Franky — fists forward, face mid-frame
+    "OP14-065": (0.310, 0.550, 0.85),   # Senor Pink — desk scene, face mid-right
+    "OP11-070": (0.225, 0.620, 0.85),   # Pudding — big hair out-detects the face
     # Starter/LT alt-art leader prints (StarterLeaderArtOverride ids):
     "OP12-020_p3": (0.430, 0.400, 0.78), # Zoro LT01 alt — head bent low, sword in mouth
     "ST21-001_p2": (0.415, 0.315, 0.80), # G5 Luffy LT01 alt — face low-left under the hair swirls
@@ -141,18 +153,54 @@ def preprocess(gray_art):
     return clahe.apply(gray_art)
 
 
-def eye_fraction_from_box(box, full_h, art_h):
+def eye_fraction_from_box(box, full_h, art_h, img=None):
     """
     Eye line as a fraction of full card height.
-    lbpcascade boxes usually include the hair crown, so eyes sit ~33% down the
-    box. Very tall boxes that start right at the top of the art tend to span
-    crown-to-chin, where the eyes sit closer to 40% (this used to be a hard
-    reject, which silently handed those cards to the skin fallback — the main
-    source of "face cut off at the top of the hex" crops).
+
+    Baseline heuristic: lbpcascade boxes usually include the hair crown, so
+    eyes sit ~33% down the box; very tall boxes that start right at the top of
+    the art tend to span crown-to-chin, where eyes sit closer to 40%.
+
+    When the card image is provided, the estimate is REFINED by locating the
+    actual eye line inside the box: anime eyes are the strongest horizontal
+    band of dark, high-contrast marks in the middle of the face. This matters
+    most for the decklist rows, whose thin slice makes a few-percent error the
+    difference between showing eyes and showing forehead (spiky hair pushes
+    the box top up → 33% lands in hair) or chin.
     """
     x, y, w, h = box
     off = 0.40 if (y < art_h * 0.10 and h > full_h * 0.14) else 0.33
-    return (y + off * h) / full_h
+    base = (y + off * h) / full_h
+    if img is None:
+        return base
+
+    import cv2, numpy as np
+    H, W = img.shape[:2]
+    # Central 64% of the box width (skip hair/ears), 18%..82% of its height.
+    x0 = max(0, int(x + w * 0.18)); x1 = min(W, int(x + w * 0.82))
+    y0 = max(0, int(y + h * 0.18)); y1 = min(H, int(y + h * 0.82))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return base
+    roi = cv2.cvtColor(img[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+    dark = (255.0 - roi.astype(np.float32)) / 255.0          # dark strokes
+    grad = np.abs(cv2.Sobel(roi, cv2.CV_32F, 0, 1, ksize=3)) / 255.0
+    prof = (dark * dark * (0.35 + grad)).mean(axis=1)        # per-row energy
+    k = max(3, (y1 - y0) // 12) | 1
+    prof = cv2.GaussianBlur(prof.reshape(-1, 1), (1, k), 0).ravel()
+    peak = int(np.argmax(prof))
+    # Only trust a clear peak, and never wander far from the prior — a dark
+    # mouth/eyebrow band scores too, so the prior keeps us honest.
+    if prof[peak] < 0.02:
+        return base
+    refined = (y0 + peak) / full_h
+    lo, hi = (y + 0.22 * h) / full_h, (y + 0.58 * h) / full_h
+    refined = min(max(refined, lo), hi)
+    # Asymmetric trust: a dark band BELOW the prior is usually the actual
+    # eyes (the prior lands in the forehead when hair inflates the box), but
+    # a dark band ABOVE it is usually hair shadow or eyebrows — lean on the
+    # prior much harder in that direction.
+    wgt = 0.65 if refined >= base else 0.30
+    return wgt * refined + (1.0 - wgt) * base
 
 
 def skin_fraction(img_bgr, box):
@@ -252,8 +300,11 @@ def collect_candidates(cascade, img):
         if tier != best_tier:
             continue
         # Ultra hits are rescue-grade: require some skin inside the box so a
-        # texture fluke on clothing/effects can't hijack the crop.
-        if tier == 2 and skin_fraction(img, (x, y, w, h)) < 0.05:
+        # texture fluke on clothing/effects can't hijack the crop, and reject
+        # boxes hugging the very top of the art — that's where cost badges,
+        # power text and frame trim live, and rescue-tier hits there are junk.
+        if tier == 2 and (skin_fraction(img, (x, y, w, h)) < 0.08
+                          or (y + h * 0.5) < art_h * 0.10):
             continue
         out.append((x, y, w, h, tier, votes))
     return out
@@ -350,7 +401,7 @@ def frame_faces(cands, img):
 
     scored = sorted(((score_candidate(c, W, art_h), c) for c in cands), reverse=True)
     s0, prim = scored[0]
-    eye0 = eye_fraction_from_box(prim[:4], full_h, art_h)
+    eye0 = eye_fraction_from_box(prim[:4], full_h, art_h, img)
     fx0 = (prim[0] + prim[2] * 0.5) / W
     hf0 = prim[3] / float(full_h)
     confident = prim[5] >= 3.0                        # re-detected ≥3 pass-votes
@@ -372,7 +423,7 @@ def frame_faces(cands, img):
         break
 
     if second is not None:
-        eye1 = eye_fraction_from_box(second[:4], full_h, art_h)
+        eye1 = eye_fraction_from_box(second[:4], full_h, art_h, img)
         fx1 = (second[0] + second[2] * 0.5) / W
         # Weighted midpoint (bigger face pulls harder).
         a0, a1 = prim[2] * prim[3], second[2] * second[3]
@@ -425,8 +476,11 @@ def skin_fallback(img_bgr_art, art_h, full_h):
     m_tan  = cv2.inRange(hsv,
         np.array([8,  12, 90], np.uint8),
         np.array([22, 210, 255], np.uint8))
+    # Min saturation 10: genuinely pale anime skin keeps a warm tint, while
+    # pure white/cream backgrounds (S≈0) used to flood this mask and drag the
+    # fallback to the top of bright cards.
     m_pale = cv2.inRange(hsv,
-        np.array([0,   3, 175], np.uint8),
+        np.array([0,  10, 175], np.uint8),
         np.array([22,  55, 255], np.uint8))
     mask = cv2.bitwise_or(cv2.bitwise_or(m_red, m_tan), m_pale)
 

@@ -52,6 +52,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private GameState state;
     private MatchConfig currentMatchConfig;
     private bool replaySaved;
+    // Wall-clock start of the live match (Time.realtimeSinceStartup), captured in
+    // NewMatch/EnterNetworkedMatch so the finished replay + match-history summary
+    // can record a real duration instead of deriving a proxy from TurnCount.
+    private float matchStartRealtime;
     private bool isReplayMode;
     private ReplayRecord loadedReplay;
     private int replayCursor;
@@ -340,6 +344,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         isReplayMode = false;
         loadedReplay = null;
         replaySaved = false;
+        matchStartRealtime = Time.realtimeSinceStartup;
         var config = new MatchConfig { Seed = System.Guid.NewGuid().ToString("N") };
         if (!string.IsNullOrEmpty(PendingSouthDeckId) && !string.IsNullOrEmpty(PendingNorthDeckId))
         {
@@ -371,7 +376,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (state.Status == "finished" && !replaySaved)
         {
             replaySaved = true;
-            ReplayStore.Save(state, currentMatchConfig);
+            SaveFinishedMatchRecords();
         }
         if (isNetworked) MatchNetworkSync.SendCommand(command);
         Render();
@@ -437,6 +442,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         isReplayMode = false;
         loadedReplay = null;
         replaySaved = false;
+        matchStartRealtime = Time.realtimeSinceStartup;
         isNetworked = true;
         localSeat = seat;
 
@@ -461,9 +467,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (state.Status == "finished" && !replaySaved)
         {
             replaySaved = true;
-            ReplayStore.Save(state, currentMatchConfig);
+            SaveFinishedMatchRecords();
         }
         Render();
+    }
+
+    // Runs once per finished match (guarded by replaySaved at both call sites —
+    // local Dispatch and the networked command receiver). Writes the full local
+    // replay first, then fires the compact account-level summary at Cloud Save.
+    // The summary is built from the local player's perspective: south for solo
+    // play (replays are already saved from the south viewpoint), localSeat for
+    // networked matches — the same orientation ReplayStore's WinnerName implies.
+    private void SaveFinishedMatchRecords()
+    {
+        int durationSeconds = Mathf.Max(0, Mathf.RoundToInt(Time.realtimeSinceStartup - matchStartRealtime));
+        var record = ReplayStore.Save(state, currentMatchConfig, durationSeconds);
+        if (record == null) return;
+
+        var summary = MatchHistoryStore.BuildSummary(state, record,
+            isNetworked && !string.IsNullOrEmpty(localSeat) ? localSeat : "south");
+        // Fire-and-forget: SaveMatchAsync catches + logs its own failures (and
+        // skips guests entirely), so match end can never be blocked by network.
+        if (summary != null) _ = MatchHistoryStore.SaveMatchAsync(summary);
     }
 
     private void NormalizeSelection()

@@ -30,27 +30,40 @@ public static class LobbyManager
     // and be awaited - it cannot be guarded by checking AuthenticationService.Instance itself.
     public static async Task EnsureSignedInAsync()
     {
-        _initTask ??= InitializeIfNeeded();
-        await _initTask;
+        await EnsureServicesInitializedAsync();
 
         if (AuthenticationService.Instance.IsSignedIn) return;
         _signInTask ??= AuthenticationService.Instance.SignInAnonymouslyAsync();
         await _signInTask;
     }
 
+    // Split out from EnsureSignedInAsync so AccountManager's email/password sign-in
+    // (which requires AuthenticationState.SignedOut, incompatible with an anonymous
+    // session already being active) can init services without forcing anonymous sign-in.
+    public static async Task EnsureServicesInitializedAsync()
+    {
+        _initTask ??= InitializeIfNeeded();
+        await _initTask;
+    }
+
     private static async Task InitializeIfNeeded()
     {
         if (UnityServices.State != ServicesInitializationState.Initialized)
             await UnityServices.InitializeAsync();
-        // Must exist before CreateSessionAsync/JoinSessionBy*Async - com.unity.services.multiplayer's
-        // built-in Netcode-for-GameObjects handler (triggered by .WithRelayNetwork() below) requires
-        // NetworkManager.Singleton to already be present, and throws otherwise.
-        NetworkBootstrap.EnsureNetworkManager();
+        // NOTE: NetworkManager creation deliberately does NOT happen here. A
+        // NetworkManager that exists but never starts a session throws a
+        // NullReferenceException from NetworkSceneManager.Dispose on app quit
+        // (Netcode-for-GameObjects teardown bug), and this method runs on plain
+        // boot sign-in - menu-only sessions would pay that cost every run.
+        // EnsureNetworkManager() is called just-in-time in CreateLobbyAsync /
+        // JoinByCodeAsync / JoinByIdAsync instead, which is still before the
+        // Sessions SDK's Netcode handler needs NetworkManager.Singleton.
     }
 
     public static async Task<IHostSession> CreateLobbyAsync(string lobbyName, bool isPrivate, string ownerDisplayName)
     {
         await EnsureSignedInAsync();
+        NetworkBootstrap.EnsureNetworkManager(); // must exist before CreateSessionAsync
         // Netcode for GameObjects is installed, so .WithRelayNetwork() auto-wires
         // NetworkManager/UnityTransport/Relay - no custom INetworkHandler needed.
         var options = new SessionOptions
@@ -70,6 +83,7 @@ public static class LobbyManager
     public static async Task<ISession> JoinByCodeAsync(string joinCode)
     {
         await EnsureSignedInAsync();
+        NetworkBootstrap.EnsureNetworkManager(); // must exist before JoinSessionByCodeAsync
         var session = await MultiplayerService.Instance.JoinSessionByCodeAsync(joinCode.Trim());
         CurrentSession = session;
         return session;
@@ -78,6 +92,7 @@ public static class LobbyManager
     public static async Task<ISession> JoinByIdAsync(string sessionId)
     {
         await EnsureSignedInAsync();
+        NetworkBootstrap.EnsureNetworkManager(); // must exist before JoinSessionByIdAsync
         var session = await MultiplayerService.Instance.JoinSessionByIdAsync(sessionId);
         CurrentSession = session;
         return session;

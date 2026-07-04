@@ -84,6 +84,18 @@ public sealed class ReplayRecord
     public string NorthDeckName;
     public string WinnerName;
     public int TurnCount;
+    // ── Match-history additions ──────────────────────────────────────────────
+    // Snapshot fields for the Match History screens so the menu can render rich
+    // rows (leaders, life, first player, duration) without re-simulating the
+    // CommandHistory. All default to 0/"" when an older replay JSON lacks them —
+    // JsonUtility simply leaves missing fields at their defaults, so old files
+    // keep loading unchanged (the UI treats empty leader ids as "unknown").
+    public int SouthFinalLife;
+    public int NorthFinalLife;
+    public string SouthLeaderId;
+    public string NorthLeaderId;
+    public string FirstPlayer;          // seat ("south" | "north") that took turn 1
+    public int DurationSeconds;         // wall-clock match length; 0 = unknown (old record)
     public List<SerializableCommand> CommandHistory = new List<SerializableCommand>();
 }
 
@@ -91,12 +103,18 @@ public static class ReplayStore
 {
     private static string Dir => Path.Combine(Application.persistentDataPath, "Replays");
 
-    /// <summary>Call once a match's GameState.Status has flipped to "finished".</summary>
-    public static ReplayRecord Save(GameState state, MatchConfig config)
+    /// <summary>Call once a match's GameState.Status has flipped to "finished".
+    /// `durationSeconds` is the wall-clock match length (optional — old callers
+    /// compile unchanged and just record 0 = unknown).</summary>
+    public static ReplayRecord Save(GameState state, MatchConfig config, int durationSeconds = 0)
     {
         if (state == null || config == null) return null;
 
         var (southName, northName) = ParseMatchup(state);
+        // Final life / leader ids read straight off the finished state — cheap
+        // snapshots that save the Match History UI from ever re-simulating.
+        state.Players.TryGetValue("south", out var southP);
+        state.Players.TryGetValue("north", out var northP);
         var record = new ReplayRecord
         {
             Id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff"),
@@ -108,6 +126,12 @@ public static class ReplayStore
             NorthDeckName = northName,
             WinnerName = ExtractWinner(state),
             TurnCount = state.TurnNumber,
+            SouthFinalLife = southP?.Life?.Count ?? 0,
+            NorthFinalLife = northP?.Life?.Count ?? 0,
+            SouthLeaderId = southP?.Leader?.CardId,
+            NorthLeaderId = northP?.Leader?.CardId,
+            FirstPlayer = state.FirstPlayer,
+            DurationSeconds = durationSeconds,
         };
         foreach (var cmd in state.CommandHistory)
             record.CommandHistory.Add(SerializableCommand.From(cmd));

@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 3b4f9bca33b016f4ca858f644fae5b36
+ScriptedImporter:
+  internalIDToNameTable: []
+  externalObjects: {}
+  serializedVersion: 2
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+  script: {fileID: 11500000, guid: fbc33bd6a5704c0881dc7a9ead54089b, type: 3}
+  Parameters:
+  - Name: playerIds
+    ParameterType: 3
+    Required: 1
+  Source: 0

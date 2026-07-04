@@ -6,6 +6,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Threading.Tasks;
 using Unity.Netcode;
 using Unity.Services.Multiplayer;
 using UnityEngine;
@@ -69,6 +71,44 @@ public class MainMenuManager : MonoBehaviour
     // When true, the stage shows the replay browser instead of the game-mode portals.
     private bool showingReplays;
 
+    // ── Match History sub-state (only meaningful while showingReplays) ────────
+    // selectedMatchId: null = the scannable 20-row list, set = the turn-by-turn
+    // detail view for that match. matchDetailTab picks the detail tab, and
+    // matchFilter re-filters the list. All reset when the nav row is clicked.
+    private string selectedMatchId;
+    private string matchDetailTab = "log";     // "log" | "decks"
+    private string matchFilter = "all";        // "all" | "win" | "loss"
+    // Merged data source: account summaries (MatchHistoryStore) + local replays
+    // (ReplayStore — watch-ability + guest fallback), deduped by id, newest
+    // first, capped at 20. null = not loaded yet (kicks off LoadMatchHistory).
+    private List<MatchSummary> matchHistory;
+    private bool matchHistoryLoading;
+    // Which of the merged matches still have a full local replay on disk —
+    // only those rows get a Watch button (cloud summaries can't be re-simmed).
+    private readonly Dictionary<string, ReplayRecord> localReplaysById = new Dictionary<string, ReplayRecord>();
+
+    // Card library + face-crop data for the Match History banners/decklists —
+    // the same official-card-library.json / face-data.json files DeckBuilder
+    // loads, parsed lazily the first time the stage is shown.
+    private CardRec[] menuCardLibrary;
+    private Dictionary<string, CardRec> menuCardsById;
+    private Dictionary<string, float> menuFaceY, menuFaceX;
+    private readonly Dictionary<string, Sprite> _thumbArtCache = new Dictionary<string, Sprite>();
+
+    // One Piece colour swatches (mirror of DeckBuilderManager.ColorSwatch, which
+    // is private there) — leader colour dots, life pips, deck-row dots.
+    private static readonly Dictionary<string, Color> MenuColorSwatch = new Dictionary<string, Color>
+    {
+        { "Red",    new Color32(214,  68,  68, 255) },
+        { "Green",  new Color32( 70, 180, 110, 255) },
+        { "Blue",   new Color32( 70, 140, 220, 255) },
+        { "Purple", new Color32(160, 110, 210, 255) },
+        { "Black",  new Color32( 90, 100, 120, 255) },
+        { "Yellow", new Color32(230, 200,  90, 255) },
+    };
+    private static readonly Color GoodGreen = new Color32( 79, 208, 138, 255);   // WIN / win-rate
+    private static readonly Color RowBg     = new Color32( 17,  32,  47, 255);   // match row / panel fill
+
     // When true, the stage shows the private-room lobby hub (create/browse/join, then
     // the in-lobby waiting room) instead of the game-mode portals.
     private bool showingLobbyHub;
@@ -82,6 +122,42 @@ public class MainMenuManager : MonoBehaviour
     // leaves, etc.), so the waiting room repaints itself instead of going stale until the
     // local player happens to click something else.
     private ISession subscribedLobbySession;
+
+    // Account gate: shown automatically once signed in if no username has been claimed
+    // yet (required to play - it's the name shown as lobby owner), before any other
+    // stage is reachable. Also offers switching to "sign in with an existing account"
+    // for players recovering onto a new device instead of claiming a fresh name.
+    private bool showingAccountGate;
+    private bool accountGateSignInMode;
+    // Post-claim "secure your account" step: shown right after a successful name claim
+    // so linking a recovery email is offered up front instead of buried in settings.
+    private bool accountGatePostClaimMode;
+    // Two-click arm for signing out with no recovery email linked (account would be lost).
+    private bool signOutArmed;
+    // Account & Recovery: opened from the gear icon / Settings nav row. Lets an
+    // already-playing account link email+password (for recovery) and request/confirm
+    // a password reset. Not required to play, unlike the gate above.
+    private bool showingAccountSettings;
+    private bool accountSettingsResetMode;
+    private string usernameInput = "";
+    private string accountEmailInput = "";
+    private string accountPasswordInput = "";
+    private string resetTokenInput = "";
+    private string resetNewPasswordInput = "";
+    private bool accountBusy;
+    private string accountError;
+
+    // Friends stage: shown for the "Friends" nav row. Relationship graph + presence come
+    // from FriendsManager.cs (Unity Friends service); lists are cached here and refreshed
+    // on navigation and on FriendsManager.FriendsChanged (real-time relationship/presence
+    // updates), the same way browsedLobbies caches LobbyManager's results.
+    private bool showingFriends;
+    private string addFriendUsernameInput = "";
+    private bool friendsBusy;
+    private string friendsError;
+    private List<FriendEntry> friendsList = new List<FriendEntry>();
+    private List<FriendEntry> incomingRequests = new List<FriendEntry>();
+    private List<FriendEntry> outgoingRequests = new List<FriendEntry>();
 
     private Canvas   canvas;
     private RectTransform menuRoot;
@@ -142,6 +218,45 @@ public class MainMenuManager : MonoBehaviour
         // elsewhere in the menu when the host clicks Start Match.
         MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
         MatchNetworkSync.MatchStartReceived += OnNetworkMatchStartReceived;
+
+        FriendsManager.FriendsChanged -= OnFriendsChanged;
+        FriendsManager.FriendsChanged += OnFriendsChanged;
+
+        CheckAccountGateOnBoot();
+    }
+
+    // Repaints live on any relationship/presence change (ours or a friend's) rather than
+    // only refreshing when the player happens to navigate back to the Friends stage.
+    private void OnFriendsChanged()
+    {
+        if (this == null || menuRoot == null) return;
+        RefreshFriendsLists();
+    }
+
+    private async void CheckAccountGateOnBoot()
+    {
+        try
+        {
+            await AccountManager.EnsureReadyAsync();
+            var existing = await AccountManager.LoadOwnUsernameAsync();
+            if (this == null || menuRoot == null) return;
+            if (string.IsNullOrEmpty(existing))
+            {
+                // Returning guests skip the welcome gate - their choice was saved.
+                // The gate comes back via Settings > Create Account / Sign In.
+                if (AccountManager.TryRestoreGuestSession())
+                {
+                    RenderMenu(); // top bar picks up the restored guest name
+                    return;
+                }
+                showingAccountGate = true;
+                RenderMenu();
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Account gate check failed: {ex.Message}");
+        }
     }
 
     // ── Leader art (versus-self deck-slot thumbnails) ───────────────────────────
@@ -190,6 +305,37 @@ public class MainMenuManager : MonoBehaviour
     {
         // Update clock every 30 seconds (no need for every-second polling)
         InvokeRepeating(nameof(UpdateClock), 30f, 30f);
+    }
+
+    // ── Tab navigation between input fields ──────────────────────────────────
+    // uGUI InputField has no built-in tab support; MakeInput registers each field
+    // in creation order (== visual order) and this walks the list. Shift+Tab
+    // goes backwards. Applies to every menu screen with inputs, not just the gate.
+
+    private readonly List<InputField> tabOrder = new List<InputField>();
+
+    private void Update()
+    {
+        var kb = UnityEngine.InputSystem.Keyboard.current;
+        if (kb == null || !kb.tabKey.wasPressedThisFrame) return;
+
+        tabOrder.RemoveAll(f => f == null); // destroy-and-rebuild leaves stale entries
+        if (tabOrder.Count == 0) return;
+
+        var selected = EventSystem.current != null ? EventSystem.current.currentSelectedGameObject : null;
+        int idx = -1;
+        for (int i = 0; i < tabOrder.Count; i++)
+            if (selected != null && tabOrder[i].gameObject == selected) { idx = i; break; }
+
+        bool backwards = kb.shiftKey.isPressed;
+        int next = idx < 0
+            ? (backwards ? tabOrder.Count - 1 : 0)          // nothing focused: start at an end
+            : (idx + (backwards ? -1 : 1) + tabOrder.Count) % tabOrder.Count;
+
+        var target = tabOrder[next];
+        target.Select();
+        target.ActivateInputField();
+        target.MoveTextEnd(false);
     }
 
     // ── EventSystem ───────────────────────────────────────────────────────────
@@ -242,10 +388,14 @@ public class MainMenuManager : MonoBehaviour
         for (int i = menuRoot.childCount - 1; i >= 0; i--)
             Destroy(menuRoot.GetChild(i).gameObject);
         clockText = null;
+        tabOrder.Clear();
 
         BuildBackground();
         BuildTopBar();
         BuildBody();
+        // Account gate renders as a modal over the whole menu (top bar included) so the
+        // menu stays visible-but-locked behind it instead of the stage being hijacked.
+        if (showingAccountGate) BuildAccountGateModal(menuRoot);
         Canvas.ForceUpdateCanvases();
     }
 
@@ -335,7 +485,7 @@ public class MainMenuManager : MonoBehaviour
         avatar.localRotation = Quaternion.Euler(0f, 0f, 45f);
         Round(avatar);
 
-        var nameText = TextObject("PlayerName", identity, DefaultPlayerName, 15, Ink, TextAnchor.LowerLeft);
+        var nameText = TextObject("PlayerName", identity, AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName, 15, Ink, TextAnchor.LowerLeft);
         nameText.fontStyle = FontStyle.Bold;
         Stretch(nameText.rectTransform, new Vector2(0f, 0.5f), Vector2.one, new Vector2(46f, 2f), Vector2.zero);
 
@@ -385,7 +535,7 @@ public class MainMenuManager : MonoBehaviour
         Stretch(gearIcon.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
         var gearBtn = gear.gameObject.AddComponent<Button>();
-        gearBtn.onClick.AddListener(() => { /* TODO: open settings */ });
+        gearBtn.onClick.AddListener(OpenAccountSettings);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -408,7 +558,9 @@ public class MainMenuManager : MonoBehaviour
         // ── Stage (fills rest, 20px gap from rail) ──────────────────────────
         var stage = PanelObject("Stage", body, new Color(0, 0, 0, 0));
         Stretch(stage, Vector2.zero, Vector2.one, new Vector2(254f, 0f), Vector2.zero);
-        if (showingReplays) BuildReplayStage(stage);
+        if (showingAccountSettings) BuildAccountSettingsStage(stage);
+        else if (showingFriends) BuildFriendsStage(stage);
+        else if (showingReplays) BuildReplayStage(stage);
         else if (showingLobbyHub) BuildLobbyStage(stage);
         else BuildStage(stage);
     }
@@ -417,81 +569,998 @@ public class MainMenuManager : MonoBehaviour
     // Replay browser (stage swapped in for "Replays" nav row)
     // ══════════════════════════════════════════════════════════════════════════
 
+    // Entry point kept as BuildReplayStage so the nav wiring above is untouched.
+    // Routes between the two Match History views: the scannable 20-row list, and
+    // the turn-by-turn detail (selectedMatchId set by clicking a row).
     private void BuildReplayStage(RectTransform stage)
     {
-        const float titleH = 60f;
+        EnsureMenuCardLibrary();
+        EnsureMenuFaceData();
 
-        var titleRow = PanelObject("Replay Title Row", stage, new Color(0, 0, 0, 0));
-        Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
-
-        var titleText = TextObject("Title", titleRow, "Match History", 26, Ink, TextAnchor.MiddleLeft);
-        titleText.fontStyle = FontStyle.Bold;
-        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
-
-        var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
-        Stretch(backHolder, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
-        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        backHlg.childAlignment = TextAnchor.MiddleRight;
-        backHlg.childControlWidth = false;
-        backHlg.childControlHeight = false;
-        AddButton(backHolder, "< Back", () => { showingReplays = false; RenderMenu(); }, true, false);
-
-        var listArea = PanelObject("Replay List", stage, new Color(0, 0, 0, 0));
-        Stretch(listArea, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
-
-        var replays = ReplayStore.ListAll();
-        if (replays.Count == 0)
+        // Data not loaded yet: kick off the merge (cloud summaries + local
+        // replays) and show the loading state until it lands.
+        if (matchHistory == null)
         {
-            var empty = TextObject("Empty", listArea, "No match history yet — finish a match to save one.",
+            if (!matchHistoryLoading) LoadMatchHistory();
+            var loading = TextObject("Loading", stage, "Loading match history...",
                 13, Muted, TextAnchor.UpperLeft, monoFont);
-            Stretch(empty.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f),
-                new Vector2(4f, -34f), Vector2.zero);
+            Stretch(loading.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(4f, -60f), Vector2.zero);
             return;
         }
 
-        const float rowH = 56f, gap = 8f;
-        int shown = Mathf.Min(replays.Count, 10);
-        for (int i = 0; i < shown; i++)
+        if (selectedMatchId != null)
         {
-            var row = PanelObject("Replay Row " + i, listArea, new Color32(8, 16, 24, 153));
+            var match = matchHistory.Find(m => m != null && m.id == selectedMatchId);
+            if (match != null) { BuildMatchDetail(stage, match); return; }
+            selectedMatchId = null;   // stale id (match aged out) — fall back to the list
+        }
+        BuildMatchList(stage);
+    }
+
+    // ── Data source: cloud summaries merged with local replays ────────────────
+
+    private async void LoadMatchHistory()
+    {
+        matchHistoryLoading = true;
+        List<MatchSummary> cloud = null;
+        try { cloud = await MatchHistoryStore.LoadAsync(); }
+        catch (Exception ex) { Debug.LogWarning($"Match history load failed: {ex.Message}"); }
+        if (this == null || menuRoot == null) return;
+        matchHistoryLoading = false;
+        matchHistory = MergeMatchHistory(cloud);
+        if (showingReplays) RenderMenu();
+    }
+
+    // Account summaries win on dedupe (they carry the turn log); local replays
+    // fill in anything the cloud doesn't have (guest play, offline matches) and
+    // decide which rows are watchable. Ids are timestamp-sortable on both sides
+    // (MatchSummary.id == ReplayRecord.Id), so an ordinal sort = newest first.
+    private List<MatchSummary> MergeMatchHistory(List<MatchSummary> cloud)
+    {
+        localReplaysById.Clear();
+        var merged = new List<MatchSummary>();
+        var seen = new HashSet<string>();
+        if (cloud != null)
+            foreach (var m in cloud)
+                if (m != null && !string.IsNullOrEmpty(m.id) && seen.Add(m.id)) merged.Add(m);
+        foreach (var r in ReplayStore.ListAll())
+        {
+            if (r == null || string.IsNullOrEmpty(r.Id)) continue;
+            localReplaysById[r.Id] = r;
+            if (seen.Add(r.Id)) merged.Add(SummaryFromLocalRecord(r));
+        }
+        merged.Sort((a, b) => string.CompareOrdinal(b.id, a.id));
+        if (merged.Count > 20) merged.RemoveRange(20, merged.Count - 20);
+        return merged;
+    }
+
+    // Shallow summary for a replay that never reached the cloud (guest/offline).
+    // A ReplayRecord has no EventLog (only the re-simmable CommandHistory), so
+    // turns stay empty and the detail view shows a friendly note instead.
+    private MatchSummary SummaryFromLocalRecord(ReplayRecord r)
+    {
+        // Replays are saved from the south (local) perspective, and WinnerName is
+        // the "{name} wins." name — same string ParseMatchup stored per side. So:
+        // south won unless the winner matches the north name.
+        bool win = !string.IsNullOrEmpty(r.WinnerName) && r.WinnerName != r.NorthDeckName;
+        var s = new MatchSummary
+        {
+            id = r.Id,
+            savedAtIso = r.SavedAtIso,
+            result = win ? "win" : "loss",
+            youLeaderId = r.SouthLeaderId,
+            oppLeaderId = r.NorthLeaderId,
+            oppName = string.IsNullOrEmpty(r.NorthDeckName) ? "Opponent" : r.NorthDeckName,
+            youFirst = r.FirstPlayer != "north",
+            youFinalLife = r.SouthFinalLife,
+            oppFinalLife = r.NorthFinalLife,
+            youMaxLife = MenuLeaderBaseLife(r.SouthLeaderId),
+            oppMaxLife = MenuLeaderBaseLife(r.NorthLeaderId),
+            turnCount = r.TurnCount,
+            durationSeconds = r.DurationSeconds,
+        };
+        // Decklists resolve the same way the live save site does — from the
+        // deck-builder store, if those decks still exist locally.
+        var southDeck = string.IsNullOrEmpty(r.SouthDeckId) ? null : DeckStore.Get(r.SouthDeckId);
+        var northDeck = string.IsNullOrEmpty(r.NorthDeckId) ? null : DeckStore.Get(r.NorthDeckId);
+        if (southDeck?.cards != null)
+            foreach (var e in southDeck.cards)
+                if (e != null && e.count > 0) s.youDeck.Add(new MatchDeckCount { cardId = e.id, count = e.count });
+        if (northDeck?.cards != null)
+            foreach (var e in northDeck.cards)
+                if (e != null && e.count > 0) s.oppDeck.Add(new MatchDeckCount { cardId = e.id, count = e.count });
+        return s;
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Match History — LIST VIEW
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Stage pixel width at the 1920x1080 reference: 1920 - 2*22 body pad - 234
+    // rail - 20 gap. Rows are laid out with absolute offsets against this, the
+    // same hand-anchored style as the rest of the file.
+    private const float MatchStageW = 1622f;
+
+    private void BuildMatchList(RectTransform stage)
+    {
+        const float headerH = 78f;
+
+        // ── Header row: title + sub (left), win-rate card + filter chips (right)
+        var header = PanelObject("MH Header", stage, new Color(0, 0, 0, 0));
+        Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -headerH), Vector2.zero);
+
+        var title = TextObject("Title", header, "Match History", 27, Ink, TextAnchor.UpperLeft);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 0f), new Vector2(0.5f, 1f), new Vector2(4f, 22f), Vector2.zero);
+
+        var sub = TextObject("Sub", header, "LAST 20 MATCHES  ·  SOUTH SEAT", 11, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(sub.rectTransform, Vector2.zero, new Vector2(0.5f, 0f), new Vector2(4f, 4f), new Vector2(0f, 26f));
+
+        int wins = 0, total = 0;
+        foreach (var m in matchHistory) if (m != null) { total++; if (m.result == "win") wins++; }
+        int losses = total - wins;
+        int pct = total > 0 ? Mathf.RoundToInt(wins * 100f / total) : 0;
+
+        // Win-rate card. The HTML mock's conic-gradient ring has no uGUI
+        // equivalent without a custom shader, so this is the sanctioned
+        // approximation: "12–8" record, a horizontal win/loss bar, and the
+        // percentage — same information, same palette.
+        var wr = PanelObject("WinRate", header, RowBg);
+        wr.anchorMin = new Vector2(1f, 1f); wr.anchorMax = new Vector2(1f, 1f);
+        wr.pivot = new Vector2(1f, 1f);
+        wr.sizeDelta = new Vector2(236f, 62f);
+        wr.anchoredPosition = new Vector2(0f, 0f);
+        RoundBig(wr);
+        AddRoundedCardBorder(wr, MenuB, 1f);
+
+        var pctText = TextObject("Pct", wr, pct + "%", 19, GoodGreen, TextAnchor.MiddleCenter, monoFont);
+        pctText.fontStyle = FontStyle.Bold;
+        Stretch(pctText.rectTransform, new Vector2(0f, 0f), new Vector2(0.32f, 1f), new Vector2(8f, 0f), Vector2.zero);
+
+        var record = TextObject("Record", wr, $"{wins}–{losses}", 17, Ink, TextAnchor.UpperLeft);
+        record.fontStyle = FontStyle.Bold;
+        Stretch(record.rectTransform, new Vector2(0.34f, 0.45f), Vector2.one, new Vector2(4f, 0f), new Vector2(-10f, -8f));
+
+        var recordLabel = TextObject("RecordLabel", wr, "WIN / LOSS", 10, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(recordLabel.rectTransform, new Vector2(0.34f, 0.18f), new Vector2(1f, 0.45f), new Vector2(4f, 0f), new Vector2(-10f, 0f));
+
+        // Win/loss bar along the card's bottom: green fill = win share.
+        var barBg = PanelObject("BarBg", wr, new Color(RedAccent.r, RedAccent.g, RedAccent.b, 0.35f));
+        Stretch(barBg, new Vector2(0.34f, 0f), new Vector2(1f, 0f), new Vector2(4f, 8f), new Vector2(-10f, 13f));
+        Round(barBg);
+        if (total > 0)
+        {
+            var barFill = PanelObject("BarFill", barBg, GoodGreen);
+            Stretch(barFill, Vector2.zero, new Vector2(Mathf.Clamp01(wins / (float)total), 1f), Vector2.zero, Vector2.zero);
+            Round(barFill);
+        }
+
+        // Filter chips: All / Wins / Losses (pill group left of the win-rate card).
+        var chips = PanelObject("Filters", header, new Color32(14, 28, 43, 255));
+        chips.anchorMin = new Vector2(1f, 1f); chips.anchorMax = new Vector2(1f, 1f);
+        chips.pivot = new Vector2(1f, 1f);
+        chips.sizeDelta = new Vector2(248f, 34f);
+        chips.anchoredPosition = new Vector2(-252f, -14f);
+        Round(chips);
+        AddRoundedCardBorder(chips, MenuB, 1f);
+        BuildFilterChip(chips, "All", "all", 0);
+        BuildFilterChip(chips, "Wins", "win", 1);
+        BuildFilterChip(chips, "Losses", "loss", 2);
+
+        // ── Filtered rows in a vertical scroll (20 rows won't all fit 1080) ──
+        var filtered = new List<MatchSummary>();
+        foreach (var m in matchHistory)
+            if (m != null && (matchFilter == "all" || m.result == matchFilter)) filtered.Add(m);
+
+        var listArea = PanelObject("MH List", stage, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -headerH - 8f));
+
+        if (filtered.Count == 0)
+        {
+            string msg = matchHistory.Count == 0
+                ? "No matches yet — finish a match and it'll show up here."
+                : "No matches for this filter.";
+            var empty = TextObject("Empty", listArea, msg, 13, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -34f), Vector2.zero);
+            return;
+        }
+
+        const float rowH = 94f, gap = 9f;
+        var content = MakeMenuScroll(listArea, filtered.Count * (rowH + gap) - gap);
+        for (int i = 0; i < filtered.Count; i++)
+        {
+            var row = PanelObject("Match Row " + i, content, RowBg);
             row.anchorMin = new Vector2(0f, 1f);
             row.anchorMax = new Vector2(1f, 1f);
             row.pivot = new Vector2(0.5f, 1f);
             row.sizeDelta = new Vector2(0f, rowH);
             row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
-            BuildReplayRow(row, replays[i]);
+            BuildMatchRow(row, filtered[i]);
         }
     }
 
-    private void BuildReplayRow(RectTransform row, ReplayRecord r)
+    private void BuildFilterChip(RectTransform group, string label, string value, int index)
+    {
+        bool active = matchFilter == value;
+        var chip = PanelObject(label + " Chip", group, active ? Accent : new Color(0, 0, 0, 0));
+        chip.anchorMin = new Vector2(index / 3f, 0f);
+        chip.anchorMax = new Vector2((index + 1) / 3f, 1f);
+        chip.offsetMin = new Vector2(4f, 4f);
+        chip.offsetMax = new Vector2(-4f, -4f);
+        Round(chip);
+        var t = TextObject("t", chip, label, 11, active ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = chip.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { matchFilter = value; RenderMenu(); });
+    }
+
+    // One 94px match row: stripe · result column · YOU banner · final-life
+    // center · OPP banner · date/watch/chevron meta.
+    private void BuildMatchRow(RectTransform row, MatchSummary m)
     {
         Round(row);
         AddRoundedCardBorder(row, MenuB, 1f);
 
-        string south = string.IsNullOrEmpty(r.SouthDeckName) ? "South" : r.SouthDeckName;
-        string north = string.IsNullOrEmpty(r.NorthDeckName) ? "North" : r.NorthDeckName;
-        var title = TextObject("Matchup", row, $"{south}  vs  {north}", 14, Ink, TextAnchor.UpperLeft);
+        bool win = m.result == "win";
+        Color resColor = win ? GoodGreen : RedAccent;
+        ReplayRecord localReplay;
+        localReplaysById.TryGetValue(m.id, out localReplay);
+
+        // Whole row opens the detail view (Button color-tint gives the hover lift).
+        var rowBtn = row.gameObject.AddComponent<Button>();
+        string capturedId = m.id;
+        rowBtn.onClick.AddListener(() => { selectedMatchId = capturedId; matchDetailTab = "log"; RenderMenu(); });
+
+        // 1. Result stripe (4px, colored).
+        var stripe = PanelObject("Stripe", row, resColor);
+        Stretch(stripe, Vector2.zero, new Vector2(0f, 1f), new Vector2(0f, 3f), new Vector2(4f, -3f));
+        stripe.GetComponent<Image>().raycastTarget = false;
+
+        // 2. Result column: WIN/LOSS badge over "T{n} · {m}m{ss}s".
+        var badge = PanelObject("Badge", row, new Color(resColor.r, resColor.g, resColor.b, 0.13f));
+        badge.anchorMin = new Vector2(0f, 1f); badge.anchorMax = new Vector2(0f, 1f);
+        badge.pivot = new Vector2(0f, 1f);
+        badge.sizeDelta = new Vector2(74f, 27f);
+        badge.anchoredPosition = new Vector2(18f, -18f);
+        Round(badge);
+        AddRoundedCardBorder(badge, new Color(resColor.r, resColor.g, resColor.b, 0.55f), 1f);
+        var badgeT = TextObject("t", badge, win ? "WIN" : "LOSS", 14, resColor, TextAnchor.MiddleCenter, monoFont);
+        badgeT.fontStyle = FontStyle.Bold;
+        Stretch(badgeT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        var meta = TextObject("TurnDur", row, $"T{m.turnCount} · {FormatDuration(m.durationSeconds)}",
+            10, new Color32(133, 152, 168, 255), TextAnchor.UpperLeft, monoFont);
+        Stretch(meta.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(18f, 12f), new Vector2(118f, -52f));
+
+        // 3/5. Leader banners (eye-cropped art + darkening gradient + overlay).
+        const float bannerL = 124f, centerHalf = 63f, metaW = 166f;
+        float bannerW = MatchStageW / 2f - bannerL - centerHalf;   // approx px width for cover math
+
+        var youBanner = PanelObject("You Banner", row, RowBg);
+        Stretch(youBanner, new Vector2(0f, 0f), new Vector2(0.5f, 1f), new Vector2(bannerL, 6f), new Vector2(-centerHalf, -6f));
+        BuildLeaderBanner(youBanner, m.youLeaderId, bannerW, 82f, true);
+        BuildBannerOverlay(youBanner, m, true, false);
+
+        var oppBanner = PanelObject("Opp Banner", row, RowBg);
+        Stretch(oppBanner, new Vector2(0.5f, 0f), new Vector2(1f, 1f), new Vector2(centerHalf, 6f), new Vector2(-metaW, -6f));
+        BuildLeaderBanner(oppBanner, m.oppLeaderId, bannerW, 82f, false);
+        BuildBannerOverlay(oppBanner, m, false, false);
+
+        // 4. Center score: FINAL LIFE / "{a} – {b}" / VS.
+        var center = PanelObject("Center", row, new Color(0, 0, 0, 0));
+        center.anchorMin = new Vector2(0.5f, 0f); center.anchorMax = new Vector2(0.5f, 1f);
+        center.pivot = new Vector2(0.5f, 0.5f);
+        center.sizeDelta = new Vector2(118f, 0f);
+        center.anchoredPosition = Vector2.zero;   // banners end symmetrically at ±centerHalf around the row middle
+        center.GetComponent<Image>().raycastTarget = false;
+        var flLabel = TextObject("FL", center, "FINAL LIFE", 9, new Color32(124, 146, 162, 255), TextAnchor.LowerCenter, monoFont);
+        Stretch(flLabel.rectTransform, new Vector2(0f, 0.66f), Vector2.one, Vector2.zero, new Vector2(0f, -8f));
+        var score = TextObject("Score", center, $"{m.youFinalLife} – {m.oppFinalLife}", 23, Ink, TextAnchor.MiddleCenter);
+        score.fontStyle = FontStyle.Bold;
+        Stretch(score.rectTransform, new Vector2(0f, 0.32f), new Vector2(1f, 0.66f), Vector2.zero, Vector2.zero);
+        var vs = TextObject("VS", center, "VS", 10, new Color32(92, 112, 128, 255), TextAnchor.UpperCenter, monoFont);
+        Stretch(vs.rectTransform, Vector2.zero, new Vector2(1f, 0.32f), new Vector2(0f, 8f), Vector2.zero);
+
+        // 6. Right meta: date + "Xh ago", Watch ▷ (only when the full replay is
+        // still on this machine), and the "open detail" chevron.
+        var when = TextObject("When", row, FormatWhen(m.savedAtIso), 11, new Color32(198, 211, 220, 255), TextAnchor.UpperRight, monoFont);
+        Stretch(when.rectTransform, new Vector2(1f, 0f), Vector2.one, new Vector2(-metaW + 4f, 0f), new Vector2(-70f, -20f));
+        var ago = TextObject("Ago", row, FormatAgo(m.savedAtIso), 10, new Color32(111, 134, 150, 255), TextAnchor.UpperRight, monoFont);
+        Stretch(ago.rectTransform, new Vector2(1f, 0f), Vector2.one, new Vector2(-metaW + 4f, 0f), new Vector2(-70f, -42f));
+
+        if (localReplay != null)
+        {
+            var watch = PanelObject("Watch", row, new Color(Accent.r, Accent.g, Accent.b, 0.12f));
+            watch.anchorMin = new Vector2(1f, 0.5f); watch.anchorMax = new Vector2(1f, 0.5f);
+            watch.pivot = new Vector2(1f, 0.5f);
+            watch.sizeDelta = new Vector2(34f, 34f);
+            watch.anchoredPosition = new Vector2(-30f, 0f);
+            Round(watch);
+            AddRoundedCardBorder(watch, new Color(Accent.r, Accent.g, Accent.b, 0.35f), 1f);
+            var wIcon = TextObject("t", watch, "▷", 14, Accent, TextAnchor.MiddleCenter);
+            Stretch(wIcon.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var capturedReplay = localReplay;
+            var wBtn = watch.gameObject.AddComponent<Button>();
+            wBtn.onClick.AddListener(() => WatchReplay(capturedReplay));
+        }
+
+        var chevron = TextObject("Chevron", row, "›", 18, new Color32(92, 112, 128, 255), TextAnchor.MiddleRight);
+        Stretch(chevron.rectTransform, new Vector2(1f, 0f), Vector2.one, new Vector2(-24f, 0f), new Vector2(-10f, 0f));
+    }
+
+    // Text overlay on a leader banner. youSide = left-aligned "YOU" block;
+    // otherwise right-aligned "@opp". `hero` switches to the bigger detail sizes.
+    private void BuildBannerOverlay(RectTransform banner, MatchSummary m, bool youSide, bool hero)
+    {
+        string leaderId = youSide ? m.youLeaderId : m.oppLeaderId;
+        var rec = MenuCard(leaderId);
+        string leaderName = rec != null ? rec.name : (string.IsNullOrEmpty(leaderId) ? "Unknown Leader" : leaderId);
+        Color leaderColor = MenuLeaderColor(leaderId);
+        int life = youSide ? m.youFinalLife : m.oppFinalLife;
+        int maxLife = Mathf.Max(youSide ? m.youMaxLife : m.oppMaxLife, life);
+        bool first = youSide ? m.youFirst : !m.youFirst;
+        var anchor = youSide ? TextAnchor.MiddleLeft : TextAnchor.MiddleRight;
+        float pad = hero ? 22f : 16f;
+
+        var holder = PanelObject("Overlay", banner, new Color(0, 0, 0, 0));
+        Stretch(holder, Vector2.zero, Vector2.one, new Vector2(pad, 6f), new Vector2(-pad, -6f));
+        holder.GetComponent<Image>().raycastTarget = false;
+
+        // Row 1: colour diamond + side label (+ gold 1ST pill when they opened).
+        var top = PanelObject("Top", holder, new Color(0, 0, 0, 0));
+        Stretch(top, new Vector2(0f, 0.68f), Vector2.one, Vector2.zero, Vector2.zero);
+        top.GetComponent<Image>().raycastTarget = false;
+        var hlg = top.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 7f;
+        hlg.childAlignment = youSide ? TextAnchor.MiddleLeft : TextAnchor.MiddleRight;
+        hlg.childControlWidth = false; hlg.childControlHeight = false;
+        hlg.childForceExpandWidth = false; hlg.childForceExpandHeight = false;
+
+        var dot = PanelObject("Dot", top, leaderColor);
+        dot.sizeDelta = new Vector2(9f, 9f);
+        SetPreferred(dot, new Vector2(9f, 9f));
+        dot.localRotation = Quaternion.Euler(0f, 0f, 45f);
+        Round(dot);
+
+        string sideLabel = youSide
+            ? (hero ? "YOU · " + (AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName).ToUpperInvariant() : "YOU")
+            : "@" + m.oppName;
+        var side = TextObject("Side", top, sideLabel, 10, Ink, TextAnchor.MiddleLeft, monoFont);
+        side.fontStyle = FontStyle.Bold;
+        SetPreferred(side.rectTransform, new Vector2(12f + sideLabel.Length * 6.6f, 16f));
+
+        if (first)
+        {
+            var pill = PanelObject("First Pill", top, new Color(Gold.r, Gold.g, Gold.b, 0.18f));
+            var pillW = hero ? 74f : 36f;
+            pill.sizeDelta = new Vector2(pillW, 16f);
+            SetPreferred(pill, new Vector2(pillW, 16f));
+            Round(pill);
+            AddRoundedCardBorder(pill, new Color(Gold.r, Gold.g, Gold.b, 0.55f), 1f);
+            var pt = TextObject("t", pill, hero ? "WENT 1ST" : "1ST", 9, Gold, TextAnchor.MiddleCenter, monoFont);
+            pt.fontStyle = FontStyle.Bold;
+            Stretch(pt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+
+        // Row 2: leader name.
+        var nameT = TextObject("Leader", holder, leaderName, hero ? 27 : 17, Ink, anchor);
+        nameT.fontStyle = FontStyle.Bold;
+        Stretch(nameT.rectTransform, new Vector2(0f, 0.30f), new Vector2(1f, 0.68f), Vector2.zero, Vector2.zero);
+
+        // Row 3: life pips + "{N} LIFE" (or "{n}/{max} LIFE" on the hero).
+        var pipRow = PanelObject("Pips", holder, new Color(0, 0, 0, 0));
+        Stretch(pipRow, Vector2.zero, new Vector2(1f, 0.30f), Vector2.zero, Vector2.zero);
+        pipRow.GetComponent<Image>().raycastTarget = false;
+        var pipHlg = pipRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        pipHlg.spacing = 3f;
+        pipHlg.childAlignment = youSide ? TextAnchor.MiddleLeft : TextAnchor.MiddleRight;
+        pipHlg.childControlWidth = false; pipHlg.childControlHeight = false;
+        pipHlg.childForceExpandWidth = false; pipHlg.childForceExpandHeight = false;
+        float pipW = hero ? 9f : 7f, pipH = hero ? 15f : 12f;
+        for (int i = 0; i < maxLife; i++)
+        {
+            bool filled = i < life;
+            var pip = PanelObject("Pip", pipRow, filled ? leaderColor : new Color(0, 0, 0, 0));
+            pip.sizeDelta = new Vector2(pipW, pipH);
+            SetPreferred(pip, new Vector2(pipW, pipH));
+            Round(pip);
+            if (!filled) AddRoundedCardBorder(pip, new Color(Muted.r, Muted.g, Muted.b, 0.5f), 1f);
+        }
+        string lifeLabel = hero ? $"  {life} / {maxLife} LIFE" : $"  {life} LIFE";
+        var lifeT = TextObject("LifeLabel", pipRow, lifeLabel, 11, Muted, TextAnchor.MiddleLeft, monoFont);
+        SetPreferred(lifeT.rectTransform, new Vector2(12f + lifeLabel.Length * 6.6f, 16f));
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Match History — DETAIL VIEW (‹ BACK · hero · meta chips · log / decklists)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private void BuildMatchDetail(RectTransform stage, MatchSummary m)
+    {
+        bool win = m.result == "win";
+        Color resColor = win ? GoodGreen : RedAccent;
+        ReplayRecord localReplay;
+        localReplaysById.TryGetValue(m.id, out localReplay);
+
+        // ── Header bar: BACK + title + date, WATCH REPLAY right ─────────────
+        var header = PanelObject("MD Header", stage, new Color(0, 0, 0, 0));
+        Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -44f), Vector2.zero);
+
+        var back = PanelObject("Back", header, new Color32(34, 58, 78, 230));
+        back.anchorMin = new Vector2(0f, 0.5f); back.anchorMax = new Vector2(0f, 0.5f);
+        back.pivot = new Vector2(0f, 0.5f);
+        back.sizeDelta = new Vector2(84f, 32f);
+        back.anchoredPosition = new Vector2(0f, 0f);
+        Round(back);
+        AddRoundedCardBorder(back, ZoneBorder, 1f);
+        var backT = TextObject("t", back, "‹ BACK", 11, Ink, TextAnchor.MiddleCenter, monoFont);
+        backT.fontStyle = FontStyle.Bold;
+        Stretch(backT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var backBtn = back.gameObject.AddComponent<Button>();
+        backBtn.onClick.AddListener(() => { selectedMatchId = null; RenderMenu(); });
+
+        var title = TextObject("Title", header, "Match Detail", 20, Ink, TextAnchor.MiddleLeft);
         title.fontStyle = FontStyle.Bold;
-        Stretch(title.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.6f, 1f),
-            new Vector2(14f, 0f), new Vector2(-4f, -6f));
+        Stretch(title.rectTransform, Vector2.zero, new Vector2(0.5f, 1f), new Vector2(100f, 0f), Vector2.zero);
 
-        string when = FormatWhen(r.SavedAtIso);
-        string sub = $"{r.TurnCount} turns"
-            + (!string.IsNullOrEmpty(r.WinnerName) ? $"  ·  {r.WinnerName} won" : "")
-            + (!string.IsNullOrEmpty(when) ? $"  ·  {when}" : "");
-        var subText = TextObject("Sub", row, sub, 11, Muted, TextAnchor.LowerLeft, monoFont);
-        Stretch(subText.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 0.5f),
-            new Vector2(14f, 6f), new Vector2(-4f, 0f));
+        var date = TextObject("Date", header, FormatWhen(m.savedAtIso), 11, Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(date.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 1f), new Vector2(240f, 0f), Vector2.zero);
 
-        var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
-        Stretch(btnHolder, new Vector2(0.6f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
-        var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        hlg.spacing = 8f;
-        hlg.childAlignment = TextAnchor.MiddleRight;
-        hlg.childControlWidth = false;
-        hlg.childControlHeight = false;
-        AddButton(btnHolder, "Delete", () => { ReplayStore.Delete(r.Id); RenderMenu(); }, true, false);
-        AddButton(btnHolder, "Watch", () => WatchReplay(r), true, false);
+        if (localReplay != null)
+        {
+            var watch = PanelObject("Watch Replay", header, Accent);
+            watch.anchorMin = new Vector2(1f, 0.5f); watch.anchorMax = new Vector2(1f, 0.5f);
+            watch.pivot = new Vector2(1f, 0.5f);
+            watch.sizeDelta = new Vector2(158f, 32f);
+            watch.anchoredPosition = Vector2.zero;
+            Round(watch);
+            var wT = TextObject("t", watch, "▷ WATCH REPLAY", 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+            wT.fontStyle = FontStyle.Bold;
+            Stretch(wT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var capturedReplay = localReplay;
+            var wBtn = watch.gameObject.AddComponent<Button>();
+            wBtn.onClick.AddListener(() => WatchReplay(capturedReplay));
+        }
+
+        // ── Hero panel (158px): stripe, YOU banner, VICTORY/DEFEAT, OPP banner ─
+        var hero = PanelObject("MD Hero", stage, RowBg);
+        Stretch(hero, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -44f - 12f - 158f), new Vector2(0f, -44f - 12f));
+        RoundBig(hero);
+        AddRoundedCardBorder(hero, MenuB, 1f);
+
+        var stripe = PanelObject("Stripe", hero, resColor);
+        Stretch(stripe, Vector2.zero, new Vector2(0f, 1f), new Vector2(0f, 4f), new Vector2(4f, -4f));
+        stripe.GetComponent<Image>().raycastTarget = false;
+
+        float heroBannerW = (MatchStageW - 300f) / 2f - 8f;
+        var youHero = PanelObject("You Hero", hero, RowBg);
+        Stretch(youHero, Vector2.zero, new Vector2(0.5f, 1f), new Vector2(8f, 6f), new Vector2(-150f, -6f));
+        BuildLeaderBanner(youHero, m.youLeaderId, heroBannerW, 146f, true);
+        BuildBannerOverlay(youHero, m, true, true);
+
+        var oppHero = PanelObject("Opp Hero", hero, RowBg);
+        Stretch(oppHero, new Vector2(0.5f, 0f), Vector2.one, new Vector2(150f, 6f), new Vector2(-8f, -6f));
+        BuildLeaderBanner(oppHero, m.oppLeaderId, heroBannerW, 146f, false);
+        BuildBannerOverlay(oppHero, m, false, true);
+
+        var centerPanel = PanelObject("Hero Center", hero, new Color32(9, 17, 26, 140));
+        centerPanel.anchorMin = new Vector2(0.5f, 0f); centerPanel.anchorMax = new Vector2(0.5f, 1f);
+        centerPanel.pivot = new Vector2(0.5f, 0.5f);
+        centerPanel.sizeDelta = new Vector2(300f, 0f);
+        centerPanel.anchoredPosition = Vector2.zero;
+        Round(centerPanel);
+        var verdict = TextObject("Verdict", centerPanel, win ? "VICTORY" : "DEFEAT", 22, resColor, TextAnchor.LowerCenter, monoFont);
+        verdict.fontStyle = FontStyle.Bold;
+        Stretch(verdict.rectTransform, new Vector2(0f, 0.62f), Vector2.one, Vector2.zero, new Vector2(0f, -18f));
+        var bigScore = TextObject("Score", centerPanel, $"{m.youFinalLife} – {m.oppFinalLife}", 34, Ink, TextAnchor.MiddleCenter);
+        bigScore.fontStyle = FontStyle.Bold;
+        Stretch(bigScore.rectTransform, new Vector2(0f, 0.26f), new Vector2(1f, 0.62f), Vector2.zero, Vector2.zero);
+        var flLabel = TextObject("FL", centerPanel, "FINAL LIFE", 9, new Color32(124, 146, 162, 255), TextAnchor.UpperCenter, monoFont);
+        Stretch(flLabel.rectTransform, Vector2.zero, new Vector2(1f, 0.26f), new Vector2(0f, 12f), Vector2.zero);
+
+        // ── Meta chips + tab switch row ──────────────────────────────────────
+        const float chipsTop = 44f + 12f + 158f + 12f;
+        var chipRow = PanelObject("MD Chips", stage, new Color(0, 0, 0, 0));
+        Stretch(chipRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -chipsTop - 48f), new Vector2(0f, -chipsTop));
+
+        var chipData = new (string label, string value)[]
+        {
+            ("RESULT",     win ? "Victory" : "Defeat"),
+            ("TURNS",      m.turnCount.ToString()),
+            ("FIRST MOVE", m.youFirst ? "You" : "@" + m.oppName),
+            ("DURATION",   FormatDuration(m.durationSeconds)),
+            ("PLAYED",     FormatAgo(m.savedAtIso)),
+        };
+        float cx = 0f;
+        foreach (var (label, value) in chipData)
+        {
+            float w = Mathf.Max(96f, 34f + Mathf.Max(label.Length * 7f, value.Length * 8f));
+            var chip = PanelObject(label + " Chip", chipRow, new Color32(14, 28, 43, 255));
+            chip.anchorMin = new Vector2(0f, 0f); chip.anchorMax = new Vector2(0f, 1f);
+            chip.pivot = new Vector2(0f, 0.5f);
+            chip.sizeDelta = new Vector2(w, 0f);
+            chip.anchoredPosition = new Vector2(cx, 0f);
+            Round(chip);
+            AddRoundedCardBorder(chip, MenuB, 1f);
+            var lt = TextObject("l", chip, label, 9, new Color32(124, 146, 162, 255), TextAnchor.UpperLeft, monoFont);
+            Stretch(lt.rectTransform, new Vector2(0f, 0.5f), Vector2.one, new Vector2(12f, 0f), new Vector2(-8f, -7f));
+            var vt = TextObject("v", chip, value, 14, Ink, TextAnchor.LowerLeft);
+            vt.fontStyle = FontStyle.Bold;
+            Stretch(vt.rectTransform, Vector2.zero, new Vector2(1f, 0.5f), new Vector2(12f, 7f), new Vector2(-8f, 0f));
+            cx += w + 8f;
+        }
+
+        // Segmented tabs (right): ACTION LOG / DECKLISTS.
+        var tabs = PanelObject("Tabs", chipRow, new Color32(14, 28, 43, 255));
+        tabs.anchorMin = new Vector2(1f, 0f); tabs.anchorMax = new Vector2(1f, 1f);
+        tabs.pivot = new Vector2(1f, 0.5f);
+        tabs.sizeDelta = new Vector2(280f, 0f);
+        tabs.anchoredPosition = Vector2.zero;
+        Round(tabs);
+        AddRoundedCardBorder(tabs, MenuB, 1f);
+        BuildDetailTab(tabs, "▤ ACTION LOG", "log", 0);
+        BuildDetailTab(tabs, "▦ DECKLISTS", "decks", 1);
+
+        // ── Tab content (vertical scroll fills the rest of the stage) ────────
+        var contentArea = PanelObject("MD Content", stage, new Color(0, 0, 0, 0));
+        Stretch(contentArea, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -chipsTop - 48f - 12f));
+
+        if (matchDetailTab == "decks") BuildDecklistsTab(contentArea, m);
+        else BuildActionLogTab(contentArea, m);
+    }
+
+    private void BuildDetailTab(RectTransform group, string label, string value, int index)
+    {
+        bool active = matchDetailTab == value;
+        var tab = PanelObject(value + " Tab", group, active ? Accent : new Color(0, 0, 0, 0));
+        tab.anchorMin = new Vector2(index / 2f, 0f);
+        tab.anchorMax = new Vector2((index + 1) / 2f, 1f);
+        tab.offsetMin = new Vector2(4f, 4f);
+        tab.offsetMax = new Vector2(-4f, -4f);
+        Round(tab);
+        var t = TextObject("t", tab, label, 11, active ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = tab.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { matchDetailTab = value; RenderMenu(); });
+    }
+
+    // ── ACTION LOG tab: per-turn headers + chat-style you/opp bubbles ─────────
+
+    private static readonly Color TagPurple = new Color32(160, 110, 210, 255);
+    private static readonly Color TagBlue   = new Color32( 70, 140, 220, 255);
+
+    private (string label, Color color) TagStyle(string k)
+    {
+        switch (k)
+        {
+            case "don":     return ("DON",   Gold);
+            case "play":    return ("PLAY",  Accent);
+            case "event":   return ("EVENT", TagPurple);
+            case "attack":  return ("ATK",   Ink);
+            case "block":   return ("BLOCK", TagBlue);
+            case "counter": return ("CNTR",  Gold);
+            case "life":    return ("DMG",   RedAccent);
+            case "ko":      return ("KO",    RedAccent);
+            default:        return ("DRAW",  Muted);
+        }
+    }
+
+    private void BuildActionLogTab(RectTransform area, MatchSummary m)
+    {
+        if (m.turns == null || m.turns.Count == 0)
+        {
+            var empty = TextObject("Empty", area,
+                "No action log for this match — it was played before cloud match history\n(or as a guest). Watch the replay to relive it.",
+                13, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -60f), Vector2.zero);
+            return;
+        }
+
+        const float turnHeaderH = 34f, actH = 34f, turnGap = 8f;
+        float total = 0f;
+        foreach (var t in m.turns) total += turnHeaderH + (t.acts?.Count ?? 0) * actH + turnGap;
+
+        var content = MakeMenuScroll(area, total);
+        float y = 0f;
+        foreach (var t in m.turns)
+        {
+            bool yours = t.active == "you";
+            Color turnColor = yours ? Accent : RedAccent;
+
+            // "TURN {n}" badge + owner label + fading hairline.
+            var head = PanelObject("Turn Head " + t.turn, content, new Color(0, 0, 0, 0));
+            head.anchorMin = new Vector2(0f, 1f); head.anchorMax = new Vector2(1f, 1f);
+            head.pivot = new Vector2(0.5f, 1f);
+            head.sizeDelta = new Vector2(0f, turnHeaderH);
+            head.anchoredPosition = new Vector2(0f, -y);
+            head.GetComponent<Image>().raycastTarget = false;
+
+            var badge = PanelObject("Badge", head, yours ? Accent : new Color(RedAccent.r, RedAccent.g, RedAccent.b, 0.9f));
+            badge.anchorMin = new Vector2(0f, 0.5f); badge.anchorMax = new Vector2(0f, 0.5f);
+            badge.pivot = new Vector2(0f, 0.5f);
+            badge.sizeDelta = new Vector2(74f, 22f);
+            badge.anchoredPosition = new Vector2(2f, 0f);
+            Round(badge);
+            var bt = TextObject("t", badge, "TURN " + t.turn, 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+            bt.fontStyle = FontStyle.Bold;
+            Stretch(bt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+            var owner = TextObject("Owner", head, yours ? "Your turn" : $"@{m.oppName}'s turn", 11, Muted, TextAnchor.MiddleLeft, monoFont);
+            Stretch(owner.rectTransform, Vector2.zero, Vector2.one, new Vector2(88f, 0f), new Vector2(-260f, 0f));
+
+            var hair = PanelObject("Hairline", head, new Color(turnColor.r, turnColor.g, turnColor.b, 0.25f));
+            Stretch(hair, new Vector2(0.2f, 0.5f), new Vector2(1f, 0.5f), new Vector2(140f, 0f), new Vector2(-8f, 1f));
+            hair.GetComponent<Image>().raycastTarget = false;
+            y += turnHeaderH;
+
+            if (t.acts == null) { y += turnGap; continue; }
+            foreach (var a in t.acts)
+            {
+                bool mine = a.s == "you";
+                var (tagLabel, tagColor) = TagStyle(a.k);
+
+                // Bubble: left-aligned + cyan tint for you, right-aligned + red
+                // tint for the opponent, inner-edge accent bar, max ~62% width.
+                var line = PanelObject("Act", content, new Color(0, 0, 0, 0));
+                line.anchorMin = new Vector2(0f, 1f); line.anchorMax = new Vector2(1f, 1f);
+                line.pivot = new Vector2(0.5f, 1f);
+                line.sizeDelta = new Vector2(0f, actH);
+                line.anchoredPosition = new Vector2(0f, -y);
+                line.GetComponent<Image>().raycastTarget = false;
+
+                var bubble = PanelObject("Bubble", line,
+                    mine ? new Color(Accent.r, Accent.g, Accent.b, 0.07f)
+                         : new Color(RedAccent.r, RedAccent.g, RedAccent.b, 0.06f));
+                Stretch(bubble, mine ? Vector2.zero : new Vector2(0.38f, 0f),
+                    mine ? new Vector2(0.62f, 1f) : Vector2.one,
+                    new Vector2(mine ? 2f : 0f, 3f), new Vector2(mine ? 0f : -10f, -3f));
+                Round(bubble);
+
+                var accentEdge = PanelObject("Edge", bubble, mine ? Accent : RedAccent);
+                Stretch(accentEdge, mine ? Vector2.zero : new Vector2(1f, 0f),
+                    mine ? new Vector2(0f, 1f) : Vector2.one,
+                    mine ? new Vector2(0f, 2f) : new Vector2(-3f, 2f),
+                    mine ? new Vector2(3f, -2f) : new Vector2(0f, -2f));
+                accentEdge.GetComponent<Image>().raycastTarget = false;
+
+                var tag = PanelObject("Tag", bubble, new Color(0, 0, 0, 0));
+                tag.anchorMin = new Vector2(0f, 0.5f); tag.anchorMax = new Vector2(0f, 0.5f);
+                tag.pivot = new Vector2(0f, 0.5f);
+                tag.sizeDelta = new Vector2(48f, 16f);
+                tag.anchoredPosition = new Vector2(10f, 0f);
+                AddRoundedCardBorder(tag, new Color(tagColor.r, tagColor.g, tagColor.b, 0.55f), 1f);
+                var tagT = TextObject("t", tag, tagLabel, 9, tagColor, TextAnchor.MiddleCenter, monoFont);
+                tagT.fontStyle = FontStyle.Bold;
+                Stretch(tagT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+                var actT = TextObject("Text", bubble, a.t, 13, new Color32(219, 229, 236, 255), TextAnchor.MiddleLeft);
+                Stretch(actT.rectTransform, Vector2.zero, Vector2.one, new Vector2(66f, 0f), new Vector2(-10f, 0f));
+                y += actH;
+            }
+            y += turnGap;
+        }
+    }
+
+    // ── DECKLISTS tab: two columns, leader-banner headers, card rows ──────────
+
+    private void BuildDecklistsTab(RectTransform area, MatchSummary m)
+    {
+        BuildDeckColumn(area, m, true);
+        BuildDeckColumn(area, m, false);
+    }
+
+    private void BuildDeckColumn(RectTransform area, MatchSummary m, bool youSide)
+    {
+        var deck = youSide ? m.youDeck : m.oppDeck;
+        string leaderId = youSide ? m.youLeaderId : m.oppLeaderId;
+        var leadRec = MenuCard(leaderId);
+        Color leaderColor = MenuLeaderColor(leaderId);
+
+        var col = PanelObject(youSide ? "You Deck" : "Opp Deck", area, new Color32(14, 28, 43, 255));
+        Stretch(col, youSide ? Vector2.zero : new Vector2(0.5f, 0f),
+            youSide ? new Vector2(0.5f, 1f) : Vector2.one,
+            new Vector2(youSide ? 0f : 8f, 0f), new Vector2(youSide ? -8f : 0f, 0f));
+        RoundBig(col);
+        AddRoundedCardBorder(col, MenuB, 1f);
+
+        // Header: 96px eye-cropped leader banner + side label + LEADER chip.
+        float colW = MatchStageW / 2f - 8f;
+        var bannerHolder = PanelObject("Banner", col, RowBg);
+        Stretch(bannerHolder, new Vector2(0f, 1f), Vector2.one, new Vector2(6f, -102f), new Vector2(-6f, -6f));
+        BuildLeaderBanner(bannerHolder, leaderId, colW - 12f, 96f, true);
+
+        var sideT = TextObject("Side", bannerHolder, youSide ? "YOU" : "@" + m.oppName, 10, Muted, TextAnchor.UpperLeft, monoFont);
+        sideT.fontStyle = FontStyle.Bold;
+        Stretch(sideT.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -30f), new Vector2(-16f, -12f));
+
+        var nameT = TextObject("Leader", bannerHolder,
+            leadRec != null ? leadRec.name : (string.IsNullOrEmpty(leaderId) ? "Unknown Leader" : leaderId),
+            21, Ink, TextAnchor.LowerLeft);
+        nameT.fontStyle = FontStyle.Bold;
+        Stretch(nameT.rectTransform, Vector2.zero, Vector2.one, new Vector2(16f, 10f), new Vector2(-120f, -34f));
+
+        var leaderChip = PanelObject("Leader Chip", bannerHolder, new Color(leaderColor.r, leaderColor.g, leaderColor.b, 0.16f));
+        leaderChip.anchorMin = new Vector2(1f, 0f); leaderChip.anchorMax = new Vector2(1f, 0f);
+        leaderChip.pivot = new Vector2(1f, 0f);
+        leaderChip.sizeDelta = new Vector2(74f, 20f);
+        leaderChip.anchoredPosition = new Vector2(-12f, 10f);
+        Round(leaderChip);
+        AddRoundedCardBorder(leaderChip, new Color(leaderColor.r, leaderColor.g, leaderColor.b, 0.6f), 1f);
+        var lcT = TextObject("t", leaderChip, "LEADER", 9, leaderColor, TextAnchor.MiddleCenter, monoFont);
+        lcT.fontStyle = FontStyle.Bold;
+        Stretch(lcT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        // Sub-header: MAIN DECK · counts.
+        int totalCards = 0;
+        if (deck != null) foreach (var e in deck) totalCards += e?.count ?? 0;
+        var subHead = PanelObject("SubHead", col, new Color(0, 0, 0, 0));
+        Stretch(subHead, new Vector2(0f, 1f), Vector2.one, new Vector2(14f, -132f), new Vector2(-14f, -104f));
+        subHead.GetComponent<Image>().raycastTarget = false;
+        var mdT = TextObject("md", subHead, "MAIN DECK", 11, Muted, TextAnchor.MiddleLeft, monoFont);
+        mdT.fontStyle = FontStyle.Bold;
+        Stretch(mdT.rectTransform, Vector2.zero, new Vector2(0.5f, 1f), Vector2.zero, Vector2.zero);
+        var cntT = TextObject("cnt", subHead,
+            $"{totalCards} CARDS · {(deck?.Count ?? 0)} UNIQUE", 10, new Color32(111, 134, 150, 255), TextAnchor.MiddleRight, monoFont);
+        Stretch(cntT.rectTransform, new Vector2(0.5f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+
+        // Card rows in their own scroll (each column scrolls independently).
+        var rowsArea = PanelObject("Rows", col, new Color(0, 0, 0, 0));
+        Stretch(rowsArea, Vector2.zero, Vector2.one, new Vector2(6f, 8f), new Vector2(-6f, -136f));
+
+        if (deck == null || deck.Count == 0)
+        {
+            var empty = TextObject("Empty", rowsArea, "No decklist recorded for this match.",
+                12, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(10f, -30f), Vector2.zero);
+            return;
+        }
+
+        // Sort by cost then name for a readable curve, resolving from the library.
+        var sorted = new List<MatchDeckCount>(deck);
+        sorted.Sort((a, b) =>
+        {
+            var ra = MenuCard(a.cardId); var rb = MenuCard(b.cardId);
+            int ca = ra?.cost ?? 0, cb = rb?.cost ?? 0;
+            if (ca != cb) return ca.CompareTo(cb);
+            return string.CompareOrdinal(ra?.name ?? a.cardId, rb?.name ?? b.cardId);
+        });
+
+        const float rowH = 30f;
+        var content = MakeMenuScroll(rowsArea, sorted.Count * rowH);
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            var e = sorted[i];
+            var rec = MenuCard(e.cardId);
+            var rowRt = PanelObject("Card " + i, content, i % 2 == 1 ? new Color(1f, 1f, 1f, 0.02f) : new Color(0, 0, 0, 0));
+            rowRt.anchorMin = new Vector2(0f, 1f); rowRt.anchorMax = new Vector2(1f, 1f);
+            rowRt.pivot = new Vector2(0.5f, 1f);
+            rowRt.sizeDelta = new Vector2(0f, rowH);
+            rowRt.anchoredPosition = new Vector2(0f, -(i * rowH));
+
+            var count = TextObject("Count", rowRt, e.count + "×", 12, Ink, TextAnchor.MiddleLeft, monoFont);
+            count.fontStyle = FontStyle.Bold;
+            Stretch(count.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(10f, 0f), new Vector2(42f, 0f));
+
+            var cost = PanelObject("Cost", rowRt, Accent);
+            cost.anchorMin = new Vector2(0f, 0.5f); cost.anchorMax = new Vector2(0f, 0.5f);
+            cost.pivot = new Vector2(0f, 0.5f);
+            cost.sizeDelta = new Vector2(20f, 20f);
+            cost.anchoredPosition = new Vector2(44f, 0f);
+            Round(cost);
+            var costT = TextObject("t", cost, (rec?.cost ?? 0).ToString(), 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+            costT.fontStyle = FontStyle.Bold;
+            Stretch(costT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+            var dot = PanelObject("Dot", rowRt, MenuLeaderColor(e.cardId));
+            dot.anchorMin = new Vector2(0f, 0.5f); dot.anchorMax = new Vector2(0f, 0.5f);
+            dot.pivot = new Vector2(0f, 0.5f);
+            dot.sizeDelta = new Vector2(8f, 8f);
+            dot.anchoredPosition = new Vector2(74f, 0f);
+            dot.localRotation = Quaternion.Euler(0f, 0f, 45f);
+            Round(dot);
+
+            var name = TextObject("Name", rowRt, rec?.name ?? e.cardId, 13, Ink, TextAnchor.MiddleLeft);
+            Stretch(name.rectTransform, Vector2.zero, Vector2.one, new Vector2(92f, 0f), new Vector2(-116f, 0f));
+
+            string type = (rec?.type ?? "").ToUpperInvariant();
+            string typeLabel = type.StartsWith("CHAR") ? "CHAR" : type.StartsWith("EVEN") ? "EVEN" : type.StartsWith("STAG") ? "STAG" : type;
+            var typeT = TextObject("Type", rowRt, typeLabel, 9, new Color32(111, 134, 150, 255), TextAnchor.MiddleRight, monoFont);
+            Stretch(typeT.rectTransform, new Vector2(1f, 0f), Vector2.one, new Vector2(-112f, 0f), new Vector2(-62f, 0f));
+
+            string counter = rec != null && rec.counter > 0 ? "+" + rec.counter : "—";
+            var counterT = TextObject("Counter", rowRt, counter, 10, rec != null && rec.counter > 0 ? Gold : Muted, TextAnchor.MiddleRight, monoFont);
+            Stretch(counterT.rectTransform, new Vector2(1f, 0f), Vector2.one, new Vector2(-58f, 0f), new Vector2(-10f, 0f));
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Match History — shared pieces (banners, scroll, card data, formatting)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Eye-cropped leader banner: the full card thumb on an Image inside a
+    // RectMask2D holder, scaled to cover and offset so the face-data eye point
+    // sits in view (same math as DeckBuilderManager's hex cells / _faceMap),
+    // then a darkening horizontal gradient toward the text side.
+    private void BuildLeaderBanner(RectTransform holder, string leaderId, float approxW, float approxH, bool darkLeft)
+    {
+        holder.gameObject.AddComponent<RectMask2D>();
+        Round(holder);
+        var holderImg = holder.GetComponent<Image>();
+        holderImg.raycastTarget = false;
+
+        var sprite = LoadThumbSprite(leaderId);
+        if (sprite != null)
+        {
+            const float BLEED = 1.04f;
+            float aspect = sprite.rect.height > 0f ? sprite.rect.width / sprite.rect.height : 0.716f;
+            // Cover: scale so both dimensions overfill the banner.
+            float artW = approxW * BLEED;
+            float artH = artW / aspect;
+            if (artH < approxH * BLEED) { artH = approxH * BLEED; artW = artH * aspect; }
+
+            float fy = 0.22f, fx = 0.5f;
+            if (menuFaceY != null && menuFaceY.TryGetValue(leaderId, out var my)) fy = Mathf.Clamp(my, 0.08f, 0.5f);
+            if (menuFaceX != null && menuFaceX.TryGetValue(leaderId, out var mx)) fx = Mathf.Clamp(mx, 0.1f, 0.9f);
+
+            // Offset so the eye point heads for the banner centre, clamped so the
+            // art never slides off an edge (fy is measured from the card's top).
+            float maxX = Mathf.Max(0f, (artW - approxW) / 2f);
+            float maxY = Mathf.Max(0f, (artH - approxH) / 2f);
+            float offX = Mathf.Clamp(-(fx - 0.5f) * artW, -maxX, maxX);
+            float offY = Mathf.Clamp((fy - 0.5f) * artH, -maxY, maxY);
+
+            var art = PanelObject("Art", holder, Color.white);
+            var ai = art.GetComponent<Image>();
+            ai.sprite = sprite; ai.type = Image.Type.Simple; ai.preserveAspect = false;
+            ai.raycastTarget = false;
+            art.anchorMin = art.anchorMax = new Vector2(0.5f, 0.5f);
+            art.pivot = new Vector2(0.5f, 0.5f);
+            art.sizeDelta = new Vector2(artW, artH);
+            art.anchoredPosition = new Vector2(offX, offY);
+        }
+
+        // Left-dark (or right-dark, mirrored via scale) readability gradient.
+        var grad = PanelObject("Gradient", holder, new Color32(9, 17, 26, 232));
+        var gi = grad.GetComponent<Image>();
+        gi.sprite = GetHGradientSprite();
+        gi.type = Image.Type.Simple;
+        gi.raycastTarget = false;
+        Stretch(grad, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        if (!darkLeft) grad.localScale = new Vector3(-1f, 1f, 1f);
+    }
+
+    // Minimal vertical scroll (viewport + RectMask2D + fixed-height content) —
+    // the menu variant of DeckBuilderManager.MakeScroll, without the scrollbar.
+    private RectTransform MakeMenuScroll(RectTransform area, float contentHeight)
+    {
+        var viewport = PanelObject("Viewport", area, new Color(0f, 0f, 0f, 0.001f));
+        Stretch(viewport, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        viewport.gameObject.AddComponent<RectMask2D>();
+
+        var content = new GameObject("Content").AddComponent<RectTransform>();
+        content.SetParent(viewport, false);
+        content.anchorMin = new Vector2(0f, 1f);
+        content.anchorMax = new Vector2(1f, 1f);
+        content.pivot     = new Vector2(0.5f, 1f);
+        content.offsetMin = Vector2.zero;
+        content.offsetMax = Vector2.zero;
+        content.sizeDelta = new Vector2(0f, Mathf.Max(contentHeight, 0f));
+
+        var sr = area.gameObject.AddComponent<ScrollRect>();
+        sr.viewport = viewport;
+        sr.content = content;
+        sr.horizontal = false;
+        sr.vertical = true;
+        sr.movementType = ScrollRect.MovementType.Clamped;
+        sr.scrollSensitivity = 26f;
+        return content;
+    }
+
+    // ── Card library / face data / thumbs (same files DeckBuilder reads) ──────
+
+    private void EnsureMenuCardLibrary()
+    {
+        if (menuCardsById != null) return;
+        menuCardsById = new Dictionary<string, CardRec>();
+        try
+        {
+            string path = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "official-card-library.json");
+            if (!File.Exists(path)) return;
+            var wrap = JsonUtility.FromJson<CardLibFile>("{\"cards\":" + File.ReadAllText(path) + "}");
+            menuCardLibrary = wrap?.cards ?? new CardRec[0];
+            foreach (var c in menuCardLibrary)
+                if (c != null && !string.IsNullOrEmpty(c.id) && !menuCardsById.ContainsKey(c.id))
+                    menuCardsById[c.id] = c;
+        }
+        catch (Exception e) { Debug.LogWarning("Menu card library parse failed: " + e.Message); }
+    }
+
+    private void EnsureMenuFaceData()
+    {
+        if (menuFaceY != null) return;
+        menuFaceY = new Dictionary<string, float>();
+        menuFaceX = new Dictionary<string, float>();
+        try
+        {
+            string p = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "face-data.json");
+            if (!File.Exists(p)) return;
+            var f = JsonUtility.FromJson<FaceMapFile>(File.ReadAllText(p));
+            if (f?.ids == null || f.y == null) return;
+            for (int i = 0; i < f.ids.Length && i < f.y.Length; i++) menuFaceY[f.ids[i]] = f.y[i];
+            if (f.x != null && f.x.Length == f.ids.Length)
+                for (int i = 0; i < f.ids.Length; i++) menuFaceX[f.ids[i]] = f.x[i];
+        }
+        catch (Exception e) { Debug.LogWarning("Menu face-data load failed: " + e.Message); }
+    }
+
+    private CardRec MenuCard(string id)
+        => id != null && menuCardsById != null && menuCardsById.TryGetValue(id, out var c) ? c : null;
+
+    // First colour of the card's "Red/Green"-style colour string → swatch.
+    private Color MenuLeaderColor(string cardId)
+    {
+        var rec = MenuCard(cardId);
+        var colors = rec?.Colors();
+        if (colors != null && colors.Length > 0 && MenuColorSwatch.TryGetValue(colors[0], out var c)) return c;
+        return Muted;
+    }
+
+    private int MenuLeaderBaseLife(string leaderId)
+    {
+        var rec = MenuCard(leaderId);
+        return rec != null && rec.life > 0 ? rec.life : 5;
+    }
+
+    // Leader card thumbnail — the same Thumbs path scheme DeckBuilder uses,
+    // falling back to the full card art LoadArt already resolves.
+    private Sprite LoadThumbSprite(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        if (_thumbArtCache.TryGetValue(id, out var cached)) return cached;
+
+        Sprite sprite = null;
+        string safe = id.Trim();
+        string set = safe.Contains("-") ? safe.Split('-')[0] : "";
+        string thumbPath = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "Thumbs", set, safe + ".jpg");
+        if (File.Exists(thumbPath))
+        {
+            try
+            {
+                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, true);
+                if (tex.LoadImage(File.ReadAllBytes(thumbPath)))
+                {
+                    tex.filterMode = FilterMode.Trilinear;
+                    tex.anisoLevel = 4;
+                    sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+                }
+            }
+            catch { /* fall through to full art */ }
+        }
+        if (sprite == null) sprite = LoadArt(id);
+        _thumbArtCache[id] = sprite;
+        return sprite;
+    }
+
+    // ── Formatting ────────────────────────────────────────────────────────────
+
+    private string FormatDuration(int seconds)
+    {
+        if (seconds <= 0) return "—";
+        return $"{seconds / 60}m{seconds % 60:00}s";
+    }
+
+    private string FormatAgo(string iso)
+    {
+        if (!DateTime.TryParse(iso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            return "";
+        var span = DateTime.UtcNow - dt.ToUniversalTime();
+        if (span.TotalMinutes < 1) return "just now";
+        if (span.TotalHours < 1) return $"{(int)span.TotalMinutes}m ago";
+        if (span.TotalDays < 1) return $"{(int)span.TotalHours}h ago";
+        return $"{(int)span.TotalDays}d ago";
     }
 
     private string FormatWhen(string iso)
@@ -509,6 +1578,1132 @@ public class MainMenuManager : MonoBehaviour
         GameManager.EnsureBoard();
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Account gate (required-to-play) + Account & Recovery settings (optional).
+    // Identity/uniqueness/profanity logic lives in AccountManager.cs + Cloud Code;
+    // this is just the uGUI wiring, following the same panel/busy/error idiom as
+    // the lobby hub below.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private void OpenAccountSettings()
+    {
+        showingAccountSettings = true;
+        accountSettingsResetMode = false;
+        accountError = null;
+        signOutArmed = false;
+        RenderMenu();
+    }
+
+    private void CloseAccountSettings()
+    {
+        showingAccountSettings = false;
+        accountError = null;
+        signOutArmed = false;
+        RenderMenu();
+    }
+
+    // Honors the "Stay signed in" preference: when off, drop the cached session token on
+    // quit so the next launch starts at the sign-in screen instead of silently resuming.
+    private void OnApplicationQuit()
+    {
+        if (!AccountManager.StaySignedIn) AccountManager.SignOut();
+    }
+
+    private void BuildAccountGateModal(RectTransform root)
+    {
+        // Full-screen dim layer whose Image IS a raycast target, so everything
+        // behind it (nav rail, top bar, gear) is unclickable while the gate is up.
+        var blocker = PanelObject("Account Modal Blocker", root, new Color(0f, 0f, 0f, 0.62f));
+        Stretch(blocker, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        blocker.GetComponent<Image>().raycastTarget = true;
+
+        var window = PanelObject("Account Modal Window", blocker, new Color32(10, 19, 28, 250));
+        window.anchorMin = new Vector2(0.5f, 0.5f);
+        window.anchorMax = new Vector2(0.5f, 0.5f);
+        window.pivot     = new Vector2(0.5f, 0.5f);
+        window.sizeDelta = new Vector2(560f,
+            accountGatePostClaimMode ? 470f : accountGateSignInMode ? 460f : 580f);
+        window.anchoredPosition = Vector2.zero;
+        RoundBig(window);
+        AddRoundedCardBorder(window, MenuB, 1f);
+
+        string title = accountGatePostClaimMode ? "Secure Your Account"
+            : accountGateSignInMode ? "Welcome Back!" : "Welcome to One Piece TCG Simulator!";
+        var titleText = TextObject("Modal Title", window, title, 21, Ink, TextAnchor.MiddleCenter);
+        titleText.fontStyle = FontStyle.Bold;
+        Stretch(titleText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -60f), new Vector2(-24f, -14f));
+
+        string subtitle = accountGatePostClaimMode
+            ? "One more step - add your login details."
+            : accountGateSignInMode ? "Sign in with your username or email."
+            : "Set up your username to start playing.";
+        var sub = TextObject("Modal Sub", window, subtitle, 12, Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(sub.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -90f), new Vector2(-24f, -62f));
+
+        // Content sits above a reserved bottom strip inside the window where the
+        // guest option lives, separated by a hairline so it reads as "or, just
+        // look around" rather than a third equal choice.
+        var content = PanelObject("Modal Content", window, new Color(0, 0, 0, 0));
+        Stretch(content, Vector2.zero, Vector2.one,
+            new Vector2(0f, accountGatePostClaimMode ? 16f : 60f), new Vector2(0f, -96f));
+
+        if (accountGatePostClaimMode) BuildPostClaimEmailFields(content);
+        else if (accountGateSignInMode) BuildAccountSignInFields(content);
+        else BuildAccountClaimFields(content);
+
+        // Not offered on the retry step (the name is already claimed there -
+        // finishing login setup is the only path).
+        if (!accountGatePostClaimMode)
+        {
+            var guestDivider = PanelObject("Guest Divider", window, new Color32(255, 255, 255, 20));
+            Stretch(guestDivider, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 59f), new Vector2(-24f, 60f));
+
+            var guestHolder = PanelObject("Guest Holder", window, new Color(0, 0, 0, 0));
+            guestHolder.anchorMin = new Vector2(0.5f, 0f);
+            guestHolder.anchorMax = new Vector2(0.5f, 0f);
+            guestHolder.pivot     = new Vector2(0.5f, 0f);
+            guestHolder.sizeDelta = new Vector2(190f, 34f);
+            guestHolder.anchoredPosition = new Vector2(0f, 14f);
+            AddButton(guestHolder, "Continue as guest", ContinueAsGuestClicked, true, false, true);
+        }
+    }
+
+    private void BuildPostClaimEmailFields(RectTransform panel)
+    {
+        // Reached only when the name claim succeeded but the email link failed -
+        // the retry screen for finishing login setup without losing the name.
+        var header = TextObject("Header", panel, "FINISH LOGIN SETUP", 12, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -26f), new Vector2(-24f, -6f));
+
+        var hint = TextObject("Hint", panel,
+            $"Your name \"{AccountManager.CurrentUsername}\" is claimed, but the email link didn't go through. Fix the details below and retry, or skip and add it later in Settings.",
+            11, Muted, TextAnchor.UpperLeft, monoFont);
+        hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -92f), new Vector2(-24f, -30f));
+
+        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
+        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -132f), new Vector2(-24f, -98f));
+
+        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
+            InputField.ContentType.Password);
+        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -172f), new Vector2(-24f, -138f));
+
+        var pwHint = TextObject("Password Hint", panel,
+            "8-30 characters with an uppercase letter, lowercase letter, number, and symbol.",
+            10, Muted, TextAnchor.UpperLeft, monoFont);
+        pwHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(pwHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -210f), new Vector2(-24f, -176f));
+
+        AddCenteredButton(panel, accountBusy ? "Working..." : "Link Email", LinkEmailClicked,
+            -222f, 180f, 38f, !accountBusy);
+        AddCenteredButton(panel, "Skip for now",
+            () => { accountGatePostClaimMode = false; showingAccountGate = false; accountError = null; RenderMenu(); },
+            -268f, 160f, 34f, !accountBusy);
+
+        if (!string.IsNullOrEmpty(accountError))
+        {
+            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -350f), new Vector2(-24f, -310f));
+        }
+    }
+
+    private void BuildAccountClaimFields(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "PICK A NAME", 12, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -26f), new Vector2(-24f, -6f));
+
+        var hint = TextObject("Hint", panel, "3-16 characters, letters/numbers/underscore. This can't be changed later.",
+            11, Muted, TextAnchor.UpperLeft, monoFont);
+        hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -52f), new Vector2(-24f, -30f));
+
+        var nameField = MakeInput(panel, "e.g. StrawHat99", usernameInput,
+            s => { usernameInput = s.Length > 16 ? s.Substring(0, 16) : s; }, null);
+        Stretch(nameField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -92f), new Vector2(-24f, -58f));
+
+        var divider = PanelObject("Divider", panel, new Color32(255, 255, 255, 20));
+        Stretch(divider, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -113f), new Vector2(-24f, -112f));
+
+        var acctHeader = TextObject("Account Header", panel, "ACCOUNT LOGIN", 12, Muted, TextAnchor.UpperLeft, monoFont);
+        acctHeader.fontStyle = FontStyle.Bold;
+        Stretch(acctHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -140f), new Vector2(-24f, -120f));
+
+        var acctHint = TextObject("Account Hint", panel,
+            "Sign in later with your name or this email, on any device.",
+            11, Muted, TextAnchor.UpperLeft, monoFont);
+        acctHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(acctHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -166f), new Vector2(-24f, -144f));
+
+        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
+        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -206f), new Vector2(-24f, -172f));
+
+        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
+            InputField.ContentType.Password);
+        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -246f), new Vector2(-24f, -212f));
+
+        var pwHint = TextObject("Password Hint", panel,
+            "8-30 characters with an uppercase letter, lowercase letter, number, and symbol.",
+            10, Muted, TextAnchor.UpperLeft, monoFont);
+        pwHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(pwHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -284f), new Vector2(-24f, -250f));
+
+        AddCenteredButton(panel, accountBusy ? "Working..." : "Create Account", ClaimUsernameClicked,
+            -296f, 200f, 38f, !accountBusy);
+        AddCenteredButton(panel, "Already have an account?\nSign in",
+            () => { accountGateSignInMode = true; accountError = null; RenderMenu(); },
+            -342f, 230f, 42f);
+
+        if (!string.IsNullOrEmpty(accountError))
+        {
+            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -426f), new Vector2(-24f, -392f));
+        }
+    }
+
+    // Centered fixed-size button anchored below the fields (top-anchored so the
+    // stack hugs the content instead of floating at the window's bottom edge).
+    private void AddCenteredButton(RectTransform panel, string label, UnityEngine.Events.UnityAction action,
+        float top, float width, float height, bool enabled = true)
+    {
+        var holder = PanelObject(label + " Holder", panel, new Color(0, 0, 0, 0));
+        holder.anchorMin = new Vector2(0.5f, 1f);
+        holder.anchorMax = new Vector2(0.5f, 1f);
+        holder.pivot     = new Vector2(0.5f, 1f);
+        holder.sizeDelta = new Vector2(width, height);
+        holder.anchoredPosition = new Vector2(0f, top);
+        AddButton(holder, label, action, enabled, false, true);
+    }
+
+    private void BuildAccountSignInFields(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "SIGN IN", 12, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -26f), new Vector2(-24f, -6f));
+
+        var idField = MakeInput(panel, "Username or email", accountEmailInput, s => accountEmailInput = s, null);
+        Stretch(idField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -72f), new Vector2(-24f, -38f));
+
+        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
+            InputField.ContentType.Password);
+        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -112f), new Vector2(-24f, -78f));
+
+        var stayHolder = PanelObject("Stay Signed In Holder", panel, new Color(0, 0, 0, 0));
+        stayHolder.anchorMin = new Vector2(0.5f, 1f);
+        stayHolder.anchorMax = new Vector2(0.5f, 1f);
+        stayHolder.pivot     = new Vector2(0.5f, 1f);
+        stayHolder.sizeDelta = new Vector2(180f, 32f);
+        stayHolder.anchoredPosition = new Vector2(0f, -120f);
+        AddButton(stayHolder,
+            (AccountManager.StaySignedIn ? "[x] " : "[ ] ") + "Stay signed in",
+            () => { AccountManager.StaySignedIn = !AccountManager.StaySignedIn; RenderMenu(); }, true, false, true);
+
+        AddCenteredButton(panel, accountBusy ? "Working..." : "Sign In", SignInWithEmailClicked,
+            -164f, 160f, 38f, !accountBusy);
+        AddCenteredButton(panel, "New here? Create an account",
+            () => { accountGateSignInMode = false; accountError = null; RenderMenu(); },
+            -210f, 240f, 36f);
+
+        if (!string.IsNullOrEmpty(accountError))
+        {
+            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -292f), new Vector2(-24f, -252f));
+        }
+    }
+
+    private void BuildAccountSettingsStage(RectTransform stage)
+    {
+        const float titleH = 60f;
+
+        var titleRow = PanelObject("Account Settings Title Row", stage, new Color(0, 0, 0, 0));
+        Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
+        var titleText = TextObject("Title", titleRow, "Account & Recovery", 26, Ink, TextAnchor.MiddleLeft);
+        titleText.fontStyle = FontStyle.Bold;
+        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
+
+        var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
+        Stretch(backHolder, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        backHlg.childAlignment = TextAnchor.MiddleRight;
+        backHlg.childControlWidth = false;
+        backHlg.childControlHeight = false;
+        AddButton(backHolder, "< Back", CloseAccountSettings, true, false);
+
+        // Guest view spreads across the full stage width; the account forms keep
+        // the narrower half-width column that suits stacked input fields.
+        var panel = PanelObject("Account Settings Panel", stage, new Color32(8, 16, 24, 153));
+        Stretch(panel, Vector2.zero, new Vector2(AccountManager.IsGuest ? 1f : 0.5f, 1f), Vector2.zero, new Vector2(0f, -titleH));
+        Round(panel);
+        AddRoundedCardBorder(panel, MenuB, 1f);
+
+        if (AccountManager.IsGuest) BuildGuestSettingsFields(panel);
+        else if (accountSettingsResetMode) BuildPasswordResetFields(panel);
+        else if (AccountManager.HasEmailLinked) BuildEmailLinkedSummary(panel);
+        else BuildLinkEmailFields(panel);
+    }
+
+    private void BuildGuestSettingsFields(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "GUEST MODE", 13, Muted, TextAnchor.UpperCenter, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -48f), new Vector2(-24f, -26f));
+
+        var playingAs = TextObject("Playing As Label", panel, "PLAYING AS", 10, Muted, TextAnchor.UpperCenter, monoFont);
+        Stretch(playingAs.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -96f), new Vector2(-24f, -78f));
+
+        var nameText = TextObject("Guest Name", panel, AccountManager.GuestDisplayName, 28, Ink, TextAnchor.UpperCenter);
+        nameText.fontStyle = FontStyle.Bold;
+        Stretch(nameText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -138f), new Vector2(-24f, -98f));
+
+        var tempNote = TextObject("Temp Note", panel,
+            "Opponents will see this name with the [Guest] tag. It lasts only for this session - guest progress isn't tied to an account and won't follow you to another device.",
+            11, Muted, TextAnchor.UpperCenter, monoFont);
+        tempNote.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(tempNote.rectTransform, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -196f), new Vector2(0f, -146f));
+
+        var divider = PanelObject("Divider", panel, new Color32(255, 255, 255, 20));
+        Stretch(divider, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -219f), new Vector2(0f, -218f));
+
+        var lockedHeader = TextObject("Locked Header", panel, "LOCKED IN GUEST MODE", 10, Muted, TextAnchor.UpperCenter, monoFont);
+        lockedHeader.fontStyle = FontStyle.Bold;
+        Stretch(lockedHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -258f), new Vector2(-24f, -240f));
+
+        // Three side-by-side cards - the page is full-width now, so spread out
+        // instead of stacking.
+        (string title, string desc)[] locked =
+        {
+            ("Friends", "Add friends, see who's online, send invites"),
+            ("Ranked play", "Climb the ladder with a permanent name"),
+            ("Account recovery", "Keep your name and progress on any device"),
+        };
+        const float cardTop = -288f, cardBottom = -392f;
+        for (int i = 0; i < locked.Length; i++)
+        {
+            float xMin = 0.06f + i * 0.30f;
+            float xMax = xMin + 0.26f;
+            var card = PanelObject($"Locked Card {i}", panel, new Color32(8, 16, 26, 200));
+            Stretch(card, new Vector2(xMin, 1f), new Vector2(xMax, 1f), new Vector2(0f, cardBottom), new Vector2(0f, cardTop));
+            Round(card);
+            AddRoundedCardBorder(card, MenuB, 1f);
+
+            var cardTitle = TextObject($"Locked Title {i}", card, locked[i].title, 13, Ink, TextAnchor.UpperCenter);
+            cardTitle.fontStyle = FontStyle.Bold;
+            Stretch(cardTitle.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(10f, -38f), new Vector2(-10f, -14f));
+
+            var cardDesc = TextObject($"Locked Desc {i}", card, locked[i].desc, 10, Muted, TextAnchor.UpperCenter, monoFont);
+            cardDesc.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(cardDesc.rectTransform, Vector2.zero, Vector2.one, new Vector2(10f, 10f), new Vector2(-10f, -42f));
+        }
+
+        var unlockNote = TextObject("Unlock Note", panel,
+            "Creating an account keeps the deck and match history from this session.",
+            11, Muted, TextAnchor.MiddleCenter, monoFont);
+        unlockNote.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(unlockNote.rectTransform, new Vector2(0.15f, 0f), new Vector2(0.85f, 0f), new Vector2(0f, 84f), new Vector2(0f, 118f));
+
+        // Fixed-width centered button, wide enough that the label stays on one line.
+        var createHolder = PanelObject("Create Holder", panel, new Color(0, 0, 0, 0));
+        createHolder.anchorMin = new Vector2(0.5f, 0f);
+        createHolder.anchorMax = new Vector2(0.5f, 0f);
+        createHolder.pivot     = new Vector2(0.5f, 0f);
+        createHolder.sizeDelta = new Vector2(340f, 46f);
+        createHolder.anchoredPosition = new Vector2(0f, 24f);
+        AddButton(createHolder, "Create Account / Sign In", () =>
+        {
+            AccountManager.EndGuestSession();
+            showingAccountSettings = false;
+            showingAccountGate = true;
+            accountGateSignInMode = false;
+            accountError = null;
+            RenderMenu();
+        }, true, false, true);
+    }
+
+    private void BuildEmailLinkedSummary(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "RECOVERY", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var body = TextObject("Body", panel, "A recovery email is linked to this account.",
+            12, Ink, TextAnchor.UpperLeft, monoFont);
+        body.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(body.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -66f), new Vector2(-16f, -46f));
+
+        AddSignOutRow(panel);
+    }
+
+    private void AddSignOutRow(RectTransform panel)
+    {
+        if (!string.IsNullOrEmpty(accountError))
+        {
+            var err = TextObject("SignOut Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 100f));
+        }
+
+        var signOutHolder = PanelObject("Sign Out Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(signOutHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, -14f), new Vector2(-16f, 16f));
+        AddButton(signOutHolder, signOutArmed ? "Sign out anyway" : "Sign Out", SignOutClicked, !accountBusy, false);
+    }
+
+    private void SignOutClicked()
+    {
+        // An anonymous account with no recovery email is gone forever once signed out,
+        // so require a deliberate second click in that case.
+        if (!AccountManager.HasEmailLinked && !signOutArmed)
+        {
+            signOutArmed = true;
+            accountError = "No recovery email is linked - signing out will permanently lose this account and its name. Click 'Sign out anyway' to confirm.";
+            RenderMenu();
+            return;
+        }
+
+        signOutArmed = false;
+        AccountManager.SignOut();
+        accountError = null;
+        accountEmailInput = "";
+        accountPasswordInput = "";
+        showingAccountSettings = false;
+        showingAccountGate = true;
+        accountGateSignInMode = true;
+        accountGatePostClaimMode = false;
+        RenderMenu();
+    }
+
+    private void BuildLinkEmailFields(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "LINK RECOVERY EMAIL", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
+        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -70f), new Vector2(-16f, -46f));
+
+        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
+            InputField.ContentType.Password);
+        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -106f), new Vector2(-16f, -82f));
+
+        if (!string.IsNullOrEmpty(accountError))
+        {
+            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 100f));
+        }
+
+        var linkHolder = PanelObject("Link Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(linkHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
+        AddButton(linkHolder, accountBusy ? "Working..." : "Link Email", LinkEmailClicked, !accountBusy, false);
+
+        var signOutHolder = PanelObject("Sign Out Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(signOutHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, -14f), new Vector2(-16f, 16f));
+        AddButton(signOutHolder, signOutArmed ? "Sign out anyway" : "Sign Out", SignOutClicked, !accountBusy, false);
+    }
+
+    private void BuildPasswordResetFields(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "RESET PASSWORD", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
+        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -70f), new Vector2(-16f, -46f));
+
+        var sendHolder = PanelObject("Send Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(sendHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -104f), new Vector2(-16f, -74f));
+        AddButton(sendHolder, accountBusy ? "Working..." : "Email Me a Code", RequestPasswordResetClicked, !accountBusy, false);
+
+        var tokenField = MakeInput(panel, "Code from email", resetTokenInput, s => resetTokenInput = s, null);
+        Stretch(tokenField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -142f), new Vector2(-16f, -112f));
+
+        var newPasswordField = MakeInput(panel, "New password", resetNewPasswordInput, s => resetNewPasswordInput = s, null,
+            InputField.ContentType.Password);
+        Stretch(newPasswordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -178f), new Vector2(-16f, -148f));
+
+        if (!string.IsNullOrEmpty(accountError))
+        {
+            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 100f));
+        }
+
+        var confirmHolder = PanelObject("Confirm Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(confirmHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
+        AddButton(confirmHolder, accountBusy ? "Working..." : "Set New Password", ConfirmPasswordResetClicked, !accountBusy, false);
+
+        var switchHolder = PanelObject("Switch Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(switchHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -14f), new Vector2(-16f, 16f));
+        AddButton(switchHolder, "< Back", () => { accountSettingsResetMode = false; accountError = null; RenderMenu(); }, true, false);
+    }
+
+    private async void ClaimUsernameClicked()
+    {
+        if (string.IsNullOrWhiteSpace(usernameInput)) { accountError = "Enter a name first."; RenderMenu(); return; }
+        if (usernameInput.Trim().Length < 3)
+        {
+            // Unity's username/password login requires 3+ chars, and the claimed name
+            // doubles as the login username.
+            accountError = "Names must be at least 3 characters.";
+            RenderMenu();
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(accountEmailInput) || !accountEmailInput.Contains("@"))
+        {
+            accountError = "Enter a valid email address.";
+            RenderMenu();
+            return;
+        }
+        string pwProblem = PasswordProblem(accountPasswordInput);
+        if (pwProblem != null)
+        {
+            accountError = pwProblem;
+            RenderMenu();
+            return;
+        }
+        accountBusy = true;
+        accountError = null;
+        RenderMenu();
+        try
+        {
+            var result = await AccountManager.ClaimUsernameAsync(usernameInput.Trim());
+            if (this == null || menuRoot == null) return;
+            if (result.Ok)
+            {
+                var linkResult = await AccountManager.LinkEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
+                if (this == null || menuRoot == null) return;
+                if (linkResult.Ok)
+                {
+                    showingAccountGate = false;
+                    accountPasswordInput = "";
+                    accountError = null;
+                }
+                else
+                {
+                    // Name is claimed; only the email link failed. Land on the retry
+                    // screen with the reason so they can fix it or skip.
+                    accountGatePostClaimMode = true;
+                    accountError = linkResult.Message;
+                }
+            }
+            else
+            {
+                accountError = DescribeClaimFailure(result.Reason);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            accountError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                accountBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void SignInWithEmailClicked()
+    {
+        if (string.IsNullOrWhiteSpace(accountEmailInput) || string.IsNullOrWhiteSpace(accountPasswordInput))
+        {
+            accountError = "Enter your email and password.";
+            RenderMenu();
+            return;
+        }
+        accountBusy = true;
+        accountError = null;
+        RenderMenu();
+        try
+        {
+            var result = await AccountManager.SignInWithEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
+            if (this == null || menuRoot == null) return;
+            if (result.Ok) showingAccountGate = false;
+            else accountError = result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            accountError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                accountBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void LinkEmailClicked()
+    {
+        if (string.IsNullOrWhiteSpace(accountEmailInput) || string.IsNullOrWhiteSpace(accountPasswordInput))
+        {
+            accountError = "Enter an email and password.";
+            RenderMenu();
+            return;
+        }
+        accountBusy = true;
+        accountError = null;
+        RenderMenu();
+        try
+        {
+            var result = await AccountManager.LinkEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
+            if (this == null || menuRoot == null) return;
+            if (!result.Ok) accountError = result.Message;
+            else if (accountGatePostClaimMode) // reached from the claim retry screen
+            {
+                // Linked from the post-claim step - done with the whole gate.
+                accountGatePostClaimMode = false;
+                showingAccountGate = false;
+                accountPasswordInput = "";
+            }
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            accountError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                accountBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void RequestPasswordResetClicked()
+    {
+        if (string.IsNullOrWhiteSpace(accountEmailInput)) { accountError = "Enter your email first."; RenderMenu(); return; }
+        accountSettingsResetMode = true;
+        accountBusy = true;
+        accountError = null;
+        RenderMenu();
+        try
+        {
+            await AccountManager.RequestPasswordResetAsync(accountEmailInput.Trim());
+            if (this == null || menuRoot == null) return;
+            accountError = "If that email has an account, a code is on its way.";
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            accountError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                accountBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void ConfirmPasswordResetClicked()
+    {
+        if (string.IsNullOrWhiteSpace(resetTokenInput) || string.IsNullOrWhiteSpace(resetNewPasswordInput))
+        {
+            accountError = "Enter the code from your email and a new password.";
+            RenderMenu();
+            return;
+        }
+        accountBusy = true;
+        accountError = null;
+        RenderMenu();
+        try
+        {
+            var result = await AccountManager.ConfirmPasswordResetAsync(resetTokenInput.Trim(), resetNewPasswordInput);
+            if (this == null || menuRoot == null) return;
+            accountError = result.Ok ? "Password updated - you can sign in with it now." : result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            accountError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                accountBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    // Mirrors Unity Authentication's password policy so failures are caught with a
+    // friendly message before the round-trip instead of an opaque SDK error after it.
+    private static string PasswordProblem(string pw)
+    {
+        if (string.IsNullOrEmpty(pw) || pw.Length < 8 || pw.Length > 30)
+            return "Password must be 8-30 characters.";
+        bool upper = false, lower = false, digit = false, symbol = false;
+        foreach (char c in pw)
+        {
+            if (char.IsUpper(c)) upper = true;
+            else if (char.IsLower(c)) lower = true;
+            else if (char.IsDigit(c)) digit = true;
+            else symbol = true;
+        }
+        if (!(upper && lower && digit && symbol))
+            return "Password needs an uppercase letter, a lowercase letter, a number, and a symbol.";
+        return null;
+    }
+
+    // ── Guest mode ────────────────────────────────────────────────────────────
+    // "Guest <title> <character>" - display-only, never claimed server-side, so
+    // guests skip the account flow entirely. Online-identity features (friends,
+    // ranked) check AccountManager.IsGuest and gate themselves off.
+
+    private static readonly string[] GuestTitles =
+    {
+        "Captain", "Admiral", "Vice Admiral", "Warlord", "Supernova", "First Mate",
+        "Navigator", "Shipwright", "Cabin Boy", "Bounty Hunter", "Revolutionary", "Yonko",
+    };
+
+    private static readonly string[] GuestCharacters =
+    {
+        "Luffy", "Zoro", "Nami", "Usopp", "Sanji", "Chopper", "Robin", "Franky",
+        "Brook", "Jinbe", "Ace", "Sabo", "Shanks", "Buggy", "Law", "Kid",
+        "Hancock", "Crocodile", "Doflamingo", "Katakuri", "Yamato", "Carrot",
+        "Vivi", "Rebecca", "Perona", "Marco", "Izo", "Denjiro", "Kinemon", "Oden",
+    };
+
+    private void ContinueAsGuestClicked()
+    {
+        var rng = new System.Random();
+        string guestName = $"[Guest] {GuestTitles[rng.Next(GuestTitles.Length)]} {GuestCharacters[rng.Next(GuestCharacters.Length)]}";
+        AccountManager.StartGuestSession(guestName);
+        showingAccountGate = false;
+        accountGateSignInMode = false;
+        accountGatePostClaimMode = false;
+        accountError = null;
+        RenderMenu();
+    }
+
+    private string DescribeClaimFailure(AccountFailureReason reason)
+    {
+        switch (reason)
+        {
+            case AccountFailureReason.TooLong: return "That name's too long (max 16 characters).";
+            case AccountFailureReason.BadChars: return "Letters, numbers, and underscore only.";
+            case AccountFailureReason.Profanity: return "That name isn't allowed.";
+            case AccountFailureReason.NameTaken: return "That name's taken - try another.";
+            case AccountFailureReason.AlreadyHasUsername: return "You already have a name.";
+            case AccountFailureReason.NoNetwork: return "Couldn't reach the server - check your connection.";
+            default: return "Enter a name first.";
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Friends (stage swapped in for the "Friends" nav row). Relationship graph +
+    // presence live in FriendsManager.cs (Unity Friends service); this is just the
+    // uGUI wiring, following the same panel/busy/error idiom as everything above.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private string FriendsOnlineSubtitle()
+    {
+        int online = friendsList.Count(f => f.Online);
+        return online == 1 ? "1 online" : $"{online} online";
+    }
+
+    private void OpenFriends()
+    {
+        showingAccountSettings = false;
+        showingReplays = false;
+        showingFriends = true;
+        friendsError = null;
+        RenderMenu();
+        RefreshFriendsLists();
+    }
+
+    private void CloseFriends()
+    {
+        showingFriends = false;
+        friendsError = null;
+        RenderMenu();
+    }
+
+    private async void RefreshFriendsLists()
+    {
+        if (AccountManager.IsGuest) return;
+        try
+        {
+            var friends = await FriendsManager.GetFriendsAsync();
+            var incoming = await FriendsManager.GetIncomingRequestsAsync();
+            var outgoing = await FriendsManager.GetOutgoingRequestsAsync();
+            if (this == null || menuRoot == null) return;
+            friendsList = friends;
+            incomingRequests = incoming;
+            outgoingRequests = outgoing;
+            RenderMenu();
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            friendsError = $"Couldn't load friends: {ex.Message}";
+            RenderMenu();
+        }
+    }
+
+    private void BuildFriendsStage(RectTransform stage)
+    {
+        const float titleH = 60f;
+
+        var titleRow = PanelObject("Friends Title Row", stage, new Color(0, 0, 0, 0));
+        Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
+        var titleText = TextObject("Title", titleRow, "Friends", 26, Ink, TextAnchor.MiddleLeft);
+        titleText.fontStyle = FontStyle.Bold;
+        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
+
+        var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
+        Stretch(backHolder, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        backHlg.childAlignment = TextAnchor.MiddleRight;
+        backHlg.childControlWidth = false;
+        backHlg.childControlHeight = false;
+        AddButton(backHolder, "< Back", CloseFriends, true, false);
+
+        // Guests have no account identity - no relationships to load or invite.
+        if (AccountManager.IsGuest)
+        {
+            var panelG = PanelObject("Friends Guest Panel", stage, new Color32(8, 16, 24, 153));
+            Stretch(panelG, Vector2.zero, new Vector2(0.5f, 1f), Vector2.zero, new Vector2(0f, -titleH));
+            Round(panelG);
+            AddRoundedCardBorder(panelG, MenuB, 1f);
+            var msg = TextObject("Guest Msg", panelG,
+                "Friends are unavailable in guest mode.\n\nCreate an account (Settings gear, top right) to add friends, send invites, and play ranked.",
+                12, Muted, TextAnchor.UpperLeft, monoFont);
+            msg.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(msg.rectTransform, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -16f));
+            return;
+        }
+
+        var body = PanelObject("Friends Body", stage, new Color(0, 0, 0, 0));
+        Stretch(body, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
+
+        // Left: add by username + incoming/outgoing requests.
+        var requestsPanel = PanelObject("Requests Panel", body, new Color32(8, 16, 24, 153));
+        Stretch(requestsPanel, Vector2.zero, new Vector2(0.42f, 1f), Vector2.zero, Vector2.zero);
+        Round(requestsPanel);
+        AddRoundedCardBorder(requestsPanel, MenuB, 1f);
+        BuildFriendRequestsPanel(requestsPanel);
+
+        // Right: friends list.
+        var friendsPanel = PanelObject("Friends Panel", body, new Color32(8, 16, 24, 153));
+        Stretch(friendsPanel, new Vector2(0.46f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        Round(friendsPanel);
+        AddRoundedCardBorder(friendsPanel, MenuB, 1f);
+        BuildFriendsListPanel(friendsPanel);
+    }
+
+    private void BuildFriendRequestsPanel(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "ADD A FRIEND", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var nameField = MakeInput(panel, "Username", addFriendUsernameInput, s => addFriendUsernameInput = s, null);
+        Stretch(nameField, new Vector2(0f, 1f), new Vector2(0.68f, 1f), new Vector2(16f, -70f), new Vector2(0f, -46f));
+
+        var addHolder = PanelObject("Add Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(addHolder, new Vector2(0.68f, 1f), new Vector2(1f, 1f), new Vector2(0f, -70f), new Vector2(-16f, -46f));
+        AddButton(addHolder, friendsBusy ? "..." : "Add", AddFriendClicked, !friendsBusy, false);
+
+        if (!string.IsNullOrEmpty(friendsError))
+        {
+            var err = TextObject("Error", panel, friendsError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -108f), new Vector2(-16f, -78f));
+        }
+
+        var listHeader = TextObject("List Header", panel, "REQUESTS", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(listHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -136f), new Vector2(-16f, -116f));
+
+        var listArea = PanelObject("Requests List", panel, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -142f));
+
+        var allRequests = new List<(FriendEntry entry, bool incoming)>();
+        foreach (var r in incomingRequests) allRequests.Add((r, true));
+        foreach (var r in outgoingRequests) allRequests.Add((r, false));
+
+        if (allRequests.Count == 0)
+        {
+            var empty = TextObject("Empty", listArea, "No pending requests.", 12, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, new Vector2(0f, -24f));
+            return;
+        }
+
+        const float rowH = 48f, gap = 6f;
+        int shown = Mathf.Min(allRequests.Count, 8);
+        for (int i = 0; i < shown; i++)
+        {
+            var (entry, incoming) = allRequests[i];
+            var row = PanelObject("Request Row " + i, listArea, new Color32(14, 22, 32, 180));
+            row.anchorMin = new Vector2(0f, 1f);
+            row.anchorMax = new Vector2(1f, 1f);
+            row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(0f, rowH);
+            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
+            BuildRequestRow(row, entry, incoming);
+        }
+    }
+
+    private void BuildRequestRow(RectTransform row, FriendEntry entry, bool incoming)
+    {
+        Round(row);
+        AddRoundedCardBorder(row, MenuB, 1f);
+
+        var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.MiddleLeft);
+        Stretch(name.rectTransform, Vector2.zero, new Vector2(0.5f, 1f), new Vector2(12f, 0f), Vector2.zero);
+
+        var tag = TextObject("Tag", row, incoming ? "wants to be friends" : "pending", 10, Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(tag.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.7f, 1f), Vector2.zero, Vector2.zero);
+
+        var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
+        Stretch(btnHolder, new Vector2(0.7f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
+        var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 6f;
+        hlg.childAlignment = TextAnchor.MiddleRight;
+        hlg.childControlWidth = false;
+        hlg.childControlHeight = false;
+
+        if (incoming)
+        {
+            AddButton(btnHolder, "Accept", () => RespondToRequestClicked(entry.PlayerId, true), !friendsBusy, false);
+            AddButton(btnHolder, "Decline", () => RespondToRequestClicked(entry.PlayerId, false), !friendsBusy, false);
+        }
+        else
+        {
+            AddButton(btnHolder, "Cancel", () => CancelOutgoingClicked(entry.PlayerId), !friendsBusy, false);
+        }
+    }
+
+    private void BuildFriendsListPanel(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, $"FRIENDS ({friendsList.Count})", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var listArea = PanelObject("Friends List Area", panel, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -46f));
+
+        if (friendsList.Count == 0)
+        {
+            var empty = TextObject("Empty", listArea, "No friends yet - add one by username.", 12, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, new Vector2(0f, -24f));
+            return;
+        }
+
+        const float rowH = 48f, gap = 6f;
+        int shown = Mathf.Min(friendsList.Count, 10);
+        for (int i = 0; i < shown; i++)
+        {
+            var row = PanelObject("Friend Row " + i, listArea, new Color32(14, 22, 32, 180));
+            row.anchorMin = new Vector2(0f, 1f);
+            row.anchorMax = new Vector2(1f, 1f);
+            row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(0f, rowH);
+            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
+            BuildFriendRow(row, friendsList[i]);
+        }
+    }
+
+    private void BuildFriendRow(RectTransform row, FriendEntry entry)
+    {
+        Round(row);
+        AddRoundedCardBorder(row, MenuB, 1f);
+
+        var dot = PanelObject("Presence Dot", row, entry.Online ? Accent : Muted);
+        dot.anchorMin = dot.anchorMax = new Vector2(0f, 0.5f);
+        dot.pivot = new Vector2(0f, 0.5f);
+        dot.sizeDelta = new Vector2(8f, 8f);
+        dot.anchoredPosition = new Vector2(12f, 0f);
+        RoundCircle(dot);
+
+        var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.MiddleLeft);
+        Stretch(name.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(28f, 0f), Vector2.zero);
+
+        var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
+        Stretch(btnHolder, new Vector2(0.6f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
+        var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 6f;
+        hlg.childAlignment = TextAnchor.MiddleRight;
+        hlg.childControlWidth = false;
+        hlg.childControlHeight = false;
+        AddButton(btnHolder, "Remove", () => RemoveFriendClicked(entry.PlayerId), !friendsBusy, false);
+        AddButton(btnHolder, "Block", () => BlockFriendClicked(entry.PlayerId), !friendsBusy, false);
+    }
+
+    private async void AddFriendClicked()
+    {
+        if (string.IsNullOrWhiteSpace(addFriendUsernameInput)) { friendsError = "Enter a username first."; RenderMenu(); return; }
+        friendsBusy = true;
+        friendsError = null;
+        RenderMenu();
+        try
+        {
+            var result = await FriendsManager.SendFriendRequestByUsernameAsync(addFriendUsernameInput.Trim());
+            if (this == null || menuRoot == null) return;
+            if (result.Ok)
+            {
+                addFriendUsernameInput = "";
+                await RefreshFriendsListsAwaited();
+            }
+            else
+            {
+                friendsError = result.Message;
+            }
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            friendsError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                friendsBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void RespondToRequestClicked(string requesterPlayerId, bool accept)
+    {
+        friendsBusy = true;
+        friendsError = null;
+        RenderMenu();
+        try
+        {
+            var result = accept
+                ? await FriendsManager.AcceptRequestAsync(requesterPlayerId)
+                : await FriendsManager.DeclineRequestAsync(requesterPlayerId);
+            if (this == null || menuRoot == null) return;
+            if (result.Ok) await RefreshFriendsListsAwaited();
+            else friendsError = result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            friendsError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                friendsBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void CancelOutgoingClicked(string targetPlayerId)
+    {
+        friendsBusy = true;
+        friendsError = null;
+        RenderMenu();
+        try
+        {
+            var result = await FriendsManager.CancelOutgoingRequestAsync(targetPlayerId);
+            if (this == null || menuRoot == null) return;
+            if (result.Ok) await RefreshFriendsListsAwaited();
+            else friendsError = result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            friendsError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                friendsBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void RemoveFriendClicked(string playerId)
+    {
+        friendsBusy = true;
+        friendsError = null;
+        RenderMenu();
+        try
+        {
+            var result = await FriendsManager.RemoveFriendAsync(playerId);
+            if (this == null || menuRoot == null) return;
+            if (result.Ok) await RefreshFriendsListsAwaited();
+            else friendsError = result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            friendsError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                friendsBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    private async void BlockFriendClicked(string playerId)
+    {
+        friendsBusy = true;
+        friendsError = null;
+        RenderMenu();
+        try
+        {
+            var result = await FriendsManager.BlockAsync(playerId);
+            if (this == null || menuRoot == null) return;
+            if (result.Ok) await RefreshFriendsListsAwaited();
+            else friendsError = result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            friendsError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                friendsBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    // Awaitable twin of RefreshFriendsLists (which is async void, fire-and-forget, for the
+    // FriendsChanged event handler) - the click handlers above need to await the reload
+    // before flipping friendsBusy back off, otherwise the UI would flash stale data.
+    private async Task RefreshFriendsListsAwaited()
+    {
+        var friends = await FriendsManager.GetFriendsAsync();
+        var incoming = await FriendsManager.GetIncomingRequestsAsync();
+        var outgoing = await FriendsManager.GetOutgoingRequestsAsync();
+        if (this == null || menuRoot == null) return;
+        friendsList = friends;
+        incomingRequests = incoming;
+        outgoingRequests = outgoing;
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -858,6 +3053,7 @@ public class MainMenuManager : MonoBehaviour
     {
         UnsubscribeFromSessionEvents();
         MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
+        FriendsManager.FriendsChanged -= OnFriendsChanged;
     }
 
     private async void RefreshLobbyBrowser()
@@ -893,7 +3089,7 @@ public class MainMenuManager : MonoBehaviour
         RenderMenu();
         try
         {
-            var session = await LobbyManager.CreateLobbyAsync(lobbyNameInput, lobbyIsPrivate, DefaultPlayerName);
+            var session = await LobbyManager.CreateLobbyAsync(lobbyNameInput, lobbyIsPrivate, AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName);
             if (this == null || menuRoot == null) return;
             SubscribeToSessionEvents(session);
         }
@@ -987,7 +3183,8 @@ public class MainMenuManager : MonoBehaviour
     // Legacy uGUI InputField with placeholder, themed to match this file's palette
     // (ported from DeckBuilderManager.MakeInput).
     private RectTransform MakeInput(RectTransform parent, string placeholder, string initial,
-        UnityEngine.Events.UnityAction<string> onChanged, UnityEngine.Events.UnityAction<string> onEnd)
+        UnityEngine.Events.UnityAction<string> onChanged, UnityEngine.Events.UnityAction<string> onEnd,
+        InputField.ContentType contentType = InputField.ContentType.Standard)
     {
         var holder = PanelObject("Input", parent, new Color32(8, 16, 26, 255));
         Round(holder);
@@ -1007,10 +3204,12 @@ public class MainMenuManager : MonoBehaviour
         field.placeholder = ph;
         field.text = initial ?? "";
         field.lineType = InputField.LineType.SingleLine;
+        field.contentType = contentType;
         field.caretColor = Accent;
         field.customCaretColor = true;
         if (onChanged != null) field.onValueChanged.AddListener(s => onChanged(s));
         if (onEnd != null) field.onEndEdit.AddListener(s => onEnd(s));
+        tabOrder.Add(field); // creation order == visual order == tab order
         return holder;
     }
 
@@ -1041,20 +3240,21 @@ public class MainMenuManager : MonoBehaviour
         // Five nav rows
         var rows = new (string title, string subtitle, string tag, bool active)[]
         {
-            ("Play",     "Game modes",          null,       !showingReplays),
+            ("Play",     "Game modes",          null,       !showingReplays && !showingFriends),
             ("Decks",    "Build & edit",        null,       false),
             ("Match History", "Watch past matches", null,   showingReplays),
-            ("Friends",  "Crew & invites",      "3 online", false),
+            ("Friends",  "Crew & invites",      FriendsOnlineSubtitle(), showingFriends),
             ("Settings", "Preferences & audio", null,       false),
         };
 
         UnityEngine.Events.UnityAction[] actions =
         {
-            () => { showingReplays = false; RenderMenu(); },
+            () => { showingAccountSettings = false; showingFriends = false; showingReplays = false; RenderMenu(); },
             () => OpenDeckBuilder(),
-            () => { showingReplays = true; RenderMenu(); },
-            () => { /* TODO: open friends */ },
-            () => { /* TODO: open settings */ },
+            () => { showingAccountSettings = false; showingFriends = false; showingReplays = true;
+                    selectedMatchId = null; matchHistory = null; RenderMenu(); },
+            OpenFriends,
+            OpenAccountSettings,
         };
 
         for (int i = 0; i < rows.Length; i++)
@@ -1866,12 +4066,21 @@ public class MainMenuManager : MonoBehaviour
     }
 
     private void AddButton(RectTransform parent, string label,
-        UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true)
+        UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true, bool fill = false)
     {
         var root = PanelObject(label + " Button", parent,
             enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
-        SetPreferred(root, new Vector2(118, 34));
-        root.sizeDelta = new Vector2(118, 34);
+        if (fill)
+        {
+            // Stretch to the holder instead of the default fixed 118x34 chip -
+            // used by the modal/wizard screens where buttons span the panel.
+            Stretch(root, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+        else
+        {
+            SetPreferred(root, new Vector2(118, 34));
+            root.sizeDelta = new Vector2(118, 34);
+        }
         Round(root);
         AddRoundedCardBorder(root,
             enabled ? MenuB : (Color)new Color32(50, 58, 74, 80), 1.1f);
@@ -2079,6 +4288,33 @@ public class MainMenuManager : MonoBehaviour
         _vGradientSprite = Sprite.Create(tex, new Rect(0, 0, W, H),
             new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect);
         return _vGradientSprite;
+    }
+
+    private Sprite _hGradientSprite;
+    // Horizontal gradient: opaque white at the LEFT fading to transparent at the
+    // right (biased toward the left, mirroring GetVGradientSprite's falloff).
+    // Tinted dark it becomes the leader-banner readability scrim; mirror it with
+    // localScale.x = -1 for the opponent's right-dark variant.
+    private Sprite GetHGradientSprite()
+    {
+        if (_hGradientSprite != null) return _hGradientSprite;
+        const int W = 128, H = 4;
+        var tex = new Texture2D(W, H, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode   = TextureWrapMode.Clamp;
+        var px = new Color32[W * H];
+        for (int x = 0; x < W; x++)
+        {
+            float t = x / (float)(W - 1);     // 0 at left column, 1 at right column
+            float a = Mathf.Clamp01(1f - t);
+            a = a * a;                         // bias the solid part toward the left
+            byte ab = (byte)Mathf.RoundToInt(a * 255f);
+            for (int y = 0; y < H; y++) px[y * W + x] = new Color32(255, 255, 255, ab);
+        }
+        tex.SetPixels32(px); tex.Apply(false, true);
+        _hGradientSprite = Sprite.Create(tex, new Rect(0, 0, W, H),
+            new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect);
+        return _hGradientSprite;
     }
 
     private Sprite _bgGradientSprite;
