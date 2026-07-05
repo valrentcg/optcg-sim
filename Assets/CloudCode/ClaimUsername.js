@@ -107,10 +107,24 @@ module.exports = async ({ params, context, logger }) => {
   // Custom Data has no query-by-value, so this index is written here at claim
   // time rather than scanned for later. Keyed by player id, not normalized
   // name, since it's looked up by id, never by name.
-  await cloudSaveApi.setCustomItem(projectId, CUSTOM_ID_PLAYER_USERNAMES, {
-    key: playerId,
-    value: { username: rawName },
-  });
+  //
+  // Unlike the registry write above, this one must UPDATE cleanly if an entry
+  // already exists (setCustomItem without writeLock is create-only and throws
+  // otherwise - same bug class RegisterEmailForRecovery.js had). Non-fatal on
+  // failure: the claim itself already stands.
+  try {
+    const idxLookup = await cloudSaveApi.getCustomItems(projectId, CUSTOM_ID_PLAYER_USERNAMES, [
+      playerId,
+    ]);
+    const idxExisting = idxLookup.data.results.find((item) => item.key === playerId);
+    const idxBody = { key: playerId, value: { username: rawName } };
+    if (idxExisting) idxBody.writeLock = idxExisting.writeLock;
+    await cloudSaveApi.setCustomItem(projectId, CUSTOM_ID_PLAYER_USERNAMES, idxBody);
+  } catch (err) {
+    logger.error("playerUsernames index write failed (claim still succeeded)", {
+      "error.message": err.message,
+    });
+  }
 
   return { ok: true, username: rawName };
 };

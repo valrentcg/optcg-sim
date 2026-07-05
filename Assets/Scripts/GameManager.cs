@@ -488,7 +488,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             isNetworked && !string.IsNullOrEmpty(localSeat) ? localSeat : "south");
         // Fire-and-forget: SaveMatchAsync catches + logs its own failures (and
         // skips guests entirely), so match end can never be blocked by network.
-        if (summary != null) _ = MatchHistoryStore.SaveMatchAsync(summary);
+        if (summary != null)
+        {
+            _ = MatchHistoryStore.SaveMatchAsync(summary);
+            // Lifetime + seasonal aggregates (StatsStore.cs). Also fire-and-forget:
+            // stats failures log and skip, they never block or break match end.
+            _ = StatsStore.RecordMatchAsync(summary);
+        }
     }
 
     private void NormalizeSelection()

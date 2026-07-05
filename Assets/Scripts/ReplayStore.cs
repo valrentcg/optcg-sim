@@ -101,7 +101,43 @@ public sealed class ReplayRecord
 
 public static class ReplayStore
 {
-    private static string Dir => Path.Combine(Application.persistentDataPath, "Replays");
+    // Replays are per-identity: each account (or guest) on this machine gets its
+    // own subfolder, so signing in as someone else - or playing as a guest - never
+    // shows another user's matches. Legacy loose files (pre-scoping) are migrated
+    // into the first signed-in account's folder; guests never inherit them.
+    private static string RootDir => Path.Combine(Application.persistentDataPath, "Replays");
+    private static string Dir
+    {
+        get
+        {
+            string dir = Path.Combine(RootDir, AccountManager.CurrentIdentityKey);
+            MigrateLegacyIfNeeded(dir);
+            return dir;
+        }
+    }
+
+    private static bool _migrationChecked;
+    private static void MigrateLegacyIfNeeded(string identityDir)
+    {
+        if (_migrationChecked) return;
+        _migrationChecked = true;
+        try
+        {
+            string ident = AccountManager.CurrentIdentityKey;
+            if (ident == "local" || ident.StartsWith("guest_")) { _migrationChecked = false; return; }
+            if (!Directory.Exists(RootDir)) return;
+            var loose = Directory.GetFiles(RootDir, "*.json");
+            if (loose.Length == 0) return;
+            Directory.CreateDirectory(identityDir);
+            foreach (var path in loose)
+            {
+                string dest = Path.Combine(identityDir, Path.GetFileName(path));
+                if (!File.Exists(dest)) File.Move(path, dest);
+            }
+            Debug.Log($"ReplayStore: migrated {loose.Length} legacy replays to account folder.");
+        }
+        catch (Exception ex) { Debug.LogWarning($"Replay migration failed: {ex.Message}"); }
+    }
 
     /// <summary>Call once a match's GameState.Status has flipped to "finished".
     /// `durationSeconds` is the wall-clock match length (optional — old callers

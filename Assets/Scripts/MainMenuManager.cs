@@ -56,7 +56,7 @@ public class MainMenuManager : MonoBehaviour
 
     // ── Runtime state ──────────────────────────────────────────────────────────
     private string selectedId = "soloSelf";
-    private const string DefaultPlayerName = "Captain Vere";
+    private const string DefaultPlayerName = "Legendary Captain Usopp";
 
     // Versus-self deck picks. Static so they survive this MonoBehaviour being
     // torn down and recreated (single-scene design) whenever a picker round-trip
@@ -134,6 +134,16 @@ public class MainMenuManager : MonoBehaviour
     private bool accountGatePostClaimMode;
     // Two-click arm for signing out with no recovery email linked (account would be lost).
     private bool signOutArmed;
+    // Show/hide state for the settings password field ("SHOW"/"HIDE" toggle).
+    private bool settingsPasswordVisible;
+    // Registration-only: retype-your-password confirmation field.
+    private string accountPasswordConfirmInput = "";
+    // SHOW/HIDE toggles for the registration password fields.
+    private bool regPasswordVisible;
+    private bool regConfirmVisible;
+    // Settings sub-view: add/change the secondary recovery email.
+    private bool accountSettingsRecoveryMode;
+    private string recoveryEmailInput = "";
     // Account & Recovery: opened from the gear icon / Settings nav row. Lets an
     // already-playing account link email+password (for recovery) and request/confirm
     // a password reset. Not required to play, unlike the gate above.
@@ -317,7 +327,20 @@ public class MainMenuManager : MonoBehaviour
     private void Update()
     {
         var kb = UnityEngine.InputSystem.Keyboard.current;
-        if (kb == null || !kb.tabKey.wasPressedThisFrame) return;
+        if (kb == null) return;
+
+        // Enter submits whichever account form is showing (uGUI single-line
+        // InputFields end their edit on Enter but don't consume the key).
+        if ((kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame)
+            && showingAccountGate && !accountBusy)
+        {
+            if (accountGatePostClaimMode) LinkEmailClicked();
+            else if (accountGateSignInMode) SignInWithEmailClicked();
+            else ClaimUsernameClicked();
+            return;
+        }
+
+        if (!kb.tabKey.wasPressedThisFrame) return;
 
         tabOrder.RemoveAll(f => f == null); // destroy-and-rebuild leaves stale entries
         if (tabOrder.Count == 0) return;
@@ -485,7 +508,7 @@ public class MainMenuManager : MonoBehaviour
         avatar.localRotation = Quaternion.Euler(0f, 0f, 45f);
         Round(avatar);
 
-        var nameText = TextObject("PlayerName", identity, AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName, 15, Ink, TextAnchor.LowerLeft);
+        var nameText = TextObject("PlayerName", identity, AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName, 15, Ink, TextAnchor.LowerLeft);
         nameText.fontStyle = FontStyle.Bold;
         Stretch(nameText.rectTransform, new Vector2(0f, 0.5f), Vector2.one, new Vector2(46f, 2f), Vector2.zero);
 
@@ -925,7 +948,7 @@ public class MainMenuManager : MonoBehaviour
         Round(dot);
 
         string sideLabel = youSide
-            ? (hero ? "YOU · " + (AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName).ToUpperInvariant() : "YOU")
+            ? (hero ? "YOU · " + (AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName).ToUpperInvariant() : "YOU")
             : "@" + m.oppName;
         var side = TextObject("Side", top, sideLabel, 10, Ink, TextAnchor.MiddleLeft, monoFont);
         side.fontStyle = FontStyle.Bold;
@@ -1591,6 +1614,7 @@ public class MainMenuManager : MonoBehaviour
     {
         showingAccountSettings = true;
         accountSettingsResetMode = false;
+        accountSettingsRecoveryMode = false;
         accountError = null;
         signOutArmed = false;
         RenderMenu();
@@ -1624,7 +1648,7 @@ public class MainMenuManager : MonoBehaviour
         window.anchorMax = new Vector2(0.5f, 0.5f);
         window.pivot     = new Vector2(0.5f, 0.5f);
         window.sizeDelta = new Vector2(560f,
-            accountGatePostClaimMode ? 470f : accountGateSignInMode ? 460f : 580f);
+            accountGatePostClaimMode ? 470f : accountGateSignInMode ? 460f : 630f);
         window.anchoredPosition = Vector2.zero;
         RoundBig(window);
         AddRoundedCardBorder(window, MenuB, 1f);
@@ -1743,26 +1767,41 @@ public class MainMenuManager : MonoBehaviour
         Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -206f), new Vector2(-24f, -172f));
 
         var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
-            InputField.ContentType.Password);
-        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -246f), new Vector2(-24f, -212f));
+            regPasswordVisible ? InputField.ContentType.Standard : InputField.ContentType.Password);
+        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -246f), new Vector2(-82f, -212f));
+
+        var pwEyeHolder = PanelObject("PW Eye Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(pwEyeHolder, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-78f, -246f), new Vector2(-24f, -212f));
+        AddButton(pwEyeHolder, regPasswordVisible ? "HIDE" : "SHOW",
+            () => { regPasswordVisible = !regPasswordVisible; RenderMenu(); }, true, false, true);
+
+        var confirmField = MakeInput(panel, "Confirm password", accountPasswordConfirmInput,
+            s => accountPasswordConfirmInput = s, null,
+            regConfirmVisible ? InputField.ContentType.Standard : InputField.ContentType.Password);
+        Stretch(confirmField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -286f), new Vector2(-82f, -252f));
+
+        var cfEyeHolder = PanelObject("CF Eye Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(cfEyeHolder, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-78f, -286f), new Vector2(-24f, -252f));
+        AddButton(cfEyeHolder, regConfirmVisible ? "HIDE" : "SHOW",
+            () => { regConfirmVisible = !regConfirmVisible; RenderMenu(); }, true, false, true);
 
         var pwHint = TextObject("Password Hint", panel,
             "8-30 characters with an uppercase letter, lowercase letter, number, and symbol.",
             10, Muted, TextAnchor.UpperLeft, monoFont);
         pwHint.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(pwHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -284f), new Vector2(-24f, -250f));
+        Stretch(pwHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -324f), new Vector2(-24f, -290f));
 
         AddCenteredButton(panel, accountBusy ? "Working..." : "Create Account", ClaimUsernameClicked,
-            -296f, 200f, 38f, !accountBusy);
+            -336f, 200f, 38f, !accountBusy);
         AddCenteredButton(panel, "Already have an account?\nSign in",
             () => { accountGateSignInMode = true; accountError = null; RenderMenu(); },
-            -342f, 230f, 42f);
+            -382f, 230f, 42f);
 
         if (!string.IsNullOrEmpty(accountError))
         {
             var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
             err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -426f), new Vector2(-24f, -392f));
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -466f), new Vector2(-24f, -428f));
         }
     }
 
@@ -1793,27 +1832,32 @@ public class MainMenuManager : MonoBehaviour
             InputField.ContentType.Password);
         Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -112f), new Vector2(-24f, -78f));
 
-        var stayHolder = PanelObject("Stay Signed In Holder", panel, new Color(0, 0, 0, 0));
-        stayHolder.anchorMin = new Vector2(0.5f, 1f);
-        stayHolder.anchorMax = new Vector2(0.5f, 1f);
-        stayHolder.pivot     = new Vector2(0.5f, 1f);
-        stayHolder.sizeDelta = new Vector2(180f, 32f);
-        stayHolder.anchoredPosition = new Vector2(0f, -120f);
-        AddButton(stayHolder,
-            (AccountManager.StaySignedIn ? "[x] " : "[ ] ") + "Stay signed in",
+        // Sign In and the stay-signed-in checkbox share one centered row.
+        var signRow = PanelObject("Sign In Row", panel, new Color(0, 0, 0, 0));
+        signRow.anchorMin = new Vector2(0.5f, 1f);
+        signRow.anchorMax = new Vector2(0.5f, 1f);
+        signRow.pivot     = new Vector2(0.5f, 1f);
+        signRow.sizeDelta = new Vector2(400f, 38f);
+        signRow.anchoredPosition = new Vector2(0f, -124f);
+
+        var signInHolder = PanelObject("Sign In Holder", signRow, new Color(0, 0, 0, 0));
+        Stretch(signInHolder, Vector2.zero, new Vector2(0.44f, 1f), Vector2.zero, Vector2.zero);
+        AddButton(signInHolder, accountBusy ? "Working..." : "Sign In", SignInWithEmailClicked, !accountBusy, false, true);
+
+        var stayHolder = PanelObject("Stay Holder", signRow, new Color(0, 0, 0, 0));
+        Stretch(stayHolder, new Vector2(0.5f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        AddButton(stayHolder, (AccountManager.StaySignedIn ? "[x] " : "[ ] ") + "Stay signed in",
             () => { AccountManager.StaySignedIn = !AccountManager.StaySignedIn; RenderMenu(); }, true, false, true);
 
-        AddCenteredButton(panel, accountBusy ? "Working..." : "Sign In", SignInWithEmailClicked,
-            -164f, 160f, 38f, !accountBusy);
         AddCenteredButton(panel, "New here? Create an account",
             () => { accountGateSignInMode = false; accountError = null; RenderMenu(); },
-            -210f, 240f, 36f);
+            -174f, 240f, 36f);
 
         if (!string.IsNullOrEmpty(accountError))
         {
             var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
             err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -292f), new Vector2(-24f, -252f));
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -266f), new Vector2(-24f, -218f));
         }
     }
 
@@ -1838,12 +1882,17 @@ public class MainMenuManager : MonoBehaviour
         // Guest view spreads across the full stage width; the account forms keep
         // the narrower half-width column that suits stacked input fields.
         var panel = PanelObject("Account Settings Panel", stage, new Color32(8, 16, 24, 153));
-        Stretch(panel, Vector2.zero, new Vector2(AccountManager.IsGuest ? 1f : 0.5f, 1f), Vector2.zero, new Vector2(0f, -titleH));
+        // Full-width for the "browse" views (guest info, linked-account summary);
+        // half-width column only for the stacked-input forms (link email, reset).
+        bool wideSettings = AccountManager.IsGuest
+            || (AccountManager.HasEmailLinked && !accountSettingsResetMode && !accountSettingsRecoveryMode);
+        Stretch(panel, Vector2.zero, new Vector2(wideSettings ? 1f : 0.5f, 1f), Vector2.zero, new Vector2(0f, -titleH));
         Round(panel);
         AddRoundedCardBorder(panel, MenuB, 1f);
 
         if (AccountManager.IsGuest) BuildGuestSettingsFields(panel);
         else if (accountSettingsResetMode) BuildPasswordResetFields(panel);
+        else if (accountSettingsRecoveryMode) BuildRecoveryEmailFields(panel);
         else if (AccountManager.HasEmailLinked) BuildEmailLinkedSummary(panel);
         else BuildLinkEmailFields(panel);
     }
@@ -1927,14 +1976,69 @@ public class MainMenuManager : MonoBehaviour
 
     private void BuildEmailLinkedSummary(RectTransform panel)
     {
-        var header = TextObject("Header", panel, "RECOVERY", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        // Mirrors the guest-mode page's full-width, center-aligned layout: identity
+        // block up top, a row of status/action cards, sign-out anchored at the bottom.
+        var header = TextObject("Header", panel, "ACCOUNT", 13, Muted, TextAnchor.UpperCenter, monoFont);
         header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -48f), new Vector2(-24f, -26f));
 
-        var body = TextObject("Body", panel, "A recovery email is linked to this account.",
-            12, Ink, TextAnchor.UpperLeft, monoFont);
-        body.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(body.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -66f), new Vector2(-16f, -46f));
+        var signedAs = TextObject("Signed In Label", panel, "SIGNED IN AS", 10, Muted, TextAnchor.UpperCenter, monoFont);
+        Stretch(signedAs.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -96f), new Vector2(-24f, -78f));
+
+        var nameText = TextObject("Account Name", panel, AccountManager.CurrentUsername ?? DefaultPlayerName, 28, Ink, TextAnchor.UpperCenter);
+        nameText.fontStyle = FontStyle.Bold;
+        Stretch(nameText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -138f), new Vector2(-24f, -98f));
+
+        var note = TextObject("Account Note", panel,
+            "A recovery email is linked - you can sign in with your name or email on any device, and your match history follows your account.",
+            11, Muted, TextAnchor.UpperCenter, monoFont);
+        note.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(note.rectTransform, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -196f), new Vector2(0f, -146f));
+
+        var divider = PanelObject("Divider", panel, new Color32(255, 255, 255, 20));
+        Stretch(divider, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -219f), new Vector2(0f, -218f));
+
+        // Status/action cards, same geometry as the guest page's locked-feature row.
+        const float cardTop = -248f, cardBottom = -372f;
+        string emailsDesc =
+            $"Main: {AccountManager.PrimaryEmail ?? "on file"}\nRecovery: {AccountManager.RecoveryEmail ?? "not set"}";
+        (string title, string desc, string action)[] cards =
+        {
+            ("Emails", emailsDesc + "\nEither address works for sign-in and reset codes.",
+                AccountManager.RecoveryEmail == null ? "Add Recovery Email" : "Change Recovery Email"),
+            ("Password", "Change it any time - a reset code is emailed to your addresses.", "Reset Password"),
+            ("Session", "Stay signed in between launches, or require a sign-in every time.", "toggle"),
+        };
+        for (int i = 0; i < cards.Length; i++)
+        {
+            float xMin = 0.06f + i * 0.30f;
+            float xMax = xMin + 0.26f;
+            var card = PanelObject($"Account Card {i}", panel, new Color32(8, 16, 26, 200));
+            Stretch(card, new Vector2(xMin, 1f), new Vector2(xMax, 1f), new Vector2(0f, cardBottom), new Vector2(0f, cardTop));
+            Round(card);
+            AddRoundedCardBorder(card, MenuB, 1f);
+
+            var cardTitle = TextObject($"Card Title {i}", card, cards[i].title, 13, Ink, TextAnchor.UpperCenter);
+            cardTitle.fontStyle = FontStyle.Bold;
+            Stretch(cardTitle.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(10f, -36f), new Vector2(-10f, -12f));
+
+            var cardDesc = TextObject($"Card Desc {i}", card, cards[i].desc, 10, Muted, TextAnchor.UpperCenter, monoFont);
+            cardDesc.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(cardDesc.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(10f, -84f), new Vector2(-10f, -38f));
+
+            var btnHolder = PanelObject($"Card Btn {i}", card, new Color(0, 0, 0, 0));
+            Stretch(btnHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(12f, 12f), new Vector2(-12f, 44f));
+            if (cards[i].action == "toggle")
+                AddButton(btnHolder, (AccountManager.StaySignedIn ? "[x] " : "[ ] ") + "Stay signed in",
+                    () => { AccountManager.StaySignedIn = !AccountManager.StaySignedIn; RenderMenu(); }, true, false, true);
+            else if (cards[i].action == "Reset Password")
+                AddButton(btnHolder, "Reset Password",
+                    () => { accountSettingsResetMode = true; accountError = null; RenderMenu(); }, !accountBusy, false, true);
+            else
+                AddButton(btnHolder, cards[i].action,
+                    () => { accountSettingsRecoveryMode = true; recoveryEmailInput = ""; accountError = null; RenderMenu(); },
+                    !accountBusy, false, true);
+        }
 
         AddSignOutRow(panel);
     }
@@ -1943,14 +2047,18 @@ public class MainMenuManager : MonoBehaviour
     {
         if (!string.IsNullOrEmpty(accountError))
         {
-            var err = TextObject("SignOut Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            var err = TextObject("SignOut Error", panel, accountError, 11, RedAccent, TextAnchor.MiddleCenter, monoFont);
             err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 100f));
+            Stretch(err.rectTransform, new Vector2(0.15f, 0f), new Vector2(0.85f, 0f), new Vector2(0f, 76f), new Vector2(0f, 122f));
         }
 
         var signOutHolder = PanelObject("Sign Out Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(signOutHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, -14f), new Vector2(-16f, 16f));
-        AddButton(signOutHolder, signOutArmed ? "Sign out anyway" : "Sign Out", SignOutClicked, !accountBusy, false);
+        signOutHolder.anchorMin = new Vector2(0.5f, 0f);
+        signOutHolder.anchorMax = new Vector2(0.5f, 0f);
+        signOutHolder.pivot     = new Vector2(0.5f, 0f);
+        signOutHolder.sizeDelta = new Vector2(220f, 40f);
+        signOutHolder.anchoredPosition = new Vector2(0f, 24f);
+        AddButton(signOutHolder, signOutArmed ? "Sign out anyway" : "Sign Out", SignOutClicked, !accountBusy, false, true);
     }
 
     private void SignOutClicked()
@@ -1960,7 +2068,7 @@ public class MainMenuManager : MonoBehaviour
         if (!AccountManager.HasEmailLinked && !signOutArmed)
         {
             signOutArmed = true;
-            accountError = "No recovery email is linked - signing out will permanently lose this account and its name. Click 'Sign out anyway' to confirm.";
+            accountError = "This account has no email & password yet, so there'd be no way to sign back in - the account and its name would be lost for good. Link an email above first, or click 'Sign out anyway' if you're sure.";
             RenderMenu();
             return;
         }
@@ -1987,8 +2095,13 @@ public class MainMenuManager : MonoBehaviour
         Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -70f), new Vector2(-16f, -46f));
 
         var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
-            InputField.ContentType.Password);
-        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -106f), new Vector2(-16f, -82f));
+            settingsPasswordVisible ? InputField.ContentType.Standard : InputField.ContentType.Password);
+        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -106f), new Vector2(-70f, -82f));
+
+        var eyeHolder = PanelObject("Eye Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(eyeHolder, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-66f, -106f), new Vector2(-16f, -82f));
+        AddButton(eyeHolder, settingsPasswordVisible ? "HIDE" : "SHOW",
+            () => { settingsPasswordVisible = !settingsPasswordVisible; RenderMenu(); }, true, false, true);
 
         if (!string.IsNullOrEmpty(accountError))
         {
@@ -1999,11 +2112,73 @@ public class MainMenuManager : MonoBehaviour
 
         var linkHolder = PanelObject("Link Holder", panel, new Color(0, 0, 0, 0));
         Stretch(linkHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
-        AddButton(linkHolder, accountBusy ? "Working..." : "Link Email", LinkEmailClicked, !accountBusy, false);
+        AddButton(linkHolder, accountBusy ? "Working..." : "Link Email", LinkEmailClicked, !accountBusy, false, true);
 
         var signOutHolder = PanelObject("Sign Out Holder", panel, new Color(0, 0, 0, 0));
         Stretch(signOutHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, -14f), new Vector2(-16f, 16f));
         AddButton(signOutHolder, signOutArmed ? "Sign out anyway" : "Sign Out", SignOutClicked, !accountBusy, false);
+    }
+
+    private void BuildRecoveryEmailFields(RectTransform panel)
+    {
+        var header = TextObject("Header", panel, "RECOVERY EMAIL", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        var hint = TextObject("Hint", panel,
+            "A second address for this account. Reset codes can be sent to it, and it works for email sign-in - useful if you ever lose access to your main inbox.",
+            11, Muted, TextAnchor.UpperLeft, monoFont);
+        hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -96f), new Vector2(-16f, -42f));
+
+        var emailField = MakeInput(panel, "recovery@example.com", recoveryEmailInput, s2 => recoveryEmailInput = s2, null);
+        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -138f), new Vector2(-16f, -104f));
+
+        if (!string.IsNullOrEmpty(accountError))
+        {
+            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -196f), new Vector2(-16f, -148f));
+        }
+
+        AddCenteredButton(panel, accountBusy ? "Working..." : "Save Recovery Email", SetRecoveryEmailClicked,
+            -204f, 220f, 38f, !accountBusy);
+        AddCenteredButton(panel, "< Back",
+            () => { accountSettingsRecoveryMode = false; accountError = null; RenderMenu(); },
+            -250f, 120f, 34f);
+    }
+
+    private async void SetRecoveryEmailClicked()
+    {
+        if (string.IsNullOrWhiteSpace(recoveryEmailInput) || !recoveryEmailInput.Contains("@"))
+        {
+            accountError = "Enter a valid email address.";
+            RenderMenu();
+            return;
+        }
+        accountBusy = true;
+        accountError = null;
+        RenderMenu();
+        try
+        {
+            var result = await AccountManager.SetRecoveryEmailAsync(recoveryEmailInput.Trim());
+            if (this == null || menuRoot == null) return;
+            if (result.Ok) accountSettingsRecoveryMode = false;
+            else accountError = result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            accountError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                accountBusy = false;
+                RenderMenu();
+            }
+        }
     }
 
     private void BuildPasswordResetFields(RectTransform panel)
@@ -2066,6 +2241,12 @@ public class MainMenuManager : MonoBehaviour
             RenderMenu();
             return;
         }
+        if (accountPasswordInput != accountPasswordConfirmInput)
+        {
+            accountError = "Passwords don't match - retype them to make sure.";
+            RenderMenu();
+            return;
+        }
         accountBusy = true;
         accountError = null;
         RenderMenu();
@@ -2075,12 +2256,23 @@ public class MainMenuManager : MonoBehaviour
             if (this == null || menuRoot == null) return;
             if (result.Ok)
             {
+                // A signed-in account that ALREADY has credentials (e.g. recovered via
+                // sign-in but missing a username) just needed the claim - trying to
+                // link again would fail with "already linked". Done.
+                if (AccountManager.HasEmailLinked)
+                {
+                    showingAccountGate = false;
+                    accountPasswordInput = "";
+                    accountError = null;
+                    return;
+                }
                 var linkResult = await AccountManager.LinkEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
                 if (this == null || menuRoot == null) return;
                 if (linkResult.Ok)
                 {
                     showingAccountGate = false;
                     accountPasswordInput = "";
+                    accountPasswordConfirmInput = "";
                     accountError = null;
                 }
                 else
@@ -2126,7 +2318,21 @@ public class MainMenuManager : MonoBehaviour
         {
             var result = await AccountManager.SignInWithEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
             if (this == null || menuRoot == null) return;
-            if (result.Ok) showingAccountGate = false;
+            if (result.Ok)
+            {
+                if (string.IsNullOrEmpty(AccountManager.CurrentUsername))
+                {
+                    // Recovered an account that has credentials but no claimed name
+                    // (possible after support-side data fixes): send them straight to
+                    // the claim screen instead of dropping them into the menu nameless.
+                    accountGateSignInMode = false;
+                    accountError = "Signed in! This account has no name yet - pick one to finish.";
+                }
+                else
+                {
+                    showingAccountGate = false;
+                }
+            }
             else accountError = result.Message;
         }
         catch (Exception ex)
@@ -3089,7 +3295,7 @@ public class MainMenuManager : MonoBehaviour
         RenderMenu();
         try
         {
-            var session = await LobbyManager.CreateLobbyAsync(lobbyNameInput, lobbyIsPrivate, AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName);
+            var session = await LobbyManager.CreateLobbyAsync(lobbyNameInput, lobbyIsPrivate, AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName);
             if (this == null || menuRoot == null) return;
             SubscribeToSessionEvents(session);
         }

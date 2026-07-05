@@ -8,5 +8,8 @@ ScriptedImporter:
   assetBundleName: 
   assetBundleVariant: 
   script: {fileID: 11500000, guid: fbc33bd6a5704c0881dc7a9ead54089b, type: 3}
-  Parameters: []
+  Parameters:
+  - Name: email
+    ParameterType: 0
+    Required: 1
   Source: 0

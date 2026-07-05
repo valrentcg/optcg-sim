@@ -94,17 +94,43 @@ public static class DeckStore
 {
     public const int MaxDecks = 36;   // radius-3 hex roster: 36 slots around the RANDOM centre
 
-    private static string Dir  => Path.Combine(Application.persistentDataPath, "Decks");
+    // Decks are per-identity (account player id / guest key) so accounts and
+    // guests on the same machine each have their own roster - see the matching
+    // scoping in ReplayStore. Legacy Decks/decks.json is migrated into the first
+    // signed-in account's folder; guests start with an empty roster.
+    private static string RootDir => Path.Combine(Application.persistentDataPath, "Decks");
+    private static string Dir  => Path.Combine(RootDir, AccountManager.CurrentIdentityKey);
     private static string File_ => Path.Combine(Dir, "decks.json");
+    private static string LegacyFile => Path.Combine(RootDir, "decks.json");
 
     public static string ActiveDeckId;   // which deck the menu/solo game uses
 
     private static List<DeckData> _cache;
+    private static string _cacheIdentity; // identity the cache was loaded for
+
+    private static void MigrateLegacyIfNeeded(string ident)
+    {
+        try
+        {
+            if (ident == "local" || ident.StartsWith("guest_")) return;
+            if (File.Exists(File_) || !File.Exists(LegacyFile)) return;
+            Directory.CreateDirectory(Dir);
+            File.Move(LegacyFile, File_);
+            Debug.Log("DeckStore: migrated legacy decks to account folder.");
+        }
+        catch (Exception e) { Debug.LogWarning("Deck migration failed: " + e.Message); }
+    }
 
     public static List<DeckData> All()
     {
-        if (_cache != null) return _cache;
+        string ident = AccountManager.CurrentIdentityKey;
+        if (_cache != null && _cacheIdentity == ident) return _cache;
+        // Identity changed (sign-in, sign-out, guest switch): drop everything the
+        // previous user had in memory, including which deck was active.
+        if (_cacheIdentity != null && _cacheIdentity != ident) ActiveDeckId = null;
+        _cacheIdentity = ident;
         _cache = new List<DeckData>();
+        MigrateLegacyIfNeeded(ident);
         try
         {
             if (File.Exists(File_))

@@ -33,7 +33,12 @@ public static class LobbyManager
         await EnsureServicesInitializedAsync();
 
         if (AuthenticationService.Instance.IsSignedIn) return;
-        _signInTask ??= AuthenticationService.Instance.SignInAnonymouslyAsync();
+        // NOT ??= : after a SignOut the cached task is completed-but-useless, and
+        // reusing it means no re-sign-in ever happens - every Cloud Code call then
+        // fails with "Player ID is missing". Start fresh whenever the cached task
+        // can no longer produce a signed-in session.
+        if (_signInTask == null || _signInTask.IsCompleted)
+            _signInTask = AuthenticationService.Instance.SignInAnonymouslyAsync();
         await _signInTask;
     }
 

@@ -28,6 +28,21 @@ const axios = require("axios-0.21");
 const { DataApi } = require("@unity-services/cloud-save-1.4");
 
 const CUSTOM_ID_EMAIL_REGISTRY = "emailRegistry";
+
+// Cloud Save keys only allow [A-Za-z0-9-_], so a raw email ("a@b.com") is an
+// ILLEGAL key and every write/lookup using one is rejected on validation.
+// Encode the (lowercased) email to hex for use as the registry key; the plain
+// address is kept in the value for debugging. All scripts touching
+// emailRegistry (RegisterEmailForRecovery / GetLoginNameForEmail /
+// RequestPasswordReset) must use this same derivation.
+function emailKey(email) {
+  let hex = "";
+  for (let i = 0; i < email.length; i++) {
+    hex += email.charCodeAt(i).toString(16).padStart(2, "0");
+  }
+  return "e_" + hex;
+}
+
 const CUSTOM_ID_PASSWORD_RESETS = "passwordResets";
 const TOKEN_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const TOKEN_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -58,10 +73,15 @@ module.exports = async ({ params, context, logger, secretManager }) => {
 
   const cloudSaveApi = new DataApi(context);
 
-  const lookup = await cloudSaveApi.getCustomItems(projectId, CUSTOM_ID_EMAIL_REGISTRY, [
-    email,
-  ]);
-  const entry = lookup.data.results.find((item) => item.key === email);
+  let entry;
+  try {
+    const lookup = await cloudSaveApi.getCustomItems(projectId, CUSTOM_ID_EMAIL_REGISTRY, [
+      emailKey(email),
+    ]);
+    entry = lookup.data.results.find((item) => item.key === emailKey(email));
+  } catch (err) {
+    entry = undefined; // registry entity missing = no account for this email
+  }
 
   // No account for this email - report success anyway, send nothing.
   if (!entry) {
