@@ -211,7 +211,7 @@ namespace OnePieceTcg.Engine
             ["st01"] = new DeckDef
             {
                 Id = "st01",
-                Name = "ST01 - Straw Hat Crew",
+                Name = "Straw Hat Crew",
                 Leader = "ST01-001",
                 List = new List<(string, int)>
                 {
@@ -225,7 +225,7 @@ namespace OnePieceTcg.Engine
             ["st02"] = new DeckDef
             {
                 Id = "st02",
-                Name = "ST02 - Worst Generation",
+                Name = "Worst Generation",
                 Leader = "ST02-001",
                 List = new List<(string, int)>
                 {
@@ -239,7 +239,7 @@ namespace OnePieceTcg.Engine
             ["st03"] = new DeckDef
             {
                 Id = "st03",
-                Name = "ST03 - The Seven Warlords of the Sea",
+                Name = "The Seven Warlords of the Sea",
                 Leader = "ST03-001",
                 List = new List<(string, int)>
                 {
@@ -252,7 +252,7 @@ namespace OnePieceTcg.Engine
             ["st04"] = new DeckDef
             {
                 Id = "st04",
-                Name = "ST04 - Animal Kingdom Pirates",
+                Name = "Animal Kingdom Pirates",
                 Leader = "ST04-001",
                 List = new List<(string, int)>
                 {
@@ -265,7 +265,7 @@ namespace OnePieceTcg.Engine
             ["st05"] = new DeckDef
             {
                 Id = "st05",
-                Name = "ST05 - ONE PIECE FILM edition",
+                Name = "ONE PIECE FILM edition",
                 Leader = "ST05-001",
                 List = new List<(string, int)>
                 {
@@ -278,7 +278,7 @@ namespace OnePieceTcg.Engine
             ["st06"] = new DeckDef
             {
                 Id = "st06",
-                Name = "ST06 - Absolute Justice",
+                Name = "Absolute Justice",
                 Leader = "ST06-001",
                 List = new List<(string, int)>
                 {
@@ -291,7 +291,7 @@ namespace OnePieceTcg.Engine
             ["st07"] = new DeckDef
             {
                 Id = "st07",
-                Name = "ST07 - Big Mom Pirates",
+                Name = "Big Mom Pirates",
                 Leader = "ST07-001",
                 List = new List<(string, int)>
                 {
@@ -304,7 +304,7 @@ namespace OnePieceTcg.Engine
             ["st08"] = new DeckDef
             {
                 Id = "st08",
-                Name = "ST08 - Monkey D. Luffy",
+                Name = "Monkey D. Luffy",
                 Leader = "ST08-001",
                 List = new List<(string, int)>
                 {
@@ -317,7 +317,7 @@ namespace OnePieceTcg.Engine
             ["st09"] = new DeckDef
             {
                 Id = "st09",
-                Name = "ST09 - Yamato",
+                Name = "Yamato",
                 Leader = "ST09-001",
                 List = new List<(string, int)>
                 {
@@ -333,7 +333,7 @@ namespace OnePieceTcg.Engine
             ["st10"] = new DeckDef
             {
                 Id = "st10",
-                Name = "ST10 - The Three Captains",
+                Name = "The Three Captains",
                 Leader = "ST10-001",
                 List = new List<(string, int)>
                 {
@@ -346,7 +346,7 @@ namespace OnePieceTcg.Engine
             ["st11"] = new DeckDef
             {
                 Id = "st11",
-                Name = "ST11 - Uta",
+                Name = "Uta",
                 Leader = "ST11-001",
                 List = new List<(string, int)>
                 {
@@ -359,7 +359,7 @@ namespace OnePieceTcg.Engine
             ["st12"] = new DeckDef
             {
                 Id = "st12",
-                Name = "ST12 - Zoro and Sanji",
+                Name = "Zoro and Sanji",
                 Leader = "ST12-001",
                 List = new List<(string, int)>
                 {
@@ -372,7 +372,7 @@ namespace OnePieceTcg.Engine
             ["st13"] = new DeckDef
             {
                 Id = "st13",
-                Name = "ST13 - The Three Brothers",
+                Name = "The Three Brothers",
                 Leader = "ST13-001",
                 List = new List<(string, int)>
                 {
@@ -385,7 +385,7 @@ namespace OnePieceTcg.Engine
             ["st14"] = new DeckDef
             {
                 Id = "st14",
-                Name = "ST14 - 3D2Y",
+                Name = "3D2Y",
                 Leader = "ST14-001",
                 List = new List<(string, int)>
                 {
@@ -401,7 +401,7 @@ namespace OnePieceTcg.Engine
             ["st15"] = new DeckDef
             {
                 Id = "st15",
-                Name = "ST15 - Edward.Newgate",
+                Name = "Edward.Newgate",
                 Leader = "OP02-001",
                 List = new List<(string, int)>
                 {
@@ -416,7 +416,7 @@ namespace OnePieceTcg.Engine
             ["st16"] = new DeckDef
             {
                 Id = "st16",
-                Name = "ST16 - GREEN Uta",
+                Name = "Uta",
                 Leader = "ST11-001",
                 List = new List<(string, int)>
                 {
@@ -432,7 +432,7 @@ namespace OnePieceTcg.Engine
             ["st17"] = new DeckDef
             {
                 Id = "st17",
-                Name = "ST17 - Blue Donquixote Doflamingo",
+                Name = "Donquixote Doflamingo",
                 Leader = "OP01-060",
                 List = new List<(string, int)>
                 {
@@ -444,7 +444,7 @@ namespace OnePieceTcg.Engine
             ["st18"] = new DeckDef
             {
                 Id = "st18",
-                Name = "ST18 - Purple Monkey.D.Luffy",
+                Name = "Monkey.D.Luffy",
                 Leader = "OP05-060",
                 List = new List<(string, int)>
                 {
@@ -456,7 +456,7 @@ namespace OnePieceTcg.Engine
             ["st19"] = new DeckDef
             {
                 Id = "st19",
-                Name = "ST19 - Black Smoker",
+                Name = "Smoker",
                 Leader = "OP02-093",
                 List = new List<(string, int)>
                 {
@@ -468,7 +468,7 @@ namespace OnePieceTcg.Engine
             ["st20"] = new DeckDef
             {
                 Id = "st20",
-                Name = "ST20 - Yellow Charlotte Katakuri",
+                Name = "Charlotte Katakuri",
                 Leader = "OP03-099",
                 List = new List<(string, int)>
                 {
@@ -480,7 +480,7 @@ namespace OnePieceTcg.Engine
             ["st21"] = new DeckDef
             {
                 Id = "st21",
-                Name = "ST21 - Starter Deck EX -GEAR5-",
+                Name = "Starter Deck EX -GEAR5-",
                 Leader = "ST21-001",
                 List = new List<(string, int)>
                 {
@@ -493,7 +493,7 @@ namespace OnePieceTcg.Engine
             ["st22"] = new DeckDef
             {
                 Id = "st22",
-                Name = "ST22 - Ace & Newgate",
+                Name = "Ace & Newgate",
                 Leader = "ST22-001",
                 List = new List<(string, int)>
                 {
@@ -510,7 +510,7 @@ namespace OnePieceTcg.Engine
             ["st23"] = new DeckDef
             {
                 Id = "st23",
-                Name = "ST23 - RED Shanks",
+                Name = "Shanks",
                 Leader = "OP09-001",
                 List = new List<(string, int)>
                 {
@@ -522,7 +522,7 @@ namespace OnePieceTcg.Engine
             ["st24"] = new DeckDef
             {
                 Id = "st24",
-                Name = "ST24 - GREEN Jewelry Bonney",
+                Name = "Jewelry Bonney",
                 Leader = "OP07-019",
                 List = new List<(string, int)>
                 {
@@ -534,7 +534,7 @@ namespace OnePieceTcg.Engine
             ["st25"] = new DeckDef
             {
                 Id = "st25",
-                Name = "ST25 - BLUE Buggy",
+                Name = "Buggy",
                 Leader = "OP09-042",
                 List = new List<(string, int)>
                 {
@@ -546,7 +546,7 @@ namespace OnePieceTcg.Engine
             ["st26"] = new DeckDef
             {
                 Id = "st26",
-                Name = "ST26 - PURPLE/BLACK Monkey.D.Luffy",
+                Name = "Monkey.D.Luffy",
                 Leader = "OP09-061",
                 List = new List<(string, int)>
                 {
@@ -558,7 +558,7 @@ namespace OnePieceTcg.Engine
             ["st27"] = new DeckDef
             {
                 Id = "st27",
-                Name = "ST27 - BLACK Marshall.D.Teach",
+                Name = "Marshall.D.Teach",
                 Leader = "OP09-081",
                 List = new List<(string, int)>
                 {
@@ -570,7 +570,7 @@ namespace OnePieceTcg.Engine
             ["st28"] = new DeckDef
             {
                 Id = "st28",
-                Name = "ST28 - GREEN/YELLOW Yamato",
+                Name = "Yamato",
                 Leader = "OP06-022",
                 List = new List<(string, int)>
                 {
@@ -582,7 +582,7 @@ namespace OnePieceTcg.Engine
             ["st29"] = new DeckDef
             {
                 Id = "st29",
-                Name = "ST29 - Egghead",
+                Name = "Egghead",
                 Leader = "ST29-001",
                 List = new List<(string, int)>
                 {
@@ -595,7 +595,7 @@ namespace OnePieceTcg.Engine
             ["st30"] = new DeckDef
             {
                 Id = "st30",
-                Name = "ST30 - Luffy & Ace",
+                Name = "Luffy & Ace",
                 Leader = "ST30-001",
                 List = new List<(string, int)>
                 {
@@ -611,7 +611,7 @@ namespace OnePieceTcg.Engine
             ["lt01luffy"] = new DeckDef
             {
                 Id = "lt01luffy",
-                Name = "LT01 - Luffy (Learn Together)",
+                Name = "Luffy (Learn Together)",
                 Leader = "ST21-001",
                 List = new List<(string, int)>
                 {
@@ -624,7 +624,7 @@ namespace OnePieceTcg.Engine
             ["lt01zoro"] = new DeckDef
             {
                 Id = "lt01zoro",
-                Name = "LT01 - Zoro (Learn Together)",
+                Name = "Zoro (Learn Together)",
                 Leader = "OP12-020",
                 List = new List<(string, int)>
                 {
@@ -637,7 +637,7 @@ namespace OnePieceTcg.Engine
             ["lt01nami"] = new DeckDef
             {
                 Id = "lt01nami",
-                Name = "LT01 - Nami (Learn Together)",
+                Name = "Nami (Learn Together)",
                 Leader = "OP11-041",
                 List = new List<(string, int)>
                 {
@@ -677,16 +677,19 @@ namespace OnePieceTcg.Engine
             ["st27"] = "OP09-081_p2",
             ["st28"] = "OP06-022_p3",
 
-            // The following use Bandai's own SAMPLE-watermarked preview image - no clean
+            // st16/st19/st20/lt01nami: clean (non-SAMPLE) art sourced directly from
+            // oppp.online on 2026-07-05, replacing the earlier SAMPLE-watermarked placeholders.
+            ["st16"] = "ST11-001_p1",
+            ["st19"] = "OP02-093_p2",
+            ["st20"] = "OP03-099_p2",
+            ["lt01nami"] = "OP11-041_p2",
+
+            // st15 still uses Bandai's own SAMPLE-watermarked preview image - no clean
             // source exists at adequate resolution: no glare-free photo anywhere, and the
             // only promo art available (the older st15-20.php mv_01.jpg collage) is lower
             // resolution than the card render itself, so warping it in would look blurry
             // rather than clean. Watermark was judged the lesser evil.
             ["st15"] = "OP02-001_p2",
-            ["st16"] = "ST11-001_p1",
-            ["st19"] = "OP02-093_p2",
-            ["st20"] = "OP03-099_p2",
-            ["lt01nami"] = "OP11-041_p2",
         };
 
         // Ruleset constants (mirrors OP_RULESET).

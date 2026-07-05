@@ -16,7 +16,9 @@ using UnityEngine.InputSystem.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
-public class MainMenuManager : MonoBehaviour
+// NOTE: declared partial — the My Profile stage (player-scouting handoff) lives in
+// MainMenuManager.Profile.cs to keep this file from growing further.
+public partial class MainMenuManager : MonoBehaviour
 {
     // ── Palette — exact Color32 constants from GameManager ─────────────────────
     private static readonly Color Ink        = new Color32(238, 242, 247, 255);
@@ -301,7 +303,11 @@ public class MainMenuManager : MonoBehaviour
                 if (tex.LoadImage(File.ReadAllBytes(p)))
                 {
                     tex.filterMode = FilterMode.Trilinear;
-                    tex.anisoLevel = 4;
+                    tex.anisoLevel = 8;
+                    // Same sharpness fix as GameManager.LoadFile / DeckBuilder's decode
+                    // queue: bias trilinear sampling toward the larger mip so downscaled
+                    // menu art stays crisp instead of blending into the mushy lower mip.
+                    tex.mipMapBias = -0.75f;
                     sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
                 }
             }
@@ -494,26 +500,29 @@ public class MainMenuManager : MonoBehaviour
         line.anchoredPosition = Vector2.zero;
         line.GetComponent<Image>().raycastTarget = false;
 
-        // ── Left — player identity ──────────────────────────────────────────
-        var identity = PanelObject("Identity", bar, new Color(0, 0, 0, 0));
-        Stretch(identity, Vector2.zero, new Vector2(0.32f, 1f), new Vector2(18f, 6f), new Vector2(0f, -6f));
+        // ── Left — player identity (click → My Profile stage) ───────────────
+        var identity = PanelObject("Identity", bar,
+            showingProfile ? new Color(Accent.r, Accent.g, Accent.b, 0.12f) : new Color(0, 0, 0, 0));
+        Stretch(identity, Vector2.zero, new Vector2(0.32f, 1f), new Vector2(12f, 6f), new Vector2(0f, -6f));
+        Round(identity);
+        if (showingProfile)
+            AddRoundedCardBorder(identity, new Color(Accent.r, Accent.g, Accent.b, 0.40f), 1.5f);
+        var identityBtn = identity.gameObject.AddComponent<Button>();
+        identityBtn.onClick.AddListener(OpenMyProfile);
 
-        // Diamond avatar (rotated 45°, green fill placeholder)
-        var avatar = PanelObject("Avatar Diamond", identity, new Color32(31, 138, 91, 255));
-        avatar.anchorMin = new Vector2(0f, 0.5f);
-        avatar.anchorMax = new Vector2(0f, 0.5f);
-        avatar.pivot     = new Vector2(0f, 0.5f);
-        avatar.sizeDelta = new Vector2(30f, 30f);
-        avatar.anchoredPosition = new Vector2(2f, 0f);
-        avatar.localRotation = Quaternion.Euler(0f, 0f, 45f);
-        Round(avatar);
+        // Circular avatar showing the player's chosen profile icon (face-crop of
+        // card art; picker lives in MainMenuManager.IconPicker.cs). Falls back to
+        // a steel circle with the player's initial when no icon is set.
+        BuildCircleFaceIcon(identity, EffectiveProfileIconId(), 34f, new Vector2(6f, 0f));
+        KickProfileIconCloudRefresh();
 
         var nameText = TextObject("PlayerName", identity, AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName, 15, Ink, TextAnchor.LowerLeft);
         nameText.fontStyle = FontStyle.Bold;
-        Stretch(nameText.rectTransform, new Vector2(0f, 0.5f), Vector2.one, new Vector2(46f, 2f), Vector2.zero);
+        nameText.raycastTarget = false;
+        Stretch(nameText.rectTransform, new Vector2(0f, 0.5f), Vector2.one, new Vector2(52f, 2f), Vector2.zero);
 
-        var subText = TextObject("PlayerSub", identity, "CAPTAIN  ·  LV 12", 10, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(subText.rectTransform, Vector2.zero, new Vector2(1f, 0.5f), new Vector2(46f, 0f), new Vector2(0f, -2f));
+        var subText = TextObject("PlayerSub", identity, "CAPTAIN  ·  VIEW PROFILE", 10, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(subText.rectTransform, Vector2.zero, new Vector2(1f, 0.5f), new Vector2(52f, 0f), new Vector2(0f, -2f));
 
         // ── Center — wordmark (absolutely centered) ─────────────────────────
         var wordmark = PanelObject("Wordmark", bar, new Color(0, 0, 0, 0));
@@ -583,6 +592,8 @@ public class MainMenuManager : MonoBehaviour
         Stretch(stage, Vector2.zero, Vector2.one, new Vector2(254f, 0f), Vector2.zero);
         if (showingAccountSettings) BuildAccountSettingsStage(stage);
         else if (showingFriends) BuildFriendsStage(stage);
+        else if (showingProfileIcon) BuildProfileIconStage(stage);
+        else if (showingProfile) BuildProfileStage(stage);
         else if (showingReplays) BuildReplayStage(stage);
         else if (showingLobbyHub) BuildLobbyStage(stage);
         else BuildStage(stage);
@@ -1556,7 +1567,11 @@ public class MainMenuManager : MonoBehaviour
                 if (tex.LoadImage(File.ReadAllBytes(thumbPath)))
                 {
                     tex.filterMode = FilterMode.Trilinear;
-                    tex.anisoLevel = 4;
+                    tex.anisoLevel = 8;
+                    // Same sharpness fix as GameManager.LoadFile / DeckBuilder's decode
+                    // queue: bias trilinear sampling toward the larger mip so downscaled
+                    // menu art stays crisp instead of blending into the mushy lower mip.
+                    tex.mipMapBias = -0.75f;
                     sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
                 }
             }
@@ -1612,6 +1627,7 @@ public class MainMenuManager : MonoBehaviour
 
     private void OpenAccountSettings()
     {
+        showingProfile = false;
         showingAccountSettings = true;
         accountSettingsResetMode = false;
         accountSettingsRecoveryMode = false;
@@ -2529,6 +2545,7 @@ public class MainMenuManager : MonoBehaviour
     {
         showingAccountSettings = false;
         showingReplays = false;
+        showingProfile = false;
         showingFriends = true;
         friendsError = null;
         RenderMenu();
@@ -3446,7 +3463,7 @@ public class MainMenuManager : MonoBehaviour
         // Five nav rows
         var rows = new (string title, string subtitle, string tag, bool active)[]
         {
-            ("Play",     "Game modes",          null,       !showingReplays && !showingFriends),
+            ("Play",     "Game modes",          null,       !showingReplays && !showingFriends && !showingProfile),
             ("Decks",    "Build & edit",        null,       false),
             ("Match History", "Watch past matches", null,   showingReplays),
             ("Friends",  "Crew & invites",      FriendsOnlineSubtitle(), showingFriends),
@@ -3455,10 +3472,11 @@ public class MainMenuManager : MonoBehaviour
 
         UnityEngine.Events.UnityAction[] actions =
         {
-            () => { showingAccountSettings = false; showingFriends = false; showingReplays = false; RenderMenu(); },
+            () => { showingAccountSettings = false; showingFriends = false; showingReplays = false;
+                    showingProfile = false; RenderMenu(); },
             () => OpenDeckBuilder(),
-            () => { showingAccountSettings = false; showingFriends = false; showingReplays = true;
-                    selectedMatchId = null; matchHistory = null; RenderMenu(); },
+            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false;
+                    showingReplays = true; selectedMatchId = null; matchHistory = null; RenderMenu(); },
             OpenFriends,
             OpenAccountSettings,
         };

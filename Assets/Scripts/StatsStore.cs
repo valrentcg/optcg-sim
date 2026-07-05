@@ -41,6 +41,30 @@ public sealed class LeaderStat
     public int wins;
 }
 
+/// <summary>Per-(own leader, opponent leader) running record — feeds the My Profile
+/// Deck History matchup grid. Added after launch: older buckets deserialize with an
+/// empty list (JsonUtility default), so the grid starts filling from the first match
+/// played after this shipped.</summary>
+[Serializable]
+public sealed class MatchupStat
+{
+    public string ownLeaderId;
+    public string oppLeaderId;
+    public int games;
+    public int wins;
+}
+
+/// <summary>Per-(UTC month, own leader) running record — feeds the My Profile
+/// Deck History lifetime chart (games bars + win-rate line). ym is "yyyy-MM".</summary>
+[Serializable]
+public sealed class MonthStat
+{
+    public string ym;
+    public string leaderId;
+    public int games;
+    public int wins;
+}
+
 [Serializable]
 public sealed class StatsBucket
 {
@@ -61,6 +85,13 @@ public sealed class StatsBucket
     // FACED (matchup winrates). Linear scans are fine at this scale (~50 ids).
     public List<LeaderStat> byOwnLeader = new List<LeaderStat>();
     public List<LeaderStat> byOpponentLeader = new List<LeaderStat>();
+
+    // Deck-scoped detail for the My Profile Deck History tab: per-(own leader ×
+    // opp leader) matchup records, and per-(month × own leader) play/win counts.
+    // Same running-aggregate rule as everything else in this file: incremented
+    // once per finished match in Apply(), never recomputed from history.
+    public List<MatchupStat> matchups = new List<MatchupStat>();
+    public List<MonthStat> months = new List<MonthStat>();
 
     public float WinRate => games == 0 ? 0f : (float)wins / games;
 }
@@ -207,6 +238,48 @@ public static class StatsStore
 
         Bump(bucket.byOwnLeader, summary.youLeaderId, won);
         Bump(bucket.byOpponentLeader, summary.oppLeaderId, won);
+        BumpMatchup(bucket, summary.youLeaderId, summary.oppLeaderId, won);
+        BumpMonth(bucket, summary.youLeaderId, MonthFromIso(summary.savedAtIso), won);
+    }
+
+    // "yyyy-MM" (UTC) from the summary's save timestamp; falls back to the
+    // current UTC month for malformed/missing timestamps so the increment is
+    // never dropped.
+    public static string MonthFromIso(string iso)
+    {
+        if (!string.IsNullOrEmpty(iso) &&
+            DateTime.TryParse(iso, null, System.Globalization.DateTimeStyles.AdjustToUniversal
+                | System.Globalization.DateTimeStyles.AssumeUniversal, out var dt))
+            return dt.ToString("yyyy-MM");
+        return DateTime.UtcNow.ToString("yyyy-MM");
+    }
+
+    private static void BumpMatchup(StatsBucket bucket, string ownLeaderId, string oppLeaderId, bool won)
+    {
+        if (string.IsNullOrEmpty(ownLeaderId) || string.IsNullOrEmpty(oppLeaderId)) return;
+        if (bucket.matchups == null) bucket.matchups = new List<MatchupStat>();
+        var entry = bucket.matchups.Find(e => e.ownLeaderId == ownLeaderId && e.oppLeaderId == oppLeaderId);
+        if (entry == null)
+        {
+            entry = new MatchupStat { ownLeaderId = ownLeaderId, oppLeaderId = oppLeaderId };
+            bucket.matchups.Add(entry);
+        }
+        entry.games++;
+        if (won) entry.wins++;
+    }
+
+    private static void BumpMonth(StatsBucket bucket, string leaderId, string ym, bool won)
+    {
+        if (string.IsNullOrEmpty(leaderId) || string.IsNullOrEmpty(ym)) return;
+        if (bucket.months == null) bucket.months = new List<MonthStat>();
+        var entry = bucket.months.Find(e => e.ym == ym && e.leaderId == leaderId);
+        if (entry == null)
+        {
+            entry = new MonthStat { ym = ym, leaderId = leaderId };
+            bucket.months.Add(entry);
+        }
+        entry.games++;
+        if (won) entry.wins++;
     }
 
     private static void Bump(List<LeaderStat> list, string leaderId, bool won)

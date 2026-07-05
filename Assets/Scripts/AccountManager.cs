@@ -123,6 +123,81 @@ public static class AccountManager
         PlayerPrefs.Save();
     }
 
+    // ── Profile icon (client avatar) ─────────────────────────────────────────
+    // The card id whose face-crop is shown as the player's avatar (top bar +
+    // My Profile). Same persistence shape as the username: a Cloud Save key so
+    // it follows the account across devices, plus a PlayerPrefs cache scoped by
+    // CurrentIdentityKey so the top bar can paint instantly at boot before the
+    // Cloud Save round-trip lands. Guests are PlayerPrefs-only (no account).
+    private const string ProfileIconCloudKey = "profileIcon";
+    private static string ProfileIconPrefKey => "account_profile_icon_" + CurrentIdentityKey;
+
+    /// <summary>Committed icon card id, or null for the default avatar.
+    /// Server value once EnsureProfileIconLoadedAsync has run; before that,
+    /// the local cache (which the server value then overwrites).</summary>
+    public static string ProfileIconId { get; private set; }
+
+    private static bool _profileIconLoadTried;
+
+    public static string CachedProfileIconId
+    {
+        get { var v = PlayerPrefs.GetString(ProfileIconPrefKey, ""); return string.IsNullOrEmpty(v) ? null : v; }
+    }
+
+    private static void CacheProfileIcon(string cardId)
+    {
+        if (string.IsNullOrEmpty(cardId)) PlayerPrefs.DeleteKey(ProfileIconPrefKey);
+        else PlayerPrefs.SetString(ProfileIconPrefKey, cardId);
+        PlayerPrefs.Save();
+    }
+
+    /// <summary>One-shot cloud refresh (no-op for guests / repeat calls).
+    /// Fire-and-forget from the menu; callers repaint on completion.</summary>
+    public static async Task EnsureProfileIconLoadedAsync()
+    {
+        if (ProfileIconId == null) ProfileIconId = CachedProfileIconId;
+        if (_profileIconLoadTried || IsGuest) return;
+        _profileIconLoadTried = true;
+        try
+        {
+            await EnsureReadyAsync();
+            var results = await Unity.Services.CloudSave.CloudSaveService.Instance.Data.Player
+                .LoadAsync(new HashSet<string> { ProfileIconCloudKey });
+            if (results.TryGetValue(ProfileIconCloudKey, out var item))
+            {
+                var v = item.Value.GetAs<string>();
+                ProfileIconId = string.IsNullOrEmpty(v) ? null : v;
+                CacheProfileIcon(ProfileIconId);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Offline: the cached value stands; next launch retries.
+            _profileIconLoadTried = false;
+            Debug.LogWarning($"Profile icon load failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Persist a new profile icon. Local cache + property update are
+    /// immediate (UI can repaint synchronously); the Cloud Save write is
+    /// best-effort, same never-throws policy as the stats stores.</summary>
+    public static async Task SetProfileIconAsync(string cardId)
+    {
+        ProfileIconId = string.IsNullOrEmpty(cardId) ? null : cardId;
+        CacheProfileIcon(ProfileIconId);
+        if (IsGuest) return;
+        try
+        {
+            await EnsureReadyAsync();
+            await Unity.Services.CloudSave.CloudSaveService.Instance.Data.Player.SaveAsync(
+                new Dictionary<string, object> { { ProfileIconCloudKey, ProfileIconId ?? "" } });
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Profile icon save failed (kept locally): {ex.Message}");
+        }
+    }
+
     [Serializable]
     private class EmailsBlob { public string primary; public string recovery; }
 
@@ -315,6 +390,11 @@ public static class AccountManager
         PrimaryEmail = null;
         RecoveryEmail = null;
         CacheUsername(null);
+        // Reset in-memory profile-icon state so the next sign-in loads THAT
+        // account's icon instead of showing this one (the PlayerPrefs cache is
+        // per-identity already; this clears the session-static copy).
+        ProfileIconId = null;
+        _profileIconLoadTried = false;
     }
 
     [Serializable]

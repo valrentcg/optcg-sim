@@ -330,7 +330,9 @@ internal class FaceMapFile
 // The builder
 // ════════════════════════════════════════════════════════════════════════════
 
-public class DeckBuilderManager : MonoBehaviour
+// NOTE: declared partial — the read-only Deck Showcase view (design handoff
+// design_handoff_deck_showcase) lives in DeckBuilderManager.Showcase.cs.
+public partial class DeckBuilderManager : MonoBehaviour
 {
     // ── Palette (identical to MainMenuManager) ────────────────────────────────
     private static readonly Color Ink        = new Color32(238, 242, 247, 255);
@@ -381,7 +383,7 @@ public class DeckBuilderManager : MonoBehaviour
     };
 
     // ── State ─────────────────────────────────────────────────────────────────
-    private enum View { Library, Editor, Select, Starter }
+    private enum View { Library, Editor, Select, Starter, Showcase }
     private View view = View.Library;
     private static bool _openAsSelect = false;
     // Starter-deck browser (ST01, ST02, ...): same leader/hex/decklist format as the
@@ -957,10 +959,11 @@ public class DeckBuilderManager : MonoBehaviour
         gradImg.type = Image.Type.Simple;
         gradImg.raycastTarget = false;
 
-        if      (view == View.Library) RenderLibrary();
-        else if (view == View.Select)  RenderSelect();
-        else if (view == View.Starter) RenderStarter();
-        else                           RenderEditor();
+        if      (view == View.Library)  RenderLibrary();
+        else if (view == View.Select)   RenderSelect();
+        else if (view == View.Starter)  RenderStarter();
+        else if (view == View.Showcase) RenderShowcase();
+        else                            RenderEditor();
 
         Canvas.ForceUpdateCanvases();
     }
@@ -1237,6 +1240,24 @@ public class DeckBuilderManager : MonoBehaviour
         {
             view = View.Starter; Render();
         });
+
+        // SHOWCASE (top-right, left of STARTER DECKS) — read-only shareable
+        // board for the currently selected deck (DeckBuilderManager.Showcase.cs).
+        if (DeckStore.Get(selectedDeckId) != null)
+        {
+            var showBtn = Panel("Showcase", root, new Color32(24, 38, 52, 200));
+            showBtn.anchorMin = showBtn.anchorMax = new Vector2(1f, 1f);
+            showBtn.pivot = new Vector2(1f, 1f);
+            showBtn.sizeDelta = new Vector2(130f, 38f);
+            showBtn.anchoredPosition = new Vector2(-24f - 170f - 10f - 150f - 10f, -13f);
+            Round(showBtn);
+            AddBorder(showBtn, MenuB, 1f);
+            var showT = Text_("t", showBtn, "⧉ SHOWCASE", 12, Ink, TextAnchor.MiddleCenter, monoFont);
+            showT.fontStyle = FontStyle.Bold;
+            Stretch(showT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var showId = selectedDeckId;
+            showBtn.gameObject.AddComponent<Button>().onClick.AddListener(() => OpenShowcase(showId));
+        }
 
         // CLEAR ALL DECKS (bottom-left, out of the way). Unarmed: a single muted
         // button. Armed: transforms into a dual CLEAR ALL (commit) / CANCEL bar.
@@ -2697,6 +2718,16 @@ public class DeckBuilderManager : MonoBehaviour
         cc.rectTransform.pivot = new Vector2(1f, 0.5f);
         cc.rectTransform.sizeDelta = new Vector2(46f, 24f);
         cc.rectTransform.anchoredPosition = new Vector2(-6f, 0f);
+
+        // Showcase cross-highlight: rows select the matching board stack.
+        if (view == View.Showcase)
+        {
+            if (rec.id == selectedShowcaseCardId) AddBorder(row, Accent, 2f);
+            var rowBtn = row.gameObject.AddComponent<Button>();
+            rowBtn.transition = Selectable.Transition.None;
+            string hlId = rec.id;
+            rowBtn.onClick.AddListener(() => { selectedShowcaseCardId = hlId; Render(); });
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
