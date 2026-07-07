@@ -1,0 +1,33 @@
+# Cloudflare Pages headers for the Unity WebGL build.
+# Place this file at the ROOT of the deployed Pages output.
+
+# Never cache the entry point or the version manifest — players must always
+# see the latest index.html (which references the new hashed build files).
+/index.html
+  Cache-Control: no-cache
+
+/version.json
+  Cache-Control: no-cache
+  Access-Control-Allow-Origin: *
+
+# Unity Brotli-compressed build files: correct Content-Encoding + long cache.
+# (Use "Filename as hash" naming in Unity WebGL Publishing Settings so these
+# are content-addressed and safe to cache forever.)
+/Build/*.data.br
+  Content-Encoding: br
+  Content-Type: application/octet-stream
+  Cache-Control: public, max-age=31536000, immutable
+
+/Build/*.wasm.br
+  Content-Encoding: br
+  Content-Type: application/wasm
+  Cache-Control: public, max-age=31536000, immutable
+
+/Build/*.framework.js.br
+  Content-Encoding: br
+  Content-Type: application/javascript
+  Cache-Control: public, max-age=31536000, immutable
+
+/Build/*.loader.js
+  Content-Type: application/javascript
+  Cache-Control: public, max-age=31536000, immutable

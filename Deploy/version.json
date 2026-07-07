@@ -1,0 +1,11 @@
+{
+  "buildVersion": "0.1.0",
+  "buildNumber": 1,
+  "minSupportedBuildNumber": 1,
+  "assetsVersion": 1,
+  "notes": "Initial deploy",
+  "downloads": {
+    "windows": "https://github.com/YOURNAME/YOURREPO/releases/latest",
+    "mac": "https://github.com/YOURNAME/YOURREPO/releases/latest"
+  }
+}

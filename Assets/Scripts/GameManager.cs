@@ -234,6 +234,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void Update()
     {
+        // Coalesced re-render when async CDN card art/definitions arrive: many
+        // fetches can complete in one frame — rebuild once, and never mid-drag
+        // (Render() would destroy the dragged object under the EventSystem).
+        if (_artRefreshQueued && !isDraggingHandCard && !isDraggingAttack)
+        {
+            _artRefreshQueued = false;
+            Render();
+        }
+
         if (coinFlipWaitingText != null)
         {
             int dots = (int)(Time.unscaledTime * 2f) % 4;
@@ -249,12 +258,31 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void LoadOfficialCardLibrary()
     {
-        string path = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "official-card-library.json");
+        if (CardAssets.UseCdn) { LoadOfficialCardLibraryAsync(); return; }
+        string path = CardAssets.LocalPath("official-card-library.json");
         if (!File.Exists(path)) return;
+        try { ParseOfficialCardLibrary(File.ReadAllText(path)); }
+        catch (System.Exception ex) { Debug.LogWarning($"Official card library failed to load: {ex.Message}"); }
+    }
 
+    // WebGL/CDN: fetched over HTTP once the asset index is ready; the board
+    // re-renders (coalesced in Update) when definitions land.
+    private async void LoadOfficialCardLibraryAsync()
+    {
+        // Safety net: if the game scene is entered without the menu having run
+        // the boot sequence, kick the (idempotent) init ourselves.
+        _ = CardAssets.InitAsync();
+        while (!CardAssets.Ready) await System.Threading.Tasks.Task.Yield();
+        string json = await CardAssets.ReadTextAsync("official-card-library.json");
+        if (string.IsNullOrEmpty(json)) { Debug.LogWarning("Official card library unavailable from CDN."); return; }
+        ParseOfficialCardLibrary(json);
+        _artRefreshQueued = true;
+    }
+
+    private void ParseOfficialCardLibrary(string json)
+    {
         try
         {
-            string json = File.ReadAllText(path);
             var payload = JsonUtility.FromJson<OfficialCardPayload>("{\"cards\":" + json + "}");
             if (payload?.cards == null) return;
 
@@ -5687,7 +5715,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private Sprite GetCardSprite(string cardId)
     {
+        if (string.IsNullOrWhiteSpace(cardId)) return null;
         if (spriteCache.TryGetValue(cardId, out var cached)) return cached;
+
+        if (CardAssets.UseCdn)
+        {
+            // No sprite this frame; fetch in the background and re-render on arrival.
+            KickCardSpriteLoad(cardId);
+            return null;
+        }
+
         var tex = LoadFront(cardId);
         if (tex == null) return null;
         var sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
@@ -5695,12 +5732,71 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return sprite;
     }
 
+    // ── WebGL/CDN async art pipeline ─────────────────────────────────────────
+    // One in-flight fetch per key; results (including misses, cached as null so
+    // they are never re-requested) land in the same caches the sync path uses,
+    // then a single coalesced Render() picks them up (see Update).
+    private readonly HashSet<string> _artPending = new HashSet<string>();
+    private bool _artRefreshQueued;
+
+    private async void KickCardSpriteLoad(string cardId)
+    {
+        if (!_artPending.Add(cardId)) return;
+        try
+        {
+            while (!CardAssets.Ready) await System.Threading.Tasks.Task.Yield();
+            var rel = CardAssets.FirstExisting(CardAssets.ArtCandidates(cardId));
+            var tex = rel != null ? await CardAssets.LoadTextureAsync(rel) : null;
+            Sprite sprite = null;
+            if (tex != null)
+            {
+                tex.filterMode = FilterMode.Trilinear;
+                tex.anisoLevel = 8;
+                tex.mipMapBias = -0.75f;
+                sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+            }
+            texCache[cardId] = tex;
+            spriteCache[cardId] = sprite;
+            if (sprite != null) _artRefreshQueued = true;
+        }
+        finally { _artPending.Remove(cardId); }
+    }
+
+    // Shared-texture fetch for backs/don/icons: writes into `assign` via the
+    // supplied setter, queues the coalesced re-render.
+    private async void KickSharedTexLoad(string relPath, System.Action<Texture2D> assign)
+    {
+        if (!_artPending.Add(relPath)) return;
+        try
+        {
+            while (!CardAssets.Ready) await System.Threading.Tasks.Task.Yield();
+            var tex = CardAssets.Exists(relPath) ? await CardAssets.LoadTextureAsync(relPath) : null;
+            if (tex != null)
+            {
+                tex.filterMode = FilterMode.Trilinear;
+                tex.anisoLevel = 8;
+                tex.mipMapBias = -0.75f;
+                assign(tex);
+                _artRefreshQueued = true;
+            }
+        }
+        finally { _artPending.Remove(relPath); }
+    }
+
     private Sprite GetBackSprite()
     {
         if (backSprite != null) return backSprite;
-        var projectPath = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "optcg_card_back.jpg");
-        backTex = LoadFile(File.Exists(projectPath) ? projectPath : BackImageFallbackPath);
-        if (backTex == null) backTex = LoadFile(Path.Combine(AssetBase, "backs", "CardBackRegular.png"));
+        if (backTex == null)
+        {
+            if (CardAssets.UseCdn)
+            {
+                KickSharedTexLoad("optcg_card_back.jpg", t => backTex = t);
+                return null;
+            }
+            var projectPath = CardAssets.LocalPath("optcg_card_back.jpg");
+            backTex = LoadFile(File.Exists(projectPath) ? projectPath : BackImageFallbackPath);
+            if (backTex == null) backTex = LoadFile(Path.Combine(AssetBase, "backs", "CardBackRegular.png"));
+        }
         if (backTex == null) return null;
         backSprite = Sprite.Create(backTex, new Rect(0, 0, backTex.width, backTex.height), new Vector2(0.5f, 0.5f), 100f);
         return backSprite;
@@ -5709,8 +5805,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private Sprite GetDonSprite()
     {
         if (donSprite != null) return donSprite;
-        var projectPath = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "donCardAltArt.png");
-        donTex = LoadFile(File.Exists(projectPath) ? projectPath : DonImageFallbackPath);
+        if (donTex == null)
+        {
+            if (CardAssets.UseCdn)
+            {
+                KickSharedTexLoad("donCardAltArt.png", t => donTex = t);
+                return null;
+            }
+            var projectPath = CardAssets.LocalPath("donCardAltArt.png");
+            donTex = LoadFile(File.Exists(projectPath) ? projectPath : DonImageFallbackPath);
+        }
         if (donTex == null) return null;
         donSprite = Sprite.Create(donTex, new Rect(0, 0, donTex.width, donTex.height), new Vector2(0.5f, 0.5f), 100f);
         return donSprite;
@@ -5720,10 +5824,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private Sprite GetDonBackSprite()
     {
         if (donBackSprite != null) return donBackSprite;
-        var projectPath = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "CardBackDon.png");
-        if (!File.Exists(projectPath)) return GetBackSprite();
-        donBackTex = LoadFile(projectPath);
-        if (donBackTex == null) return GetBackSprite();
+        if (donBackTex == null)
+        {
+            if (CardAssets.UseCdn)
+            {
+                if (CardAssets.Ready && !CardAssets.Exists("CardBackDon.png")) return GetBackSprite();
+                KickSharedTexLoad("CardBackDon.png", t => donBackTex = t);
+                return GetBackSprite();   // regular back until (unless) the DON back arrives
+            }
+            var projectPath = CardAssets.LocalPath("CardBackDon.png");
+            if (!File.Exists(projectPath)) return GetBackSprite();
+            donBackTex = LoadFile(projectPath);
+            if (donBackTex == null) return GetBackSprite();
+        }
         donBackSprite = Sprite.Create(donBackTex, new Rect(0, 0, donBackTex.width, donBackTex.height), new Vector2(0.5f, 0.5f), 100f);
         return donBackSprite;
     }
@@ -5737,11 +5850,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (string.IsNullOrWhiteSpace(safeId)) return null;
         string set = safeId.Contains("-") ? safeId.Split('-')[0] : "";
 
+        // Desktop/editor path only — the CDN build resolves art in KickCardSpriteLoad.
         var candidates = new List<string>();
-        AddPathCandidate(candidates, Application.dataPath, "StreamingAssets", "Cards", "OfficialById", set, safeId + ".png");
-        AddPathCandidate(candidates, Application.dataPath, "StreamingAssets", "Cards", "Official", set, safeId + ".png");
-        AddPathCandidate(candidates, Application.dataPath, "StreamingAssets", "Cards", set, safeId + ".png");
-        AddPathCandidate(candidates, Application.dataPath, "StreamingAssets", "Cards", safeId + ".png");
+        foreach (var rel in CardAssets.ArtCandidates(safeId))
+            AddPathCandidate(candidates, CardAssets.LocalPath(rel));
         AddPathCandidate(candidates, AssetBase, set, safeId + "_small.jpg");
 
         Texture2D tex = null;
@@ -5763,8 +5875,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (colorIconCache.TryGetValue(key, out var cached)) return cached;
 
         var fileName = SafePathPart(key.Replace('/', '_').Replace(' ', '_')) + ".png";
+
+        if (CardAssets.UseCdn)
+        {
+            KickSharedTexLoad($"ColorIcons/{fileName}", t => colorIconCache[key] = t);
+            return null;   // icon pops in on the coalesced re-render
+        }
+
         var candidates = new List<string>();
-        AddPathCandidate(candidates, Application.dataPath, "StreamingAssets", "Cards", "ColorIcons", fileName);
+        AddPathCandidate(candidates, CardAssets.LocalPath($"ColorIcons/{fileName}"));
 
         Texture2D tex = null;
         foreach (var path in candidates)

@@ -272,20 +272,27 @@ public partial class MainMenuManager : MonoBehaviour
     }
 
     // ── Leader art (versus-self deck-slot thumbnails) ───────────────────────────
+    // All card art/data IO goes through CardAssets: direct file IO in the Editor
+    // and desktop builds (UseCdn=false — behavior identical to the old inline
+    // File.* code), HTTP from the R2 CDN on WebGL. Paths are Cards-relative.
     private static string LeaderArtPath(string id)
+        => CardAssets.FirstExisting(CardAssets.ArtCandidates(id));
+
+    // Decode + the sharpness settings previously duplicated in LoadArt /
+    // LoadThumbSprite (same fix as GameManager.LoadFile / DeckBuilder's queue).
+    private static Sprite SpriteFromBytes(byte[] bytes)
     {
-        if (string.IsNullOrWhiteSpace(id)) return null;
-        string safe = id.Trim();
-        string set = safe.Contains("-") ? safe.Split('-')[0] : "";
-        var candidates = new[]
+        if (bytes == null) return null;
+        try
         {
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "OfficialById", set, safe + ".png"),
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "Official", set, safe + ".png"),
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", set, safe + ".png"),
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", safe + ".png"),
-        };
-        foreach (var p in candidates) if (File.Exists(p)) return p;
-        return null;
+            var tex = new Texture2D(2, 2, TextureFormat.RGBA32, true);
+            if (!tex.LoadImage(bytes)) return null;
+            tex.filterMode = FilterMode.Trilinear;
+            tex.anisoLevel = 8;
+            tex.mipMapBias = -0.75f;
+            return Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+        }
+        catch { return null; }
     }
 
     private Sprite LoadArt(string id)
@@ -293,34 +300,74 @@ public partial class MainMenuManager : MonoBehaviour
         if (string.IsNullOrWhiteSpace(id)) return null;
         if (_leaderArtCache.TryGetValue(id, out var cached)) return cached;
 
-        Sprite sprite = null;
-        string p = LeaderArtPath(id);
-        if (p != null)
+        if (!CardAssets.UseCdn)
         {
-            try
+            // Desktop/Editor: synchronous, same behavior as always.
+            Sprite sprite = null;
+            string rel = LeaderArtPath(id);
+            if (rel != null)
             {
-                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, true);
-                if (tex.LoadImage(File.ReadAllBytes(p)))
-                {
-                    tex.filterMode = FilterMode.Trilinear;
-                    tex.anisoLevel = 8;
-                    // Same sharpness fix as GameManager.LoadFile / DeckBuilder's decode
-                    // queue: bias trilinear sampling toward the larger mip so downscaled
-                    // menu art stays crisp instead of blending into the mushy lower mip.
-                    tex.mipMapBias = -0.75f;
-                    sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
-                }
+                try { sprite = SpriteFromBytes(File.ReadAllBytes(CardAssets.LocalPath(rel))); }
+                catch { /* ignore */ }
             }
-            catch { /* ignore */ }
+            _leaderArtCache[id] = sprite;
+            return sprite;
         }
-        _leaderArtCache[id] = sprite;
-        return sprite;
+
+        // WebGL/CDN: no result this frame — kick an async fetch; the menu
+        // re-renders (coalesced, in Update) when art arrives and finds it cached.
+        KickMenuArtLoad(id, thumbFirst: false);
+        return null;
     }
+
+    // One in-flight fetch per id; caches the result (null included, so missing
+    // art is not re-requested) and queues a single re-render.
+    private async void KickMenuArtLoad(string id, bool thumbFirst)
+    {
+        if (!_menuArtPending.Add(id)) return;
+        try
+        {
+            while (!CardAssets.Ready) await Task.Yield();   // index.json still downloading
+
+            string rel = null;
+            if (thumbFirst)
+            {
+                var t = CardAssets.ThumbCandidate(id);
+                if (CardAssets.Exists(t)) rel = t;
+            }
+            rel ??= CardAssets.FirstExisting(CardAssets.ArtCandidates(id));
+
+            var sprite = rel != null ? SpriteFromBytes(await CardAssets.ReadBytesAsync(rel)) : null;
+            if (thumbFirst) _thumbArtCache[id] = sprite; else _leaderArtCache[id] = sprite;
+            if (sprite != null) _menuArtRefreshQueued = true;
+        }
+        finally { _menuArtPending.Remove(id); }
+    }
+
+    private readonly HashSet<string> _menuArtPending = new HashSet<string>();
+    private bool _menuArtRefreshQueued;
 
     private void Start()
     {
         // Update clock every 30 seconds (no need for every-second polling)
         InvokeRepeating(nameof(UpdateClock), 30f, 30f);
+        BootUpdateAndAssetsOnce();
+    }
+
+    // Launch-time update check + CDN asset index, once per app run. On WebGL a
+    // newer deployed build hard-reloads the page inside CheckAsync; on desktop
+    // it raises UpdateChecker.OnUpdateAvailable (hook a prompt to it later).
+    // CheckAndApplyDesktopUpdateAsync is the real exe auto-updater (Velopack):
+    // it silently downloads + restarts into a newer build if one exists on
+    // GitHub Releases, independently of the buildNumber/manifest check above.
+    private static bool _bootRan;
+    private static async void BootUpdateAndAssetsOnce()
+    {
+        if (_bootRan) return;
+        _bootRan = true;
+        await UpdateChecker.CheckAsync();
+        await UpdateChecker.CheckAndApplyDesktopUpdateAsync();
+        await CardAssets.InitAsync();
     }
 
     // ── Tab navigation between input fields ──────────────────────────────────
@@ -332,6 +379,14 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void Update()
     {
+        // Coalesced re-render when async card art/library data arrives (CDN
+        // builds): many loads can complete in one frame; rebuild the menu once.
+        if (_menuArtRefreshQueued && menuRoot != null && !showingAccountGate)
+        {
+            _menuArtRefreshQueued = false;   // stays queued while the gate is up
+            RenderMenu();
+        }
+
         var kb = UnityEngine.InputSystem.Keyboard.current;
         if (kb == null) return;
 
@@ -1499,15 +1554,34 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (menuCardsById != null) return;
         menuCardsById = new Dictionary<string, CardRec>();
+        if (CardAssets.UseCdn) { FillMenuCardLibraryAsync(); return; }
         try
         {
-            string path = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "official-card-library.json");
+            string path = CardAssets.LocalPath("official-card-library.json");
             if (!File.Exists(path)) return;
-            var wrap = JsonUtility.FromJson<CardLibFile>("{\"cards\":" + File.ReadAllText(path) + "}");
-            menuCardLibrary = wrap?.cards ?? new CardRec[0];
-            foreach (var c in menuCardLibrary)
-                if (c != null && !string.IsNullOrEmpty(c.id) && !menuCardsById.ContainsKey(c.id))
-                    menuCardsById[c.id] = c;
+            ParseMenuCardLibrary(File.ReadAllText(path));
+        }
+        catch (Exception e) { Debug.LogWarning("Menu card library parse failed: " + e.Message); }
+    }
+
+    private void ParseMenuCardLibrary(string json)
+    {
+        var wrap = JsonUtility.FromJson<CardLibFile>("{\"cards\":" + json + "}");
+        menuCardLibrary = wrap?.cards ?? new CardRec[0];
+        foreach (var c in menuCardLibrary)
+            if (c != null && !string.IsNullOrEmpty(c.id) && !menuCardsById.ContainsKey(c.id))
+                menuCardsById[c.id] = c;
+    }
+
+    private async void FillMenuCardLibraryAsync()
+    {
+        try
+        {
+            while (!CardAssets.Ready) await Task.Yield();
+            var json = await CardAssets.ReadTextAsync("official-card-library.json");
+            if (string.IsNullOrEmpty(json)) return;
+            ParseMenuCardLibrary(json);
+            _menuArtRefreshQueued = true; // colors/life labels can now resolve
         }
         catch (Exception e) { Debug.LogWarning("Menu card library parse failed: " + e.Message); }
     }
@@ -1517,15 +1591,32 @@ public partial class MainMenuManager : MonoBehaviour
         if (menuFaceY != null) return;
         menuFaceY = new Dictionary<string, float>();
         menuFaceX = new Dictionary<string, float>();
+        if (CardAssets.UseCdn) { FillMenuFaceDataAsync(); return; }
         try
         {
-            string p = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "face-data.json");
+            string p = CardAssets.LocalPath("face-data.json");
             if (!File.Exists(p)) return;
-            var f = JsonUtility.FromJson<FaceMapFile>(File.ReadAllText(p));
-            if (f?.ids == null || f.y == null) return;
-            for (int i = 0; i < f.ids.Length && i < f.y.Length; i++) menuFaceY[f.ids[i]] = f.y[i];
-            if (f.x != null && f.x.Length == f.ids.Length)
-                for (int i = 0; i < f.ids.Length; i++) menuFaceX[f.ids[i]] = f.x[i];
+            ParseMenuFaceData(File.ReadAllText(p));
+        }
+        catch (Exception e) { Debug.LogWarning("Menu face-data load failed: " + e.Message); }
+    }
+
+    private void ParseMenuFaceData(string json)
+    {
+        var f = JsonUtility.FromJson<FaceMapFile>(json);
+        if (f?.ids == null || f.y == null) return;
+        for (int i = 0; i < f.ids.Length && i < f.y.Length; i++) menuFaceY[f.ids[i]] = f.y[i];
+        if (f.x != null && f.x.Length == f.ids.Length)
+            for (int i = 0; i < f.ids.Length; i++) menuFaceX[f.ids[i]] = f.x[i];
+    }
+
+    private async void FillMenuFaceDataAsync()
+    {
+        try
+        {
+            while (!CardAssets.Ready) await Task.Yield();
+            var json = await CardAssets.ReadTextAsync("face-data.json");
+            if (!string.IsNullOrEmpty(json)) ParseMenuFaceData(json);
         }
         catch (Exception e) { Debug.LogWarning("Menu face-data load failed: " + e.Message); }
     }
@@ -1555,31 +1646,24 @@ public partial class MainMenuManager : MonoBehaviour
         if (string.IsNullOrWhiteSpace(id)) return null;
         if (_thumbArtCache.TryGetValue(id, out var cached)) return cached;
 
-        Sprite sprite = null;
-        string safe = id.Trim();
-        string set = safe.Contains("-") ? safe.Split('-')[0] : "";
-        string thumbPath = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "Thumbs", set, safe + ".jpg");
-        if (File.Exists(thumbPath))
+        if (!CardAssets.UseCdn)
         {
-            try
+            // Desktop/Editor: synchronous, same behavior as always.
+            Sprite sprite = null;
+            string rel = CardAssets.ThumbCandidate(id);
+            if (rel != null && CardAssets.Exists(rel))
             {
-                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, true);
-                if (tex.LoadImage(File.ReadAllBytes(thumbPath)))
-                {
-                    tex.filterMode = FilterMode.Trilinear;
-                    tex.anisoLevel = 8;
-                    // Same sharpness fix as GameManager.LoadFile / DeckBuilder's decode
-                    // queue: bias trilinear sampling toward the larger mip so downscaled
-                    // menu art stays crisp instead of blending into the mushy lower mip.
-                    tex.mipMapBias = -0.75f;
-                    sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
-                }
+                try { sprite = SpriteFromBytes(File.ReadAllBytes(CardAssets.LocalPath(rel))); }
+                catch { /* fall through to full art */ }
             }
-            catch { /* fall through to full art */ }
+            if (sprite == null) sprite = LoadArt(id);
+            _thumbArtCache[id] = sprite;
+            return sprite;
         }
-        if (sprite == null) sprite = LoadArt(id);
-        _thumbArtCache[id] = sprite;
-        return sprite;
+
+        // WebGL/CDN: async fetch (thumb first, full art fallback), re-render on arrival.
+        KickMenuArtLoad(id, thumbFirst: true);
+        return null;
     }
 
     // ── Formatting ────────────────────────────────────────────────────────────

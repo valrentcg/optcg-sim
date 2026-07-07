@@ -796,15 +796,35 @@ public partial class DeckBuilderManager : MonoBehaviour
     // ══════════════════════════════════════════════════════════════════════════
     private void LoadLibrary()
     {
+        if (CardAssets.UseCdn) { LoadLibraryAsync(); return; }
         try
         {
-            string path = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "official-card-library.json");
+            string path = CardAssets.LocalPath("official-card-library.json");
             if (!File.Exists(path)) { Debug.LogWarning("Card library not found: " + path); return; }
-            string json = File.ReadAllText(path);
-            var wrap = JsonUtility.FromJson<CardLibFile>("{\"cards\":" + json + "}");
-            library = wrap?.cards ?? new CardRec[0];
-            byId = new Dictionary<string, CardRec>();
-            foreach (var c in library) if (c != null && !string.IsNullOrEmpty(c.id)) byId[c.id] = c;
+            ParseLibrary(File.ReadAllText(path));
+        }
+        catch (Exception e) { Debug.LogWarning("Card library parse failed: " + e.Message); }
+    }
+
+    private void ParseLibrary(string json)
+    {
+        var wrap = JsonUtility.FromJson<CardLibFile>("{\"cards\":" + json + "}");
+        library = wrap?.cards ?? new CardRec[0];
+        byId = new Dictionary<string, CardRec>();
+        foreach (var c in library) if (c != null && !string.IsNullOrEmpty(c.id)) byId[c.id] = c;
+    }
+
+    // WebGL/CDN: library arrives over HTTP after Awake's synchronous init; the
+    // builder re-renders once it lands (pool/filters populate then).
+    private async void LoadLibraryAsync()
+    {
+        try
+        {
+            while (!CardAssets.Ready) await System.Threading.Tasks.Task.Yield();
+            var json = await CardAssets.ReadTextAsync("official-card-library.json");
+            if (string.IsNullOrEmpty(json)) { Debug.LogWarning("Card library unavailable from CDN."); return; }
+            ParseLibrary(json);
+            if (this != null && canvas != null) Render();
         }
         catch (Exception e) { Debug.LogWarning("Card library parse failed: " + e.Message); }
     }
@@ -3653,6 +3673,9 @@ public partial class DeckBuilderManager : MonoBehaviour
         _artLoading.Add(id);
         activeArtLoads++;
 
+        // CDN builds: path resolution needs the asset index (index.json) first.
+        while (CardAssets.UseCdn && !CardAssets.Ready) yield return null;
+
         string path = ArtPath(id);
         byte[] fetched = null;
         if (path != null)
@@ -3684,6 +3707,9 @@ public partial class DeckBuilderManager : MonoBehaviour
     {
         _thumbLoading.Add(id);
         activeThumbLoads++;
+
+        // CDN builds: path resolution needs the asset index (index.json) first.
+        while (CardAssets.UseCdn && !CardAssets.Ready) yield return null;
 
         var (path, isRealThumb) = ResolveThumbPath(id);
         byte[] fetched = null;
@@ -4517,21 +4543,13 @@ public partial class DeckBuilderManager : MonoBehaviour
     // Card art loading
     // ══════════════════════════════════════════════════════════════════════════
 
-    // Resolve the on-disk art path for a card id (or null if no art exists).
+    // Resolve a fetchable location for a card id's art (or null if none exists):
+    // an absolute disk path on desktop/editor, an https CDN URL on WebGL. Both
+    // feed new Uri(...).AbsoluteUri in the fetch coroutines unchanged.
     private static string ArtPath(string id)
     {
-        if (string.IsNullOrWhiteSpace(id)) return null;
-        string safe = id.Trim();
-        string set = safe.Contains("-") ? safe.Split('-')[0] : "";
-        var candidates = new[]
-        {
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "OfficialById", set, safe + ".png"),
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "Official", set, safe + ".png"),
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", set, safe + ".png"),
-            Path.Combine(Application.dataPath, "StreamingAssets", "Cards", safe + ".png"),
-        };
-        foreach (var p in candidates) if (File.Exists(p)) return p;
-        return null;
+        var rel = CardAssets.FirstExisting(CardAssets.ArtCandidates(id));
+        return rel != null ? CardAssets.FetchUri(rel) : null;
     }
 
     // Resolves the pre-generated small thumbnail for a card (see
@@ -4543,10 +4561,10 @@ public partial class DeckBuilderManager : MonoBehaviour
     private static (string path, bool isRealThumb) ResolveThumbPath(string id)
     {
         if (string.IsNullOrWhiteSpace(id)) return (null, false);
-        string safe = id.Trim();
-        string set = safe.Contains("-") ? safe.Split('-')[0] : "";
-        string thumbPath = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "Thumbs", set, safe + ".jpg");
-        return File.Exists(thumbPath) ? (thumbPath, true) : (ArtPath(id), false);
+        var rel = CardAssets.ThumbCandidate(id);
+        return (rel != null && CardAssets.Exists(rel))
+            ? (CardAssets.FetchUri(rel), true)
+            : (ArtPath(id), false);
     }
 
     // Vertical framing fraction (0 = top of card) used to slice the deck-row art.
@@ -4558,22 +4576,36 @@ public partial class DeckBuilderManager : MonoBehaviour
         _faceMap  = new Dictionary<string, float>();
         _faceMapX = new Dictionary<string, float>();
         _faceMapZ = new Dictionary<string, float>();
+        if (CardAssets.UseCdn) { LoadFaceDataAsync(); return; }
         try
         {
-            string p = Path.Combine(Application.dataPath, "StreamingAssets", "Cards", "face-data.json");
-            if (File.Exists(p))
-            {
-                var f = JsonUtility.FromJson<FaceMapFile>(File.ReadAllText(p));
-                if (f != null && f.ids != null && f.y != null)
-                    for (int i = 0; i < f.ids.Length && i < f.y.Length; i++)
-                        _faceMap[f.ids[i]] = f.y[i];
-                if (f != null && f.ids != null && f.x != null && f.x.Length == f.ids.Length)
-                    for (int i = 0; i < f.ids.Length; i++)
-                        _faceMapX[f.ids[i]] = f.x[i];
-                if (f != null && f.ids != null && f.z != null && f.z.Length == f.ids.Length)
-                    for (int i = 0; i < f.ids.Length; i++)
-                        _faceMapZ[f.ids[i]] = f.z[i];
-            }
+            string p = CardAssets.LocalPath("face-data.json");
+            if (File.Exists(p)) ParseFaceData(File.ReadAllText(p));
+        }
+        catch (Exception e) { Debug.LogWarning("face-data load failed: " + e.Message); }
+    }
+
+    private void ParseFaceData(string json)
+    {
+        var f = JsonUtility.FromJson<FaceMapFile>(json);
+        if (f != null && f.ids != null && f.y != null)
+            for (int i = 0; i < f.ids.Length && i < f.y.Length; i++)
+                _faceMap[f.ids[i]] = f.y[i];
+        if (f != null && f.ids != null && f.x != null && f.x.Length == f.ids.Length)
+            for (int i = 0; i < f.ids.Length; i++)
+                _faceMapX[f.ids[i]] = f.x[i];
+        if (f != null && f.ids != null && f.z != null && f.z.Length == f.ids.Length)
+            for (int i = 0; i < f.ids.Length; i++)
+                _faceMapZ[f.ids[i]] = f.z[i];
+    }
+
+    private async void LoadFaceDataAsync()
+    {
+        try
+        {
+            while (!CardAssets.Ready) await System.Threading.Tasks.Task.Yield();
+            var json = await CardAssets.ReadTextAsync("face-data.json");
+            if (!string.IsNullOrEmpty(json)) ParseFaceData(json);
         }
         catch (Exception e) { Debug.LogWarning("face-data load failed: " + e.Message); }
     }
@@ -4597,17 +4629,23 @@ public partial class DeckBuilderManager : MonoBehaviour
         if (_faceCenterCache.TryGetValue(id, out var cached)) return cached;
 
         var result = new Vector2(0.5f, 0.22f);
-        try
+        // Edge-density heuristic needs a synchronous byte read — desktop only.
+        // On CDN builds face-data.json (shipped with the assets) covers every
+        // card; anything missing from it just uses the default framing.
+        if (!CardAssets.UseCdn)
         {
-            string p = ArtPath(id);
-            if (p != null)
+            try
             {
-                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-                if (tex.LoadImage(File.ReadAllBytes(p))) result = DetectFaceCenter(tex);
-                UnityEngine.Object.Destroy(tex);
+                string p = ArtPath(id);   // absolute disk path when !UseCdn
+                if (p != null)
+                {
+                    var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                    if (tex.LoadImage(File.ReadAllBytes(p))) result = DetectFaceCenter(tex);
+                    UnityEngine.Object.Destroy(tex);
+                }
             }
+            catch { /* keep fallback */ }
         }
-        catch { /* keep fallback */ }
         _faceCenterCache[id] = result;
         return result;
     }

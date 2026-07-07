@@ -17,6 +17,14 @@ public static class NetworkBootstrap
         var go = new GameObject("NetworkManager");
         Object.DontDestroyOnLoad(go);
         var transport = go.AddComponent<UnityTransport>();
+#if UNITY_WEBGL && !UNITY_EDITOR
+        // Browsers cannot speak UDP/DTLS — Relay traffic must go over WebSockets.
+        // Desktop clients keep the default UDP path; Relay bridges the two, so
+        // web and desktop players can still share a session as long as both
+        // builds run the same protocol version (guarded by version.json's
+        // minSupportedBuildNumber).
+        transport.UseWebSockets = true;
+#endif
         var manager = go.AddComponent<NetworkManager>();
         // NetworkConfig is a plain field with no inline initializer, so a NetworkManager
         // added purely at runtime (no scene/prefab data backing it) can come up with it
