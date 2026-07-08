@@ -202,7 +202,29 @@ public static class DeckStore
 
     public static bool CanAddNew() => All().Count < MaxDecks;
 
-    public static DeckData Get(string id) => All().FirstOrDefault(d => d.id == id);
+    // Virtual starter-deck ids ("starter:st01") resolve straight from
+    // CardData.StarterDecks without ever being written into the user's roster —
+    // starter decks stay on the Starter Decks page but are still playable
+    // anywhere a deck id is accepted (versus-self picker, match setup, replays).
+    public const string StarterIdPrefix = "starter:";
+
+    public static DeckData Get(string id)
+    {
+        if (!string.IsNullOrEmpty(id) && id.StartsWith(StarterIdPrefix, StringComparison.Ordinal))
+        {
+            var key = id.Substring(StarterIdPrefix.Length);
+            if (!CardData.StarterDecks.TryGetValue(key, out var def) || def == null) return null;
+            return new DeckData
+            {
+                id = id,
+                name = def.Name,
+                leaderId = def.Leader,
+                cards = def.List?.Select(t => new DeckEntry { id = t.cardId, count = t.qty }).ToList()
+                    ?? new List<DeckEntry>(),
+            };
+        }
+        return All().FirstOrDefault(d => d.id == id);
+    }
 
     // Insert or update by id.
     public static void Save(DeckData deck)
@@ -1582,7 +1604,8 @@ public partial class DeckBuilderManager : MonoBehaviour
         // to the picker. Outside picker mode it's just COPY TO MY DECKS, since
         // starter decks aren't user-owned data and can't be played from here. ──
         float btnY = badgeY - BADGE_H - GAP;
-        bool canAdd = DeckStore.CanAddNew();
+        // In picker mode nothing is saved, so the roster limit doesn't apply.
+        bool canAdd = pickerActive || DeckStore.CanAddNew();
         var copyBtn = Panel("Copy", panel, canAdd ? (Color)Accent : (Color)new Color32(40, 60, 78, 220));
         copyBtn.anchorMin = copyBtn.anchorMax = new Vector2(0.5f, 0.5f);
         copyBtn.pivot = new Vector2(0f, 1f);
@@ -1601,16 +1624,18 @@ public partial class DeckBuilderManager : MonoBehaviour
             bool wasPicking = pickerActive;
             copyBtn.gameObject.AddComponent<Button>().onClick.AddListener(() =>
             {
+                if (wasPicking)
+                {
+                    // Hand back a virtual "starter:" id — no DeckStore.Save, so the
+                    // starter deck never appears in the user's built-deck roster.
+                    ConfirmPicker(DeckStore.StarterIdPrefix + capturedDef.Id);
+                    return;
+                }
                 var copy = FromStarterDef(capturedDef);
                 copy.id = DeckStore.NewId();
                 copy.name = capturedDef.Name;
                 copy.slot = -1;
                 DeckStore.Save(copy);
-                if (wasPicking)
-                {
-                    ConfirmPicker(copy.id);
-                    return;
-                }
                 selectedDeckId = copy.id;
                 view = View.Select;
                 Render();

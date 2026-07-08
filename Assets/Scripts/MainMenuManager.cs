@@ -65,6 +65,13 @@ public partial class MainMenuManager : MonoBehaviour
     // rebuilds the menu — mirrors DeckStore.ActiveDeckId's lifetime.
     private static string p1DeckId;
     private static string p2DeckId;
+
+    // ── Lobby (networked match) deck selection ──────────────────────────────
+    // Static because the deck picker tears down this MainMenuManager instance and
+    // a new one is built when the picker closes — same pattern as p1/p2DeckId.
+    private static string lobbyDeckId;            // our pick: DeckStore id or "starter:stXX"; null = seat default
+    private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
+    private static bool reopenLobbyAfterPicker;   // restore the waiting room after the picker closes
     // Set when ENTER is pressed without both decks chosen; cleared automatically
     // once both are valid (recomputed fresh every BuildLaunchBar), so it doesn't
     // need its own timer — it just flags whichever slot(s) are still empty.
@@ -221,6 +228,14 @@ public partial class MainMenuManager : MonoBehaviour
         }
         catch { monoFont = null; }
 
+        // Coming back from the lobby's deck picker: reopen the waiting room (the
+        // session itself survived in LobbyManager.CurrentSession; only the UI died).
+        if (reopenLobbyAfterPicker)
+        {
+            reopenLobbyAfterPicker = false;
+            showingLobbyHub = LobbyManager.CurrentSession != null;
+        }
+
         EnsureEventSystem();
         BuildCanvas();
         RenderMenu();
@@ -230,6 +245,9 @@ public partial class MainMenuManager : MonoBehaviour
         // elsewhere in the menu when the host clicks Start Match.
         MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
         MatchNetworkSync.MatchStartReceived += OnNetworkMatchStartReceived;
+
+        MatchNetworkSync.DeckShareReceived -= OnPeerDeckShared;
+        MatchNetworkSync.DeckShareReceived += OnPeerDeckShared;
 
         FriendsManager.FriendsChanged -= OnFriendsChanged;
         FriendsManager.FriendsChanged += OnFriendsChanged;
@@ -365,9 +383,65 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (_bootRan) return;
         _bootRan = true;
+
+        // Desktop: the Velopack check runs FIRST, behind a full-screen splash,
+        // so an update installs before the player ever sees the menu — launch
+        // reads as "checking… downloading… restarting" instead of the game
+        // opening, closing, and reopening. Restarting is unavoidable (Windows
+        // can't patch a running exe) but this way it happens seconds into boot,
+        // behind the splash, before any interaction.
+#if !UNITY_EDITOR && UNITY_STANDALONE_WIN
+        ShowUpdateSplash();
+        bool restarting = await UpdateChecker.CheckAndApplyDesktopUpdateAsync(s => _updateStatus = s);
+        if (restarting) return;          // keep the splash up; Velopack relaunches us momentarily
+        HideUpdateSplash();
+#endif
         await UpdateChecker.CheckAsync();
-        await UpdateChecker.CheckAndApplyDesktopUpdateAsync();
         await CardAssets.InitAsync();
+    }
+
+    // ── Update splash ─────────────────────────────────────────────────────────
+    // Minimal self-contained canvas (sorted above everything) shown during the
+    // launch-time Velopack check. Status text arrives from background threads via
+    // _updateStatus; Update() applies it on the main thread.
+    private static GameObject _updateSplash;
+    private static Text _updateSplashText;
+    private static volatile string _updateStatus;
+
+    private static void ShowUpdateSplash()
+    {
+        if (_updateSplash != null) return;
+        _updateSplash = new GameObject("Update Splash");
+        UnityEngine.Object.DontDestroyOnLoad(_updateSplash);
+        var canvas = _updateSplash.AddComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 32000;   // above every menu canvas
+
+        var bg = new GameObject("BG").AddComponent<Image>();
+        bg.transform.SetParent(_updateSplash.transform, false);
+        bg.color = new Color32(7, 13, 22, 255);
+        var bgRt = bg.rectTransform;
+        bgRt.anchorMin = Vector2.zero; bgRt.anchorMax = Vector2.one;
+        bgRt.offsetMin = Vector2.zero; bgRt.offsetMax = Vector2.zero;
+
+        _updateSplashText = new GameObject("Status").AddComponent<Text>();
+        _updateSplashText.transform.SetParent(_updateSplash.transform, false);
+        _updateSplashText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        _updateSplashText.fontSize = 18;
+        _updateSplashText.alignment = TextAnchor.MiddleCenter;
+        _updateSplashText.color = new Color32(126, 200, 227, 255);
+        _updateSplashText.text = "CHECKING FOR UPDATES...";
+        var txtRt = _updateSplashText.rectTransform;
+        txtRt.anchorMin = Vector2.zero; txtRt.anchorMax = Vector2.one;
+        txtRt.offsetMin = Vector2.zero; txtRt.offsetMax = Vector2.zero;
+    }
+
+    private static void HideUpdateSplash()
+    {
+        if (_updateSplash != null) UnityEngine.Object.Destroy(_updateSplash);
+        _updateSplash = null;
+        _updateSplashText = null;
+        _updateStatus = null;
     }
 
     // ── Tab navigation between input fields ──────────────────────────────────
@@ -379,6 +453,11 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void Update()
     {
+        // Update-splash status arrives from Velopack's background threads; apply
+        // it to the UI here, on the main thread.
+        if (_updateSplashText != null && _updateStatus != null)
+            _updateSplashText.text = _updateStatus;
+
         // Coalesced re-render when async card art/library data arrives (CDN
         // builds): many loads can complete in one frame; rebuild the menu once.
         if (_menuArtRefreshQueued && menuRoot != null && !showingAccountGate)
@@ -607,7 +686,7 @@ public partial class MainMenuManager : MonoBehaviour
 
         clockText = TextObject("Clock", rightGroup, DateTime.Now.ToString("HH:mm"),
             14, Ink, TextAnchor.MiddleRight, monoFont);
-        Stretch(clockText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(-56f, 0f));
+        Stretch(clockText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(-120f, 0f));
 
         var gear = PanelObject("Gear Btn", rightGroup, LogBgDark);
         gear.anchorMin = new Vector2(1f, 0.5f);
@@ -623,6 +702,106 @@ public partial class MainMenuManager : MonoBehaviour
 
         var gearBtn = gear.gameObject.AddComponent<Button>();
         gearBtn.onClick.AddListener(OpenAccountSettings);
+
+        // ── Exit game button, left of the gear. Plain "EXIT" text — the ⏻ power
+        // glyph isn't in the runtime fonts and renders as a blank box. ─────────
+        var exit = PanelObject("Exit Btn", rightGroup, LogBgDark);
+        exit.anchorMin = new Vector2(1f, 0.5f);
+        exit.anchorMax = new Vector2(1f, 0.5f);
+        exit.pivot     = new Vector2(1f, 0.5f);
+        exit.sizeDelta = new Vector2(56f, 40f);
+        exit.anchoredPosition = new Vector2(-48f, 0f);
+        Round(exit);
+        AddRoundedCardBorder(exit, MenuB, 1f);
+
+        var exitLabel = TextObject("Exit Label", exit, "EXIT", 11, Muted, TextAnchor.MiddleCenter, monoFont);
+        exitLabel.fontStyle = FontStyle.Bold;
+        Stretch(exitLabel.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        var exitBtn = exit.gameObject.AddComponent<Button>();
+        exitBtn.onClick.AddListener(ShowExitConfirm);
+    }
+
+    // ── Exit confirmation ─────────────────────────────────────────────────────
+    // Quitting shouldn't be one accidental click away: EXIT opens a modal that
+    // dims the menu and asks first. CANCEL (or clicking the dim backdrop) closes
+    // it; EXIT GAME actually quits.
+    private RectTransform exitConfirmOverlay;
+
+    private void ShowExitConfirm()
+    {
+        if (exitConfirmOverlay != null) return;   // already open
+
+        // Full-screen dim backdrop — parented to the canvas root so it sits on
+        // top of everything, and raycast-blocking so the menu behind is inert.
+        var overlay = PanelObject("Exit Confirm Overlay", canvas.transform, new Color(0f, 0f, 0f, 0.62f));
+        Stretch(overlay, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        exitConfirmOverlay = overlay;
+        overlay.gameObject.AddComponent<Button>().onClick.AddListener(HideExitConfirm); // click-away = cancel
+
+        // Dialog panel
+        var panel = PanelObject("Exit Dialog", overlay, LogBgDark);
+        panel.anchorMin = panel.anchorMax = new Vector2(0.5f, 0.5f);
+        panel.pivot = new Vector2(0.5f, 0.5f);
+        panel.sizeDelta = new Vector2(380f, 170f);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, MenuB, 1f);
+        // Swallow clicks so tapping the panel body doesn't trigger the backdrop's cancel.
+        panel.gameObject.AddComponent<Button>().transition = Selectable.Transition.None;
+
+        var title = TextObject("Title", panel, "EXIT GAME?", 16, Ink, TextAnchor.MiddleCenter);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 0.62f), Vector2.one, new Vector2(16f, 0f), new Vector2(-16f, -14f));
+
+        var sub = TextObject("Sub", panel, "Close the client and return to desktop?", 12, Muted, TextAnchor.UpperCenter);
+        Stretch(sub.rectTransform, new Vector2(0f, 0.42f), new Vector2(1f, 0.62f), new Vector2(16f, 0f), new Vector2(-16f, 0f));
+
+        // CANCEL — safe default on the left
+        var cancel = PanelObject("Cancel Btn", panel, new Color32(24, 38, 52, 220));
+        Stretch(cancel, new Vector2(0.06f, 0.10f), new Vector2(0.47f, 0.34f), Vector2.zero, Vector2.zero);
+        Round(cancel);
+        AddRoundedCardBorder(cancel, MenuB, 1f);
+        var cancelT = TextObject("t", cancel, "CANCEL", 12, Ink, TextAnchor.MiddleCenter, monoFont);
+        Stretch(cancelT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        cancel.gameObject.AddComponent<Button>().onClick.AddListener(HideExitConfirm);
+
+        // EXIT GAME — destructive action on the right, red accent
+        var confirm = PanelObject("Confirm Btn", panel, new Color32(170, 56, 56, 235));
+        Stretch(confirm, new Vector2(0.53f, 0.10f), new Vector2(0.94f, 0.34f), Vector2.zero, Vector2.zero);
+        Round(confirm);
+        var confirmT = TextObject("t", confirm, "EXIT GAME", 12, Ink, TextAnchor.MiddleCenter, monoFont);
+        confirmT.fontStyle = FontStyle.Bold;
+        Stretch(confirmT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        confirm.gameObject.AddComponent<Button>().onClick.AddListener(QuitGame);
+    }
+
+    private void HideExitConfirm()
+    {
+        if (exitConfirmOverlay != null) Destroy(exitConfirmOverlay.gameObject);
+        exitConfirmOverlay = null;
+    }
+
+    // Closes the application. Application.Quit() is a no-op inside the editor,
+    // so stop play mode there instead — same behavior players get from the .exe.
+    private static void QuitGame()
+    {
+        // Tear down Netcode BEFORE quitting. NGO has a known teardown bug where
+        // app quit runs its shutdown twice (OnApplicationQuit -> OnDestroy) and
+        // the second pass NREs in NetworkSceneManager.Dispose (SceneEventDataStore
+        // already nulled). Shutting down + destroying the NetworkManager here,
+        // while the app is still alive, means the quit path finds nothing to
+        // double-dispose.
+        var nm = NetworkManager.Singleton;
+        if (nm != null)
+        {
+            try { nm.Shutdown(); } catch (Exception e) { Debug.LogWarning("Netcode shutdown on quit: " + e.Message); }
+            try { DestroyImmediate(nm.gameObject); } catch (Exception e) { Debug.LogWarning("NetworkManager teardown on quit: " + e.Message); }
+        }
+#if UNITY_EDITOR
+        UnityEditor.EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -3256,12 +3435,30 @@ public partial class MainMenuManager : MonoBehaviour
         // 2/2 before Netcode's own Relay connection between host and guest has actually finished
         // establishing. Gate Start Match on the real Netcode connection too, not just the lobby,
         // so a click can't fire before there's an actual peer to send the match-start message to.
+        // ── Deck selection ── each player picks the deck they'll bring; the pick
+        // is shared with the peer (OptcgDeckShare) and both decks ride inside the
+        // match-start payload. No pick = that seat's starter default.
+        SubscribeToSessionEvents(session);   // idempotent; re-attaches after a picker rebuild
+        var myDeck = DeckStore.Get(lobbyDeckId);
+        string myDeckName = myDeck != null ? myDeck.name
+            : (session.IsHost ? "Straw Hat Crew [ST01] (default)" : "Worst Generation [ST02] (default)");
+        var myDeckText = TextObject("My Deck", panel, $"YOUR DECK: {myDeckName}", 12, Ink, TextAnchor.UpperLeft, monoFont);
+        Stretch(myDeckText.rectTransform, new Vector2(0f, 1f), new Vector2(0.6f, 1f), new Vector2(16f, y - 24f), new Vector2(-8f, y));
+        var pickHolder = PanelObject("Pick Deck Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(pickHolder, new Vector2(0.6f, 1f), Vector2.one, new Vector2(0f, y - 30f), new Vector2(-16f, y + 4f));
+        AddButton(pickHolder, "Select Deck", PickLobbyDeck, !lobbyBusy, false);
+        y -= 34f;
+        string peerDeckName = lobbyPeerDeck != null ? lobbyPeerDeck.name : "not chosen yet (starter default)";
+        var peerDeckText = TextObject("Peer Deck", panel, $"OPPONENT DECK: {peerDeckName}", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(peerDeckText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 22f), new Vector2(-16f, y));
+        y -= 28f;
+
         bool bothPresent = session.PlayerCount >= session.MaxPlayers;
         bool networkReady = MatchNetworkSync.IsPeerConnected;
         string noteMessage;
         if (!bothPresent) noteMessage = "Waiting for another player to join...";
         else if (!networkReady) noteMessage = "Both players are here. Finishing connection...";
-        else if (session.IsHost) noteMessage = "Both players are here — click Start Match when ready. (Starter decks only for now.)";
+        else if (session.IsHost) noteMessage = "Both players are here — pick decks, then click Start Match.";
         else noteMessage = "Both players are here. Waiting for the host to start the match...";
         var noteText = TextObject("Note", panel, noteMessage,
             11, Muted, TextAnchor.UpperLeft, monoFont);
@@ -3280,31 +3477,73 @@ public partial class MainMenuManager : MonoBehaviour
             AddButton(actionRow, "Start Match", StartMatchClicked, bothPresent && networkReady && !lobbyBusy, false);
     }
 
-    // Host: generates the shared seed, sends it once to the guest, then both clients
-    // independently call GameEngine.CreateMatch with that seed - no game state itself
-    // is transmitted here, just the seed each side needs to build an identical match.
-    private void StartMatchClicked()
-    {
-        string seed = Guid.NewGuid().ToString("N");
-        MatchNetworkSync.SendMatchStart(seed);
-        LaunchNetworkedMatch(seed, "south");
-    }
-
-    private void OnNetworkMatchStartReceived(string seed)
-    {
-        LaunchNetworkedMatch(seed, "north");
-    }
-
-    // Host is always "south" (ST01), guest is always "north" (ST02) for now - custom
-    // deck selection for networked matches is a follow-up; this reuses the same
-    // starter-deck defaults hotseat play already falls back to.
-    private void LaunchNetworkedMatch(string seed, string localSeat)
+    // Opens the deck-builder hex roster as a one-shot picker for this online match.
+    // Same teardown/rebuild pattern as PickPlayerDeck (versus-self): the picker owns
+    // the screen, and a fresh MainMenuManager reopens the waiting room on confirm
+    // or cancel (reopenLobbyAfterPicker + Awake). Starter decks work here too via
+    // their virtual "starter:" ids — nothing is copied into the user's roster.
+    private void PickLobbyDeck()
     {
         CancelInvoke();
         UnsubscribeFromSessionEvents();
         if (canvas != null) canvas.gameObject.SetActive(false);
-        GameManager.PendingNetworkedSeed = seed;
+        DeckBuilderManager.OpenPicker("CHOOSE YOUR DECK", "for this online match — pick a deck, then confirm",
+            chosenId =>
+            {
+                lobbyDeckId = chosenId;
+                reopenLobbyAfterPicker = true;
+                ShareLobbyDeck();
+                EnsureMenu();
+            },
+            () => { reopenLobbyAfterPicker = true; EnsureMenu(); });
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    // Tell the peer what we're playing. Safe to call any time: no-ops when no peer
+    // is connected yet (OnLobbyNetworkClientConnected re-sends once one is).
+    private static void ShareLobbyDeck()
+    {
+        var deck = DeckStore.Get(lobbyDeckId);
+        if (deck != null) MatchNetworkSync.SendDeckShare(NetworkDeck.From(deck));
+    }
+
+    private void OnPeerDeckShared(NetworkDeck deck)
+    {
+        lobbyPeerDeck = deck;
+        if (showingLobbyHub) RenderMenu();   // live-update the "OPPONENT DECK" line
+    }
+
+    // Host: generates the shared seed and sends it with BOTH deck picks, then each
+    // client independently calls GameEngine.CreateMatch with the same payload - no
+    // game state itself is transmitted, just what both sides need to build an
+    // identical match. Host is always "south", guest always "north".
+    private void StartMatchClicked()
+    {
+        var payload = new MatchStartPayload
+        {
+            seed = Guid.NewGuid().ToString("N"),
+            south = NetworkDeck.From(DeckStore.Get(lobbyDeckId)),   // null → engine default ST01
+            north = lobbyPeerDeck,                                  // null → engine default ST02
+        };
+        MatchNetworkSync.SendMatchStart(payload);
+        LaunchNetworkedMatch(payload, "south");
+    }
+
+    private void OnNetworkMatchStartReceived(MatchStartPayload payload)
+    {
+        LaunchNetworkedMatch(payload, "north");
+    }
+
+    private void LaunchNetworkedMatch(MatchStartPayload payload, string localSeat)
+    {
+        CancelInvoke();
+        UnsubscribeFromSessionEvents();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        GameManager.PendingNetworkedSeed = payload.seed;
         GameManager.PendingNetworkedSeat = localSeat;
+        GameManager.PendingNetworkedSouthDeck = payload.south;
+        GameManager.PendingNetworkedNorthDeck = payload.north;
         GameManager.EnsureBoard();
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
@@ -3347,6 +3586,9 @@ public partial class MainMenuManager : MonoBehaviour
     private void OnLobbyNetworkClientConnected(ulong clientId)
     {
         if (this == null || menuRoot == null) return;
+        // If we picked a deck before the Relay connection finished, the share was
+        // a no-op — re-send now that there's actually a peer to receive it.
+        ShareLobbyDeck();
         RenderMenu();
     }
 
@@ -3360,6 +3602,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         UnsubscribeFromSessionEvents();
         MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
+        MatchNetworkSync.DeckShareReceived -= OnPeerDeckShared;
         FriendsManager.FriendsChanged -= OnFriendsChanged;
     }
 
@@ -3471,6 +3714,7 @@ public partial class MainMenuManager : MonoBehaviour
     private async void LeaveLobbyClicked()
     {
         lobbyBusy = true;
+        lobbyPeerDeck = null;   // stale picks shouldn't leak into the next lobby
         RenderMenu();
         try
         {

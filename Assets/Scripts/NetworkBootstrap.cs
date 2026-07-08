@@ -31,6 +31,15 @@ public static class NetworkBootstrap
         // still null, unlike one placed in the Editor where serialization fills it in.
         if (manager.NetworkConfig == null) manager.NetworkConfig = new NetworkConfig();
         manager.NetworkConfig.NetworkTransport = transport;
+        // Scene management MUST be off. This project never syncs scenes or
+        // NetworkObjects (gameplay is a deterministic GameCommand log over custom
+        // messages), and NGO's automatic scene-sync handshake actively breaks the
+        // connection here: on client connect, NetworkSceneManager tries to resolve
+        // the host's scene hash to a local scene path, throws
+        // ArgumentOutOfRangeException (GetSceneNameFromPath), and the handshake
+        // never completes — the lobby then sits on "Finishing connection..."
+        // forever because IsPeerConnected never turns true.
+        manager.NetworkConfig.EnableSceneManagement = false;
 
         MatchNetworkSync.EnsureHandlersRegistered();
     }

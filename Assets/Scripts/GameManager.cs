@@ -67,6 +67,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // interaction to the seat this client actually controls (see Dispatch()).
     public static string PendingNetworkedSeed;
     public static string PendingNetworkedSeat;
+    // Deck picks for a networked match (from the lobby's SELECT DECK flow). Sent
+    // inside the match-start payload so both clients hold both decks; either may
+    // be null, in which case CreateMatch falls back to the ST01/ST02 defaults.
+    public static NetworkDeck PendingNetworkedSouthDeck;
+    public static NetworkDeck PendingNetworkedNorthDeck;
     private bool isNetworked;
     private string localSeat;
     // Cached label for the coin-flip "waiting on opponent" state (networked only); Update()
@@ -475,6 +480,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         localSeat = seat;
 
         var config = new MatchConfig { Seed = seed };
+        // Deck picks travel in the match-start payload (see MatchStartPayload) and
+        // land here via the Pending fields. Both clients receive the same pair, so
+        // both build identical matches. Null (either seat) = ST01/ST02 default.
+        var southDef = PendingNetworkedSouthDeck?.ToDeckDef();
+        var northDef = PendingNetworkedNorthDeck?.ToDeckDef();
+        PendingNetworkedSouthDeck = null;
+        PendingNetworkedNorthDeck = null;
+        if (southDef != null) config.SouthDeckDef = southDef;
+        if (northDef != null) config.NorthDeckDef = northDef;
         currentMatchConfig = config;
         state = GameEngine.CreateMatch(config);
         selectedId = null;

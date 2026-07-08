@@ -40,7 +40,7 @@ public static class UpdateChecker
 
     // Bump this every release. Must match "buildNumber" in the deployed
     // version.json for that release.
-    public const int CurrentBuildNumber = 2;
+    public const int CurrentBuildNumber = 3;
     // -----------------------------------------------------------------------
 
     [Serializable]
@@ -142,30 +142,42 @@ public static class UpdateChecker
     // GitHub repo hosting the packaged Velopack releases (Setup.exe + delta patches).
     public const string GithubRepoUrl = "https://github.com/valrentcg/optcg-sim";
 
-    /// Desktop only: checks the GitHub release feed via Velopack, silently downloads
-    /// any newer version (delta patch if available), and restarts into it. Safe to
+    /// Desktop only: checks the GitHub release feed via Velopack, downloads any
+    /// newer version (delta patch if available), and restarts into it. Safe to
     /// call on every launch - no-ops if already on the latest version.
-    public static async Task CheckAndApplyDesktopUpdateAsync()
+    ///
+    /// `status` receives human-readable progress ("DOWNLOADING UPDATE... 47%") and
+    /// MAY BE CALLED FROM A BACKGROUND THREAD - write it somewhere thread-safe
+    /// (e.g. a static string a Unity Update() polls); do not touch UI from it.
+    ///
+    /// Returns true when an update was found and a restart is imminent — the
+    /// caller should keep its "updating" UI up and skip the rest of its boot.
+    public static async Task<bool> CheckAndApplyDesktopUpdateAsync(Action<string> status = null)
     {
 #if !UNITY_EDITOR && UNITY_STANDALONE_WIN
         try
         {
+            status?.Invoke("CHECKING FOR UPDATES...");
             var source = new GithubSource(GithubRepoUrl, null, false);
             var mgr = new UpdateManager(source);
 
             var newVersion = await mgr.CheckForUpdatesAsync();
-            if (newVersion == null) return;
+            if (newVersion == null) return false;
 
             Debug.Log($"[UpdateChecker] Velopack update found: {newVersion.TargetFullRelease.Version} - downloading.");
-            await mgr.DownloadUpdatesAsync(newVersion);
+            await mgr.DownloadUpdatesAsync(newVersion, p => status?.Invoke($"DOWNLOADING UPDATE... {p}%"));
+            status?.Invoke("RESTARTING TO APPLY UPDATE...");
             mgr.ApplyUpdatesAndRestart(newVersion);
+            return true;
         }
         catch (Exception e)
         {
             Debug.LogWarning($"[UpdateChecker] Velopack update check failed: {e.Message} - continuing with current build.");
+            return false;
         }
 #else
         await Task.CompletedTask;
+        return false;
 #endif
     }
 }

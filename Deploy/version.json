@@ -1,11 +1,11 @@
 {
-  "buildVersion": "0.1.0",
-  "buildNumber": 1,
-  "minSupportedBuildNumber": 1,
+  "buildVersion": "1.0.2",
+  "buildNumber": 3,
+  "minSupportedBuildNumber": 3,
   "assetsVersion": 1,
-  "notes": "Initial deploy",
+  "notes": "Multiplayer deck selection, lobby connection fix, hex glow fix, exit button.",
   "downloads": {
-    "windows": "https://github.com/YOURNAME/YOURREPO/releases/latest",
-    "mac": "https://github.com/YOURNAME/YOURREPO/releases/latest"
+    "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
+    "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
   }
 }

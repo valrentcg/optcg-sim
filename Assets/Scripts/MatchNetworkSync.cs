@@ -11,20 +11,75 @@
 // SessionOptions.WithRelayNetwork() once this package is present.
 
 using System;
+using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 using OnePieceTcg.Engine;
 
+// Wire-format snapshot of one player's deck (leader + main-deck counts). Sent by
+// the guest to the host when they pick a deck in the lobby, and embedded (both
+// seats) in the match-start payload so each client can build an identical match
+// without either side needing the other's deck to exist in its local DeckStore.
+[Serializable]
+public class NetworkDeckEntry { public string id; public int count; }
+
+[Serializable]
+public class NetworkDeck
+{
+    public string id;
+    public string name;
+    public string leader;
+    public NetworkDeckEntry[] cards;
+
+    public static NetworkDeck From(DeckData d)
+    {
+        if (d == null) return null;
+        var entries = new List<NetworkDeckEntry>();
+        if (d.cards != null)
+            foreach (var e in d.cards)
+                if (e != null && e.count > 0) entries.Add(new NetworkDeckEntry { id = e.id, count = e.count });
+        return new NetworkDeck { id = d.id, name = d.name, leader = d.leaderId, cards = entries.ToArray() };
+    }
+
+    public DeckDef ToDeckDef()
+    {
+        if (string.IsNullOrEmpty(leader)) return null;
+        var list = new List<(string cardId, int qty)> { (leader, 1) };
+        if (cards != null)
+            foreach (var e in cards)
+                if (e != null && e.count > 0) list.Add((e.id, e.count));
+        return new DeckDef
+        {
+            Id = string.IsNullOrEmpty(id) ? "net" : id,
+            Name = string.IsNullOrEmpty(name) ? "Custom Deck" : name,
+            Leader = leader,
+            List = list,
+        };
+    }
+}
+
+// Everything both clients need to start the same match: the shared seed plus both
+// seats' decks. Serialized with JsonUtility over the existing match-start message.
+[Serializable]
+public class MatchStartPayload
+{
+    public string seed;
+    public NetworkDeck south;   // host's deck
+    public NetworkDeck north;   // guest's deck
+}
+
 public static class MatchNetworkSync
 {
     private const string MatchStartMessage = "OptcgMatchStart";
     private const string GameCommandMessage = "OptcgGameCmd";
+    private const string DeckShareMessage = "OptcgDeckShare";
 
     private static bool handlersRegistered;
 
-    public static event Action<string> MatchStartReceived;   // payload: match seed
+    public static event Action<MatchStartPayload> MatchStartReceived;
     public static event Action<GameCommand> CommandReceived;
+    public static event Action<NetworkDeck> DeckShareReceived;   // peer told us which deck they'll play
 
     /// <summary>Call once, right after the NetworkManager singleton is created.</summary>
     public static void EnsureHandlersRegistered()
@@ -46,6 +101,7 @@ public static class MatchNetworkSync
 
         nm.CustomMessagingManager.RegisterNamedMessageHandler(MatchStartMessage, OnMatchStartMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(GameCommandMessage, OnGameCommandMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(DeckShareMessage, OnDeckShareMessage);
         handlersRegistered = true;
     }
 
@@ -67,15 +123,32 @@ public static class MatchNetworkSync
 
     // ---- Sending ----
 
-    public static void SendMatchStart(string seed)
+    public static void SendMatchStart(MatchStartPayload payload)
     {
         var nm = NetworkManager.Singleton;
-        if (nm == null || nm.CustomMessagingManager == null || string.IsNullOrEmpty(seed)) return;
+        if (nm == null || nm.CustomMessagingManager == null || payload == null || string.IsNullOrEmpty(payload.seed)) return;
         var target = GetPeerClientId();
         if (target == null) { Debug.LogWarning("MatchNetworkSync.SendMatchStart: no connected peer yet - not sent."); return; }
-        using var writer = new FastBufferWriter(seed.Length * 2 + 32, Allocator.Temp);
-        writer.WriteValueSafe(seed);
-        nm.CustomMessagingManager.SendNamedMessage(MatchStartMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+        string json = JsonUtility.ToJson(payload);
+        using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(json);
+        // Fragmented: the payload carries two full decklists (~2KB+), well past the
+        // ~1264-byte single-packet cap of plain ReliableSequenced.
+        nm.CustomMessagingManager.SendNamedMessage(MatchStartMessage, target.Value, writer, NetworkDelivery.ReliableFragmentedSequenced);
+    }
+
+    /// <summary>Tell the peer which deck we'll be playing (lobby deck selection).</summary>
+    public static void SendDeckShare(NetworkDeck deck)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null || deck == null) return;
+        var target = GetPeerClientId();
+        if (target == null) return;   // not connected yet - lobby re-sends on peer connect
+        string json = JsonUtility.ToJson(deck);
+        using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(json);
+        // Fragmented for the same reason as SendMatchStart: one decklist can exceed a packet.
+        nm.CustomMessagingManager.SendNamedMessage(DeckShareMessage, target.Value, writer, NetworkDelivery.ReliableFragmentedSequenced);
     }
 
     public static void SendCommand(GameCommand command)
@@ -94,8 +167,22 @@ public static class MatchNetworkSync
 
     private static void OnMatchStartMessage(ulong senderClientId, FastBufferReader reader)
     {
-        reader.ReadValueSafe(out string seed);
-        MatchStartReceived?.Invoke(seed);
+        reader.ReadValueSafe(out string json);
+        MatchStartPayload payload = null;
+        try { payload = JsonUtility.FromJson<MatchStartPayload>(json); } catch { /* fall through */ }
+        // Compatibility: a pre-deck-selection client sends the bare seed string
+        // instead of a JSON payload. Treat it as a payload with default decks.
+        if (payload == null || string.IsNullOrEmpty(payload.seed))
+            payload = new MatchStartPayload { seed = json };
+        MatchStartReceived?.Invoke(payload);
+    }
+
+    private static void OnDeckShareMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        NetworkDeck deck = null;
+        try { deck = JsonUtility.FromJson<NetworkDeck>(json); } catch { /* ignore malformed */ }
+        if (deck != null && !string.IsNullOrEmpty(deck.leader)) DeckShareReceived?.Invoke(deck);
     }
 
     private static void OnGameCommandMessage(ulong senderClientId, FastBufferReader reader)
