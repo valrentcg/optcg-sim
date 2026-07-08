@@ -90,7 +90,33 @@ public static class FriendsManager
         await FriendsService.Instance.InitializeAsync();
         FriendsService.Instance.RelationshipAdded += _ => FriendsChanged?.Invoke();
         FriendsService.Instance.RelationshipDeleted += _ => FriendsChanged?.Invoke();
+        // PresenceUpdated fires whenever a friend's Availability changes (client opened/
+        // closed) - routed into the same FriendsChanged repaint the relationship events use,
+        // so the menu's online/offline dots update live without any extra plumbing.
         FriendsService.Instance.PresenceUpdated += _ => FriendsChanged?.Invoke();
+
+        // Publish our own availability as ONLINE so we show up green in friends' lists.
+        // The Friends service flips us back to OFFLINE automatically when the client's
+        // WebSocket drops (app quit/crash), so no explicit sign-out call is required.
+        // Best-effort: in the editor / no-services / offline case this must never throw
+        // to the caller - friends lists still work, we just appear offline to others.
+        try
+        {
+            await FriendsService.Instance.SetPresenceAsync(Availability.Online, new PresenceActivity());
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"FriendsManager: couldn't set presence to Online ({ex.Message}) - continuing; we'll appear offline to friends.");
+        }
+    }
+
+    // Minimal activity payload for SetPresenceAsync<T> — the SDK requires one even
+    // when we only care about the Availability flag. Serializable so the Friends
+    // service can round-trip it; friends' clients ignore it (we only read Availability).
+    [Serializable]
+    private sealed class PresenceActivity
+    {
+        public string status = "online";
     }
 
     public static async Task<FriendActionResult> SendFriendRequestByUsernameAsync(string username)
@@ -178,7 +204,12 @@ public static class FriendsManager
         foreach (var m in others)
         {
             usernames.TryGetValue(m.Id, out var name);
-            bool online = m.Presence != null && m.Presence.Availability == Availability.Online;
+            // Presence rides along on the Relationship snapshot; anything other than a
+            // concrete Online availability (null presence, Offline, Invisible, service
+            // hiccup) renders as offline - the safe default for the menu's dot.
+            bool online = false;
+            try { online = m.Presence != null && m.Presence.Availability == Availability.Online; }
+            catch (Exception) { /* degrade to offline */ }
             result.Add(new FriendEntry(m.Id, name ?? "(unknown)", online));
         }
         return result;

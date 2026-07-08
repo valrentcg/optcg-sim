@@ -11,6 +11,7 @@ using System.Collections.Generic;
 namespace OnePieceTcg.Engine
 {
     /// <summary>A live card in the match. Carries its definition id plus per-instance state.</summary>
+    [System.Serializable]
     public sealed class CardInstance
     {
         public string InstanceId;
@@ -20,6 +21,29 @@ namespace OnePieceTcg.Engine
         public bool Rested;
         public List<string> AttachedDonIds = new List<string>();
         public int? PlayedOnTurn;
+
+        // Active per-instance stat modifiers, kept directly on the card so the UI can render
+        // "+1000 (Jinbe)" / "-4 cost (Backlight)" chips. CostDelta entries are AUTHORITATIVE:
+        // GameEngine.GetCost() sums them onto the printed cost. PowerDelta entries MIRROR the
+        // engine's TemporaryPowerBonus/BattlePowerBonus bookkeeping (GetPower still reads those
+        // dicts) — they exist so the UI has a single per-card list to display. Expired entries
+        // are removed by the engine at the matching time (see ActiveModifier.ExpiresAt).
+        public List<ActiveModifier> Modifiers = new List<ActiveModifier>();
+    }
+
+    /// <summary>
+    /// One active power/cost modifier on a card instance. Serializable for JsonUtility.
+    /// ExpiresAt: "endOfTurn" (cleared at the next Refresh Phase, same time as
+    /// TemporaryPowerBonus), "endOfBattle" (cleared when the current BattleState is
+    /// discarded), or "permanent" (cleared only when the card leaves play).
+    /// </summary>
+    [System.Serializable]
+    public sealed class ActiveModifier
+    {
+        public string Source;       // display name of the card that applied it, e.g. "Jinbe [ST01-005]"
+        public int PowerDelta;      // e.g. +1000 (mirror of the engine power dicts, for UI display)
+        public int CostDelta;       // e.g. -4 (authoritative; GameEngine.GetCost applies it)
+        public string ExpiresAt;    // "endOfTurn" | "endOfBattle" | "permanent"
     }
 
     /// <summary>A DON!! card in the cost area. Active (ready) or rested (spent/face-down side).</summary>
@@ -57,6 +81,12 @@ namespace OnePieceTcg.Engine
     {
         public string Id;               // unique id for scoping CardModifier.Duration == "thisBattle"
         public string Step;             // "block" | "counter" | "damage" | "trigger"
+
+        // Seat whose decision the battle is currently waiting on. After an attack is declared
+        // every remaining decision belongs to the DEFENDER (block -> counter -> final resolve ->
+        // trigger), so this is always TargetSeat for the whole battle; it exists as an explicit
+        // field so the UI can gate its block/counter/resolve buttons on it without hardcoding.
+        public string PrioritySeat;
         public string AttackerSeat;
         public string AttackerId;
         public string TargetSeat;

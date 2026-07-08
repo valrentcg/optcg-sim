@@ -71,6 +71,7 @@ public partial class MainMenuManager : MonoBehaviour
     // a new one is built when the picker closes — same pattern as p1/p2DeckId.
     private static string lobbyDeckId;            // our pick: DeckStore id or "starter:stXX"; null = seat default
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
+    private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
     private static bool reopenLobbyAfterPicker;   // restore the waiting room after the picker closes
     // Set when ENTER is pressed without both decks chosen; cleared automatically
     // once both are valid (recomputed fresh every BuildLaunchBar), so it doesn't
@@ -248,6 +249,9 @@ public partial class MainMenuManager : MonoBehaviour
 
         MatchNetworkSync.DeckShareReceived -= OnPeerDeckShared;
         MatchNetworkSync.DeckShareReceived += OnPeerDeckShared;
+
+        MatchNetworkSync.PeerNameReceived -= OnPeerNameReceived;
+        MatchNetworkSync.PeerNameReceived += OnPeerNameReceived;
 
         FriendsManager.FriendsChanged -= OnFriendsChanged;
         FriendsManager.FriendsChanged += OnFriendsChanged;
@@ -3012,15 +3016,22 @@ public partial class MainMenuManager : MonoBehaviour
         Round(row);
         AddRoundedCardBorder(row, MenuB, 1f);
 
-        var dot = PanelObject("Presence Dot", row, entry.Online ? Accent : Muted);
+        // Online = green dot + "online"; offline = grey dot + "offline". Driven by
+        // FriendEntry.Online (Unity Friends presence); FriendsManager.FriendsChanged fires
+        // on PresenceUpdated, so these repaint live as friends open/close their client.
+        var dot = PanelObject("Presence Dot", row, entry.Online ? GoodGreen : Muted);
         dot.anchorMin = dot.anchorMax = new Vector2(0f, 0.5f);
         dot.pivot = new Vector2(0f, 0.5f);
         dot.sizeDelta = new Vector2(8f, 8f);
         dot.anchoredPosition = new Vector2(12f, 0f);
         RoundCircle(dot);
 
-        var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.MiddleLeft);
-        Stretch(name.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(28f, 0f), Vector2.zero);
+        var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.LowerLeft);
+        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.6f, 1f), new Vector2(28f, 0f), new Vector2(0f, -6f));
+
+        var status = TextObject("Presence Label", row, entry.Online ? "online" : "offline", 10,
+            entry.Online ? GoodGreen : Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(status.rectTransform, Vector2.zero, new Vector2(0.6f, 0.5f), new Vector2(28f, 6f), Vector2.zero);
 
         var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
         Stretch(btnHolder, new Vector2(0.6f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
@@ -3514,6 +3525,11 @@ public partial class MainMenuManager : MonoBehaviour
         if (showingLobbyHub) RenderMenu();   // live-update the "OPPONENT DECK" line
     }
 
+    private void OnPeerNameReceived(string name)
+    {
+        lobbyPeerName = name;
+    }
+
     // Host: generates the shared seed and sends it with BOTH deck picks, then each
     // client independently calls GameEngine.CreateMatch with the same payload - no
     // game state itself is transmitted, just what both sides need to build an
@@ -3538,6 +3554,25 @@ public partial class MainMenuManager : MonoBehaviour
     private void LaunchNetworkedMatch(MatchStartPayload payload, string localSeat)
     {
         CancelInvoke();
+        // Player display names for the in-match center turn indicator (host = south,
+        // guest = north). Our own name comes from the account; the host's name is also
+        // visible to the guest as the session owner. The host has no reliable view of the
+        // guest's display name here, so that falls back to "Player 2".
+        string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName;
+        // Both clients exchanged display names on peer connect (OptcgNameShare), so the
+        // host knows the guest's name too; session owner name remains a guest-side fallback.
+        string hostName = LobbyManager.CurrentSession != null ? LobbyManager.GetOwnerName(LobbyManager.CurrentSession) : null;
+        if (localSeat == "south")
+        {
+            GameManager.PendingSouthName = string.IsNullOrEmpty(myName) ? "Player 1" : myName;
+            GameManager.PendingNorthName = string.IsNullOrEmpty(lobbyPeerName) ? "Player 2" : lobbyPeerName;
+        }
+        else
+        {
+            GameManager.PendingSouthName = !string.IsNullOrEmpty(lobbyPeerName) ? lobbyPeerName
+                : (string.IsNullOrEmpty(hostName) ? "Player 1" : hostName);
+            GameManager.PendingNorthName = string.IsNullOrEmpty(myName) ? "Player 2" : myName;
+        }
         UnsubscribeFromSessionEvents();
         if (canvas != null) canvas.gameObject.SetActive(false);
         GameManager.PendingNetworkedSeed = payload.seed;
@@ -3587,8 +3622,11 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (this == null || menuRoot == null) return;
         // If we picked a deck before the Relay connection finished, the share was
-        // a no-op — re-send now that there's actually a peer to receive it.
+        // a no-op — re-send now that there's actually a peer to receive it. The
+        // display name rides along the same way (turn indicator / chat prefixes).
         ShareLobbyDeck();
+        MatchNetworkSync.SendPeerName(
+            AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName);
         RenderMenu();
     }
 
@@ -3714,7 +3752,8 @@ public partial class MainMenuManager : MonoBehaviour
     private async void LeaveLobbyClicked()
     {
         lobbyBusy = true;
-        lobbyPeerDeck = null;   // stale picks shouldn't leak into the next lobby
+        lobbyPeerDeck = null;   // stale picks/names shouldn't leak into the next lobby
+        lobbyPeerName = null;
         RenderMenu();
         try
         {

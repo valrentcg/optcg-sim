@@ -69,17 +69,44 @@ public class MatchStartPayload
     public NetworkDeck north;   // guest's deck
 }
 
+// Lightweight "what am I looking at" state each client streams to its opponent while
+// playing: which board card is being hovered (opponent renders a gold glow on it) and
+// which face-down hand cards are being lifted/inspected. Sent over an Unreliable
+// channel - it's pure fire-and-forget cosmetic state, so lost or stale packets are fine
+// (the next send overwrites). Serialized with JsonUtility like everything else here.
+[Serializable]
+public class PresencePayload
+{
+    public string hoverCardId;        // instance/card id being hovered, or null/empty for none
+    public int[] raisedHandIndexes;   // indexes of the sender's hand cards currently lifted
+}
+
 public static class MatchNetworkSync
 {
     private const string MatchStartMessage = "OptcgMatchStart";
     private const string GameCommandMessage = "OptcgGameCmd";
     private const string DeckShareMessage = "OptcgDeckShare";
+    private const string ChatMessage = "OptcgChat";
+    private const string NameShareMessage = "OptcgNameShare";
+    private const string PresenceMessage = "OptcgPresence";
+
+    // Chat messages longer than this are truncated before sending (UI should enforce the
+    // same cap on its input field; this is the transport-level backstop).
+    public const int MaxChatLength = 500;
+
+    // Presence rate limit: at most ~10 sends/sec. Timestamp is caller-supplied
+    // (UnityEngine.Time.unscaledTime from the UI layer) so tests can drive it directly.
+    private const float PresenceMinInterval = 0.1f;
+    private static float lastPresenceSendTime = float.NegativeInfinity;
 
     private static bool handlersRegistered;
 
     public static event Action<MatchStartPayload> MatchStartReceived;
     public static event Action<GameCommand> CommandReceived;
     public static event Action<NetworkDeck> DeckShareReceived;   // peer told us which deck they'll play
+    public static event Action<string> ChatReceived;             // peer sent an in-match chat line
+    public static event Action<string> PeerNameReceived;         // peer told us their display name
+    public static event Action<PresencePayload> PresenceReceived; // peer's hover/raised-hand state
 
     /// <summary>Call once, right after the NetworkManager singleton is created.</summary>
     public static void EnsureHandlersRegistered()
@@ -102,6 +129,9 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(MatchStartMessage, OnMatchStartMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(GameCommandMessage, OnGameCommandMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(DeckShareMessage, OnDeckShareMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(ChatMessage, OnChatMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(NameShareMessage, OnNameShareMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(PresenceMessage, OnPresenceMessage);
         handlersRegistered = true;
     }
 
@@ -163,6 +193,65 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.SendNamedMessage(GameCommandMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
     }
 
+    /// <summary>
+    /// Send an in-match chat line to the opponent. Text is trimmed to MaxChatLength (500)
+    /// chars before sending. Reliable + fragmented so a max-length UTF-16-heavy message
+    /// can't exceed a single packet. Silently drops (with a warning) if no peer is
+    /// connected yet - chat before the guest joins has nowhere to go.
+    /// </summary>
+    public static void SendChat(string text)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null || string.IsNullOrEmpty(text)) return;
+        var target = GetPeerClientId();
+        if (target == null) { Debug.LogWarning("MatchNetworkSync.SendChat: no connected peer yet - not sent."); return; }
+        if (text.Length > MaxChatLength) text = text.Substring(0, MaxChatLength);
+        using var writer = new FastBufferWriter(text.Length * 4 + 32, Allocator.Temp);
+        writer.WriteValueSafe(text);
+        nm.CustomMessagingManager.SendNamedMessage(ChatMessage, target.Value, writer, NetworkDelivery.ReliableFragmentedSequenced);
+    }
+
+    /// <summary>Tell the peer our display name (for the in-match turn indicator / chat).
+    /// Sent on peer connect, like the lobby's deck share. Capped at 40 chars.</summary>
+    public static void SendPeerName(string name)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null || string.IsNullOrWhiteSpace(name)) return;
+        var target = GetPeerClientId();
+        if (target == null) return;   // lobby re-sends on peer connect
+        name = name.Trim();
+        if (name.Length > 40) name = name.Substring(0, 40);
+        using var writer = new FastBufferWriter(name.Length * 4 + 32, Allocator.Temp);
+        writer.WriteValueSafe(name);
+        nm.CustomMessagingManager.SendNamedMessage(NameShareMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
+    /// <summary>
+    /// Stream our hover/raised-hand state to the opponent. Fire-and-forget (Unreliable):
+    /// callers may invoke this every frame while state changes; sends are rate-limited to
+    /// ~10/sec via the caller-supplied timestamp (pass UnityEngine.Time.unscaledTime -
+    /// parameterized so the deterministic engine layer stays Unity-free and tests can
+    /// drive the clock). Over-rate calls and calls with no peer are silently dropped.
+    /// </summary>
+    public static void SendPresence(PresencePayload p, float now)
+    {
+        if (p == null) return;
+        if (now - lastPresenceSendTime < PresenceMinInterval) return;   // rate limit
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null) return;
+        var target = GetPeerClientId();
+        if (target == null) return;   // cosmetic state - nothing to warn about pre-connect
+        lastPresenceSendTime = now;
+        string json = JsonUtility.ToJson(p);
+        using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(json);
+        // Unreliable: stale/dropped packets are fine, the next send overwrites the state.
+        nm.CustomMessagingManager.SendNamedMessage(PresenceMessage, target.Value, writer, NetworkDelivery.Unreliable);
+    }
+
+    /// <summary>Convenience overload using UnityEngine.Time.unscaledTime as the clock.</summary>
+    public static void SendPresence(PresencePayload p) => SendPresence(p, Time.unscaledTime);
+
     // ---- Receiving ----
 
     private static void OnMatchStartMessage(ulong senderClientId, FastBufferReader reader)
@@ -183,6 +272,32 @@ public static class MatchNetworkSync
         NetworkDeck deck = null;
         try { deck = JsonUtility.FromJson<NetworkDeck>(json); } catch { /* ignore malformed */ }
         if (deck != null && !string.IsNullOrEmpty(deck.leader)) DeckShareReceived?.Invoke(deck);
+    }
+
+    private static void OnChatMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string text);
+        if (string.IsNullOrEmpty(text)) return;
+        // Defensive cap on the receive side too - never trust the peer's client to clamp.
+        if (text.Length > MaxChatLength) text = text.Substring(0, MaxChatLength);
+        ChatReceived?.Invoke(text);
+    }
+
+    private static void OnNameShareMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string name);
+        if (string.IsNullOrWhiteSpace(name)) return;
+        name = name.Trim();
+        if (name.Length > 40) name = name.Substring(0, 40);   // defensive receive-side cap
+        PeerNameReceived?.Invoke(name);
+    }
+
+    private static void OnPresenceMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        PresencePayload payload = null;
+        try { payload = JsonUtility.FromJson<PresencePayload>(json); } catch { /* ignore malformed */ }
+        if (payload != null) PresenceReceived?.Invoke(payload);
     }
 
     private static void OnGameCommandMessage(ulong senderClientId, FastBufferReader reader)

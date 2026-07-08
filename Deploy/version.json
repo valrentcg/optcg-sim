@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.3",
-  "buildNumber": 4,
-  "minSupportedBuildNumber": 4,
+  "buildVersion": "1.0.4",
+  "buildNumber": 5,
+  "minSupportedBuildNumber": 5,
   "assetsVersion": 1,
-  "notes": "Streaming performance rework.",
+  "notes": "First playtest feedback: card effects fixed, defender priority, trigger privacy, mulligan flow, in-match chat, live opponent presence, friends online status, win-on-disconnect.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

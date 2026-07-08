@@ -72,8 +72,33 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // be null, in which case CreateMatch falls back to the ST01/ST02 defaults.
     public static NetworkDeck PendingNetworkedSouthDeck;
     public static NetworkDeck PendingNetworkedNorthDeck;
+    // Player display names for the center turn indicator. Set by MainMenuManager before
+    // EnsureBoard() for networked matches; hotseat falls back to "Player 1"/"Player 2".
+    public static string PendingSouthName;
+    public static string PendingNorthName;
+    private string southDisplayName = "Player 1";
+    private string northDisplayName = "Player 2";
+    private string DisplayName(string seat) => seat == "north" ? northDisplayName : southDisplayName;
     private bool isNetworked;
     private string localSeat;
+    // Set when the networked peer disconnects mid-match; Render() shows the
+    // "OPPONENT LEFT — YOU WIN!" modal until the player returns to the menu.
+    private bool opponentLeft;
+    // ---- In-match chat (networked only; see DrawMatchChatPanel) ----
+    private bool chatOpen;
+    private bool chatUnread;
+    private string chatDraft = "";
+    private InputField chatInputField;
+    private bool ChatInputFocused => chatInputField != null && chatInputField.isFocused;
+    // ---- Presence (networked only): what WE are hovering, and the opponent's last payload ----
+    private string presenceHoverCardId;
+    private int presenceRaisedHandIndex = -1;
+    private PresencePayload opponentPresence;
+    private RectTransform opponentPresenceGlow;
+    // Top-hand (opponent) fan holders + their rest positions, so PresenceReceived can lift
+    // the face-down cards the opponent is inspecting. Rebuilt every Render.
+    private readonly List<RectTransform> opponentHandSlots = new List<RectTransform>();
+    private readonly List<Vector2> opponentHandSlotHomes = new List<Vector2>();
     // Cached label for the coin-flip "waiting on opponent" state (networked only); Update()
     // mutates its text directly for the blinking-dots animation instead of re-rendering the
     // whole board every frame. Unity's fake-null makes the null-check safe even after the
@@ -235,6 +260,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void OnDestroy()
     {
         MatchNetworkSync.CommandReceived -= OnNetworkCommandReceived;
+        MatchNetworkSync.ChatReceived -= OnNetworkChatReceived;
+        MatchNetworkSync.PresenceReceived -= OnNetworkPresenceReceived;
+        var nm = Unity.Netcode.NetworkManager.Singleton;
+        if (nm != null) nm.OnClientDisconnectCallback -= OnPeerDisconnected;
     }
 
     private void Update()
@@ -253,6 +282,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             int dots = (int)(Time.unscaledTime * 2f) % 4;
             coinFlipWaitingText.text = coinFlipWaitingBaseMessage + new string('.', dots);
         }
+
+        // Presence OUT: stream our current hover/raised-hand state to the opponent every frame;
+        // MatchNetworkSync.SendPresence self-rate-limits (~10/s) and no-ops with no peer. Sending
+        // the FULL current state each call means a dropped packet is corrected by the next one,
+        // and hover-end naturally goes out as an empty payload.
+        if (isNetworked && !isReplayMode && state != null)
+        {
+            MatchNetworkSync.SendPresence(new PresencePayload
+            {
+                hoverCardId = presenceHoverCardId,
+                raisedHandIndexes = presenceRaisedHandIndex >= 0 ? new[] { presenceRaisedHandIndex } : new int[0],
+            });
+        }
+
+        // While the chat input has keyboard focus, keystrokes must never reach game handling.
+        if (ChatInputFocused) return;
 
         if (selectedDonIds.Count == 0) return;
 
@@ -390,6 +435,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             }
         }
         currentMatchConfig = config;
+        // Hotseat/versus-self: both seats are this player; generic names.
+        southDisplayName = "Player 1";
+        northDisplayName = "Player 2";
         state = GameEngine.CreateMatch(config);
         selectedId = null;
         selectedSeat = null;
@@ -496,14 +544,57 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         previewLockCard = null;
         ClearDonSelection(false);
 
+        // Display names (set by MainMenuManager.LaunchNetworkedMatch; consumed here so a later
+        // hotseat match can't inherit them).
+        southDisplayName = string.IsNullOrEmpty(PendingSouthName) ? "Player 1" : PendingSouthName;
+        northDisplayName = string.IsNullOrEmpty(PendingNorthName) ? "Player 2" : PendingNorthName;
+        PendingSouthName = null;
+        PendingNorthName = null;
+        opponentLeft = false;
+        chatOpen = false;
+        chatUnread = false;
+        chatMessages.Clear();
+        opponentPresence = null;
+        presenceHoverCardId = null;
+        presenceRaisedHandIndex = -1;
+
         MatchNetworkSync.CommandReceived -= OnNetworkCommandReceived;
         MatchNetworkSync.CommandReceived += OnNetworkCommandReceived;
+        MatchNetworkSync.ChatReceived -= OnNetworkChatReceived;
+        MatchNetworkSync.ChatReceived += OnNetworkChatReceived;
+        MatchNetworkSync.PresenceReceived -= OnNetworkPresenceReceived;
+        MatchNetworkSync.PresenceReceived += OnNetworkPresenceReceived;
+        var nm = Unity.Netcode.NetworkManager.Singleton;
+        if (nm != null)
+        {
+            nm.OnClientDisconnectCallback -= OnPeerDisconnected;
+            nm.OnClientDisconnectCallback += OnPeerDisconnected;
+        }
+        Render();
+    }
+
+    // Netcode client disconnect during a live networked match: if the match isn't already
+    // decided, the remaining player wins by forfeit. Purely a UI outcome — no command is
+    // dispatched and no state is mutated; the match record is deliberately NOT saved
+    // (SaveFinishedMatchRecords expects an engine-finished state).
+    private void OnPeerDisconnected(ulong clientId)
+    {
+        if (!isNetworked || opponentLeft || isReplayMode) return;
+        if (state == null || state.Status == "finished") return;
+        opponentLeft = true;
         Render();
     }
 
     private void OnNetworkCommandReceived(GameCommand command)
     {
         if (!isNetworked || state == null) return;
+        // Trigger privacy: when the DEFENDER (the remote player, from this client's point of
+        // view) activates a life-card Trigger, capture which card it was BEFORE the command
+        // consumes it, so the attacker can be shown the reveal in the right-side preview.
+        string activatedTriggerCardId = null;
+        if (command.Type == "useTrigger" && command.Seat != localSeat
+            && state.Battle != null && state.Battle.RevealedLife != null)
+            activatedTriggerCardId = state.Battle.RevealedLife.CardId;
         state = GameEngine.ApplyCommand(state, command);
         NormalizeSelection();
         if (state.Status == "finished" && !replaySaved)
@@ -512,6 +603,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             SaveFinishedMatchRecords();
         }
         Render();
+        // AFTER the defender chose to activate: show the attacker what triggered.
+        if (activatedTriggerCardId != null) ShowPreviewById(activatedTriggerCardId);
     }
 
     // Runs once per finished match (guarded by replaySaved at both call sites —
@@ -1030,6 +1123,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         handCardRects.Clear();
         boardDeckPileRects.Clear();
         cardTargetRects.Clear();
+        // Presence visuals live on board objects that Clear() just destroyed.
+        opponentPresenceGlow = null;
+        opponentHandSlots.Clear();
+        opponentHandSlotHomes.Clear();
+        chatInputField = null;
         HideHoverTargetArrow();
         // Self-heal: if a drag's OnDrop (e.g. playing a character) triggers this Render() and
         // destroys the dragged object before its OnEndDrag runs, Unity's EventSystem sees the
@@ -1071,7 +1169,33 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         DrawResolvedTargetingArrows();
         DrawSidePanel();
         DrawLeftPanel();
+        if (isNetworked && !isReplayMode) DrawMatchChatPanel();
         if (isReplayMode) DrawReplayBar();
+        if (opponentLeft) DrawOpponentLeftOverlay();
+        // Re-apply the opponent's hover/raised-hand presence to the freshly built board.
+        ApplyOpponentPresence();
+    }
+
+    // Modal shown when the networked peer disconnects before the match finished.
+    private void DrawOpponentLeftOverlay()
+    {
+        var dim = PanelObject("Opponent Left Dim", boardRoot, new Color32(8, 10, 14, 200));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+
+        var panel = PanelObject("Opponent Left Panel", boardRoot, (Color)new Color32(14, 30, 46, 250));
+        Stretch(panel, new Vector2(0.32f, 0.40f), new Vector2(0.68f, 0.60f), Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, Accent, 2f);
+        panel.SetAsLastSibling();
+
+        var label = TextObject("Opponent Left Text", panel, "OPPONENT LEFT — YOU WIN!", 20, Ink, TextAnchor.MiddleCenter, titleFont);
+        label.fontStyle = FontStyle.Bold;
+        Stretch(label.rectTransform, new Vector2(0.04f, 0.52f), new Vector2(0.96f, 0.94f), Vector2.zero, Vector2.zero);
+
+        var buttons = RowObject("Opponent Left Buttons", panel, 10, TextAnchor.MiddleCenter);
+        Stretch(buttons, new Vector2(0.10f, 0.10f), new Vector2(0.90f, 0.46f), Vector2.zero, Vector2.zero);
+        AddButton(buttons, "MAIN MENU", ReturnToMenu);
     }
 
     // Thin control strip across the top of the board, only shown during replay playback.
@@ -1966,40 +2090,44 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
     }
 
+    // Mulligan choice: no modal — the freshly dealt hands are visible on the board, and each
+    // undecided player gets two choice bubbles (KEEP / MULLIGAN) tucked under their own hand
+    // (mirrored above the top hand for the hotseat second player). Networked PvP: each client
+    // only sees/controls its own choice, so nothing leaks before both have decided.
     private void DrawMulliganOverlay()
     {
         if (state.Status != "mulligan") return;
 
-        var dim = PanelObject("Mulligan Dim", boardRoot, new Color32(8, 10, 14, 160));
-        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var hint = TextObject("Mulligan Hint", boardRoot,
+            "Look at your 5 cards — keep this hand, or mulligan once for a fresh 5.",
+            13, Muted, TextAnchor.MiddleCenter, titleFont);
+        Stretch(hint.rectTransform, new Vector2(0.25f, 0.515f), new Vector2(0.75f, 0.545f), Vector2.zero, Vector2.zero);
+        hint.raycastTarget = false;
 
-        var panel = PanelObject("Mulligan Panel", boardRoot, (Color)new Color32(14, 30, 46, 250));
-        Stretch(panel, new Vector2(0.24f, 0.34f), new Vector2(0.76f, 0.66f), Vector2.zero, Vector2.zero);
-        RoundBig(panel);
-        AddRoundedCardBorder(panel, Accent, 2f);
-
-        var label = TextObject("Mulligan Text", panel, "Look at your hand. Each player may mulligan once for a fresh 5.", 15, Ink, TextAnchor.MiddleCenter, titleFont);
-        Stretch(label.rectTransform, new Vector2(0.04f, 0.72f), new Vector2(0.96f, 0.96f), Vector2.zero, Vector2.zero);
-
-        // Networked PvP: each client only sees/controls their own mulligan choice - showing
-        // the opponent's here would leak whether they kept or mulliganed before it matters.
-        // Hotseat/Versus Self still shows both side by side, unchanged.
         var mulliganSeats = isNetworked ? new[] { BottomSeat } : new[] { "south", "north" };
         foreach (var seat in mulliganSeats)
         {
             var p = state.Players[seat];
-            var half = mulliganSeats.Length == 1
-                ? new Vector2(0.06f, 0.94f)
-                : (seat == BottomSeat ? new Vector2(0.06f, 0.54f) : new Vector2(0.54f, 0.94f));
+            bool top = seat == TopSeat;
+            var holder = PanelObject(seat + " Mulligan Choice", boardRoot, new Color(0, 0, 0, 0));
+            Stretch(holder,
+                top ? new Vector2(0.30f, 0.952f) : new Vector2(0.30f, 0.004f),
+                top ? new Vector2(0.70f, 0.996f) : new Vector2(0.70f, 0.048f),
+                Vector2.zero, Vector2.zero);
+            holder.GetComponent<Image>().raycastTarget = false;
 
-            var name = TextObject(seat + " Mulligan Name", panel, p.MulliganDecided ? $"{p.Name}: ready" : $"{p.Name}: deciding...", 13, Muted, TextAnchor.MiddleCenter, monoFont);
-            Stretch(name.rectTransform, new Vector2(half.x, 0.42f), new Vector2(half.y, 0.68f), Vector2.zero, Vector2.zero);
+            if (p.MulliganDecided)
+            {
+                var ready = TextObject(seat + " Mulligan Ready", holder, "READY — waiting for opponent...", 11, Muted, TextAnchor.MiddleCenter, monoFont);
+                Stretch(ready.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+                ready.raycastTarget = false;
+                continue;
+            }
 
-            if (p.MulliganDecided) continue;
-            var row = RowObject(seat + " Mulligan Buttons", panel, 10, TextAnchor.MiddleCenter);
-            Stretch(row, new Vector2(half.x, 0.08f), new Vector2(half.y, 0.40f), Vector2.zero, Vector2.zero);
-            AddButton(row, "Mulligan", () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = true }));
-            AddButton(row, "Keep Hand", () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = false }));
+            var row = RowObject(seat + " Mulligan Buttons", holder, 12, TextAnchor.MiddleCenter);
+            Stretch(row, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            AddButton(row, "KEEP", () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = false }));
+            AddButton(row, "MULLIGAN", () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = true }));
         }
     }
 
@@ -2093,8 +2221,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         crest.anchoredPosition = Vector2.zero;
         Round(crest);
         AddRoundedCardBorder(crest, Accent, 1.2f);
-        string activeName = state.Players.TryGetValue(state.ActiveSeat, out var activePlayer) && activePlayer != null
-            ? activePlayer.Name : state.ActiveSeat;
+        // Center turn indicator shows the players' DISPLAY names (account/lobby names), not
+        // the engine's seat names ("South"/"North").
+        string activeName = DisplayName(state.ActiveSeat);
         var crestText = TextObject("Center Crest Text", crest,
             $"TURN {state.TurnNumber}    ·    {activeName.ToUpper()}'S TURN", 10, Ink, TextAnchor.MiddleCenter, monoFont);
         Stretch(crestText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -3053,7 +3182,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(actionPanel, new Vector2(0.085f, 0.35f), new Vector2(0.915f, 0.852f), Vector2.zero, Vector2.zero);
         DrawContextActions(actionPanel);
 
-        DrawChatPanel();
+        // Networked matches use the left-edge match chat panel (DrawMatchChatPanel) instead.
+        if (!isNetworked) DrawChatPanel();
         DrawPlayerPlate(sideRoot, state.Players.ContainsKey(BottomSeat) ? state.Players[BottomSeat] : null, BottomSeat, state.ActiveSeat == BottomSeat, new Vector2(0.06f, 0.094f), new Vector2(0.94f, 0.138f));
         AddEndTurnPanel();
 
@@ -3221,12 +3351,217 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private sealed class ChatMessage { public string Sender; public string Text; public bool Mine; }
     private readonly List<ChatMessage> chatMessages = new List<ChatMessage>();
+    private const int MaxChatHistory = 50;
 
     private void SendChat(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return;
-        chatMessages.Add(new ChatMessage { Sender = "You", Text = text.Trim(), Mine = true });
+        text = text.Trim();
+        if (text.Length > MatchNetworkSync.MaxChatLength) text = text.Substring(0, MatchNetworkSync.MaxChatLength);
+        string sender = isNetworked ? DisplayName(localSeat) : "You";
+        chatMessages.Add(new ChatMessage { Sender = sender, Text = text, Mine = true });
+        TrimChatHistory();
+        if (isNetworked) MatchNetworkSync.SendChat(text);
+        chatDraft = "";
         Render();
+    }
+
+    private void OnNetworkChatReceived(string text)
+    {
+        if (!isNetworked || string.IsNullOrEmpty(text)) return;
+        string opponentSeat = localSeat == "south" ? "north" : "south";
+        chatMessages.Add(new ChatMessage { Sender = DisplayName(opponentSeat), Text = text, Mine = false });
+        TrimChatHistory();
+        if (!chatOpen) chatUnread = true;
+        // Never rebuild mid-drag (Render() would destroy the dragged object under the
+        // EventSystem) — the coalesced refresh in Update() picks it up instead.
+        if (isDraggingHandCard || isDraggingAttack) _artRefreshQueued = true;
+        else Render();
+    }
+
+    private void TrimChatHistory()
+    {
+        while (chatMessages.Count > MaxChatHistory) chatMessages.RemoveAt(0);
+    }
+
+    // Presence OUT bookkeeping: called by CardHover on enter/exit. Board hovers publish the
+    // hovered instance id; hovering (lifting) one of OUR OWN hand cards publishes its hand
+    // index. Update() streams the current state to the peer (rate-limited in the transport).
+    private void SetPresenceHover(CardInstance card, bool isHandCard, bool entered)
+    {
+        if (!isNetworked || card == null || state == null) return;
+        if (isHandCard)
+        {
+            if (entered)
+            {
+                int idx = -1;
+                if (card.Owner == localSeat && state.Players.TryGetValue(localSeat, out var lp) && lp != null)
+                    idx = lp.Hand.FindIndex(c => c.InstanceId == card.InstanceId);
+                presenceRaisedHandIndex = idx;
+            }
+            else
+            {
+                presenceRaisedHandIndex = -1;
+            }
+        }
+        else
+        {
+            if (entered) presenceHoverCardId = card.InstanceId;
+            else if (presenceHoverCardId == card.InstanceId) presenceHoverCardId = null;
+        }
+    }
+
+    // Presence IN: store the opponent's latest payload (each one is a full replacement) and
+    // re-render its cosmetic effects. NEVER dispatches commands or touches game state.
+    private void OnNetworkPresenceReceived(PresencePayload payload)
+    {
+        if (!isNetworked || isReplayMode) return;
+        opponentPresence = payload;
+        ApplyOpponentPresence();
+    }
+
+    private void ApplyOpponentPresence()
+    {
+        // Clear previous cosmetic state first (also handles the empty-payload case).
+        if (opponentPresenceGlow != null) { Destroy(opponentPresenceGlow.gameObject); opponentPresenceGlow = null; }
+        for (int i = 0; i < opponentHandSlots.Count; i++)
+            if (opponentHandSlots[i] != null) opponentHandSlots[i].anchoredPosition = opponentHandSlotHomes[i];
+
+        if (!isNetworked || opponentPresence == null) return;
+
+        // (i) Gold hover glow on the board card the opponent is pointing at.
+        if (!string.IsNullOrEmpty(opponentPresence.hoverCardId)
+            && cardTargetRects.TryGetValue(opponentPresence.hoverCardId, out var cardRect) && cardRect != null)
+        {
+            var host = (cardRect.Find("Card Face") as RectTransform) ?? cardRect;
+            opponentPresenceGlow = AddMysticalCardOutline(host, false);
+        }
+
+        // (ii) Lift the opponent's face-down hand cards they're inspecting by ~12px (they stay
+        // face-down; the top hand lifts toward the board centre, i.e. downward on screen).
+        if (opponentPresence.raisedHandIndexes != null)
+        {
+            foreach (var idx in opponentPresence.raisedHandIndexes)
+            {
+                if (idx < 0 || idx >= opponentHandSlots.Count) continue;
+                var slot = opponentHandSlots[idx];
+                if (slot != null) slot.anchoredPosition = opponentHandSlotHomes[idx] + new Vector2(0f, -12f);
+            }
+        }
+    }
+
+    // Networked-match chat: a collapsed tab on the LEFT screen edge; clicking it expands a
+    // ~300px panel with the scrollable message history + an input field (Enter or Send to
+    // send). Presence/game hotkeys are guarded while the input is focused (ChatInputFocused).
+    private void DrawMatchChatPanel()
+    {
+        // Collapsed tab (always present so the panel can be re-opened).
+        var tab = PanelObject("Chat Tab", boardRoot, chatOpen ? Accent : (Color)new Color32(34, 58, 78, 235));
+        tab.anchorMin = new Vector2(0f, 0.5f);
+        tab.anchorMax = new Vector2(0f, 0.5f);
+        tab.pivot = new Vector2(0f, 0.5f);
+        tab.sizeDelta = new Vector2(26f, 92f);
+        tab.anchoredPosition = new Vector2(0f, 0f);
+        Round(tab);
+        AddRoundedCardBorder(tab, chatOpen ? Accent2 : MenuB, 1f);
+        var tabText = TextObject("Chat Tab Text", tab, "C\nH\nA\nT", 10, chatOpen ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
+        tabText.fontStyle = FontStyle.Bold;
+        Stretch(tabText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        if (chatUnread && !chatOpen)
+        {
+            var dot = PanelObject("Chat Unread Dot", tab, (Color)RedAccent);
+            dot.anchorMin = dot.anchorMax = new Vector2(0.82f, 0.92f);
+            dot.pivot = new Vector2(0.5f, 0.5f);
+            dot.sizeDelta = new Vector2(8f, 8f);
+            dot.anchoredPosition = Vector2.zero;
+            RoundCircle(dot);
+        }
+        var tabButton = tab.gameObject.AddComponent<Button>();
+        tabButton.onClick.AddListener(() => { chatOpen = !chatOpen; if (chatOpen) chatUnread = false; Render(); });
+
+        if (!chatOpen) return;
+
+        var panel = PanelObject("Match Chat Panel", boardRoot, (Color)new Color32(14, 30, 46, 246));
+        panel.anchorMin = new Vector2(0f, 0.5f);
+        panel.anchorMax = new Vector2(0f, 0.5f);
+        panel.pivot = new Vector2(0f, 0.5f);
+        panel.sizeDelta = new Vector2(300f, 420f);
+        panel.anchoredPosition = new Vector2(30f, 0f);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, MenuB, 1.2f);
+
+        var title = TextObject("Match Chat Title", panel, "MATCH CHAT", 10, Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(title.rectTransform, new Vector2(0.05f, 0.93f), new Vector2(0.95f, 0.99f), Vector2.zero, Vector2.zero);
+
+        // Scrollable message list (same viewport/ScrollRect pattern as the combat log).
+        var viewport = PanelObject("Match Chat Viewport", panel, new Color(0, 0, 0, 0));
+        Stretch(viewport, new Vector2(0.04f, 0.12f), new Vector2(0.96f, 0.92f), Vector2.zero, Vector2.zero);
+        viewport.gameObject.AddComponent<RectMask2D>();
+
+        var content = new GameObject("Match Chat Content").AddComponent<RectTransform>();
+        content.SetParent(viewport, false);
+        content.anchorMin = new Vector2(0f, 1f);
+        content.anchorMax = new Vector2(1f, 1f);
+        content.pivot = new Vector2(0.5f, 1f);
+        content.sizeDelta = Vector2.zero;
+        content.anchoredPosition = Vector2.zero;
+        var vlg = content.gameObject.AddComponent<VerticalLayoutGroup>();
+        vlg.spacing = 4;
+        vlg.childControlWidth = true; vlg.childControlHeight = true;
+        vlg.childForceExpandWidth = true; vlg.childForceExpandHeight = false;
+        vlg.childAlignment = TextAnchor.UpperLeft;
+        content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        var scroll = viewport.gameObject.AddComponent<ScrollRect>();
+        scroll.content = content; scroll.viewport = viewport;
+        scroll.horizontal = false; scroll.vertical = true;
+        scroll.movementType = ScrollRect.MovementType.Clamped; scroll.scrollSensitivity = 18f;
+        AttachScrollbar(scroll);
+
+        foreach (var m in chatMessages)
+        {
+            var line = TextObject("Chat Line", content, $"{m.Sender}: {m.Text}", 12,
+                m.Mine ? Accent2 : Ink, TextAnchor.UpperLeft);
+            line.horizontalOverflow = HorizontalWrapMode.Wrap;
+            line.verticalOverflow = VerticalWrapMode.Overflow;
+            line.raycastTarget = false;
+        }
+        Canvas.ForceUpdateCanvases();
+        scroll.verticalNormalizedPosition = 0f;
+
+        // Input field (left) + Send (right).
+        var fieldGo = new GameObject("Match Chat Input", typeof(RectTransform), typeof(Image), typeof(InputField));
+        var fieldRt = fieldGo.GetComponent<RectTransform>();
+        fieldRt.SetParent(panel, false);
+        Stretch(fieldRt, new Vector2(0.04f, 0.015f), new Vector2(0.74f, 0.105f), Vector2.zero, Vector2.zero);
+        fieldGo.GetComponent<Image>().color = new Color32(20, 34, 50, 235);
+        Round(fieldRt);
+        AddRoundedCardBorder(fieldRt, MenuB, 1f);
+        var field = fieldGo.GetComponent<InputField>();
+        var ph = TextObject("Match Chat Placeholder", fieldRt, "Type message...", 11, Muted, TextAnchor.MiddleLeft);
+        var txt = TextObject("Match Chat Field Text", fieldRt, "", 11, Ink, TextAnchor.MiddleLeft);
+        Stretch(ph.rectTransform, new Vector2(0.06f, 0f), new Vector2(0.96f, 1f), Vector2.zero, Vector2.zero);
+        Stretch(txt.rectTransform, new Vector2(0.06f, 0f), new Vector2(0.96f, 1f), Vector2.zero, Vector2.zero);
+        field.textComponent = txt;
+        field.placeholder = ph;
+        field.lineType = InputField.LineType.SingleLine;
+        field.characterLimit = MatchNetworkSync.MaxChatLength;
+        // Renders happen on every incoming command; keep the half-typed draft alive across them.
+        field.text = chatDraft ?? "";
+        field.onValueChanged.AddListener(v => chatDraft = v);
+        field.onEndEdit.AddListener(v =>
+        {
+            if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)) SendChat(v);
+        });
+        chatInputField = field;
+
+        var sendGo = PanelObject("Match Chat Send", panel, Accent);
+        Stretch(sendGo, new Vector2(0.77f, 0.015f), new Vector2(0.96f, 0.105f), Vector2.zero, Vector2.zero);
+        Round(sendGo);
+        var sendTxt = TextObject("Match Chat Send Text", sendGo, "Send", 11, BadgeInk, TextAnchor.MiddleCenter, titleFont);
+        Stretch(sendTxt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var sendBtn = sendGo.gameObject.AddComponent<Button>();
+        sendBtn.onClick.AddListener(() => { var t = field.text; field.text = ""; SendChat(t); });
     }
 
     private void DrawChatPanel()
@@ -3370,6 +3705,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             selectedSeat = null;
             var dl = state.DeckLook;
             var selecting = dl.Step == "select";
+            // Buttons only for the seat doing the look/search; the other client just waits.
+            if (isNetworked && dl.Seat != localSeat)
+            {
+                AddInfo(body, $"{dl.SourceName}: opponent is looking at cards — waiting on opponent...");
+                return;
+            }
             if (dl.SearchMode)
             {
                 string costHint = dl.MaxCost >= 0 ? $" (cost ≤ {dl.MaxCost})" : "";
@@ -3442,7 +3783,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         // ---- Hand card selected --------------------------------------------------
-        if (!string.IsNullOrEmpty(selectedId) && selectedSeat != null && selectedSeat.EndsWith("-hand"))
+        if (!string.IsNullOrEmpty(selectedId) && selectedSeat != null && selectedSeat.EndsWith("-hand")
+            && (!isNetworked || selectedSeat == localSeat + "-hand"))
         {
             var hSeat = selectedSeat.Replace("-hand", "");
             state.Players.TryGetValue(hSeat, out var hp2);
@@ -3457,8 +3799,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 if (!string.IsNullOrEmpty(hDef.Trigger)) AddInfo(body, $"[Trigger] {hDef.Trigger}");
 
                 int freeDon2 = hp2 != null ? GameEngine.ActiveDonCount(hp2) : 0;
-                bool canAfford = hp2 != null && freeDon2 >= hDef.Cost;
-                string costHint = canAfford ? "" : $"  (need {hDef.Cost} DON!!, have {freeDon2})";
+                int effCost = GameEngine.GetCost(state, hCard);   // effective cost (printed + CostDelta modifiers)
+                bool canAfford = hp2 != null && freeDon2 >= effCost;
+                string costHint = canAfford ? "" : $"  (need {effCost} DON!!, have {freeDon2})";
 
                 bool counterOnly = hDef.Type == "event" && hDef.Power == 0 && hDef.Counter > 0
                     && string.IsNullOrEmpty(hDef.Effect);
@@ -3485,7 +3828,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         // ---- Board card selected -------------------------------------------------
-        if (!string.IsNullOrEmpty(selectedId) && !string.IsNullOrEmpty(selectedSeat) && selectedSeat == state.ActiveSeat)
+        if (!string.IsNullOrEmpty(selectedId) && !string.IsNullOrEmpty(selectedSeat) && selectedSeat == state.ActiveSeat
+            && (!isNetworked || selectedSeat == localSeat))
         {
             var selected = FindAny(selectedSeat, selectedId);
             if (selected != null)
@@ -3556,6 +3900,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         var effect = state.PendingEffects[0];
         var source = CardData.GetCard(effect.SourceCardId);
+        // Only the seat whose effect this is gets buttons; the other client sees a passive
+        // status line (buttons only for the seat whose decision it is).
+        if (isNetworked && effect.Seat != localSeat)
+        {
+            AddEffectCardVisual(body, effect.SourceCardId);
+            AddInfo(body, source.Name + " - " + EffectTimingLabel(effect.Timing));
+            AddInfo(body, "Waiting on opponent...");
+            return;
+        }
         AddEffectCardVisual(body, effect.SourceCardId);
         AddInfo(body, source.Name + " - " + EffectTimingLabel(effect.Timing));
         AddInfo(body, effect.Text);
@@ -3591,8 +3944,55 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             }
         }
 
-        AddButton(body, "Resolve / Manual", () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
-        AddButton(body, "Skip Effect", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional);
+        AddButton(body, ResolveEffectLabel(effect), () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
+        AddButton(body, "SKIP", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional);
+    }
+
+    // Short, descriptive label for the resolve button, derived from the queued effect:
+    // "UTA: +2000 POWER", "ROBIN: PLAY FROM HAND", ... Falls back to the first ~30 chars
+    // of the effect clause, uppercased.
+    private static string ResolveEffectLabel(PendingEffect effect)
+    {
+        var src = CardData.GetCard(effect.SourceCardId);
+        string name = src != null && !string.IsNullOrEmpty(src.Name) ? src.Name.ToUpperInvariant() : "EFFECT";
+        // Keep the prefix compact for multi-word names ("NICO ROBIN" -> "ROBIN" is nicer, but
+        // ambiguous to derive; just cap the whole name's length instead).
+        if (name.Length > 14) name = name.Substring(0, 14).TrimEnd();
+        string clause = SummarizeEffectClause(effect.Text);
+        return string.IsNullOrEmpty(clause) ? name + ": RESOLVE" : name + ": " + clause;
+    }
+
+    private static string SummarizeEffectClause(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var Rx = new System.Func<string, System.Text.RegularExpressions.Match>(pat =>
+            System.Text.RegularExpressions.Regex.Match(text, pat,
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase));
+
+        var m = Rx(@"([+\-−–]\s?\d{3,5})\s*power");
+        if (m.Success) return NormalizeSign(m.Groups[1].Value) + " POWER";
+        m = Rx(@"([+\-−–]\s?\d{1,2})\s*cost");
+        if (m.Success) return NormalizeSign(m.Groups[1].Value) + " COST";
+        if (Rx(@"\bK\.?O\.?\b").Success) return "K.O. TARGET";
+        if (Rx(@"play\b[^.]*from your hand").Success) return "PLAY FROM HAND";
+        if (Rx(@"play\b[^.]*from your trash").Success) return "PLAY FROM TRASH";
+        m = Rx(@"draw (\d+|a) cards?");
+        if (m.Success) return "DRAW " + (m.Groups[1].Value.Equals("a", System.StringComparison.OrdinalIgnoreCase) ? "1" : m.Groups[1].Value);
+
+        // Fallback: strip leading timing/cost tags, take the first clause, cap ~30 chars.
+        string t = System.Text.RegularExpressions.Regex.Replace(text,
+            @"^\s*(\[[^\]]*\]\s*|[①②③④⑤⑥⑦⑧⑨⑩]\s*:?\s*|DON!!\s*[x×]?\s*\d+\s*:?\s*)+", "");
+        int cut = t.IndexOfAny(new[] { '.', ';', ':' });
+        if (cut > 0) t = t.Substring(0, cut);
+        t = t.Trim();
+        if (t.Length == 0) return null;
+        if (t.Length > 30) t = t.Substring(0, 30).TrimEnd();
+        return t.ToUpperInvariant();
+    }
+
+    private static string NormalizeSign(string value)
+    {
+        return value.Replace(" ", "").Replace('−', '-').Replace('–', '-');
     }
 
     private void DrawChoiceActions(RectTransform body)
@@ -3600,6 +4000,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var ch = state.ActiveChoice;
         var source = CardData.GetCard(ch.SourceCardId);
         AddEffectCardVisual(body, ch.SourceCardId);
+        // Buttons only for the seat whose choice this is; the other client just waits.
+        if (isNetworked && ch.Seat != localSeat)
+        {
+            AddInfo(body, source.Name + " — opponent is choosing...");
+            return;
+        }
         AddInfo(body, source.Name + " — Choose One:");
         AddInfo(body, $"A: {ch.OptionA}");
         AddInfo(body, $"B: {ch.OptionB}");
@@ -3628,8 +4034,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawBattleActions(RectTransform body)
     {
         var b = state.Battle;
-        var defender = state.Players[b.TargetSeat];
         AddInfo(body, StepLabel(b.Step));
+
+        // Defender priority: every post-declaration decision (block, counter, final resolve,
+        // trigger) belongs to the DEFENDER (BattleState.PrioritySeat — always TargetSeat; the
+        // engine ignores resolveAttack from the attacker). In a networked match the attacker's
+        // client gets a passive status line and NO buttons; hotseat shows the buttons since
+        // both seats are local.
+        string prioritySeat = string.IsNullOrEmpty(b.PrioritySeat) ? b.TargetSeat : b.PrioritySeat;
+        bool myDecision = !isNetworked || prioritySeat == localSeat;
+        if (!myDecision)
+        {
+            if (b.Step == "trigger")
+                AddInfo(body, "Opponent is checking their Life card for a Trigger — waiting on opponent...");
+            else
+                AddInfo(body, "Waiting on opponent...");
+            return;
+        }
 
         if (b.Step == "block")
         {
@@ -3645,10 +4066,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         else if (b.Step == "damage")
         {
             AddInfo(body, "Counter window closed. Resolve damage or battle result.");
-            AddButton(body, "Resolve Attack", () => Dispatch(new GameCommand { Type = "resolveAttack", Seat = b.AttackerSeat }));
+            AddButton(body, "Resolve Attack", () => Dispatch(new GameCommand { Type = "resolveAttack", Seat = b.TargetSeat }));
         }
         else if (b.Step == "trigger")
         {
+            // Only the DEFENDER sees the revealed life card and the activate/pass choice;
+            // the attacker's client returned above with a passive note. They get the card
+            // preview only AFTER the defender activates it (see OnNetworkCommandReceived).
             var revealed = b.RevealedLife != null ? GameEngine.GetCard(b.RevealedLife) : null;
             AddInfo(body, "Revealed: " + (revealed != null ? revealed.Name : "?"));
             if (revealed != null && !string.IsNullOrWhiteSpace(revealed.Trigger)) AddInfo(body, revealed.Trigger);
@@ -3875,7 +4299,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var player = state.Players[handSeat];
         var def = GameEngine.GetCard(card);
         if (def.Type != "character" && def.Type != "stage" && def.Type != "event") return false;
-        if (GameEngine.ActiveDonCount(player) < def.Cost) return false;
+        if (GameEngine.ActiveDonCount(player) < GameEngine.GetCost(state, card)) return false;
         if (def.Type == "event") return HasMainEffect(def);
         if (def.Type == "stage") return true;
         return player.CharacterArea.Any(slot => slot == null);
@@ -3910,7 +4334,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var player = state.Players[handSeat];
         if (!player.Hand.Any(c => c.InstanceId == card.InstanceId)) return false;
         var def = GameEngine.GetCard(card);
-        return def.Type == "event" && HasMainEffect(def) && GameEngine.ActiveDonCount(player) >= def.Cost;
+        return def.Type == "event" && HasMainEffect(def) && GameEngine.ActiveDonCount(player) >= GameEngine.GetCost(state, card);
     }
 
     private static bool HasMainEffect(CardDef def)
@@ -4291,6 +4715,36 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (faceUp)
         {
             if (card.AttachedDonIds.Count > 0) AddBadge(cardBody, "+" + card.AttachedDonIds.Count, new Vector2(0.62f, 0.82f), new Vector2(0.98f, 0.98f), new Color32(13, 68, 34, 230));
+
+            // Active-modifier badges: sum the per-card deltas (ENGINE_NOTES: PowerDelta mirrors
+            // the power dicts, CostDelta is authoritative) and overlay compact chips near the
+            // bottom of the card, matching the attached-DON badge style. Zero sums are skipped.
+            if (card.Modifiers != null && card.Modifiers.Count > 0)
+            {
+                int powerDelta = 0, costDelta = 0;
+                foreach (var mod in card.Modifiers) { powerDelta += mod.PowerDelta; costDelta += mod.CostDelta; }
+                float badgeY = 0.02f;
+                if (powerDelta != 0)
+                {
+                    AddBadge(cardBody, (powerDelta > 0 ? "+" : "") + powerDelta + " POWER",
+                        new Vector2(0.02f, badgeY), new Vector2(0.72f, badgeY + 0.13f),
+                        powerDelta > 0 ? (Color)new Color32(20, 92, 46, 235) : (Color)new Color32(110, 26, 26, 235));
+                    badgeY += 0.145f;
+                }
+                if (costDelta != 0)
+                    AddBadge(cardBody, (costDelta > 0 ? "+" : "") + costDelta + " COST",
+                        new Vector2(0.02f, badgeY), new Vector2(0.72f, badgeY + 0.13f), new Color32(26, 64, 118, 235));
+            }
+
+            // Persistent GREEN glow on every card that is a VALID target for the pending effect
+            // (engine-validated via IsValidEffectTarget); invalid in-zone cards keep the red
+            // hover treatment (CardHover). Only shown to the deciding seat's client.
+            if (state != null && state.PendingEffects.Count > 0)
+            {
+                var pending = state.PendingEffects[0];
+                if ((!isNetworked || pending.Seat == localSeat) && GameEngine.IsValidEffectTarget(state, pending, card))
+                    AddUsableGlow(cardBody);
+            }
         }
 
         if (faceUp && IsDonAttachTarget(seat, card))
@@ -4334,13 +4788,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         int attachedShown = Mathf.Min(attachedDon, 8);
         if (attachedShown > 0)
         {
-            float donW = boardCardSize.x * 0.66f;
-            float donH = boardCardSize.y * 0.66f;
+            // Attached DON render at the SAME size as a leader/character card (they're normal
+            // cards, just tucked behind); the row still packs within the character's width and
+            // peeks out below it.
+            float donW = boardCardSize.x;
+            float donH = boardCardSize.y;
             float span = boardCardSize.x;                         // never exceed the character's width
-            float step = attachedShown > 1 ? (span - donW) / (attachedShown - 1) : 0f;
+            float step = attachedShown > 1 ? (span - donW * 0.5f) / (attachedShown - 1) : 0f;
             float total = donW + step * (attachedShown - 1);
             float startX = -total * 0.5f + donW * 0.5f;
-            float centerY = -donH * 0.5f;                         // top edge sits at the card's middle
+            float centerY = -donH * 0.30f;                        // ~30% of the DON peeks below the card
             for (int i = 0; i < attachedShown; i++)
             {
                 var don = new GameObject("Attached DON").AddComponent<RectTransform>();
@@ -4470,6 +4927,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             bool handFaceUp = !(isNetworked && top);
             AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top, count - 1 - i);
             holders[i] = holder;
+            // Presence IN: remember the opponent's face-down hand holders (by hand index) so
+            // PresenceReceived can lift the cards they're currently inspecting.
+            if (isNetworked && top)
+            {
+                while (opponentHandSlots.Count <= i) { opponentHandSlots.Add(null); opponentHandSlotHomes.Add(Vector2.zero); }
+                opponentHandSlots[i] = holder;
+                opponentHandSlotHomes[i] = holder.anchoredPosition;
+            }
         }
 
         // Push siblings to the front from rightmost to leftmost, so the leftmost card ends up
@@ -4637,7 +5102,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private bool CanEndTurn()
     {
-        return state.Status == "active" && state.Phase == "main" && state.Battle == null && state.PendingEffects.Count == 0;
+        return state.Status == "active" && state.Phase == "main" && state.Battle == null && state.PendingEffects.Count == 0
+            && (!isNetworked || state.ActiveSeat == localSeat);   // no dead END TURN button off-turn in networked play
     }
 
     private void AddButton(RectTransform parent, string label, UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true)
@@ -7054,6 +7520,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (manager.isDraggingHandCard || manager.isDraggingAttack) return;
 
             ShowHoverGlow();
+            manager.SetPresenceHover(card, isHandCard, true);
             manager.ShowContextTargetArrow(card);
 
             if (suppressPreview) return;
@@ -7075,6 +7542,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         public void OnPointerExit(PointerEventData eventData)
         {
             ResetVisual();
+            manager.SetPresenceHover(card, isHandCard, false);
             manager.HideHoverTargetArrow();
             if (homeSiblingIndex >= 0) stackRoot.SetSiblingIndex(homeSiblingIndex);
             if (isHandCard) manager.HideHandHoverPreview();
