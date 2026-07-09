@@ -124,13 +124,17 @@ namespace OnePieceTcg.Engine
                 Record(state, command);
                 return state;
             }
-            if (state.Status != "active" && command.Type != "startGame") return state;
+            // Hand re-arranging is allowed during the mulligan overlay too (cosmetic only).
+            if (state.Status != "active" && command.Type != "startGame"
+                && !(state.Status == "mulligan" && command.Type == "reorderHand")) return state;
 
             switch (command.Type)
             {
                 case "draw": ManualDrawCard(state, actor); break;
                 case "drawDon": ManualDrawDon(state, actor, command.Amount ?? 2); break;
                 case "reorderHand": ReorderHand(state, actor, command.InstanceId, command.SlotIndex ?? 0); break;
+                case "reorderTrash": ReorderTrash(state, actor, command.InstanceId, command.SlotIndex ?? 0); break;
+                case "sortTrash": SortTrash(state, actor, (command.Amount ?? 1) >= 0); break;
                 case "playCard": PlayCard(state, actor, command.InstanceId, command.SlotIndex); break;
                 case "attachDon": AttachDon(state, actor, command.Target, command.Amount ?? 1, command.DonInstanceIds); break;
                 case "activateMain": ActivateMain(state, actor, command.Target); break;
@@ -153,6 +157,7 @@ namespace OnePieceTcg.Engine
                 case "endTurn": EndTurn(state, actor); break;
                 case "deckLookSelect": ResolveDeckLookSelect(state, actor, command.Target); break;
                 case "deckLookConfirmOrder": ResolveDeckLookConfirmOrder(state, actor, command.OrderedInstanceIds); break;
+                case "deckLookScryConfirm": ResolveDeckLookScryConfirm(state, actor, command.OrderedInstanceIds); break;
                 default: Log(state, "system", $"Unknown command: {command.Type}"); break;
             }
             CheckRuleProcessing(state);
@@ -173,6 +178,39 @@ namespace OnePieceTcg.Engine
         {
             var owner = instance.Owner != null && state.Players.TryGetValue(instance.Owner, out var op) ? op : null;
             int power = GetCard(instance).Power;
+            // Continuous base-power auras: "[Opponent's Turn] All of your [Name] cards' base
+            // power and this Character's base power become N." (OP15-070/71).
+            if (owner != null)
+            {
+                var bpaSrcs = new List<CardInstance>();
+                if (owner.Leader != null) bpaSrcs.Add(owner.Leader);
+                foreach (var c in owner.CharacterArea) if (c != null) bpaSrcs.Add(c);
+                foreach (var bpaSrc in bpaSrcs)
+                {
+                    var bpaM = System.Text.RegularExpressions.Regex.Match(GetCard(bpaSrc)?.Effect ?? "",
+                        @"All of your \[([^\]]+)\] cards' base power and this Character's base power become (\d{3,6})");
+                    if (!bpaM.Success || IsEffectNegated(state, bpaSrc)) continue;
+                    var bpaLine = (GetCard(bpaSrc)?.Effect ?? "").Split('\n')
+                        .FirstOrDefault(l => l.Contains("base power become"));
+                    bool bpaYour = bpaLine != null && HasTiming(bpaLine, "Your Turn");
+                    bool bpaOpp = bpaLine != null && HasTiming(bpaLine, "Opponent's Turn");
+                    bool bpaOwnTurn = state.ActiveSeat == instance.Owner;
+                    if (bpaYour && !bpaOwnTurn) continue;
+                    if (bpaOpp && bpaOwnTurn) continue;
+                    if (instance.InstanceId == bpaSrc.InstanceId
+                        || NameMatches(state, instance, bpaM.Groups[1].Value.Trim()))
+                        power = int.Parse(bpaM.Groups[2].Value);
+                }
+            }
+            // "Base power becomes N" overrides replace the PRINTED power (latest wins).
+            for (int i = state.BasePowerOverrides.Count - 1; i >= 0; i--)
+            {
+                if (state.BasePowerOverrides[i].TargetInstanceId == instance.InstanceId)
+                {
+                    power = state.BasePowerOverrides[i].Value;
+                    break;
+                }
+            }
             // Attached DON!! cards only grant their raw +1000 power during their controller's
             // turn. They stay attached until that player's refresh so [DON!! xN] requirements
             // can still see them, but they do not raise defense on the opponent's turn.
@@ -180,13 +218,158 @@ namespace OnePieceTcg.Engine
                 power += instance.AttachedDonIds.Count * 1000;
             // Passive DON!! power bonuses: "[DON!! xN] This card gains +N power."
             power += GetPassiveDonPowerBonus(state, instance, owner);
+            // Conditional printed self-penalty: "If <cond>, give this Leader/Character −N power."
+            {
+                var penM = System.Text.RegularExpressions.Regex.Match(GetCard(instance)?.Effect ?? "",
+                    @"If ([^,]+), give this (?:Leader|Character) [-\u2212\u2013\u2011\u2012\u2014](\d{3,5}) power");
+                if (penM.Success && owner != null && !IsEffectNegated(state, instance)
+                    && EvaluateCondition(state, instance.Owner, penM.Groups[1].Value.Trim(), instance.InstanceId))
+                    power -= int.Parse(penM.Groups[2].Value);
+            }
             // EffectScope.Turn — cleared at the owning player's next Refresh Phase.
             if (state.TemporaryPowerBonus.TryGetValue(instance.InstanceId, out var temp)) power += temp;
             // EffectScope.Battle — cleared when the BattleState is discarded.
             if (state.Battle != null && state.Battle.BattlePowerBonus.TryGetValue(instance.InstanceId, out var battleBonus)) power += battleBonus;
             // [Your Turn] / [Opponent's Turn] passive auras from other cards.
             power += GetTurnPassiveAuraBonus(state, instance, owner);
+            // "Until the start of your next turn" bonuses (outlive normal turn cleanup).
+            foreach (var tb in state.TimedPowerBonuses)
+                if (tb.TargetInstanceId == instance.InstanceId) power += tb.Delta;
             return power;
+        }
+
+        // ---- UI status badges ------------------------------------------------
+        // One in-game status indicator on a card: short Label for the on-card chip,
+        // longer Detail for the hover preview, Kind drives the chip color:
+        // "buff" (green) | "debuff" (red) | "restrict" (amber) | "info" (blue).
+        public sealed class StatusBadge
+        {
+            public string Label;
+            public string Detail;
+            public string Kind;
+        }
+
+        // Everything currently affecting this card that a player needs insight into:
+        // net power change, cost change, base-power overrides, keyword grants (Rush,
+        // Double Attack, Banish, ...), restrictions (can't attack, frozen, can't be
+        // rested, ...), protections (can't be K.O.'d), and negated effects.
+        public static List<StatusBadge> GetStatusBadges(GameState state, CardInstance instance)
+        {
+            var badges = new List<StatusBadge>();
+            if (state == null || instance == null) return badges;
+            if (instance.Zone != "character" && instance.Zone != "leader" && instance.Zone != "stage") return badges;
+            var def = GetCard(instance);
+            if (def == null) return badges;
+
+            // Net power change vs the printed card, excluding the raw +1000s of attached
+            // DON!! (those are already visible as the DON!! badge/row on the card).
+            if (def.Type == "character" || def.Type == "leader")
+            {
+                var bo = state.BasePowerOverrides.FindLast(b => b.TargetInstanceId == instance.InstanceId);
+                int baseline = bo != null ? bo.Value : def.Power;
+                if (bo != null)
+                    badges.Add(new StatusBadge
+                    {
+                        Label = "BASE " + bo.Value,
+                        Detail = $"Base power is set to {bo.Value} (printed {def.Power}).",
+                        Kind = bo.Value >= def.Power ? "buff" : "debuff",
+                    });
+                int eff = GetPower(state, instance);
+                var ownerP = instance.Owner != null && state.Players.ContainsKey(instance.Owner) ? state.Players[instance.Owner] : null;
+                int donRaw = (ownerP != null && state.ActiveSeat == instance.Owner) ? instance.AttachedDonIds.Count * 1000 : 0;
+                int delta = eff - baseline - donRaw;
+                if (delta != 0)
+                {
+                    // Name the sources when the per-card mirror list has them.
+                    string srcs = null;
+                    if (instance.Modifiers != null && instance.Modifiers.Count > 0)
+                    {
+                        var names = new List<string>();
+                        foreach (var mm in instance.Modifiers)
+                            if (mm.PowerDelta != 0 && !string.IsNullOrEmpty(mm.Source) && !names.Contains(mm.Source)) names.Add(mm.Source);
+                        if (names.Count > 0) srcs = string.Join(", ", names.ToArray());
+                    }
+                    badges.Add(new StatusBadge
+                    {
+                        Label = (delta > 0 ? "+" : "−") + Math.Abs(delta) + " PWR",
+                        Detail = $"Power {(delta > 0 ? "+" : "−")}{Math.Abs(delta)} from effects{(srcs != null ? " (" + srcs + ")" : "")}.",
+                        Kind = delta > 0 ? "buff" : "debuff",
+                    });
+                }
+            }
+
+            // Cost change vs printed.
+            {
+                int effCost = GetCost(state, instance);
+                if (effCost != def.Cost)
+                {
+                    int cd = effCost - def.Cost;
+                    badges.Add(new StatusBadge
+                    {
+                        Label = (cd > 0 ? "+" : "−") + Math.Abs(cd) + " COST",
+                        Detail = $"Cost is {effCost} (printed {def.Cost}).",
+                        Kind = cd > 0 ? "buff" : "debuff",
+                    });
+                }
+            }
+
+            // Keyword grants and restriction/protection flags.
+            foreach (var mod in state.ActiveModifiers)
+            {
+                if (mod.TargetInstanceId != instance.InstanceId) continue;
+                string dur = mod.Duration == "thisTurn" ? "this turn"
+                           : mod.Duration == "thisBattle" ? "this battle"
+                           : mod.Duration == "untilNextTurn" ? "until the controller's next turn"
+                           : "while in play";
+                switch (mod.ModifierType)
+                {
+                    case "cannotAttack":
+                        badges.Add(new StatusBadge { Label = "NO ATTACK", Detail = "Cannot attack (" + dur + ").", Kind = "restrict" });
+                        break;
+                    case "freeze":
+                        badges.Add(new StatusBadge { Label = "FROZEN", Detail = "Does not become active at the Refresh Phase (" + dur + ").", Kind = "restrict" });
+                        break;
+                    case "cannotBeRested":
+                        badges.Add(new StatusBadge { Label = "NO REST", Detail = "Cannot be rested by effects (" + dur + ").", Kind = "buff" });
+                        break;
+                    case "cannotBeKod":
+                        badges.Add(new StatusBadge { Label = "K.O.-PROOF", Detail = "Cannot be K.O.'d (" + dur + ").", Kind = "buff" });
+                        break;
+                    case "canAttackActive":
+                        badges.Add(new StatusBadge { Label = "ATK ACTIVE", Detail = "May attack your opponent's active Characters (" + dur + ").", Kind = "info" });
+                        break;
+                    case "doubleAttack":
+                        badges.Add(new StatusBadge { Label = "2x ATTACK", Detail = "May attack twice per turn (" + dur + ").", Kind = "info" });
+                        break;
+                    case "effectsNegated":
+                        badges.Add(new StatusBadge { Label = "NEGATED", Detail = "All of this card's effects are negated (" + dur + ").", Kind = "restrict" });
+                        break;
+                    case "onPlayNegated":
+                        badges.Add(new StatusBadge { Label = "NO ON-PLAY", Detail = "Its [On Play] effect is negated (" + dur + ").", Kind = "restrict" });
+                        break;
+                    case "trashAtEndOfTurn":
+                        badges.Add(new StatusBadge { Label = "TRASH @ END", Detail = "Trashed / returned at the end of the turn (" + dur + ").", Kind = "restrict" });
+                        break;
+                    case "noBlocker":
+                        badges.Add(new StatusBadge { Label = "NO BLOCKER", Detail = "The opponent cannot activate [Blocker] against this attacker (" + dur + ").", Kind = "info" });
+                        break;
+                    case "keyword":
+                        if (!string.IsNullOrEmpty(mod.Keyword))
+                            badges.Add(new StatusBadge { Label = "+" + mod.Keyword.ToUpperInvariant(), Detail = "Gained [" + mod.Keyword + "] (" + dur + ").", Kind = "buff" });
+                        break;
+                }
+            }
+
+            // No-Blocker granted this turn (attacker-side turn flag).
+            if (state.NoBlockerGrantedThisTurn.Contains(instance.InstanceId)
+                && !badges.Exists(b => b.Label == "NO BLOCKER"))
+                badges.Add(new StatusBadge { Label = "NO BLOCKER", Detail = "The opponent cannot activate [Blocker] against this attacker this turn.", Kind = "info" });
+
+            // Alternate-name treatment.
+            if (state.NameOverrides.TryGetValue(instance.InstanceId, out var aka) && !string.IsNullOrEmpty(aka))
+                badges.Add(new StatusBadge { Label = "AKA " + aka.ToUpperInvariant(), Detail = "Also treated as [" + aka + "].", Kind = "info" });
+
+            return badges;
         }
 
         // Passive DON!! bonus: "[DON!! xN] This Character gains +N power."
@@ -195,7 +378,7 @@ namespace OnePieceTcg.Engine
         // because those are conditional, not always-on.
         private static int GetPassiveDonPowerBonus(GameState state, CardInstance instance, PlayerState owner)
         {
-            if (owner == null) return 0;
+            if (owner == null || IsEffectNegated(state, instance)) return 0;
             var text = GetCard(instance).Effect ?? "";
             if (!ContainsAll(text, "[DON!! x")) return 0;
             if (HasTiming(text, "When Attacking") || HasTiming(text, "On Play") ||
@@ -205,7 +388,36 @@ namespace OnePieceTcg.Engine
             int donReq = ParseDonThreshold(text);
             if (donReq <= 0 || instance.AttachedDonIds.Count < donReq) return 0;
             int bonus = ParsePowerGain(text);
+            if (bonus <= 0)
+            {
+                var andPw = System.Text.RegularExpressions.Regex.Match(text, @"and \+(\d{3,5}) power\.");
+                if (andPw.Success && !ContainsAll(text, "during this") && !ContainsAll(text, "until the"))
+                    bonus = int.Parse(andPw.Groups[1].Value);
+            }
             if (bonus <= 0) return 0;
+            // Scaling passives: "+N power for every X / for each X".
+            var forEvery = System.Text.RegularExpressions.Regex.Match(text,
+                @"for (?:every|each)(?: (\d+))? (?:of your )?([^.]+)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (forEvery.Success)
+            {
+                int per = forEvery.Groups[1].Success && forEvery.Groups[1].Value.Length > 0 ? int.Parse(forEvery.Groups[1].Value) : 1;
+                string what = forEvery.Groups[2].Value;
+                int count;
+                if (ContainsAll(what, "rested DON")) count = RestedDonCount(owner);
+                else if (ContainsAll(what, "card in your hand") || ContainsAll(what, "cards in your hand")) count = owner.Hand.Count;
+                else if (ContainsAll(what, "Events in your trash")) count = owner.Trash.Count(c => GetCard(c).Type == "event");
+                else if (ContainsAll(what, "cards in your trash")) count = owner.Trash.Count;
+                else if (ContainsAll(what, "Characters with a different card name"))
+                    count = owner.CharacterArea.Where(c => c != null).Select(c => GetEffectiveName(state, c)).Distinct(StringComparer.OrdinalIgnoreCase).Count();
+                else if (ContainsAll(what, "type Characters"))
+                {
+                    string tagFe = ParseCurlyBraceTag(what);
+                    count = owner.CharacterArea.Count(c => c != null && (string.IsNullOrEmpty(tagFe) || GetCard(c).HasFeature(tagFe)));
+                }
+                else return 0;
+                return bonus * (count / Math.Max(1, per));
+            }
             // Board condition: "If you have 3 or more Characters" (Urouge pattern).
             if (ContainsAll(text, "3 or more Characters") && owner.CharacterArea.Count(c => c != null) < 3) return 0;
             return bonus;
@@ -230,22 +442,86 @@ namespace OnePieceTcg.Engine
                 if (p.Leader != null) auraCards.Add(p.Leader);
                 foreach (var aura in auraCards)
                 {
-                    if (aura.InstanceId == instance.InstanceId) continue;
-                    var aText = GetCard(aura).Effect ?? "";
-                    bool yourTurn = HasTiming(aText, "Your Turn");
-                    bool oppTurn  = HasTiming(aText, "Opponent's Turn");
-                    if (!yourTurn && !oppTurn) continue;
-                    // Active when it's this player's turn (Your Turn) or not (Opponent's Turn).
-                    if (yourTurn && !isActiveSeat) continue;
-                    if (oppTurn  &&  isActiveSeat) continue;
-                    int donReq = ParseDonThreshold(aText);
-                    if (donReq > 0 && aura.AttachedDonIds.Count < donReq) continue;
-                    // Rested condition.
-                    if (ContainsAll(aText, "is rested") && !aura.Rested) continue;
-                    int bonus = ParsePowerGain(aText);
-                    if (bonus <= 0) continue;
-                    if (!CardPassesFeatureFilter(aText, instanceDef)) continue;
-                    total += bonus;
+                    if (IsEffectNegated(state, aura)) continue;
+                    var fullText = GetCard(aura).Effect ?? "";
+                    foreach (var aText in fullText.Split('\n'))
+                    {
+                        bool yourTurn = HasTiming(aText, "Your Turn");
+                        bool oppTurn  = HasTiming(aText, "Opponent's Turn");
+                        // Continuous board-wide auras: "All of your (…) Characters/cards … gain +N power."
+                        // Active on BOTH turns when no turn tag is printed. Anything with an action
+                        // timing ([On Play], [When Attacking], [Activate: Main], …) is NOT an aura.
+                        bool boardWide = System.Text.RegularExpressions.Regex.IsMatch(aText,
+                            @"All of your .*gain \+\d{3,5} power", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                            || System.Text.RegularExpressions.Regex.IsMatch(aText,
+                            @"All of your .*and this Character gain \+?\d*", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        bool hasActionTiming = HasTiming(aText, "On Play") || HasTiming(aText, "When Attacking")
+                            || HasTiming(aText, "Activate: Main") || HasTiming(aText, "Main") || HasTiming(aText, "Counter")
+                            || HasTiming(aText, "Trigger") || HasTiming(aText, "On K.O.") || HasTiming(aText, "On KO")
+                            || HasTiming(aText, "End of Your Turn") || HasTiming(aText, "On Block")
+                            || ContainsAll(aText, "during this turn") || ContainsAll(aText, "until the");
+                        if (hasActionTiming) continue;
+                        if (!yourTurn && !oppTurn && !boardWide) continue;
+                        // Self-buffs are handled by GetPassiveDonPowerBonus, not the aura scan —
+                        // unless the aura line ALSO buffs the board ("All of your …").
+                        if (aura.InstanceId == instance.InstanceId && !boardWide) continue;
+                        if (yourTurn && !isActiveSeat) continue;
+                        if (oppTurn  &&  isActiveSeat) continue;
+                        int donReq = ParseDonThreshold(aText);
+                        if (donReq > 0 && aura.AttachedDonIds.Count < donReq) continue;
+                        // Rested condition.
+                        if (ContainsAll(aText, "is rested") && !aura.Rested) continue;
+                        // Leading "If …," condition on the aura line.
+                        var condA = System.Text.RegularExpressions.Regex.Match(
+                            System.Text.RegularExpressions.Regex.Replace(aText, @"^\s*(\[[^\]]+\]\s*/?\s*)+", ""),
+                            @"^If ([^,]+),", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (condA.Success && !EvaluateCondition(state, candidateSeat, condA.Groups[1].Value.Trim(), aura.InstanceId)) continue;
+                        int bonus = ParsePowerGain(aText);
+                        if (bonus <= 0)
+                        {
+                            var gainPl = System.Text.RegularExpressions.Regex.Match(aText, @"gain \+(\d{3,5}) power");
+                            if (gainPl.Success) bonus = int.Parse(gainPl.Groups[1].Value);
+                        }
+                        if (bonus <= 0) continue;
+                        // Aura-side base power/cost filters on the RECIPIENT.
+                        int bpCapA = ParseLimit(aText, @"(\d{3,5}) base power or less");
+                        if (bpCapA >= 0 && instanceDef.Power > bpCapA) continue;
+                        int bpMinA = ParseLimit(aText, @"(\d{3,5}) base power or more");
+                        if (bpMinA >= 0 && instanceDef.Power < bpMinA) continue;
+                        var bpEqA = System.Text.RegularExpressions.Regex.Match(aText, @"with (\d{3,5}) base power gain");
+                        if (bpEqA.Success && instanceDef.Power != int.Parse(bpEqA.Groups[1].Value)) continue;
+                        int bcMinA = ParseLimit(aText, @"base cost of (\d+) or more");
+                        if (bcMinA >= 0 && instanceDef.Cost < bcMinA) continue;
+                        var bcEqA = System.Text.RegularExpressions.Regex.Match(aText, @"with a base cost of (\d+) gain");
+                        if (bcEqA.Success && instanceDef.Cost != int.Parse(bcEqA.Groups[1].Value)) continue;
+                        int cMinA = ParseLimit(aText, @"cost of (\d+) or more");
+                        if (cMinA >= 0 && GetCost(state, instance) < cMinA) continue;
+                        int cMaxA = ParseLimit(aText, @"cost of (\d+) or less");
+                        if (cMaxA >= 0 && GetCost(state, instance) > cMaxA) continue;
+                        // Color filter ("All of your red Characters …").
+                        bool colorOkA = true;
+                        foreach (var col in new[] { "red", "green", "blue", "purple", "black", "yellow" })
+                            if (System.Text.RegularExpressions.Regex.IsMatch(aText, $@"All of your {col}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                                && (instanceDef.Color ?? "").IndexOf(col, StringComparison.OrdinalIgnoreCase) < 0)
+                                colorOkA = false;
+                        if (!colorOkA) continue;
+                        if (ContainsAll(aText, "other than this Character") && aura.InstanceId == instance.InstanceId) continue;
+                        // Named filter(s): "All of your [A] (and [B]) cards …" — match ANY name.
+                        var nameFilts = System.Text.RegularExpressions.Regex.Matches(
+                            System.Text.RegularExpressions.Regex.Match(aText, @"All of your [^.]*?(?:gain|cards)").Value,
+                            @"\[([^\]]+)\]");
+                        if (nameFilts.Count > 0 && aura.InstanceId != instance.InstanceId)
+                        {
+                            bool anyName = false;
+                            foreach (System.Text.RegularExpressions.Match nf in nameFilts)
+                                if (NameMatches(state, instance, nf.Groups[1].Value.Trim())) anyName = true;
+                            if (!anyName) continue;
+                        }
+                        var inclFilt = System.Text.RegularExpressions.Regex.Match(aText, @"type including ""([^""]+)""");
+                        if (inclFilt.Success && !instanceDef.HasFeature(inclFilt.Groups[1].Value.Trim())) continue;
+                        if (!CardPassesFeatureFilter(aText, instanceDef)) continue;
+                        total += bonus;
+                    }
                 }
             }
             return total;
@@ -265,7 +541,84 @@ namespace OnePieceTcg.Engine
             int cost = def.Cost;
             if (instance?.Modifiers != null)
                 foreach (var m in instance.Modifiers) cost += m.CostDelta;
+            cost += GetPassiveCostBonus(state, instance);
+            cost += GetPassiveCostAuraBonus(state, instance);
             return Math.Max(0, cost);
+        }
+
+        // Continuous cost AURAS: "All of your (black) ({T} type) Characters gain +N cost."
+        // printed on any of the owner's cards in play (leader/characters/stage).
+        private static int GetPassiveCostAuraBonus(GameState state, CardInstance instance)
+        {
+            if (instance == null || instance.Zone != "character") return 0;
+            var ownerP = instance.Owner != null && state.Players.TryGetValue(instance.Owner, out var opc) ? opc : null;
+            if (ownerP == null) return 0;
+            int total = 0;
+            var sources = new List<CardInstance>();
+            if (ownerP.Leader != null) sources.Add(ownerP.Leader);
+            foreach (var c in ownerP.CharacterArea) if (c != null) sources.Add(c);
+            if (ownerP.Stage != null) sources.Add(ownerP.Stage);
+            var instDef = GetCard(instance);
+            foreach (var src in sources)
+            {
+                if (IsEffectNegated(state, src)) continue;
+                var full = GetCard(src)?.Effect ?? "";
+                if (full.IndexOf("cost", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                foreach (var line in full.Split('\n'))
+                {
+                    var m = System.Text.RegularExpressions.Regex.Match(line,
+                        @"All of your ([^.]*?)Characters gain \+(\d+) cost",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (!m.Success) continue;
+                    if (ContainsAll(line, "during this turn") || ContainsAll(line, "until the")) continue; // timed → modifier path
+                    bool yourTurnC = HasTiming(line, "Your Turn");
+                    bool oppTurnC = HasTiming(line, "Opponent's Turn");
+                    bool isOwnTurn = state.ActiveSeat == instance.Owner;
+                    if (yourTurnC && !isOwnTurn) continue;
+                    if (oppTurnC && isOwnTurn) continue;
+                    int donReqC = ParseDonThreshold(line);
+                    if (donReqC > 0 && src.AttachedDonIds.Count < donReqC) continue;
+                    string qual = m.Groups[1].Value;
+                    bool colorOkC = true;
+                    foreach (var col in new[] { "red", "green", "blue", "purple", "black", "yellow" })
+                        if (qual.IndexOf(col, StringComparison.OrdinalIgnoreCase) >= 0
+                            && (instDef.Color ?? "").IndexOf(col, StringComparison.OrdinalIgnoreCase) < 0)
+                            colorOkC = false;
+                    if (!colorOkC) continue;
+                    if (!CardPassesFeatureFilter(qual, instDef)) continue;
+                    int cMin = ParseLimit(line, @"cost of (\d+) or more");
+                    if (cMin >= 0 && instDef.Cost < cMin) continue;
+                    total += int.Parse(m.Groups[2].Value);
+                }
+            }
+            return total;
+        }
+
+        // Passive self cost bonuses printed on the card itself, e.g. ST19-004 Hina:
+        // "[DON!! x1] [Opponent's Turn] This Character gains +4 cost." Evaluated live
+        // (not stored as a modifier) because the condition flips every turn change.
+        // Scanned per line so a multi-ability card's other clauses don't contaminate the parse.
+        private static int GetPassiveCostBonus(GameState state, CardInstance instance)
+        {
+            if (instance == null || (instance.Zone != "character" && instance.Zone != "leader" && instance.Zone != "stage")) return 0;
+            var text = GetCard(instance)?.Effect ?? "";
+            if (text.IndexOf("cost", StringComparison.OrdinalIgnoreCase) < 0) return 0;
+            int total = 0;
+            foreach (var line in text.Split('\n'))
+            {
+                var m = System.Text.RegularExpressions.Regex.Match(line,
+                    @"[Tt]his (?:Character|card|Leader) gains \+(\d+) cost");
+                if (!m.Success) continue;
+                bool yourTurn = HasTiming(line, "Your Turn");
+                bool oppTurn = HasTiming(line, "Opponent's Turn");
+                bool isOwnersTurn = state.ActiveSeat == instance.Owner;
+                if (yourTurn && !isOwnersTurn) continue;
+                if (oppTurn && isOwnersTurn) continue;
+                int donReq = ParseDonThreshold(line);
+                if (donReq > 0 && instance.AttachedDonIds.Count < donReq) continue;
+                total += int.Parse(m.Groups[1].Value);
+            }
+            return total;
         }
 
         // Register a power modifier chip on the card instance (UI display mirror of the
@@ -313,7 +666,7 @@ namespace OnePieceTcg.Engine
         }
 
         private static void AddModifier(GameState state, CardInstance source, CardInstance target,
-            string modifierType, string duration, string keyword = null)
+            string modifierType, string duration, string keyword = null, string ownerSeat = null)
         {
             state.ActiveModifiers.Add(new CardModifier
             {
@@ -323,6 +676,7 @@ namespace OnePieceTcg.Engine
                 Keyword = keyword,
                 Duration = duration,
                 BattleId = duration == "thisBattle" ? state.Battle?.Id : null,
+                OwnerSeat = ownerSeat,
             });
         }
 
@@ -366,11 +720,85 @@ namespace OnePieceTcg.Engine
             return v;
         }
 
+        // Always-on keyword grants: printed on the card itself ("[DON!! xN] This Character
+        // gains [KW]", "[Your Turn] … gains [KW] if you have N or more cards in your hand",
+        // "… cannot be rested … and gains [KW]") or granted by an aura on the owner's board
+        // ("Your [Name] gains [KW]."). Temporary "during this turn" grants use CardModifiers.
+        private static bool HasDonGatedKeyword(CardInstance instance, string keyword) =>
+            HasPrintedKeywordGrant(null, instance, keyword);
+
+        private static bool HasPrintedKeywordGrant(GameState state, CardInstance instance, string keyword)
+        {
+            if (instance == null) return false;
+            if (state != null && IsEffectNegated(state, instance)) { /* own lines negated; auras below also skipped */ }
+            var ownerP = state != null && instance.Owner != null && state.Players.TryGetValue(instance.Owner, out var okp) ? okp : null;
+            var text = GetCard(instance)?.Effect ?? "";
+            if ((state == null || !IsEffectNegated(state, instance))
+                && text.IndexOf("gains [" + keyword + "]", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                foreach (var line in text.Split('\n'))
+                {
+                    if (line.IndexOf("gains [" + keyword + "]", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                    if (ContainsAll(line, "during this") || ContainsAll(line, "until the")) continue;
+                    // Turn-scoped continuous lines ("[Your Turn] / [Opponent's Turn] … gains [KW]").
+                    if (state != null)
+                    {
+                        bool ytK = HasTiming(line, "Your Turn");
+                        bool otK = HasTiming(line, "Opponent's Turn");
+                        bool ownTurnK = state.ActiveSeat == instance.Owner;
+                        if (ytK && !ownTurnK) continue;
+                        if (otK && ownTurnK) continue;
+                        // "… if you have N or more cards in your hand".
+                        var handCond = System.Text.RegularExpressions.Regex.Match(line,
+                            @"if you have (\d+) or more cards in your hand",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (handCond.Success && (ownerP == null || ownerP.Hand.Count < int.Parse(handCond.Groups[1].Value))) continue;
+                        // Leading "If your Leader has the {T} type, this Character gains [KW]."
+                        var leadCond = System.Text.RegularExpressions.Regex.Match(line.TrimStart(),
+                            @"^If ([^,]+),", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (leadCond.Success && !EvaluateCondition(state, instance.Owner, leadCond.Groups[1].Value.Trim(), instance.InstanceId)) continue;
+                    }
+                    else if (line.TrimStart().StartsWith("If ", StringComparison.OrdinalIgnoreCase)) continue;
+                    int req = ParseDonThreshold(line);
+                    if (req > 0 && instance.AttachedDonIds.Count < req) continue;
+                    if (req <= 0 && state == null) continue;   // state-less legacy path: DON-gated only
+                    if (req <= 0 && !ContainsAll(line, "This Character") && !ContainsAll(line, "this Character")
+                        && !ContainsAll(line, "and gains")) continue;
+                    return true;
+                }
+            }
+            // Keyword auras from the owner's other cards: "Your [Name] gains [KW]." /
+            // "Your {T} type Characters gain [KW]."
+            if (ownerP != null)
+            {
+                var auraSrcsK = new List<CardInstance>();
+                if (ownerP.Leader != null) auraSrcsK.Add(ownerP.Leader);
+                foreach (var c in ownerP.CharacterArea) if (c != null) auraSrcsK.Add(c);
+                if (ownerP.Stage != null) auraSrcsK.Add(ownerP.Stage);
+                var instDefK = GetCard(instance);
+                foreach (var srcK in auraSrcsK)
+                {
+                    if (srcK.InstanceId == instance.InstanceId) continue;
+                    if (IsEffectNegated(state, srcK)) continue;
+                    var fK = GetCard(srcK)?.Effect ?? "";
+                    foreach (System.Text.RegularExpressions.Match mK in System.Text.RegularExpressions.Regex.Matches(fK,
+                        @"Your (\[(?<name>[^\]]+)\]|\{(?<tag>[^}]+)\} type Characters?) gains? \[" + keyword + @"\]"))
+                    {
+                        if (mK.Groups["name"].Success && !NameMatches(state, instance, mK.Groups["name"].Value.Trim())) continue;
+                        if (mK.Groups["tag"].Success && !instDefK.HasFeature(mK.Groups["tag"].Value.Trim())) continue;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         // Sanji: [DON!! x2] this Character gains Rush.
         // State-aware overload also checks CardModifiers (Rush granted by an effect).
         public static bool HasRush(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Rush")
                 || (instance.CardId == "ST01-004" && instance.AttachedDonIds.Count >= 2)
+                || HasPrintedKeywordGrant(state, instance, "Rush")
                 || HasKeywordModifier(state, instance, "Rush"));
 
         // Backward-compatible overload (no modifier check) — kept for external callers.
@@ -380,6 +808,7 @@ namespace OnePieceTcg.Engine
         // Double Attack: can this card attack a second time this turn (while rested)?
         public static bool HasDoubleAttack(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Double Attack")
+                || HasPrintedKeywordGrant(state, instance, "Double Attack")
                 || HasKeywordModifier(state, instance, "Double Attack")
                 || HasModifier(state, instance, "doubleAttack"));
 
@@ -387,6 +816,7 @@ namespace OnePieceTcg.Engine
         // going to hand and no Trigger step occurs.
         public static bool HasBanish(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Banish")
+                || HasPrintedKeywordGrant(state, instance, "Banish")
                 || HasKeywordModifier(state, instance, "Banish"));
 
         // Extract the DON!! cost encoded as circled Unicode digits in Activate:Main effect text.
@@ -399,6 +829,112 @@ namespace OnePieceTcg.Engine
                 if (c >= '➀' && c <= '➉') return (c - '➀') + 1;
             }
             return 0;
+        }
+
+        // Extract N from "DON!! −N (You may return the specified number of DON!! cards from
+        // your field to your DON!! deck.)" — a return-DON!!-to-deck cost (purple staple).
+        // Accepts '-', '−' (minus sign) and '–' (en dash).
+        private static int ParseDonMinusCost(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            var m = System.Text.RegularExpressions.Regex.Match(text, @"DON!!\s*[-\u2212\u2013\u2011\u2012\u2014]\s*(\d+)");
+            return m.Success ? int.Parse(m.Groups[1].Value) : 0;
+        }
+
+        // Body of a "DON!! −N (…): <body>" effect — the text after the colon that follows the
+        // reminder parenthetical. Falls back to the whole text when the shape doesn't match.
+        private static string DonMinusBody(string text)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(text, @"DON!!\s*[-\u2212\u2013\u2011\u2012\u2014]\s*\d+\s*(?:\([^)]*\))?\s*[,:]?\s*");
+            if (!m.Success) return text;
+            var body = text.Substring(m.Index + m.Length).Trim();
+            // Never return the unchanged text — ResolveEffect rewrites effect.Text to the body
+            // after paying, and an unchanged text would double-charge on the next click.
+            return string.IsNullOrEmpty(body) ? text : (text.Substring(0, m.Index) + body).Trim();
+        }
+
+        // Pays a DON!! -N cost immediately when the choice can't matter (all cost-area DON!!
+        // share the same state, or paying empties the cost area anyway); otherwise flags the
+        // effect as awaiting per-DON!! clicks and returns false (caller stops and waits).
+        private static bool AutoPayOrAwaitDonMinus(GameState state, PendingEffect effect, int donMinus)
+        {
+            var payer = Player(state, effect.Seat);
+            bool hasActive = payer.CostArea.Exists(d => !d.Rested);
+            bool hasRested = payer.CostArea.Exists(d => d.Rested);
+            if (hasActive && hasRested && payer.CostArea.Count > donMinus)
+            {
+                effect.DonPaymentRemaining = donMinus;
+                Log(state, effect.Seat, $"Click {donMinus} of your DON!! to return for {NameId(CardData.GetCard(effect.SourceCardId))} (active or rested — your choice).");
+                return false;
+            }
+            PayDonMinus(state, effect.Seat, donMinus);
+            effect.Text = DonMinusBody(effect.Text);
+            return true;
+        }
+
+        // Pay a DON!! −N cost: return N DON!! cards from the cost area (rested first, since
+        // that's strictly best for the player) to the DON!! deck. Returns false if the player
+        // doesn't have N DON!! on their field.
+        private static bool PayDonMinus(GameState state, string seat, int amount)
+        {
+            var p = Player(state, seat);
+            if (p.CostArea.Count < amount) return false;
+            for (int i = 0; i < amount; i++)
+            {
+                int idx = p.CostArea.FindIndex(d => d.Rested);
+                if (idx < 0) idx = p.CostArea.Count - 1;
+                p.CostArea.RemoveAt(idx);
+            }
+            p.DonDeck += amount;
+            Log(state, seat, $"{p.Name} returns {amount} DON!! to the DON!! deck.");
+            NotifyDonReturned(state, seat);
+            return true;
+        }
+
+        // Total DON!! on a player's field: cost area plus every attached DON!!.
+        private static int TotalFieldDon(PlayerState p)
+        {
+            int total = p.CostArea.Count;
+            if (p.Leader != null) total += p.Leader.AttachedDonIds.Count;
+            foreach (var c in p.CharacterArea) if (c != null) total += c.AttachedDonIds.Count;
+            if (p.Stage != null) total += p.Stage.AttachedDonIds.Count;
+            return total;
+        }
+
+        // Strip a leading "Then," connective and re-capitalize a following "if" so downstream
+        // clause handlers (which anchor on "If ") recognize queued second clauses.
+        private static string NormalizeClause(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return text ?? "";
+            var t = text.Trim();
+            if (t.StartsWith("Then,", StringComparison.OrdinalIgnoreCase)) t = t.Substring(5).Trim();
+            else if (t.StartsWith("Then ", StringComparison.OrdinalIgnoreCase)) t = t.Substring(5).Trim();
+            if (t.StartsWith("if ")) t = "If " + t.Substring(3);
+            return t;
+        }
+
+        // Pull the single ability line containing "[timing]" out of a multi-line effect text
+        // (e.g. Uta ST05-004's "[Blocker] …\n[On Block] DON!! −1 …"). Whole text if not found.
+        private static string ExtractTimedClause(string text, string timing)
+        {
+            if (string.IsNullOrEmpty(text)) return "";
+            var lines = text.Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                if (!HasTiming(lines[i], timing)) continue;
+                // Include following bullet lines ("Choose one:" / "Apply each …" blocks list
+                // their options on subsequent lines starting with •, - or ‐).
+                var sb = new System.Text.StringBuilder(lines[i].Trim());
+                for (int j = i + 1; j < lines.Length; j++)
+                {
+                    var t2 = lines[j].TrimStart();
+                    if (t2.Length > 0 && (t2[0] == '\u2022' || t2[0] == '-' || t2[0] == '\u2010'))
+                        sb.Append('\n').Append(lines[j].Trim());
+                    else break;
+                }
+                return sb.ToString();
+            }
+            return text;
         }
 
         // Extract N from "Look at N cards from the top of your deck".
@@ -586,6 +1122,13 @@ namespace OnePieceTcg.Engine
             // CleanupTurnModifiers runs BEFORE unrest so "freeze" modifiers that last
             // only "thisTurn" correctly expire and let the card be refreshed normally.
             CleanupTurnModifiers(state);
+            // "until the end of your opponent's next turn" restrictions expire when the
+            // CONTROLLER's next turn begins (they last through the opponent's whole turn).
+            state.ActiveModifiers.RemoveAll(m => m.Duration == "untilNextTurn" && m.OwnerSeat == seat);
+            state.TimedPowerBonuses.RemoveAll(tb => tb.OwnerSeat == seat);
+            ExpireInstanceModifiers(state, "untilNextTurnOf:" + seat);
+            state.BasePowerOverrides.RemoveAll(bp =>
+                (bp.Duration == "untilNextTurn" && bp.OwnerSeat == seat) || bp.Duration == "thisTurn");
             state.Phase = "refresh";
             p.Leader.Rested = false;
             ReturnAttachedDon(p, p.Leader);
@@ -621,7 +1164,9 @@ namespace OnePieceTcg.Engine
                 if (!HasTiming(def.Effect, "Start of Your Turn")) continue;
                 int donReq = ParseDonThreshold(def.Effect);
                 if (donReq > 0 && c.AttachedDonIds.Count < donReq) continue;
-                QueueEffect(state, seat, c, "startOfYourTurn", def.Effect, true);
+                string soyClause = ExtractTimedClause(def.Effect, "Start of Your Turn");
+                QueueAndAutoResolve(state, seat, c, "startOfYourTurn", soyClause, IsOptionalEffectText(soyClause),
+                    EffectScope.Instant, InferTargetZone(soyClause));
             }
         }
 
@@ -692,6 +1237,40 @@ namespace OnePieceTcg.Engine
             p.Hand.Insert(insertIndex, card);
         }
 
+        // Cosmetic: the owner may freely re-arrange or sort their trash pile (public zone,
+        // no hidden information — order has no rules meaning, it's a browsing convenience).
+        private static void ReorderTrash(GameState state, string seat, string instanceId, int targetIndex)
+        {
+            if (string.IsNullOrEmpty(seat) || !state.Players.ContainsKey(seat)) return;
+            var p = Player(state, seat);
+            int oldIndex = p.Trash.FindIndex(c => c.InstanceId == instanceId);
+            if (oldIndex < 0) return;
+            int insertIndex = Math.Max(0, Math.Min(targetIndex, p.Trash.Count));
+            var card = p.Trash[oldIndex];
+            p.Trash.RemoveAt(oldIndex);
+            if (oldIndex < insertIndex) insertIndex -= 1;
+            insertIndex = Math.Max(0, Math.Min(insertIndex, p.Trash.Count));
+            p.Trash.Insert(insertIndex, card);
+        }
+
+        // lowestFirst refers to DISPLAY order (the trash viewer shows the END of the list
+        // first), so "lowest cost at the top" stores the list in DESCENDING cost order.
+        private static void SortTrash(GameState state, string seat, bool lowestFirst)
+        {
+            if (string.IsNullOrEmpty(seat) || !state.Players.ContainsKey(seat)) return;
+            var p = Player(state, seat);
+            var sorted = lowestFirst
+                ? p.Trash.OrderByDescending(c => GetCard(c)?.Cost ?? 0)
+                    .ThenByDescending(c => GetCard(c)?.Name ?? "", StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+                : p.Trash.OrderBy(c => GetCard(c)?.Cost ?? 0)
+                    .ThenBy(c => GetCard(c)?.Name ?? "", StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+            p.Trash.Clear();
+            p.Trash.AddRange(sorted);
+            Log(state, seat, $"{p.Name} sorts their trash by cost ({(lowestFirst ? "lowest" : "highest")} first).");
+        }
+
         private static void PlayCard(GameState state, string seat, string instanceId, int? slotIndex)
         {
             if (!IsTurnPlayerInMain(state, seat)) return;
@@ -746,6 +1325,28 @@ namespace OnePieceTcg.Engine
             {
                 instance.Zone = "trash";
                 p.Trash.Add(instance);
+                // OP06-044: "When your opponent activates an Event, your opponent must place
+                // 1 card from their hand at the bottom of their deck." — printed on the
+                // OPPONENT's board, taxing THIS player.
+                if (BoardHasText(state, OtherSeat(seat), "When your opponent activates an Event") && p.Hand.Count > 0)
+                {
+                    var taxed = p.Hand[p.Hand.Count - 1];
+                    p.Hand.RemoveAt(p.Hand.Count - 1);
+                    taxed.Zone = "deck";
+                    p.Deck.Add(taxed);
+                    Log(state, seat, $"{p.Name} places 1 card from hand at the bottom of the deck (opponent's Event tax).");
+                }
+            }
+            // "Your Character cards are played rested." (printed on one of the player's own cards).
+            if (def.Type == "character")
+            {
+                var playedRestedSrcs = new List<CardInstance>();
+                if (p.Leader != null) playedRestedSrcs.Add(p.Leader);
+                foreach (var cc in p.CharacterArea) if (cc != null) playedRestedSrcs.Add(cc);
+                foreach (var srcPR in playedRestedSrcs)
+                    if (!IsEffectNegated(state, srcPR)
+                        && ContainsAll(GetCard(srcPR)?.Effect ?? "", "Your Character cards are played rested"))
+                    { instance.Rested = true; break; }
             }
             Log(state, seat, $"{p.Name} plays {NameId(def)}.");
             if (HasKeyword(instance, "Rush")) Log(state, seat, $"{NameId(def)} has [Rush] and can attack this turn.");
@@ -753,9 +1354,28 @@ namespace OnePieceTcg.Engine
             // so the UI routes hand/trash clicks to resolveEffect and highlights the right zone
             // (e.g. Robin's [On Play] "Play up to 1 ... from your hand" must offer HAND targets).
             if (def.Type == "event" && HasTiming(def.Effect, "Main"))
-                QueueAndAutoResolve(state, seat, instance, "main", def.Effect, true, EffectScope.Instant, InferTargetZone(def.Effect));
+            {
+                string mainCl = ExtractTimedClause(def.Effect, "Main");
+                QueueAndAutoResolve(state, seat, instance, "main", mainCl, IsOptionalEffectText(mainCl), EffectScope.Instant, InferTargetZone(mainCl));
+            }
             else if (HasTiming(def.Effect, "On Play"))
-                QueueAndAutoResolve(state, seat, instance, "onPlay", def.Effect, true, EffectScope.Instant, InferTargetZone(def.Effect));
+            {
+                // [On Play] suppression: an "onPlayNegated" modifier (OP09-081 active effect),
+                // the player's own "Your [On Play] effects are negated." drawback line on the
+                // board, or full effect negation on the played card.
+                bool onPlaySuppressed = HasModifier(state, instance, "onPlayNegated")
+                    || IsEffectNegated(state, instance)
+                    || BoardHasText(state, seat, "Your [On Play] effects are negated");
+                if (onPlaySuppressed)
+                {
+                    Log(state, seat, $"{NameId(def)}'s [On Play] effect is negated.");
+                }
+                else
+                {
+                    string onPlayCl = ExtractTimedClause(def.Effect, "On Play");
+                    QueueAndAutoResolve(state, seat, instance, "onPlay", onPlayCl, IsOptionalEffectText(onPlayCl), EffectScope.Instant, InferTargetZone(onPlayCl));
+                }
+            }
         }
 
         private static void AttachDon(GameState state, string seat, string target, int amount, List<string> donInstanceIds = null)
@@ -805,6 +1425,11 @@ namespace OnePieceTcg.Engine
             if (card == null) return;
             var def = GetCard(card);
             if (!HasTiming(def.Effect, "Activate: Main")) return;
+            if (IsEffectNegated(state, card))
+            {
+                Log(state, seat, $"{NameId(def)}'s effects are negated this turn.");
+                return;
+            }
 
             bool oncePerTurn = def.Effect.IndexOf("[Once Per Turn]", StringComparison.OrdinalIgnoreCase) >= 0;
             if (oncePerTurn && p.AbilityUsedThisTurn.Contains(instanceId))
@@ -855,7 +1480,29 @@ namespace OnePieceTcg.Engine
                     // Generic fallback: parse the DON cost circled digit, pay it, then queue
                     // the effect text for TryResolveKnownEffect.  Cards whose effect text
                     // matches no known pattern will log "acknowledged for manual resolution".
-                    int genericCost = ParseActivateMainCost(def.Effect);
+                    // IMPORTANT: multi-ability cards (e.g. ST19-004 Hina: a [DON!! x1] passive
+                    // line PLUS an [Activate: Main] line) must be parsed/queued from the
+                    // Activate:Main CLAUSE only, or the passive line's [DON!! x1] tag would be
+                    // misread as an activation requirement and the queued text would fail the
+                    // cost-prefix resolver's anchoring.
+                    string mainClause = ExtractTimedClause(def.Effect, "Activate: Main");
+                    // [DON!! xN] requirement (e.g. OP02-093 Smoker leader's [DON!! x1][Activate: Main])
+                    // gates activation on attached DON!!.
+                    int donAttachedReq = ParseDonThreshold(mainClause);
+                    if (donAttachedReq > 0 && card.AttachedDonIds.Count < donAttachedReq)
+                    {
+                        Log(state, seat, $"{NameId(def)} needs {donAttachedReq} DON!! attached to activate its ability.");
+                        return;
+                    }
+                    // DON!! −N (return to DON!! deck) costs are paid in ResolveEffect when the
+                    // player commits, but check affordability up front for a clear error.
+                    int donMinusReq = ParseDonMinusCost(mainClause);
+                    if (donMinusReq > 0 && p.CostArea.Count < donMinusReq)
+                    {
+                        Log(state, seat, $"Not enough DON!! on your field (need {donMinusReq}) to activate {NameId(def)}.");
+                        return;
+                    }
+                    int genericCost = ParseActivateMainCost(mainClause);
                     if (genericCost > 0 && ActiveDonCount(p) < genericCost)
                     {
                         Log(state, seat, $"Not enough active DON!! (need {genericCost}) to activate {NameId(def)}.");
@@ -864,35 +1511,43 @@ namespace OnePieceTcg.Engine
                     if (genericCost > 0) PayDonCost(p, genericCost);
                     if (oncePerTurn) p.AbilityUsedThisTurn.Add(instanceId);
                     // Deck search: "Look at/Search your entire deck … add to hand … shuffle."
-                    if ((ContainsAll(def.Effect, "Look at your entire deck") || ContainsAll(def.Effect, "Look at your deck")
-                         || ContainsAll(def.Effect, "Search your deck")) && ContainsAll(def.Effect, "hand"))
+                    if ((ContainsAll(mainClause, "Look at your entire deck") || ContainsAll(mainClause, "Look at your deck")
+                         || ContainsAll(mainClause, "Search your deck")) && ContainsAll(mainClause, "hand"))
                     {
-                        int maxCostS = ParseCostFilter(def.Effect);
-                        string featureS = ParseCurlyBraceTag(def.Effect);
-                        string typeS = ContainsAll(def.Effect, "Character") ? "character"
-                                     : ContainsAll(def.Effect, "Event") ? "event"
-                                     : ContainsAll(def.Effect, "Stage") ? "stage" : "";
+                        int maxCostS = ParseCostFilter(mainClause);
+                        string featureS = ParseCurlyBraceTag(mainClause);
+                        string typeS = ContainsAll(mainClause, "Character") ? "character"
+                                     : ContainsAll(mainClause, "Event") ? "event"
+                                     : ContainsAll(mainClause, "Stage") ? "stage" : "";
                         StartDeckSearch(state, seat, card, featureS, maxCostS, typeS);
                     }
-                    // Deck-look pattern: "Look at N cards from the top of your deck".
-                    else if (ContainsAll(def.Effect, "Look at", "from the top of your deck") && ContainsAll(def.Effect, "to your hand"))
+                    // Scry: "Look at N … place them at the top or bottom of the deck".
+                    else if (ContainsAll(mainClause, "Look at", "from the top of your deck")
+                             && (ContainsAll(mainClause, "top or bottom of the deck") || ContainsAll(mainClause, "top or bottom of your deck")))
                     {
-                        int lookN = ParseLookCount(def.Effect);
-                        var (namedFilter, typeFilter) = ParseNamedOrTypeFilter(def.Effect);
-                        string filter = namedFilter == null ? ParseCurlyBraceTag(def.Effect) : null;
-                        StartDeckLook(state, seat, card, filter, lookN, namedFilter, typeFilter);
+                        StartDeckScry(state, seat, card, ParseLookCount(mainClause));
+                    }
+                    // Deck-look pattern: "Look at N cards from the top of your deck".
+                    else if (ContainsAll(mainClause, "Look at", "from the top of your deck") && ContainsAll(mainClause, "to your hand"))
+                    {
+                        int lookN = ParseLookCount(mainClause);
+                        var (namedFilter, typeFilter) = ParseNamedOrTypeFilter(mainClause);
+                        string filter = namedFilter == null ? ParseCurlyBraceTag(mainClause) : null;
+                        StartDeckLook(state, seat, card, filter, lookN, namedFilter, typeFilter,
+                            ContainsAll(mainClause, "trash the rest"));
                     }
                     else
                     {
-                        EffectTargetZone zone = InferTargetZone(def.Effect);
-                        QueueEffect(state, seat, card, "activateMain", def.Effect, true, EffectScope.Instant, zone);
+                        EffectTargetZone zone = InferTargetZone(mainClause);
+                        QueueEffect(state, seat, card, "activateMain", mainClause, true, EffectScope.Instant, zone);
                     }
                     break;
             }
         }
 
         private static void StartDeckLook(GameState state, string seat, CardInstance source, string featureFilter, int count,
-            string namedCardFilter = null, string cardTypeFilter = null)
+            string namedCardFilter = null, string cardTypeFilter = null, bool trashRest = false,
+            bool playMode = false, bool playRested = false, int maxCost = -1, int maxPower = -1)
         {
             var p = Player(state, seat);
             var looked = new List<CardInstance>();
@@ -902,12 +1557,16 @@ namespace OnePieceTcg.Engine
                 Seat = seat,
                 SourceInstanceId = source.InstanceId,
                 SourceName = GetCard(source).Name,
+                TrashRest = trashRest,
+                PlayMode = playMode,
+                PlayRested = playRested,
+                MaxCost = maxCost,
+                MaxPower = maxPower,
                 FeatureFilter = featureFilter,
                 NamedCardFilter = namedCardFilter,
                 CardTypeFilter = cardTypeFilter,
                 Step = "select",
                 Cards = looked,
-                MaxCost = -1,
             };
             Log(state, seat, $"{NameId(GetCard(source))} looks at the top {looked.Count} card(s) of the deck.");
         }
@@ -917,8 +1576,58 @@ namespace OnePieceTcg.Engine
         // featureFilter: type tag required (e.g. "Supernovas"), or "" for none.
         // maxCost: -1 = no cost limit; otherwise only cards with Cost <= maxCost qualify.
         // cardTypeFilter: "character" / "event" / "stage" / "" for any.
+        // Scry: "Look at N cards from the top of your deck and place them at the top or bottom
+        // of the deck in any order." (OP01-073 etc.) Step "scry": the player clicks the cards
+        // to keep on TOP (in order); the rest go to the bottom. Confirmed via deckLookScryConfirm.
+        private static void StartDeckScry(GameState state, string seat, CardInstance source, int count)
+        {
+            var p = Player(state, seat);
+            var looked = new List<CardInstance>();
+            for (int i = 0; i < count && p.Deck.Count > 0; i++) looked.Add(Shift(p.Deck));
+            state.DeckLook = new DeckLookState
+            {
+                Seat = seat,
+                SourceInstanceId = source.InstanceId,
+                SourceName = GetCard(source).Name,
+                FeatureFilter = "",
+                Step = "scry",
+                Cards = looked,
+            };
+            Log(state, seat, $"{NameId(GetCard(source))} looks at the top {looked.Count} card(s) of the deck (place at top or bottom).");
+        }
+
+        // topInstanceIds = the cards chosen to stay on TOP, first = topmost. Every other looked
+        // card goes to the BOTTOM of the deck in its current display order.
+        private static void ResolveDeckLookScryConfirm(GameState state, string seat, List<string> topInstanceIds)
+        {
+            var dl = state.DeckLook;
+            if (dl == null || dl.Seat != seat || dl.Step != "scry") return;
+            var p = Player(state, seat);
+            var tops = new List<CardInstance>();
+            if (topInstanceIds != null)
+            {
+                foreach (var id in topInstanceIds)
+                {
+                    var c = dl.Cards.Find(x => x.InstanceId == id);
+                    if (c == null) return; // invalid selection — ignore the command
+                    tops.Add(c);
+                }
+            }
+            foreach (var c in tops) dl.Cards.Remove(c);
+            // Insert tops so the FIRST selected ends up topmost (deck index 0 = top).
+            for (int i = tops.Count - 1; i >= 0; i--)
+            {
+                tops[i].Zone = "deck";
+                p.Deck.Insert(0, tops[i]);
+            }
+            foreach (var c in dl.Cards) { c.Zone = "deck"; p.Deck.Add(c); }
+            Log(state, seat, $"{p.Name} places {tops.Count} card(s) on top and {dl.Cards.Count} at the bottom of the deck.");
+            state.DeckLook = null;
+        }
+
         private static void StartDeckSearch(GameState state, string seat, CardInstance source,
-            string featureFilter, int maxCost, string cardTypeFilter)
+            string featureFilter, int maxCost, string cardTypeFilter,
+            bool playMode = false, bool playRested = false, string namedCardFilter = null, int maxPower = -1)
         {
             var p = Player(state, seat);
             var allCards = new List<CardInstance>(p.Deck);
@@ -933,7 +1642,11 @@ namespace OnePieceTcg.Engine
                 Cards = allCards,
                 SearchMode = true,
                 MaxCost = maxCost,
+                MaxPower = maxPower,
                 CardTypeFilter = cardTypeFilter,
+                PlayMode = playMode,
+                PlayRested = playRested,
+                NamedCardFilter = namedCardFilter,
             };
             Log(state, seat, $"{NameId(GetCard(source))} searches the deck ({allCards.Count} card(s) available).");
         }
@@ -955,7 +1668,7 @@ namespace OnePieceTcg.Engine
                 if (!string.IsNullOrEmpty(dl.NamedCardFilter))
                 {
                     // "[Name] or Type card" effects (e.g. Charlotte Pudding: "[Sanji] or Event card") — OR, not AND.
-                    bool nameMatch = string.Equals(GetEffectiveName(state, dl.Cards[idx]), dl.NamedCardFilter, StringComparison.OrdinalIgnoreCase);
+                    bool nameMatch = NameMatches(state, dl.Cards[idx], dl.NamedCardFilter);
                     bool typeMatch = !string.IsNullOrEmpty(dl.CardTypeFilter) && def.Type.Equals(dl.CardTypeFilter, StringComparison.OrdinalIgnoreCase);
                     if (!nameMatch && !typeMatch)
                     {
@@ -971,6 +1684,11 @@ namespace OnePieceTcg.Engine
                         Log(state, seat, $"{NameId(def)} does not match the required {{{dl.FeatureFilter}}} type.");
                         return;
                     }
+                    if (dl.RequireTrigger && string.IsNullOrEmpty(def.Trigger))
+                    {
+                        Log(state, seat, $"{NameId(def)} has no [Trigger].");
+                        return;
+                    }
                     // Card type filter (search mode)
                     if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !def.Type.Equals(dl.CardTypeFilter, StringComparison.OrdinalIgnoreCase))
                     {
@@ -984,11 +1702,47 @@ namespace OnePieceTcg.Engine
                     Log(state, seat, $"{NameId(def)} costs too much (max cost {dl.MaxCost}).");
                     return;
                 }
+                if (dl.MaxPower >= 0 && def.Power > dl.MaxPower)
+                {
+                    Log(state, seat, $"{NameId(def)} has too much power (max {dl.MaxPower}).");
+                    return;
+                }
                 var taken = dl.Cards[idx];
                 dl.Cards.RemoveAt(idx);
-                taken.Zone = "hand";
-                p.Hand.Add(taken);
-                Log(state, seat, $"{p.Name} adds {NameId(def)} to hand.");
+                if (dl.TrashSelected)
+                {
+                    taken.Zone = "trash";
+                    p.Trash.Add(taken);
+                    Log(state, seat, $"{p.Name} trashes {NameId(def)} from the look.");
+                    dl.SelectCount--;
+                    if (dl.SelectCount > 0 && dl.Cards.Count > 0) return;   // more picks allowed
+                }
+                else if (dl.PlayMode && def.Type == "character")
+                {
+                    int slotPM = p.CharacterArea.FindIndex(c => c == null);
+                    if (slotPM < 0)
+                    {
+                        dl.Cards.Insert(Math.Min(idx, dl.Cards.Count), taken);
+                        Log(state, seat, "No open character slot to play into.");
+                        return;
+                    }
+                    taken.Zone = "character";
+                    taken.PlayedOnTurn = state.TurnNumber;
+                    taken.Rested = dl.PlayRested;
+                    p.CharacterArea[slotPM] = taken;
+                    Log(state, seat, $"{p.Name} plays {NameId(def)} from the deck{(dl.PlayRested ? " rested" : "")}.");
+                    if (HasTiming(def.Effect, "On Play"))
+                        QueueAndAutoResolve(state, seat, taken, "onPlay", ExtractTimedClause(def.Effect, "On Play"), true,
+                            EffectScope.Instant, InferTargetZone(def.Effect));
+                }
+                else
+                {
+                    taken.Zone = "hand";
+                    p.Hand.Add(taken);
+                    Log(state, seat, $"{p.Name} adds {NameId(def)} to hand.");
+                    dl.SelectCount--;
+                    if (dl.SelectCount > 0 && !dl.SearchMode && dl.Cards.Count > 0) return;  // more picks
+                }
             }
             else
             {
@@ -1002,6 +1756,17 @@ namespace OnePieceTcg.Engine
                 ShuffleInPlace(dl.Cards, shuffleSeed);
                 foreach (var c in dl.Cards) { c.Zone = "deck"; p.Deck.Add(c); }
                 Log(state, seat, $"{p.Name} shuffles the deck.");
+                state.DeckLook = null;
+                return;
+            }
+
+            // "Then, trash the rest." variant (e.g. OP03-089 Brannew): no rearrange step —
+            // every remaining card goes straight to the trash.
+            if (dl.TrashRest)
+            {
+                foreach (var c in dl.Cards) { c.Zone = "trash"; p.Trash.Add(c); }
+                Log(state, seat, $"{p.Name} trashes {dl.Cards.Count} card(s) from the look.");
+                dl.Cards.Clear();
                 state.DeckLook = null;
                 return;
             }
@@ -1032,6 +1797,18 @@ namespace OnePieceTcg.Engine
         private static void FinishDeckLook(GameState state, string seat, DeckLookState dl)
         {
             var p = Player(state, seat);
+            if (dl.ToTop)
+            {
+                // First in the arranged order ends up topmost.
+                for (int i = dl.Ordered.Count - 1; i >= 0; i--)
+                {
+                    dl.Ordered[i].Zone = "deck";
+                    p.Deck.Insert(0, dl.Ordered[i]);
+                }
+                Log(state, seat, $"{p.Name} places {dl.Ordered.Count} card(s) at the top of the deck.");
+                state.DeckLook = null;
+                return;
+            }
             foreach (var c in dl.Ordered)
             {
                 c.Zone = "deck";
@@ -1087,14 +1864,76 @@ namespace OnePieceTcg.Engine
                 Log(state, seat, $"{NameId(GetCard(attacker))} cannot attack this turn.");
                 return;
             }
-            if (attacker.PlayedOnTurn == state.TurnNumber && !HasRush(state, attacker))
+            // Printed self-restrictions: "This Leader/Character cannot attack." (OP03-058 etc.),
+            // "This Character cannot attack a Leader on the turn in which it is played." (OP03-004),
+            // "This Character cannot attack unless there is a Character with N base power or more."
+            var attackerDefP = GetCard(attacker);
+            if (!IsEffectNegated(state, attacker))
             {
-                Log(state, seat, "Only [Rush] characters can attack on the turn they are played.");
+                if ((ContainsAll(attackerDefP.Effect, "This Leader cannot attack.") && attackerDefP.Type == "leader")
+                    || System.Text.RegularExpressions.Regex.IsMatch(attackerDefP.Effect ?? "",
+                        @"(^|\n)\s*This Character cannot attack\.\s*($|\n)"))
+                {
+                    Log(state, seat, $"{NameId(attackerDefP)} cannot attack.");
+                    return;
+                }
+                var unlessM = System.Text.RegularExpressions.Regex.Match(attackerDefP.Effect ?? "",
+                    @"cannot attack unless there is a Character with (\d{3,5}) base power or more");
+                if (unlessM.Success)
+                {
+                    int bpNeed = int.Parse(unlessM.Groups[1].Value);
+                    bool found = false;
+                    foreach (var st in Seats())
+                        foreach (var cc in Player(state, st).CharacterArea)
+                            if (cc != null && GetCard(cc).Power >= bpNeed) found = true;
+                    if (!found)
+                    {
+                        Log(state, seat, $"{NameId(attackerDefP)} cannot attack — no Character with {bpNeed}+ base power in play.");
+                        return;
+                    }
+                }
+            }
+            if (ContainsAll(attackerDefP.Effect, "cannot attack a Leader on the turn in which it is played")
+                && attacker.PlayedOnTurn == state.TurnNumber
+                && GetCard(FindInPlay(Player(state, OtherSeat(seat)), targetId))?.Type == "leader")
+            {
+                Log(state, seat, $"{NameId(attackerDefP)} cannot attack a Leader this turn.");
                 return;
             }
+            if (attacker.PlayedOnTurn == state.TurnNumber && !HasRush(state, attacker))
+            {
+                // "Rush vs Characters" — printed on the card, granted as a modifier, or from an
+                // aura ("Your {T} type Characters can attack Characters on the turn in which
+                // they are played."). Only lets it attack CHARACTERS the turn it came down.
+                var rushCharTarget = FindInPlay(Player(state, OtherSeat(seat)), targetId);
+                bool targetIsChar = rushCharTarget != null && GetCard(rushCharTarget).Type == "character";
+                bool rushChars = ContainsAll(attackerDefP.Effect, "can attack Characters on the turn in which it is played")
+                    || HasModifier(state, attacker, "rushCharacters");
+                if (!rushChars)
+                {
+                    var pAura = Player(state, seat);
+                    var auraSrcsR = new List<CardInstance>();
+                    if (pAura.Leader != null) auraSrcsR.Add(pAura.Leader);
+                    foreach (var cc in pAura.CharacterArea) if (cc != null) auraSrcsR.Add(cc);
+                    foreach (var srcR in auraSrcsR)
+                    {
+                        var ft = GetCard(srcR)?.Effect ?? "";
+                        if (IsEffectNegated(state, srcR)) continue;
+                        if (ContainsAll(ft, "Characters can attack Characters on the turn in which they are played")
+                            && CardPassesFeatureFilter(ft, attackerDefP)) { rushChars = true; break; }
+                    }
+                }
+                if (!(rushChars && targetIsChar))
+                {
+                    Log(state, seat, "Only [Rush] characters can attack on the turn they are played.");
+                    return;
+                }
+            }
             var defenderDef = GetCard(defender);
-            // canAttackActive: this attacker may target active (non-rested) characters.
-            bool canHitActive = HasModifier(state, attacker, "canAttackActive");
+            // canAttackActive: this attacker may target active (non-rested) characters —
+            // granted by effect, or printed ("[DON!! x1] This Character can also attack your
+            // opponent's active Characters.", OP01-021 etc.).
+            bool canHitActive = HasModifier(state, attacker, "canAttackActive") || HasPrintedCanAttackActive(attacker);
             if (defenderDef.Type == "character" && !defender.Rested && !canHitActive)
             {
                 Log(state, seat, "Only the opponent's leader or rested characters can be attacked.");
@@ -1125,6 +1964,32 @@ namespace OnePieceTcg.Engine
             };
             Log(state, seat, $"{NameId(GetCard(attacker))} ({state.Battle.AttackPower}) attacks {NameId(GetCard(defender))} ({state.Battle.DefensePower}).");
             ApplyWhenAttackingEffects(state, seat, attacker, defenderDef);
+            // [On Your Opponent's Attack] effects on the DEFENDER's board (e.g. OP11-041 Nami
+            // leader: "[DON!! x1] [On Your Opponent's Attack] [Once Per Turn] You may trash 1
+            // card from your hand: This Leader gains +2000 power during this turn."). Queued
+            // optional; the pending-effect panel takes priority over the battle UI.
+            {
+                string defSeat = OtherSeat(seat);
+                var dp = Player(state, defSeat);
+                var reactors = new List<CardInstance>();
+                if (dp.Leader != null) reactors.Add(dp.Leader);
+                foreach (var c in dp.CharacterArea) if (c != null) reactors.Add(c);
+                if (dp.Stage != null) reactors.Add(dp.Stage);
+                foreach (var rc in reactors)
+                {
+                    var rDef = GetCard(rc);
+                    if (!HasTiming(rDef.Effect, "On Your Opponent's Attack")) continue;
+                    if (IsEffectNegated(state, rc)) continue;
+                    string oaClause = ExtractTimedClause(rDef.Effect, "On Your Opponent's Attack");
+                    int oaDon = ParseDonThreshold(oaClause);
+                    if (oaDon > 0 && rc.AttachedDonIds.Count < oaDon) continue;
+                    bool oaOnce = oaClause.IndexOf("[Once Per Turn]", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (oaOnce && dp.AbilityUsedThisTurn.Contains(rc.InstanceId + ":onOppAttack")) continue;
+                    if (oaOnce) dp.AbilityUsedThisTurn.Add(rc.InstanceId + ":onOppAttack");
+                    QueueEffect(state, defSeat, rc, "onOpponentsAttack", oaClause, true,
+                        EffectScope.Instant, InferTargetZone(oaClause));
+                }
+            }
         }
 
         // [When Attacking] effects, applied right after the battle is declared.
@@ -1168,7 +2033,7 @@ namespace OnePieceTcg.Engine
             // Generic fallback for [When Attacking] effects not handled by the switch above.
             // Checks DON requirement and once-per-turn gate, then queues the effect for resolution.
             var atkDef = GetCard(attacker);
-            if (HasTiming(atkDef.Effect, "When Attacking"))
+            if (HasTiming(atkDef.Effect, "When Attacking") && !IsEffectNegated(state, attacker))
             {
                 // Already handled by the switch for known cards — skip those.
                 bool handled = attacker.CardId == "ST01-002" || attacker.CardId == "ST01-005" ||
@@ -1183,7 +2048,9 @@ namespace OnePieceTcg.Engine
                     if (donOk && !alreadyUsed)
                     {
                         if (optFlag) Player(state, seat).AbilityUsedThisTurn.Add(attacker.InstanceId);
-                        QueueEffect(state, seat, attacker, "whenAttacking", atkDef.Effect, true);
+                        string waClause = ExtractTimedClause(atkDef.Effect, "When Attacking");
+                        QueueEffect(state, seat, attacker, "whenAttacking", waClause, IsOptionalEffectText(waClause),
+                            EffectScope.Instant, InferTargetZone(waClause));
                     }
                 }
             }
@@ -1195,7 +2062,8 @@ namespace OnePieceTcg.Engine
             var defender = Player(state, defenderSeat);
             var blocker = FindInPlay(defender, blockerId);
             // Blocker keyword check: printed keyword OR granted via CardModifier.
-            if (blocker == null || blocker.Rested || (!HasKeyword(blocker, "Blocker") && !HasKeywordModifier(state, blocker, "Blocker"))) return;
+            if (blocker == null || blocker.Rested || IsEffectNegated(state, blocker)
+                || (!HasKeyword(blocker, "Blocker") && !HasKeywordModifier(state, blocker, "Blocker") && !HasPrintedKeywordGrant(state, blocker, "Blocker"))) return;
             if (blocker.InstanceId == state.Battle.TargetId) return;
             if (state.Battle.NoBlocker) return;
             if (state.Battle.BlockerPowerBan.HasValue && GetPower(state, blocker) >= state.Battle.BlockerPowerBan.Value) return;
@@ -1207,6 +2075,18 @@ namespace OnePieceTcg.Engine
             state.Battle.Blocked = true;
             state.Battle.DefensePower = GetPower(state, blocker) + state.Battle.CounterPower;
             Log(state, defenderSeat, $"{NameId(GetCard(blocker))} blocks the attack.");
+
+            // [On Block] effects (e.g. ST05-004 Uta: "DON!! −1: Rest up to 1 of your opponent's
+            // Characters with a cost of 5 or less."). Queued optional; any DON!! −N cost is paid
+            // in ResolveEffect when the player commits. The pending-effect panel takes priority
+            // over the battle UI, so it resolves before the counter step continues.
+            var blockerDef2 = GetCard(blocker);
+            if (HasTiming(blockerDef2.Effect, "On Block"))
+            {
+                string onBlockClause = ExtractTimedClause(blockerDef2.Effect, "On Block");
+                QueueEffect(state, defenderSeat, blocker, "onBlock", onBlockClause, IsOptionalEffectText(onBlockClause),
+                    EffectScope.Instant, InferTargetZone(onBlockClause));
+            }
 
             // Some cards win the match outright when their controller's opponent
             // activates [Blocker] while either player is at 0 Life (e.g. Gol.D.Roger).
@@ -1246,6 +2126,30 @@ namespace OnePieceTcg.Engine
             var counterCard = defender.Hand[index];
             var counterDef = GetCard(counterCard);
             int counterPower = AutomatedCounterPower(counterCard);
+            // Counter auras printed on the defender's board (EB01-001 Oden, OP16-118):
+            // "All of your {T} type Character cards without a Counter have a +N Counter" /
+            // "The counter of all of your Character cards with N power in your hand becomes +N".
+            {
+                var auraSrcs = new List<CardInstance>();
+                if (defender.Leader != null) auraSrcs.Add(defender.Leader);
+                foreach (var c in defender.CharacterArea) if (c != null) auraSrcs.Add(c);
+                foreach (var srcA in auraSrcs)
+                {
+                    if (IsEffectNegated(state, srcA)) continue;
+                    var fA = GetCard(srcA)?.Effect ?? "";
+                    var noCtr = System.Text.RegularExpressions.Regex.Match(fA,
+                        @"without a Counter have a \+(\d{3,5}) Counter");
+                    if (noCtr.Success && counterDef.Counter == 0 && counterDef.Type == "character"
+                        && CardPassesFeatureFilter(fA, counterDef) && counterPower == 0)
+                        counterPower = int.Parse(noCtr.Groups[1].Value);
+                    var becomeCtr = System.Text.RegularExpressions.Regex.Match(fA,
+                        @"counter of all of your Character cards with (\d{3,5}) power in your hand becomes \+(\d{3,5})",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (becomeCtr.Success && counterDef.Type == "character"
+                        && counterDef.Power == int.Parse(becomeCtr.Groups[1].Value))
+                        counterPower = int.Parse(becomeCtr.Groups[2].Value);
+                }
+            }
             if (counterPower <= 0)
             {
                 Log(state, defenderSeat, $"{NameId(GetCard(counterCard))} has no usable counter value.");
@@ -1264,19 +2168,18 @@ namespace OnePieceTcg.Engine
             state.Battle.DefensePower += counterPower;
             Log(state, defenderSeat, $"{defender.Name} counters with {NameId(GetCard(counterCard))} (+{counterPower}).");
 
-            // Generic secondary effect: anything after "Then," in the counter event text.
-            // Queued as a pending effect so TryResolveKnownEffect handles it (e.g. set DON!! active,
-            // draw cards, rest opponent's character, etc.).
-            string effectText = counterDef.Effect ?? "";
+            // Generic secondary effect: anything after "Then," in the card's [Counter]
+            // CLAUSE ONLY (e.g. "…+2000 power. Then, set 1 DON!! active"). Never read other
+            // clauses — countering with a Character must NOT trigger its [On Play] text
+            // (which frequently contains its own "Then," sentence).
+            string effectText = ExtractTimedClause(counterDef.Effect ?? "", "Counter") ?? "";
             int thenIdx = effectText.IndexOf("Then,", StringComparison.OrdinalIgnoreCase);
             if (thenIdx < 0) thenIdx = effectText.IndexOf("Then ", StringComparison.OrdinalIgnoreCase);
             if (thenIdx >= 0)
             {
-                string secondary = effectText.Substring(thenIdx).Trim();
-                if (IsAutomatedEffectPattern(secondary))
-                    QueueEffect(state, defenderSeat, counterCard, "counter", secondary, true);
-                else
-                    Log(state, defenderSeat, $"{NameId(counterDef)} secondary effect requires manual resolution: {secondary}");
+                string secondary = NormalizeClause(effectText.Substring(thenIdx).Trim());
+                QueueEffect(state, defenderSeat, counterCard, "counter", secondary,
+                    IsOptionalEffectText(secondary), EffectScope.Instant, InferTargetZone(secondary));
             }
         }
 
@@ -1309,9 +2212,23 @@ namespace OnePieceTcg.Engine
             string endedBattleId = state.Battle?.Id;
             if (cardFromLife != null)
             {
-                cardFromLife.Zone = "hand";
-                p.Hand.Add(cardFromLife);
-                Log(state, defenderSeat, $"{p.Name} takes 1 life to hand.");
+                // ST13-003 rule: "Your face-up Life cards are placed at the bottom of your
+                // deck instead of being added to your hand."
+                bool faceUpToDeck = cardFromLife.FaceUp && BoardHasText(state, defenderSeat,
+                    "face-up Life cards are placed at the bottom of your deck");
+                if (faceUpToDeck)
+                {
+                    cardFromLife.Zone = "deck";
+                    cardFromLife.FaceUp = false;
+                    p.Deck.Add(cardFromLife);
+                    Log(state, defenderSeat, $"{p.Name}'s face-up Life card goes to the bottom of the deck.");
+                }
+                else
+                {
+                    cardFromLife.Zone = "hand";
+                    p.Hand.Add(cardFromLife);
+                    Log(state, defenderSeat, $"{p.Name} takes 1 life to hand.");
+                }
                 state.Phase = "main";
             }
             else
@@ -1385,6 +2302,11 @@ namespace OnePieceTcg.Engine
             CleanupBattleModifiers(state, endedBattleId);
         }
 
+        // "Your opponent's [Trigger] effects are negated." — printed on the trigger-user's
+        // OPPONENT's board; the trigger fizzles (the life card goes to hand as normal).
+        private static bool TriggersNegatedFor(GameState state, string seat) =>
+            BoardHasText(state, OtherSeat(seat), "opponent's [Trigger] effects are negated");
+
         private static void UseTrigger(GameState state, string seat)
         {
             if (state.Battle == null || state.Battle.Step != "trigger") return;
@@ -1392,6 +2314,12 @@ namespace OnePieceTcg.Engine
             if (seat != defenderSeat) return;
             var cardFromLife = state.Battle.RevealedLife;
             if (cardFromLife == null) { FinalizeTrigger(state, defenderSeat); return; }
+            if (TriggersNegatedFor(state, defenderSeat))
+            {
+                Log(state, defenderSeat, $"{NameId(GetCard(cardFromLife))}'s [Trigger] is negated by the opponent.");
+                FinalizeTrigger(state, defenderSeat);
+                return;
+            }
             Log(state, defenderSeat, $"{Player(state, defenderSeat).Name} reveals and activates {NameId(GetCard(cardFromLife))}'s [Trigger].");
             if (TryResolveKnownTrigger(state, defenderSeat, cardFromLife)) return;
             var triggerText = GetCard(cardFromLife).Trigger;
@@ -1449,7 +2377,7 @@ namespace OnePieceTcg.Engine
                 else
                 {
                     string koedBattleId = state.Battle.Id;
-                    if (HasModifier(state, target, "cannotBeKod"))
+                    if (HasModifier(state, target, "cannotBeKod") || IsBattleKoImmune(state, target))
                     {
                         Log(state, "system", $"{NameId(targetDef)} cannot be K.O.'d and survives the battle.");
                         state.Battle = null;
@@ -1469,9 +2397,368 @@ namespace OnePieceTcg.Engine
 
             Log(state, "system", "Attack resolves with no damage.");
             string endedId = state.Battle.Id;
+            var pbAttacker = FindInPlay(Player(state, state.Battle.AttackerSeat), state.Battle.AttackerId);
+            string pbSeat = state.Battle.AttackerSeat;
             state.Battle = null;
             state.Phase = "main";
             CleanupBattleModifiers(state, endedId);
+            ApplyEndOfBattleEffects(state, pbSeat, pbAttacker, target);
+        }
+
+        // "At the end of a battle in which this Character battles your opponent's Character
+        // (with a cost of N or less)?, <body>" — OP04-047, ST08-013.
+        private static void ApplyEndOfBattleEffects(GameState state, string attackerSeat, CardInstance attacker, CardInstance defender)
+        {
+            if (attacker == null || defender == null) return;
+            if (GetCard(defender)?.Type != "character") return;
+            var line = (GetCard(attacker)?.Effect ?? "").Split('\n')
+                .FirstOrDefault(l => ContainsAll(l, "At the end of a battle in which this Character battles"));
+            if (line == null || IsEffectNegated(state, attacker)) return;
+            int donReqB = ParseDonThreshold(line);
+            if (donReqB > 0 && attacker.AttachedDonIds.Count < donReqB) return;
+            if (HasTiming(line, "Your Turn") && state.ActiveSeat != attackerSeat) return;
+            int pbCap = ParseLimit(line, @"cost of (\d+) or less");
+            if (pbCap >= 0 && GetCost(state, defender) > pbCap) return;
+            if (FindInPlay(Player(state, OtherSeat(attackerSeat)), defender.InstanceId) == null) return;
+            if (ContainsAll(line, "K.O. the opponent"))
+            {
+                if (!CannotBeKoedByEffect(state, defender) && !TryRemovalReplacement(state, OtherSeat(attackerSeat), defender))
+                {
+                    MoveToTrash(state, OtherSeat(attackerSeat), defender.InstanceId);
+                    Log(state, attackerSeat, $"{NameId(GetCard(attacker))}: K.O.s {NameId(GetCard(defender))} at the end of the battle.");
+                }
+                if (ContainsAll(line, "If you do, K.O. this Character")
+                    && FindInPlay(Player(state, attackerSeat), attacker.InstanceId) != null)
+                    MoveToTrash(state, attackerSeat, attacker.InstanceId);
+            }
+            else if (ContainsAll(line, "place the opponent's Character you battled with at the bottom of the owner's deck"))
+            {
+                var pDef = Player(state, OtherSeat(attackerSeat));
+                int di = pDef.CharacterArea.FindIndex(c => c != null && c.InstanceId == defender.InstanceId);
+                if (di >= 0 && !TryRemovalReplacement(state, OtherSeat(attackerSeat), defender))
+                {
+                    ReturnAttachedDon(pDef, defender);
+                    pDef.CharacterArea[di] = null;
+                    defender.Zone = "deck"; defender.Rested = false; defender.PlayedOnTurn = null; defender.Modifiers.Clear();
+                    state.NameOverrides.Remove(defender.InstanceId);
+                    pDef.Deck.Add(defender);
+                    Log(state, attackerSeat, $"{NameId(GetCard(attacker))}: {NameId(GetCard(defender))} is placed at the bottom of its owner's deck.");
+                }
+            }
+        }
+
+        // Printed "can also attack your opponent's active Characters" (with optional [DON!! xN]
+        // gate), scanned per ability line so other clauses' DON!! tags don't interfere.
+        private static bool HasPrintedCanAttackActive(CardInstance attacker)
+        {
+            var text = GetCard(attacker)?.Effect ?? "";
+            if (!ContainsAll(text, "can also attack your opponent's active Characters")) return false;
+            foreach (var line in text.Split('\n'))
+            {
+                if (!ContainsAll(line, "can also attack your opponent's active Characters")) continue;
+                int donReq = ParseDonThreshold(line);
+                if (donReq > 0 && attacker.AttachedDonIds.Count < donReq) continue;
+                return true;
+            }
+            return false;
+        }
+
+        // K.O.-by-effect immunity: a cannotBeKod modifier OR printed immunity text OR a
+        // protective aura on the owner's board ("All of your Characters with N base power or
+        // less cannot be K.O.'d by your opponent's effects…", conditional variants, etc.).
+        private static bool CannotBeKoedByEffect(GameState state, CardInstance c)
+        {
+            if (c == null) return false;
+            if (HasModifier(state, c, "cannotBeKod")) return true;
+            var own = GetCard(c)?.Effect ?? "";
+            if (ContainsAll(own, "cannot be K.O.'d by effects")
+                || ContainsAll(own, "cannot be K.O.'d by your opponent's effects")
+                || ContainsAll(own, "cannot be removed from the field by your opponent's effects"))
+            {
+                // "Once per turn, this Character cannot be K.O.'d…" — consume a per-turn charge.
+                if (ContainsAll(own, "Once per turn"))
+                {
+                    var pOnce = c.Owner != null && state.Players.TryGetValue(c.Owner, out var po) ? po : null;
+                    if (pOnce == null) return false;
+                    if (pOnce.AbilityUsedThisTurn.Contains(c.InstanceId + ":koImmunity")) return false;
+                    pOnce.AbilityUsedThisTurn.Add(c.InstanceId + ":koImmunity");
+                }
+                return true;
+            }
+            return HasRemovalImmunityAura(state, c);
+        }
+
+        // Protective auras on the victim's own board: "All of your (yellow) ({T} type)
+        // Characters (with N base power or less) cannot be K.O.'d / removed from the field by
+        // your opponent's effects (until …)", with an optional leading "If …" condition.
+        private static bool HasRemovalImmunityAura(GameState state, CardInstance victim)
+        {
+            if (victim == null || victim.Owner == null || !state.Players.TryGetValue(victim.Owner, out var p)) return false;
+            var vDef = GetCard(victim);
+            var srcs = new List<CardInstance>();
+            if (p.Leader != null) srcs.Add(p.Leader);
+            foreach (var c in p.CharacterArea) if (c != null) srcs.Add(c);
+            foreach (var src in srcs)
+            {
+                if (IsEffectNegated(state, src)) continue;
+                var full = GetCard(src)?.Effect ?? "";
+                foreach (var line in full.Split('\n'))
+                {
+                    if (!System.Text.RegularExpressions.Regex.IsMatch(line,
+                            @"all of your .*cannot be (K\.O\.'d|removed from the field) by your opponent's effects",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
+                    var condI = System.Text.RegularExpressions.Regex.Match(line,
+                        @"^\s*If ([^,]+),", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (condI.Success && !EvaluateCondition(state, victim.Owner, condI.Groups[1].Value.Trim(), src.InstanceId)) continue;
+                    int bpCapI = ParseLimit(line, @"(\d{3,5}) base power or less");
+                    if (bpCapI >= 0 && vDef.Power > bpCapI) continue;
+                    bool colorOkI = true;
+                    foreach (var col in new[] { "red", "green", "blue", "purple", "black", "yellow" })
+                        if (System.Text.RegularExpressions.Regex.IsMatch(line, $@"all of your {col}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                            && (vDef.Color ?? "").IndexOf(col, StringComparison.OrdinalIgnoreCase) < 0)
+                            colorOkI = false;
+                    if (!colorOkI) continue;
+                    if (!CardPassesFeatureFilter(line, vDef)) continue;
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Effective-name match including printed aliases ("Also treat this card's name as
+        // [X] (and [Y]) according to the rules." — static, unlike runtime NameOverrides).
+        public static bool NameMatches(GameState state, CardInstance card, string name)
+        {
+            if (card == null || string.IsNullOrEmpty(name)) return false;
+            if (string.Equals(GetEffectiveName(state, card), name, StringComparison.OrdinalIgnoreCase)) return true;
+            var text = GetCard(card)?.Effect ?? "";
+            if (text.IndexOf("treat this card's name as", StringComparison.OrdinalIgnoreCase) < 0) return false;
+            foreach (System.Text.RegularExpressions.Match am in
+                System.Text.RegularExpressions.Regex.Matches(text, @"treat this card's name as \[([^\]]+)\](?: and \[([^\]]+)\])?"))
+            {
+                if (string.Equals(am.Groups[1].Value.Trim(), name, StringComparison.OrdinalIgnoreCase)) return true;
+                if (am.Groups[2].Success && string.Equals(am.Groups[2].Value.Trim(), name, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        // Dynamic numeric caps: "…equal to or less than the number of your opponent's Life
+        // cards / your rested DON!! / …". Returns -1 when the text has no dynamic cap.
+        private static int ComputeDynamicCap(GameState state, string seat, string text)
+        {
+            if (text.IndexOf("equal to or less than", StringComparison.OrdinalIgnoreCase) < 0) return -1;
+            var p = Player(state, seat);
+            var opp = Player(state, OtherSeat(seat));
+            if (ContainsAll(text, "total of your and your opponent's Life")) return p.Life.Count + opp.Life.Count;
+            if (ContainsAll(text, "number of your opponent's Life")) return opp.Life.Count;
+            if (ContainsAll(text, "number of your Life")) return p.Life.Count;
+            if (ContainsAll(text, "number of your opponent's rested DON!!")) return RestedDonCount(opp);
+            if (ContainsAll(text, "number of your rested DON!!")) return RestedDonCount(p);
+            if (ContainsAll(text, "number of your opponent's DON!!")) return TotalFieldDon(opp);
+            if (ContainsAll(text, "number of your DON!!")) return TotalFieldDon(p);
+            if (ContainsAll(text, "number of cards in your hand")) return p.Hand.Count;
+            var tagM = System.Text.RegularExpressions.Regex.Match(text,
+                @"number of your \{([^}]+)\} type Characters",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (tagM.Success)
+                return p.CharacterArea.Count(c => c != null && GetCard(c).HasFeature(tagM.Groups[1].Value.Trim()));
+            if (ContainsAll(text, "number of your Characters")) return p.CharacterArea.Count(c => c != null);
+            return -1;
+        }
+
+        // Removal replacement: "If (this|your {T} type) Character would be removed from the
+        // field by your opponent's effect, you may <X> instead." Scans the victim's own board
+        // (the victim card itself plus any aura card whose text protects the victim's type)
+        // and auto-applies the first payable replacement. Returns true when the removal was
+        // replaced (the victim stays on the field).
+        private static bool TryRemovalReplacement(GameState state, string victimSeat, CardInstance victim)
+        {
+            var p = Player(state, victimSeat);
+            var candidates = new List<CardInstance>();
+            if (victim != null) candidates.Add(victim);
+            foreach (var c in p.CharacterArea) if (c != null && c != victim) candidates.Add(c);
+            if (p.Leader != null) candidates.Add(p.Leader);
+            foreach (var guard in candidates)
+            {
+                var text = GetCard(guard)?.Effect ?? "";
+                if (!ContainsAll(text, "would be removed from the field by your opponent's effect")) continue;
+                foreach (var line in text.Split('\n'))
+                {
+                    if (!ContainsAll(line, "would be removed from the field by your opponent's effect")) continue;
+                    // Whose removal does this replace? "this Character" → the guard itself;
+                    // "your {T} type Character" → any of the player's characters of that type.
+                    bool selfOnly = ContainsAll(line, "If this Character would be removed");
+                    if (selfOnly && guard != victim) continue;
+                    if (!selfOnly)
+                    {
+                        string tag = ParseCurlyBraceTag(line);
+                        if (!string.IsNullOrEmpty(tag) && !GetCard(victim).HasFeature(tag)) continue;
+                    }
+                    bool oncePerTurn = line.IndexOf("[Once Per Turn]", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (oncePerTurn && p.AbilityUsedThisTurn.Contains(guard.InstanceId + ":replace")) continue;
+                    // Apply the replacement action.
+                    if (ContainsAll(line, "rest this Character instead"))
+                    {
+                        if (guard.Rested) continue;
+                        guard.Rested = true;
+                        Log(state, victimSeat, $"{NameId(GetCard(guard))} rests instead of {NameId(GetCard(victim))} being removed.");
+                    }
+                    else if (ContainsAll(line, "rest 1 of your opponent's Characters instead"))
+                    {
+                        var oppP = Player(state, OtherSeat(victimSeat));
+                        var toRest = oppP.CharacterArea.FirstOrDefault(c => c != null && !c.Rested);
+                        if (toRest == null) continue;
+                        toRest.Rested = true;
+                        Log(state, victimSeat, $"{NameId(GetCard(guard))}: rests {NameId(GetCard(toRest))} instead of the removal.");
+                    }
+                    else if (ContainsAll(line, "give your Leader") && ContainsAll(line, "power during this turn instead"))
+                    {
+                        var pwrM = System.Text.RegularExpressions.Regex.Match(line, @"[-\u2212\u2013\u2011\u2012\u2014](\d{3,5})\s+power");
+                        int delta = pwrM.Success ? int.Parse(pwrM.Groups[1].Value) : 0;
+                        if (delta <= 0 || p.Leader == null) continue;
+                        state.TemporaryPowerBonus.TryGetValue(p.Leader.InstanceId, out var exL);
+                        state.TemporaryPowerBonus[p.Leader.InstanceId] = exL - delta;
+                        RegisterPowerModifier(p.Leader, NameId(GetCard(guard)), -delta, "endOfTurn");
+                        Log(state, victimSeat, $"{NameId(GetCard(guard))}: Leader takes -{delta} power instead of the removal.");
+                    }
+                    else continue;   // unknown replacement action — don't consume the effect
+                    if (oncePerTurn) p.AbilityUsedThisTurn.Add(guard.InstanceId + ":replace");
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Reactive hook: "When a card is trashed from your hand by an effect, this
+        // Character's effect is negated during this turn." (OP14-056 drawback on either board).
+        private static void NotifyHandTrashedByEffect(GameState state, string handOwnerSeat)
+        {
+            foreach (var st in Seats())
+            {
+                var p = Player(state, st);
+                foreach (var c in p.CharacterArea)
+                {
+                    if (c == null) continue;
+                    if (ContainsAll(GetCard(c)?.Effect ?? "", "When a card is trashed from your hand by an effect")
+                        && c.Owner == handOwnerSeat)
+                    {
+                        AddModifier(state, c, c, "effectsNegated", "thisTurn", null, st);
+                        Log(state, st, $"{NameId(GetCard(c))}'s effect is negated this turn (a hand card was trashed by an effect).");
+                    }
+                }
+            }
+        }
+
+        // Reactive hook: "When a DON!! card on your field is returned to your DON!! deck,
+        // up to 1 of your {T} type Characters gains +N power …" (OP11-077).
+        private static void NotifyDonReturned(GameState state, string seat)
+        {
+            var p = Player(state, seat);
+            var cards = new List<CardInstance>();
+            if (p.Leader != null) cards.Add(p.Leader);
+            foreach (var c in p.CharacterArea) if (c != null) cards.Add(c);
+            foreach (var c in cards)
+            {
+                var line = (GetCard(c)?.Effect ?? "").Split('\n')
+                    .FirstOrDefault(l => ContainsAll(l, "When a DON!! card on your field is returned to your DON!! deck"));
+                if (line == null || IsEffectNegated(state, c)) continue;
+                int comma = line.IndexOf(',');
+                if (comma < 0) continue;
+                string body = NormalizeClause(line.Substring(comma + 1));
+                if (IsAutomatedEffectPattern(body))
+                    QueueAndAutoResolve(state, seat, c, "reactive", body, true, EffectScope.Instant, InferTargetZone(body));
+            }
+        }
+
+        // Reactive hook: "When a Character is removed from the field by your effect, if your
+        // opponent has N or more cards in their hand, …" (OP08-046) — fired after the unified
+        // removal resolvers succeed.
+        private static void NotifyRemovalByEffect(GameState state, string removerSeat)
+        {
+            var p = Player(state, removerSeat);
+            var cards = new List<CardInstance>();
+            if (p.Leader != null) cards.Add(p.Leader);
+            foreach (var c in p.CharacterArea) if (c != null) cards.Add(c);
+            foreach (var c in cards)
+            {
+                var line = (GetCard(c)?.Effect ?? "").Split('\n')
+                    .FirstOrDefault(l => ContainsAll(l, "When a Character is removed from the field by your effect"));
+                if (line == null || IsEffectNegated(state, c)) continue;
+                int comma = line.IndexOf(',');
+                if (comma < 0) continue;
+                string body = NormalizeClause(line.Substring(comma + 1));
+                if (IsAutomatedEffectPattern(body))
+                    QueueAndAutoResolve(state, removerSeat, c, "reactive", body, true, EffectScope.Instant, InferTargetZone(body));
+            }
+        }
+
+        // "All of your opponent's Characters cannot be removed from the field by your
+        // effects." — a drawback printed on the REMOVER's own board (OP14-079).
+        private static bool RemoverCannotRemoveByEffect(GameState state, string removerSeat)
+        {
+            var p = Player(state, removerSeat);
+            var cards = new List<CardInstance>();
+            if (p.Leader != null) cards.Add(p.Leader);
+            foreach (var c in p.CharacterArea) if (c != null) cards.Add(c);
+            foreach (var c in cards)
+                if (!IsEffectNegated(state, c)
+                    && ContainsAll(GetCard(c)?.Effect ?? "", "All of your opponent's Characters cannot be removed from the field by your effects"))
+                    return true;
+            return false;
+        }
+
+        // Effect negation: "Negate the effect of up to N of your opponent's Leader or
+        // Character cards during this turn." Checked wherever a card's own printed text
+        // grants something (auras, keywords, when-attacking, activate, blocker).
+        public static bool IsEffectNegated(GameState state, CardInstance instance)
+        {
+            if (instance == null) return false;
+            if (HasModifier(state, instance, "effectsNegated")) return true;
+            // Continuous negation auras: "Your Leader and all of your Characters that do not
+            // have a type including \"X\" have their effects negated." (OP13-064 drawback).
+            if (instance.Owner != null && state.Players.TryGetValue(instance.Owner, out var pN))
+            {
+                var srcsN = new List<CardInstance>();
+                if (pN.Leader != null) srcsN.Add(pN.Leader);
+                foreach (var c in pN.CharacterArea) if (c != null) srcsN.Add(c);
+                var instDefN = GetCard(instance);
+                foreach (var srcN in srcsN)
+                {
+                    if (srcN.InstanceId == instance.InstanceId) continue;
+                    var mN = System.Text.RegularExpressions.Regex.Match(GetCard(srcN)?.Effect ?? "",
+                        @"Your Leader and all of your Characters that do not have a type including ""([^""]+)"" have their effects negated");
+                    if (mN.Success && !instDefN.HasFeature(mN.Groups[1].Value.Trim())
+                        && (instDefN.Type == "leader" || instDefN.Type == "character"))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        // Printed battle K.O. immunity: "[DON!! x1] This Character cannot be K.O.'d in battle."
+        // (OP03-079 Vergo) or "If you have 8 or more DON!! cards on your field, this Character
+        // cannot be K.O.'d in battle." (ST05-008 Shiki). Evaluated live at battle resolution.
+        private static bool IsBattleKoImmune(GameState state, CardInstance instance)
+        {
+            if (instance == null) return false;
+            var text = GetCard(instance)?.Effect ?? "";
+            if (!ContainsAll(text, "cannot be K.O.'d in battle")) return false;
+            foreach (var line in text.Split('\n'))
+            {
+                if (!ContainsAll(line, "cannot be K.O.'d in battle")) continue;
+                int donReq = ParseDonThreshold(line);
+                if (donReq > 0 && instance.AttachedDonIds.Count < donReq) continue;
+                var fieldReq = System.Text.RegularExpressions.Regex.Match(line,
+                    @"(\d+) or more DON!! cards on your field",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (fieldReq.Success)
+                {
+                    var ownerP = instance.Owner != null && state.Players.TryGetValue(instance.Owner, out var op) ? op : null;
+                    if (ownerP == null || TotalFieldDon(ownerP) < int.Parse(fieldReq.Groups[1].Value)) continue;
+                }
+                return true;
+            }
+            return false;
         }
 
         private enum EffectResolution
@@ -1496,6 +2783,58 @@ namespace OnePieceTcg.Engine
                 return;
             }
 
+            // "DON!! −N (…): body" costs (return N DON!! from field to DON!! deck — Shanks
+            // leader, Gild Tesoro, Uta's [On Block], Lion's Threat, …). The pending effect is
+            // optional; the first resolve interaction commits: pay the cost, then resolve only
+            // the body text from here on.
+            int donMinus = ParseDonMinusCost(effect.Text ?? "");
+            if (donMinus > 0)
+            {
+                var payer = Player(state, effect.Seat);
+                if (payer.CostArea.Count < donMinus)
+                {
+                    state.PendingEffects.Remove(effect);
+                    Log(state, effect.Seat, $"Not enough DON!! on the field (need {donMinus}) — {NameId(CardData.GetCard(effect.SourceCardId))} effect fizzles.");
+                    return;
+                }
+                // A specific cost-area DON!! was clicked — return exactly that one.
+                if (!string.IsNullOrEmpty(targetId))
+                {
+                    int di = payer.CostArea.FindIndex(d => d.InstanceId == targetId);
+                    if (di >= 0)
+                    {
+                        bool wasRested = payer.CostArea[di].Rested;
+                        payer.CostArea.RemoveAt(di);
+                        payer.DonDeck += 1;
+                        Log(state, effect.Seat, $"{payer.Name} returns 1 {(wasRested ? "rested" : "active")} DON!! to the DON!! deck.");
+                        NotifyDonReturned(state, effect.Seat);
+                        int rem = (effect.DonPaymentRemaining > 0 ? effect.DonPaymentRemaining : donMinus) - 1;
+                        effect.DonPaymentRemaining = rem;
+                        if (rem > 0) return;   // more DON!! clicks needed
+                        effect.Text = DonMinusBody(effect.Text);
+                        targetId = null;       // the click paid the cost; it is not a body target
+                    }
+                    else if (effect.DonPaymentRemaining > 0)
+                    {
+                        return;                // mid-payment: ignore clicks that aren't cost-area DON!!
+                    }
+                    else
+                    {
+                        // Body-target click before the cost was paid: fall through to the
+                        // no-choice auto-pay below so the click still counts.
+                        if (!AutoPayOrAwaitDonMinus(state, effect, donMinus)) return;
+                    }
+                }
+                else if (effect.DonPaymentRemaining > 0)
+                {
+                    return;                    // waiting for the player to click DON!! cards
+                }
+                else
+                {
+                    if (!AutoPayOrAwaitDonMinus(state, effect, donMinus)) return;
+                }
+            }
+
             var result = TryResolveKnownEffect(state, effect, targetId);
             if (result == EffectResolution.WaitingForTarget) return;
             if (result == EffectResolution.Resolved && donCost > 0)
@@ -1512,7 +2851,13 @@ namespace OnePieceTcg.Engine
         private static void PassEffect(GameState state, string seat, string effectId)
         {
             var effect = FindPendingEffect(state, seat, effectId);
-            if (effect == null || !effect.Optional) return;
+            if (effect == null) return;
+            // "Up to N" effects may always choose zero targets, "You may"/"If" effects are
+            // inherently optional — allow skipping even when queued as mandatory, so an
+            // effect with no legal target can never deadlock the game.
+            bool skippable = effect.Optional || IsOptionalEffectText(effect.Text) || effect.SelectionsRemaining > 0;
+            if (!skippable)
+                Log(state, seat, $"{NameId(CardData.GetCard(effect.SourceCardId))} mandatory effect skipped (no legal way to resolve it).");
             state.PendingEffects.Remove(effect);
             Log(state, seat, $"{NameId(CardData.GetCard(effect.SourceCardId))} effect skipped.");
         }
@@ -1526,12 +2871,16 @@ namespace OnePieceTcg.Engine
             string chosen = (choice == "B") ? ch.OptionB : ch.OptionA;
             state.ActiveChoice = null;
             if (string.IsNullOrWhiteSpace(chosen)) return;
-            var src = FindAnyInPlay(state, ch.SourceInstanceId, out _) ?? Player(state, seat).Leader;
+            // The chosen option always resolves FOR the effect's controller — even when the
+            // OPPONENT made the choice ("Your opponent chooses one:") — because option texts
+            // are written from the controller's perspective ("your opponent's Life", …).
+            string resolveSeat = string.IsNullOrEmpty(ch.ControllerSeat) ? seat : ch.ControllerSeat;
+            var src = FindAnyInPlay(state, ch.SourceInstanceId, out _) ?? Player(state, resolveSeat).Leader;
             if (src != null)
             {
                 // Infer the target zone from the sub-option text so the UI routes correctly.
                 EffectTargetZone zone = InferTargetZone(chosen);
-                QueueEffect(state, seat, src, ch.Timing, chosen.Trim(), false, EffectScope.Instant, zone);
+                QueueAndAutoResolve(state, resolveSeat, src, ch.Timing, chosen.Trim(), false, EffectScope.Instant, zone);
             }
             Log(state, seat, $"Chose: {chosen.Trim()}");
         }
@@ -1539,7 +2888,15 @@ namespace OnePieceTcg.Engine
         // Derive the EffectTargetZone a sub-effect needs based on its text.
         private static EffectTargetZone InferTargetZone(string text)
         {
-            if (ContainsAll(text, "from your hand") || ContainsAll(text, "from your opponent's hand")) return EffectTargetZone.Hand;
+            // Choice-shaped bodies ("play it or add it to Life", "Choose one:") resolve to an
+            // A/B choice FIRST — zone targeting belongs to the CHOSEN option, which is queued
+            // as its own effect afterwards. Returning Hand/Trash here made the trash/hand
+            // picker pop up before the choice (Moria: trash → pointless pick → choice →
+            // trash again). With Play, the flow is: choice → then the zone picker.
+            if (ContainsAll(text, "and play it or add it")
+                || ContainsAll(text, "Choose one") || ContainsAll(text, "chooses one"))
+                return EffectTargetZone.Play;
+            if (ContainsAll(text, "from your hand") || ContainsAll(text, "from your opponent's hand") || ContainsAll(text, "from their hand")) return EffectTargetZone.Hand;
             if (ContainsAll(text, "from your trash") || ContainsAll(text, "from your opponent's trash")) return EffectTargetZone.Trash;
             return EffectTargetZone.Play;
         }
@@ -1576,6 +2933,9 @@ namespace OnePieceTcg.Engine
                 Optional       = src.Optional,
                 Scope          = src.Scope,
                 TargetZone     = src.TargetZone,
+                SelectionsRemaining = src.SelectionsRemaining,
+                RemainingBudget = src.RemainingBudget,
+                FirstPickId    = src.FirstPickId,
             };
 
         // Returns the index of "Then," that begins a second clause ("<sentence>. Then, <rest>").
@@ -1592,10 +2952,292 @@ namespace OnePieceTcg.Engine
 
         // Evaluate the most common One Piece TCG conditional expressions.
         // Returns true if the condition is met for the given seat.
-        private static bool EvaluateCondition(GameState state, string seat, string condition)
+        private static bool EvaluateCondition(GameState state, string seat, string condition, string sourceInstanceId = null)
         {
             var p   = Player(state, seat);
             var opp = Player(state, OtherSeat(seat));
+
+            // "there is a Character with a cost of 0" (post -cost effects; either player's board).
+            if (ContainsAll(condition, "there is a Character with a cost of 0"))
+            {
+                foreach (var s in Seats())
+                    if (Player(state, s).CharacterArea.Any(c => c != null && GetCost(state, c) == 0))
+                        return true;
+                return false;
+            }
+
+            // "your opponent has more DON!! cards on their field than you" (ST05-005 Carina).
+            if (ContainsAll(condition, "opponent has more DON!! cards on their field"))
+                return TotalFieldDon(opp) > TotalFieldDon(p);
+
+            // "your opponent has N or more DON!! cards on their field" (OP02-089 etc.)
+            var oppDonN = System.Text.RegularExpressions.Regex.Match(condition,
+                @"opponent has (\d+) or more DON!! cards on their field",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (oppDonN.Success)
+                return TotalFieldDon(opp) >= int.Parse(oppDonN.Groups[1].Value);
+
+            // "your Leader is [Name]" (e.g. ST19-003 Tashigi: "If your Leader is [Smoker]").
+            var leaderIs = System.Text.RegularExpressions.Regex.Match(condition, @"Leader is \[([^\]]+)\]",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (leaderIs.Success)
+                return p.Leader != null && NameMatches(state, p.Leader, leaderIs.Groups[1].Value.Trim());
+
+            // "this Character was played on this turn" (ST19-003 Tashigi's Activate:Main).
+            if (ContainsAll(condition, "was played on this turn") || ContainsAll(condition, "was played this turn"))
+            {
+                var srcCard = FindCardInstance(state, sourceInstanceId);
+                return srcCard != null && srcCard.PlayedOnTurn == state.TurnNumber;
+            }
+
+            // Life-count conditions: "your opponent has N or less Life cards", "you have N or
+            // less Life cards", "you and your opponent have a total of N or less Life cards".
+            var totalLife = System.Text.RegularExpressions.Regex.Match(condition,
+                @"total of (\d+) or less Life", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (totalLife.Success)
+                return p.Life.Count + opp.Life.Count <= int.Parse(totalLife.Groups[1].Value);
+            var oppLife = System.Text.RegularExpressions.Regex.Match(condition,
+                @"opponent has (\d+) or (less|more) Life", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (oppLife.Success)
+            {
+                int n = int.Parse(oppLife.Groups[1].Value);
+                return oppLife.Groups[2].Value.Equals("less", StringComparison.OrdinalIgnoreCase)
+                    ? opp.Life.Count <= n : opp.Life.Count >= n;
+            }
+            var youLife = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+) or (less|more) Life", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (youLife.Success)
+            {
+                int n = int.Parse(youLife.Groups[1].Value);
+                return youLife.Groups[2].Value.Equals("less", StringComparison.OrdinalIgnoreCase)
+                    ? p.Life.Count <= n : p.Life.Count >= n;
+            }
+
+            // Compound conditions joined by "and" — every part must hold.
+            if (condition.IndexOf(" and ", StringComparison.OrdinalIgnoreCase) > 0)
+            {
+                int andIdx = condition.IndexOf(" and ", StringComparison.OrdinalIgnoreCase);
+                string left = condition.Substring(0, andIdx).Trim();
+                string right = condition.Substring(andIdx + 5).Trim();
+                // Only recurse when both halves look like standalone conditions (avoid splitting
+                // phrases like "Leader or Character" — those contain no digits/verbs anyway).
+                if (left.Length > 8 && right.Length > 8)
+                    return EvaluateCondition(state, seat, left, sourceInstanceId)
+                        && EvaluateCondition(state, seat, right, sourceInstanceId);
+            }
+
+            // "you have a Character with a cost of N or more"
+            var costCond = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have a Character with a cost of (\d+) or more",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (costCond.Success)
+                return p.CharacterArea.Any(c => c != null && GetCost(state, c) >= int.Parse(costCond.Groups[1].Value));
+
+            // "your opponent has a Character with a cost of 0" / "of N or less"
+            var oppCostCond = System.Text.RegularExpressions.Regex.Match(condition,
+                @"opponent has a Character with a cost of (\d+)( or less)?",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (oppCostCond.Success)
+            {
+                int n0 = int.Parse(oppCostCond.Groups[1].Value);
+                bool orLess = oppCostCond.Groups[2].Success;
+                return opp.CharacterArea.Any(c => c != null && (orLess ? GetCost(state, c) <= n0 : GetCost(state, c) == n0));
+            }
+
+            // "you have N or less cards in your hand" / "N or more cards in your hand"
+            var handN = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+) or (less|more) cards in your hand",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (handN.Success)
+            {
+                int hn = int.Parse(handN.Groups[1].Value);
+                return handN.Groups[2].Value.Equals("less", StringComparison.OrdinalIgnoreCase)
+                    ? p.Hand.Count <= hn : p.Hand.Count >= hn;
+            }
+
+            // "you have N (or more/less) DON!! cards on your field" (exact when unqualified)
+            var donCount = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+)( or more| or less)? DON!! cards on your field",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (donCount.Success)
+            {
+                int dn = int.Parse(donCount.Groups[1].Value);
+                int have = TotalFieldDon(p);
+                if (!donCount.Groups[2].Success) return have == dn;
+                return donCount.Groups[2].Value.Contains("more") ? have >= dn : have <= dn;
+            }
+
+            // "you have N or more rested Characters" / "N or less Characters"
+            var restedN = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+) or (more|less) (rested )?Characters",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (restedN.Success)
+            {
+                int rn = int.Parse(restedN.Groups[1].Value);
+                bool restedOnly = restedN.Groups[3].Success;
+                int cnt = p.CharacterArea.Count(c => c != null && (!restedOnly || c.Rested));
+                return restedN.Groups[2].Value.Equals("more", StringComparison.OrdinalIgnoreCase) ? cnt >= rn : cnt <= rn;
+            }
+
+            // "you have [Name]" / "you have no other [Name] (with a base cost of N)"
+            var haveName = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (no other )?\[([^\]]+)\]( with a base cost of (\d+))?",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (haveName.Success)
+            {
+                bool noOther = haveName.Groups[1].Success;
+                string wantName = haveName.Groups[2].Value.Trim();
+                int? wantBc = haveName.Groups[4].Success ? int.Parse(haveName.Groups[4].Value) : (int?)null;
+                int matches = 0;
+                var scanC = new List<CardInstance>();
+                if (p.Leader != null) scanC.Add(p.Leader);
+                foreach (var c in p.CharacterArea) if (c != null) scanC.Add(c);
+                foreach (var c in scanC)
+                {
+                    if (c.InstanceId == sourceInstanceId) continue;   // "no OTHER" excludes self
+                    if (!NameMatches(state, c, wantName)) continue;
+                    if (wantBc.HasValue && GetCard(c).Cost != wantBc.Value) continue;
+                    matches++;
+                }
+                return noOther ? matches == 0 : matches > 0;
+            }
+
+            // "this Character battles your opponent's Character (during this turn)"
+            if (ContainsAll(condition, "Character battles your opponent's Character")
+                || ContainsAll(condition, "Leader battles your opponent's Character"))
+            {
+                if (state.Battle == null) return false;
+                var bAtk = FindCardInstance(state, state.Battle.AttackerId);
+                var bDef = FindCardInstance(state, state.Battle.TargetId);
+                return bAtk != null && bAtk.InstanceId == sourceInstanceId
+                    && bDef != null && GetCard(bDef)?.Type == "character";
+            }
+
+            // "you have N or more {T} type Characters" / "you do not have N Characters with a
+            // cost of N or more" / "you have N {T} type Characters with different card names"
+            {
+                var tagCount = System.Text.RegularExpressions.Regex.Match(condition,
+                    @"you (do not have|have) (\d+)( or more| or less)? (?:\{([^}]+)\} type )?Characters( with a cost of (\d+) or more)?( with different card names)?",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (tagCount.Success)
+                {
+                    bool negated = tagCount.Groups[1].Value.StartsWith("do not", StringComparison.OrdinalIgnoreCase);
+                    int wantN = int.Parse(tagCount.Groups[2].Value);
+                    string cmp = tagCount.Groups[3].Success ? tagCount.Groups[3].Value.Trim() : "";
+                    string tagW = tagCount.Groups[4].Success ? tagCount.Groups[4].Value.Trim() : null;
+                    int minCost2 = tagCount.Groups[6].Success ? int.Parse(tagCount.Groups[6].Value) : -1;
+                    bool distinct = tagCount.Groups[7].Success;
+                    var pool = p.CharacterArea.Where(c => c != null
+                        && (tagW == null || GetCard(c).HasFeature(tagW))
+                        && (minCost2 < 0 || GetCost(state, c) >= minCost2));
+                    int cnt2 = distinct
+                        ? pool.Select(c => GetEffectiveName(state, c)).Distinct(StringComparer.OrdinalIgnoreCase).Count()
+                        : pool.Count();
+                    bool met = cmp.Equals("or less", StringComparison.OrdinalIgnoreCase) ? cnt2 <= wantN : cnt2 >= wantN;
+                    return negated ? !met : met;
+                }
+            }
+
+            // "you have a [Name] (Character)" — indefinite-article variant.
+            var haveA = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have an? \[([^\]]+)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (haveA.Success)
+            {
+                var scanA = new List<CardInstance>();
+                if (p.Leader != null) scanA.Add(p.Leader);
+                foreach (var c in p.CharacterArea) if (c != null) scanA.Add(c);
+                return scanA.Any(c => NameMatches(state, c, haveA.Groups[1].Value.Trim()));
+            }
+
+            // "you have N or less cards in your deck"
+            var deckN = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+) or (less|more) cards in your deck",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (deckN.Success)
+            {
+                int dnn = int.Parse(deckN.Groups[1].Value);
+                return deckN.Groups[2].Value.Equals("less", StringComparison.OrdinalIgnoreCase)
+                    ? p.Deck.Count <= dnn : p.Deck.Count >= dnn;
+            }
+
+            // "your Leader's type includes \"X\""
+            var leadIncl = System.Text.RegularExpressions.Regex.Match(condition,
+                @"Leader's type includes ""([^""]+)""",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (leadIncl.Success)
+                return p.Leader != null && GetCard(p.Leader).HasFeature(leadIncl.Groups[1].Value.Trim());
+
+            // "the only Characters on your field are {T} type Characters"
+            var onlyTag = System.Text.RegularExpressions.Regex.Match(condition,
+                @"only Characters on your field are \{([^}]+)\} type",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (onlyTag.Success)
+            {
+                string ot = onlyTag.Groups[1].Value.Trim();
+                var mine = p.CharacterArea.Where(c => c != null).ToList();
+                return mine.Count > 0 && mine.All(c => GetCard(c).HasFeature(ot));
+            }
+
+            // "you have N or more Events in your trash"
+            var evTrash = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+) or more Events in your trash",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (evTrash.Success)
+                return p.Trash.Count(c => GetCard(c).Type == "event") >= int.Parse(evTrash.Groups[1].Value);
+
+            // "your opponent has N or less DON!! cards on their field"
+            var oppDonLe = System.Text.RegularExpressions.Regex.Match(condition,
+                @"opponent has (\d+) or (less|more) DON!! cards on their field",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (oppDonLe.Success)
+            {
+                int odn = int.Parse(oppDonLe.Groups[1].Value);
+                return oppDonLe.Groups[2].Value.Equals("less", StringComparison.OrdinalIgnoreCase)
+                    ? TotalFieldDon(opp) <= odn : TotalFieldDon(opp) >= odn;
+            }
+
+            // "you have N or more cards in your trash"
+            var trashN2 = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+) or (more|less) cards in your trash",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (trashN2.Success)
+            {
+                int tn2 = int.Parse(trashN2.Groups[1].Value);
+                return trashN2.Groups[2].Value.Equals("more", StringComparison.OrdinalIgnoreCase)
+                    ? p.Trash.Count >= tn2 : p.Trash.Count <= tn2;
+            }
+
+            // "your opponent has a Character with N power or more"
+            var oppPwrC = System.Text.RegularExpressions.Regex.Match(condition,
+                @"opponent has a Character with (\d{3,5}) power or more",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (oppPwrC.Success)
+                return opp.CharacterArea.Any(c => c != null && GetPower(state, c) >= int.Parse(oppPwrC.Groups[1].Value));
+
+            // "your Leader is multicolored"
+            if (ContainsAll(condition, "Leader is multicolored"))
+                return p.Leader != null && (GetCard(p.Leader).Color ?? "").Contains("/");
+
+            // "this Character is rested"
+            if (ContainsAll(condition, "this Character is rested"))
+            {
+                var srcR = FindCardInstance(state, sourceInstanceId);
+                return srcR != null && srcR.Rested;
+            }
+
+            // "you have a Character with N base power or more"
+            var bpCond = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have a Character with (\d{3,5}) base power or more",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (bpCond.Success)
+                return p.CharacterArea.Any(c => c != null && GetCard(c).Power >= int.Parse(bpCond.Groups[1].Value));
+
+            // "you have N or more DON!! cards on your field"
+            var donField = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have (\d+) or more DON!! cards on your field",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (donField.Success)
+                return TotalFieldDon(p) >= int.Parse(donField.Groups[1].Value);
 
             // "you have N or more [Type] Characters in play"
             var charCount = System.Text.RegularExpressions.Regex.Match(
@@ -1612,7 +3254,7 @@ namespace OnePieceTcg.Engine
 
             // "your opponent has N or more cards in their hand"
             var oppHand = System.Text.RegularExpressions.Regex.Match(
-                condition, @"opponent has (\d+) or more cards? in their hand",
+                condition, @"opponent has (\d+) or more cards? in (?:their )?hand",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (oppHand.Success)
                 return opp.Hand.Count >= int.Parse(oppHand.Groups[1].Value);
@@ -1646,6 +3288,7 @@ namespace OnePieceTcg.Engine
         {
             var text = effect.Text ?? "";
             int chooseIdx = text.IndexOf("Choose one", StringComparison.OrdinalIgnoreCase);
+            if (chooseIdx < 0) chooseIdx = text.IndexOf("chooses one", StringComparison.OrdinalIgnoreCase);
             if (chooseIdx < 0) return false;
             // Split on bullet character (• U+2022) or "- " after the colon.
             int colonIdx = text.IndexOf(':', chooseIdx);
@@ -1655,11 +3298,19 @@ namespace OnePieceTcg.Engine
             string[] parts = after.Contains('•')
                 ? after.Split('•')
                 : after.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
-            var options = parts.Select(p => p.Trim()).Where(p => p.Length > 0).ToList();
+            var options = parts.Select(p => p.Trim().TrimStart('-', '•', '‐').Trim())
+                .Where(p => p.Length > 0).ToList();
             if (options.Count < 2) return false;
+            // "Your opponent chooses one:" — the OPPONENT makes this choice (its options still
+            // resolve for the effect's controller via ResolveChoice, which uses ChoiceState.Seat
+            // as the resolver seat — so flip the option texts' perspective is NOT needed: these
+            // cards phrase options from the opponent's viewpoint already).
+            bool opponentChooses = text.IndexOf("Your opponent chooses one", StringComparison.OrdinalIgnoreCase) >= 0
+                                || text.IndexOf("opponent chooses one", StringComparison.OrdinalIgnoreCase) >= 0;
             state.ActiveChoice = new ChoiceState
             {
-                Seat = effect.Seat,
+                Seat = opponentChooses ? OtherSeat(effect.Seat) : effect.Seat,
+                ControllerSeat = effect.Seat,
                 SourceInstanceId = effect.SourceInstanceId,
                 SourceCardId = effect.SourceCardId,
                 Timing = effect.Timing,
@@ -1676,6 +3327,18 @@ namespace OnePieceTcg.Engine
             if (state.PendingEffects.Count == 0) return null;
             if (!string.IsNullOrEmpty(effectId)) return state.PendingEffects.FirstOrDefault(e => e.EffectId == effectId && e.Seat == seat);
             return state.PendingEffects.FirstOrDefault(e => e.Seat == seat) ?? state.PendingEffects[0];
+        }
+
+        // An effect is genuinely optional when its text says so ("You may …", "up to N", a
+        // conditional). Mandatory effects ("Draw 2 cards.") must not offer a skip button.
+        private static bool IsOptionalEffectText(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return true;
+            var t = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "").TrimStart();
+            return t.StartsWith("You may", StringComparison.OrdinalIgnoreCase)
+                || t.StartsWith("If ", StringComparison.OrdinalIgnoreCase)
+                || text.IndexOf("up to", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static void QueueEffect(GameState state, string seat, CardInstance source, string timing, string text, bool optional,
@@ -1710,9 +3373,169 @@ namespace OnePieceTcg.Engine
             EffectScope scope = EffectScope.Instant, EffectTargetZone targetZone = EffectTargetZone.Play)
         {
             QueueEffect(state, seat, source, timing, text, optional, scope, targetZone);
+            // "You may ..." effects are a real decision — never auto-resolve them; the
+            // player opts in by clicking the effect button (or a highlighted target).
+            if (optional || IsOptionalEffectText(text)) return;
             if (!IsAutomatedEffectPattern(text)) return;
             var queued = state.PendingEffects[state.PendingEffects.Count - 1];
             ResolveEffect(state, seat, queued.EffectId, null);
+        }
+
+        // Attempt to auto-pay a "You may <cost>:" whose components need no hidden-zone picks:
+        // self-rest, rest N DON!!, return DON!! to deck, trash this Character, return trash to
+        // deck, turn Life face-up, add top-of-Life to hand. Returns 1 = paid, 0 = unpayable,
+        // -1 = a component wasn't recognized (caller falls through to other flows).
+        private static int TryAutoPayCost(GameState state, string seat, CardInstance source, string costText)
+        {
+            var p = Player(state, seat);
+            var actions = new List<Action>();
+            foreach (var rawPart in System.Text.RegularExpressions.Regex.Split(costText, @",? and |, "))
+            {
+                var part = rawPart.Trim();
+                if (part.Length == 0) continue;
+                if (System.Text.RegularExpressions.Regex.IsMatch(part, @"^rest this (Character|Leader|Stage|card)$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    if (source == null || source.Rested) return 0;
+                    var capS = source;
+                    actions.Add(() => { capS.Rested = true; Log(state, seat, $"{NameId(GetCard(capS))} rests (cost)."); });
+                    continue;
+                }
+                var restDonM = System.Text.RegularExpressions.Regex.Match(part, @"^rest (\d+) of your DON!! cards?$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (restDonM.Success)
+                {
+                    int n = int.Parse(restDonM.Groups[1].Value);
+                    if (ActiveDonCount(p) < n) return 0;
+                    actions.Add(() => { PayDonCost(p, n); Log(state, seat, $"Rested {n} DON!! (cost)."); });
+                    continue;
+                }
+                var retDonM = System.Text.RegularExpressions.Regex.Match(part, @"^return (\d+) of your (?:active )?DON!! cards? to your DON!! deck$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (retDonM.Success)
+                {
+                    int n = int.Parse(retDonM.Groups[1].Value);
+                    if (p.CostArea.Count < n) return 0;
+                    actions.Add(() => PayDonMinus(state, seat, n));
+                    continue;
+                }
+                var restNamed = System.Text.RegularExpressions.Regex.Match(part,
+                    @"^(?:rest )?(\d+) of your \[([^\]]+)\] cards?$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (restNamed.Success)
+                {
+                    int rnN = int.Parse(restNamed.Groups[1].Value);
+                    string rnName = restNamed.Groups[2].Value.Trim();
+                    var rnCandidates = new List<CardInstance>();
+                    if (p.Leader != null) rnCandidates.Add(p.Leader);
+                    foreach (var c in p.CharacterArea) if (c != null) rnCandidates.Add(c);
+                    var rnPick = rnCandidates.Where(c => !c.Rested && NameMatches(state, c, rnName)).Take(rnN).ToList();
+                    if (rnPick.Count < rnN) return 0;
+                    actions.Add(() =>
+                    {
+                        foreach (var c in rnPick) { c.Rested = true; Log(state, seat, $"{NameId(GetCard(c))} rests (cost)."); }
+                    });
+                    continue;
+                }
+                if (System.Text.RegularExpressions.Regex.IsMatch(part, @"^trash this Character$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    if (source == null || source.Zone != "character") return 0;
+                    var capT = source;
+                    actions.Add(() => MoveToTrash(state, seat, capT.InstanceId));
+                    continue;
+                }
+                var retTrashM = System.Text.RegularExpressions.Regex.Match(part,
+                    @"^return (\d+) cards? from your trash to (?:your deck and shuffle it|the bottom of your deck[^:]*)$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (retTrashM.Success)
+                {
+                    int n = int.Parse(retTrashM.Groups[1].Value);
+                    if (p.Trash.Count < n) return 0;
+                    bool shuffle = ContainsAll(part, "shuffle");
+                    actions.Add(() =>
+                    {
+                        for (int i = 0; i < n; i++)
+                        {
+                            var tc = p.Trash[p.Trash.Count - 1];
+                            p.Trash.RemoveAt(p.Trash.Count - 1);
+                            tc.Zone = "deck";
+                            p.Deck.Add(tc);
+                        }
+                        if (shuffle) ShuffleInPlace(p.Deck, $"{state.Seed}:{seat}:costshuffle:{state.EffectSequence}");
+                        Log(state, seat, $"Returned {n} card(s) from trash to the deck (cost).");
+                    });
+                    continue;
+                }
+                var faceUpM = System.Text.RegularExpressions.Regex.Match(part,
+                    @"^turn (\d+) cards? from the top of your Life cards? face-up$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (faceUpM.Success)
+                {
+                    int n = int.Parse(faceUpM.Groups[1].Value);
+                    if (p.Life.Count < n) return 0;
+                    actions.Add(() =>
+                    {
+                        for (int i = 0; i < n; i++) p.Life[p.Life.Count - 1 - i].FaceUp = true;
+                        Log(state, seat, $"Turned {n} Life card(s) face-up (cost).");
+                    });
+                    continue;
+                }
+                var addLifeM = System.Text.RegularExpressions.Regex.Match(part,
+                    @"^add (\d+) cards? from the top of your Life cards? to your hand$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (addLifeM.Success)
+                {
+                    int n = int.Parse(addLifeM.Groups[1].Value);
+                    if (p.Life.Count < n) return 0;
+                    actions.Add(() =>
+                    {
+                        for (int i = 0; i < n; i++)
+                        {
+                            var lc = p.Life[p.Life.Count - 1];
+                            p.Life.RemoveAt(p.Life.Count - 1);
+                            lc.Zone = "hand";
+                            p.Hand.Add(lc);
+                        }
+                        Log(state, seat, $"Added {n} Life card(s) to hand (cost).");
+                    });
+                    continue;
+                }
+                return -1;   // unrecognized component
+            }
+            if (actions.Count == 0) return -1;
+            foreach (var a in actions) a();
+            return 1;
+        }
+
+        // Does a hand card satisfy an optional-cost clause like "trash 2 black {Navy} type
+        // cards from your hand"? Checks the color word (if any) and the {Feature} tag (if any).
+        private static bool CostCardMatches(string costText, CardDef def)
+        {
+            if (def == null) return false;
+            foreach (var color in new[] { "red", "green", "blue", "purple", "black", "yellow" })
+            {
+                if (System.Text.RegularExpressions.Regex.IsMatch(costText, $@"\b{color}\b",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    if ((def.Color ?? "").IndexOf(color, StringComparison.OrdinalIgnoreCase) < 0) return false;
+                    break;
+                }
+            }
+            if (ContainsAll(costText, "with a [Trigger]") && string.IsNullOrEmpty(def.Trigger)) return false;
+            return CardPassesFeatureFilter(costText, def);
+        }
+
+        // Queue an optional-cost effect's body once its cost is fully paid, auto-resolving it
+        // immediately when the body needs no player decision.
+        private static void QueueBody(GameState state, PendingEffect parent, string bodyText)
+        {
+            if (string.IsNullOrWhiteSpace(bodyText)) return;
+            var src = FindCardInstance(state, parent.SourceInstanceId) ?? Player(state, parent.Seat).Leader;
+            if (src == null) return;
+            string norm = NormalizeClause(bodyText);
+            QueueAndAutoResolve(state, parent.Seat, src, parent.Timing, norm,
+                IsOptionalEffectText(norm), parent.Scope, InferTargetZone(bodyText));
         }
 
         // Returns true if `def` satisfies the feature-tag requirement stated in `effectText`.
@@ -1746,6 +3569,45 @@ namespace OnePieceTcg.Engine
             var def = GetCard(card);
             if (def == null) return false;
             string text = effect.Text ?? "";
+            // Strip leading (possibly '/'-combined) timing tags and "Then," connectives so the
+            // phrase checks below see the same text the resolver matches against.
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+            text = NormalizeClause(text);
+            // Strip a leading "If <condition>," clause BEFORE analyzing target words — the
+            // condition often names card types that are NOT targets (ST19-003 Tashigi:
+            // "If your Leader is [Smoker], give up to 1 of your opponent's Characters
+            // −4 cost..." must not mark the Leader as a valid target).
+            text = System.Text.RegularExpressions.Regex.Replace(text,
+                @"^If [^,]+,\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // While an optional-cost effect is still paying its cost ("You may <cost>: <body>"),
+            // the click chooses a COST card — validate against the cost clause, not the body.
+            {
+                var costGate = System.Text.RegularExpressions.Regex.Match(text,
+                    @"^You may (?<cost>[^:]+):", System.Text.RegularExpressions.RegexOptions.Singleline);
+                if (costGate.Success)
+                {
+                    string costTx = costGate.Groups["cost"].Value;
+                    if (ContainsAll(costTx, "trash") && ContainsAll(costTx, "from your hand"))
+                        return Player(state, effect.Seat).Hand.Any(c => c.InstanceId == card.InstanceId)
+                            && CostCardMatches(costTx, def);
+                    if (ContainsAll(costTx, "place") && ContainsAll(costTx, "from your trash"))
+                        return Player(state, effect.Seat).Trash.Any(c => c.InstanceId == card.InstanceId);
+                    var costPick = System.Text.RegularExpressions.Regex.Match(costTx,
+                        @"^(K\.O\.|trash|rest) (\d+) of your ([^:]*?)Characters",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (costPick.Success)
+                        return card.Owner == effect.Seat && card.Zone == "character"
+                            && CardPassesFeatureFilter(costPick.Groups[3].Value, def)
+                            && !(ContainsAll(costTx, "other than this Character") && card.InstanceId == effect.SourceInstanceId)
+                            && !(costPick.Groups[1].Value.Equals("rest", StringComparison.OrdinalIgnoreCase) && card.Rested);
+                }
+            }
+            // Self-targeting effects glow only the source card.
+            if (ContainsAll(text, "This Character gains") || ContainsAll(text, "this Leader gains")
+                || ContainsAll(text, "Set this Character as active") || ContainsAll(text, "rest this Character"))
+                return card.InstanceId == effect.SourceInstanceId;
+            // Swap picks: the second pick cannot be the first.
+            if (ContainsAll(text, "Swap the base power") && card.InstanceId == effect.FirstPickId) return false;
             // Multi-clause effects ("Do X. Then, do Y.") resolve one clause at a time (the
             // splitter in TryResolveKnownEffect queues Y separately), so the current click is
             // always choosing a target for the FIRST clause — validate against it alone.
@@ -1755,20 +3617,47 @@ namespace OnePieceTcg.Engine
             if (thenSplit > 0) text = text.Substring(0, thenSplit).Trim();
 
             bool oppZone = text.IndexOf("opponent's hand", StringComparison.OrdinalIgnoreCase) >= 0
-                        || text.IndexOf("opponent's trash", StringComparison.OrdinalIgnoreCase) >= 0;
+                        || text.IndexOf("opponent's trash", StringComparison.OrdinalIgnoreCase) >= 0
+                        || text.IndexOf("from their hand", StringComparison.OrdinalIgnoreCase) >= 0;
             var zoneOwner = oppZone ? Player(state, OtherSeat(effect.Seat)) : Player(state, effect.Seat);
+            // Owner-agnostic effects ("to the owner's hand/deck", "K.O. up to N Characters"
+            // without an ownership word) accept either side's Characters.
+            bool ownerAgnostic = ContainsAll(text, "owner's hand") || ContainsAll(text, "owner's deck")
+                || ContainsAll(text, "owner's Life")
+                || (System.Text.RegularExpressions.Regex.IsMatch(text, @"K\.O\. up to \d+ (rested )?Characters?\b",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    && !ContainsAll(text, "your opponent's") && !ContainsAll(text, "of your "));
 
+            // Dual-zone plays ("from your hand or trash"): a card in EITHER of the owner's
+            // hand or trash is a candidate; the generic filters below still apply.
+            if (ContainsAll(text, "from your hand or trash"))
+            {
+                var dzOwner = Player(state, effect.Seat);
+                if (!dzOwner.Hand.Any(c => c.InstanceId == card.InstanceId)
+                    && !dzOwner.Trash.Any(c => c.InstanceId == card.InstanceId)) return false;
+                if (ContainsAll(text, "Character") && def.Type != "character") return false;
+            }
+            else
             switch (effect.TargetZone)
             {
                 case EffectTargetZone.Hand:
                     if (!zoneOwner.Hand.Any(c => c.InstanceId == card.InstanceId)) return false;
                     // "…Character/Event/Stage card…from your hand" restricts by card type.
                     if (System.Text.RegularExpressions.Regex.IsMatch(text, @"\bCharacter card", System.Text.RegularExpressions.RegexOptions.IgnoreCase) && def.Type != "character") return false;
-                    if (System.Text.RegularExpressions.Regex.IsMatch(text, @"\bEvent card", System.Text.RegularExpressions.RegexOptions.IgnoreCase) && def.Type != "event") return false;
+                    if ((System.Text.RegularExpressions.Regex.IsMatch(text, @"\bEvent card", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                         || ContainsAll(text, "type Event")) && def.Type != "event") return false;
                     if (System.Text.RegularExpressions.Regex.IsMatch(text, @"\bStage card", System.Text.RegularExpressions.RegexOptions.IgnoreCase) && def.Type != "stage") return false;
+                    if (ContainsAll(text, "with a [Trigger]") && string.IsNullOrEmpty(def.Trigger)) return false;
+                    if (ContainsAll(text, "cannot be played by effects")) { }
+                    if (ContainsAll(def.Effect ?? "", "This card in your hand cannot be played by effects")
+                        && ContainsAll(text, "Play")) return false;
                     break;
                 case EffectTargetZone.Trash:
                     if (!zoneOwner.Trash.Any(c => c.InstanceId == card.InstanceId)) return false;
+                    // "Play N [Name] from your trash" name filter.
+                    var trashName = System.Text.RegularExpressions.Regex.Match(text, @"Play (?:up to )?1 \[([^\]]+)\]");
+                    if (trashName.Success && !NameMatches(state, card, trashName.Groups[1].Value.Trim())) return false;
+                    if (ContainsAll(text, "Character") && !ContainsAll(text, "card") && def.Type != "character") return false;
                     break;
                 case EffectTargetZone.Play:
                 case EffectTargetZone.Any:
@@ -1784,10 +3673,17 @@ namespace OnePieceTcg.Engine
                         if (isLeader && !textLeader) return false;
                         if (isChar && !textChar) return false;
                     }
-                    bool mentionsOpp = text.IndexOf("opponent", StringComparison.OrdinalIgnoreCase) >= 0;
-                    bool mentionsYour = text.IndexOf("your ", StringComparison.OrdinalIgnoreCase) >= 0;
-                    if (mentionsOpp && !mentionsYour && card.Owner == effect.Seat) return false;
-                    if (mentionsYour && !mentionsOpp && card.Owner != effect.Seat) return false;
+                    bool mentionsOpp = text.IndexOf("opponent's", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool mentionsYour = System.Text.RegularExpressions.Regex.IsMatch(text, @"of your (?!opponent)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (!ownerAgnostic)
+                    {
+                        if (mentionsOpp && !mentionsYour && card.Owner == effect.Seat) return false;
+                        if (mentionsYour && !mentionsOpp && card.Owner != effect.Seat) return false;
+                    }
+                    // "[Name] cards/Characters" named-target filters.
+                    var playNameF = System.Text.RegularExpressions.Regex.Match(text,
+                        @"of your (?:opponent's )?\[([^\]]+)\]");
+                    if (playNameF.Success && !NameMatches(state, card, playNameF.Groups[1].Value.Trim())) return false;
                     // Rested/active requirement, e.g. "rested Characters ... as active" needs a rested target.
                     if (System.Text.RegularExpressions.Regex.IsMatch(text, "rested (leader|character)", System.Text.RegularExpressions.RegexOptions.IgnoreCase) && !card.Rested) return false;
                     if (System.Text.RegularExpressions.Regex.IsMatch(text, "active (leader|character)", System.Text.RegularExpressions.RegexOptions.IgnoreCase) && card.Rested) return false;
@@ -1801,20 +3697,34 @@ namespace OnePieceTcg.Engine
             // "other than [Name]" self-exclusion (e.g. Robin: "…other than [Nico Robin]").
             var otherThan = System.Text.RegularExpressions.Regex.Match(text, @"other than \[([^\]]+)\]",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (otherThan.Success && string.Equals(GetEffectiveName(state, card), otherThan.Groups[1].Value.Trim(), StringComparison.OrdinalIgnoreCase))
+            if (otherThan.Success && NameMatches(state, card, otherThan.Groups[1].Value.Trim()))
                 return false;
 
             // Cost caps compare against the EFFECTIVE cost (printed cost + CostDelta modifiers,
             // e.g. Backlight's "-4 cost"), not the printed cost — otherwise a card made legal by
             // a cost-reduction effect is wrongly flagged invalid. "cost of N" without "or less"
             // (e.g. "with a cost of 0") is an exact-value filter.
+            bool baseCostCap = ContainsAll(text, "base cost");
             int costCap = ParseLimit(text, @"cost (?:of )?(\d+) or less");
-            if (costCap >= 0 && GetCost(state, card) > costCap) return false;
+            int cardCost = baseCostCap ? def.Cost : GetCost(state, card);
+            if (costCap >= 0 && cardCost > costCap) return false;
             if (costCap < 0)
             {
-                int costExact = ParseLimit(text, @"cost of (\d+)\b(?! or)");
-                if (costExact >= 0 && GetCost(state, card) != costExact) return false;
+                var costRange = System.Text.RegularExpressions.Regex.Match(text, @"cost of (\d+) to (\d+)");
+                if (costRange.Success)
+                {
+                    if (cardCost < int.Parse(costRange.Groups[1].Value) || cardCost > int.Parse(costRange.Groups[2].Value)) return false;
+                }
+                else
+                {
+                    int costExact = ParseLimit(text, @"cost of (\d+)\b(?! or)");
+                    if (costExact >= 0 && cardCost != costExact) return false;
+                }
             }
+            int bpCapV = ParseLimit(text, @"(\d{3,5}) base power or less");
+            if (bpCapV >= 0 && def.Power > bpCapV) return false;
+            int bpMinV = ParseLimit(text, @"(\d{3,5}) base power or more");
+            if (bpMinV >= 0 && def.Power < bpMinV) return false;
 
             int powerCap = ParseLimit(text, @"(\d{3,5}) power or less");
             if (powerCap < 0) powerCap = ParseLimit(text, @"power of (\d{3,5}) or less");
@@ -1841,6 +3751,8 @@ namespace OnePieceTcg.Engine
                 case "whenAttacking":       return "[When Attacking]";
                 case "activateMain":        return "[Activate: Main]";
                 case "onKo":                return "[On KO]";
+                case "onBlock":             return "[On Block]";
+                case "onOpponentsAttack":   return "[On Your Opponent's Attack]";
                 case "endOfYourTurn":       return "[End of Your Turn]";
                 case "endOfOpponentsTurn":  return "[End of Opponent's Turn]";
                 case "startOfYourTurn":     return "[Start of Your Turn]";
@@ -1857,8 +3769,3068 @@ namespace OnePieceTcg.Engine
         private static EffectResolution TryResolveKnownEffect(GameState state, PendingEffect effect, string targetId)
         {
             var text = effect.Text ?? "";
+            // Leading [Timing]/[DON!! xN]/[Once Per Turn] tags carry no matching information and
+            // break anchored checks ("If …" conditionals, "You may …:" costs) — strip them for
+            // pattern matching. effect.Text itself is left untouched for the UI.
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+            text = NormalizeClause(text);   // strip stray leading "Then," connectives
             var owner = Player(state, effect.Seat);
             var sourceName = NameId(CardData.GetCard(effect.SourceCardId));
+
+            // "Choose one:" branches must be parsed BEFORE any other handler — option texts
+            // routinely embed phrases (K.O., -N power, draw) that would otherwise match a
+            // single-effect resolver and resolve option A without offering the choice.
+            if ((ContainsAll(text, "Choose one") || ContainsAll(text, "chooses one"))
+                && !System.Text.RegularExpressions.Regex.IsMatch(text, @"^You may [^:]+:",
+                        System.Text.RegularExpressions.RegexOptions.Singleline))
+            {
+                if (TryParseChoiceEffect(state, effect)) return EffectResolution.Resolved;
+            }
+
+            // ---- Optional-cost prefix: "You may <cost>: <body>" -----------------------------
+            // Covers the black/purple staples: "You may trash N [color] {Type} card(s) from your
+            // hand: …" (ST19-001 Smoker, ST19-002 Sengoku, OP02-098 Koby), "You may place 1 card
+            // from your trash at the bottom of your deck: …" (ST19-004 Hina, ST19-005 Garp) and
+            // "You may rest this Character and trash 1 … from your hand: …" (ST05-005 Carina).
+            // Must run BEFORE every other pattern so the body's phrases (K.O., draw, …) don't
+            // resolve without the cost being paid. The whole effect is optional (SKIP passes).
+            {
+                string bare = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+                var costM = System.Text.RegularExpressions.Regex.Match(bare,
+                    @"^You may (?<cost>[^:]+):\s*(?<body>.+)$",
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
+                if (costM.Success)
+                {
+                    string costText = costM.Groups["cost"].Value.Trim();
+                    string bodyText = costM.Groups["body"].Value.Trim();
+
+                    // Fully auto-payable costs (self-rest, rest/return DON!!, trash self, …):
+                    // pay immediately and queue the body — no clicks needed.
+                    if (!ContainsAll(costText, "from your hand") && !ContainsAll(costText, "from your trash")
+                        && !ContainsAll(costText, "top or bottom of your Life"))
+                    {
+                        var srcAuto = FindCardInstance(state, effect.SourceInstanceId);
+                        int payRes = TryAutoPayCost(state, effect.Seat, srcAuto, costText);
+                        if (payRes == 0)
+                        {
+                            Log(state, effect.Seat, $"{sourceName}: cost cannot be paid ({costText}).");
+                            return EffectResolution.Resolved;
+                        }
+                        if (payRes == 1)
+                        {
+                            QueueBody(state, effect, bodyText);
+                            return EffectResolution.Resolved;
+                        }
+                        // -1 → fall through to the pick-based flows below.
+                    }
+
+                    // Cost: pick-based own-board sacrifice/rest: "K.O./trash/rest N of your
+                    // ({T} type )Characters (other than this Character)".
+                    {
+                        var pickM = System.Text.RegularExpressions.Regex.Match(costText,
+                            @"^(K\.O\.|trash|rest) (\d+) of your ([^:]*?)Characters",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (pickM.Success)
+                        {
+                            if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(pickM.Groups[2].Value);
+                            var pcT = FindAnyInPlay(state, targetId, out var pcSeat);
+                            if (pcT == null)
+                            {
+                                Log(state, effect.Seat, $"Click {effect.SelectionsRemaining} of your Character(s) to pay {sourceName}'s cost, or skip.");
+                                return EffectResolution.WaitingForTarget;
+                            }
+                            if (pcSeat != effect.Seat || GetCard(pcT).Type != "character"
+                                || !CardPassesFeatureFilter(pickM.Groups[3].Value, GetCard(pcT))
+                                || (ContainsAll(costText, "other than this Character") && pcT.InstanceId == effect.SourceInstanceId))
+                            {
+                                Log(state, effect.Seat, "That is not a valid cost target.");
+                                return EffectResolution.WaitingForTarget;
+                            }
+                            string verb = pickM.Groups[1].Value.ToLowerInvariant();
+                            if (verb == "rest")
+                            {
+                                if (pcT.Rested) { Log(state, effect.Seat, "That Character is already rested."); return EffectResolution.WaitingForTarget; }
+                                pcT.Rested = true;
+                                Log(state, effect.Seat, $"{NameId(GetCard(pcT))} rests (cost).");
+                            }
+                            else
+                            {
+                                MoveToTrash(state, effect.Seat, pcT.InstanceId);
+                                Log(state, effect.Seat, $"{NameId(GetCard(pcT))} paid as cost.");
+                            }
+                            effect.SelectionsRemaining--;
+                            if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                            if (ContainsAll(costText, "rest this Character"))
+                            {
+                                var rSelf2 = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                                if (rSelf2 != null) rSelf2.Rested = true;
+                            }
+                            QueueBody(state, effect, bodyText);
+                            return EffectResolution.Resolved;
+                        }
+                    }
+
+                    // Cost: add 1 card from the top or bottom of your Life cards to your hand.
+                    // Routed through the Choose-one modal so the player picks top vs bottom;
+                    // each option resolves as its own clause and chains the body via "Then,".
+                    if (ContainsAll(costText, "from the top or bottom of your Life"))
+                    {
+                        if (owner.Life.Count == 0)
+                        {
+                            Log(state, effect.Seat, $"{sourceName}: no Life cards — cost cannot be paid.");
+                            return EffectResolution.Resolved;
+                        }
+                        state.ActiveChoice = new ChoiceState
+                        {
+                            Seat = effect.Seat,
+                            SourceInstanceId = effect.SourceInstanceId,
+                            SourceCardId = effect.SourceCardId,
+                            Timing = effect.Timing,
+                            OptionA = "Add the top card of your Life cards to your hand. Then, " + bodyText,
+                            OptionB = "Add the bottom card of your Life cards to your hand. Then, " + bodyText,
+                        };
+                        Log(state, effect.Seat, $"{sourceName}: choose the top or bottom Life card as the cost.");
+                        return EffectResolution.Resolved;
+                    }
+
+                    // Cost: trash N (matching) cards from your hand.
+                    if (ContainsAll(costText, "trash") && ContainsAll(costText, "from your hand"))
+                    {
+                        if (effect.SelectionsRemaining <= 0)
+                        {
+                            var nM = System.Text.RegularExpressions.Regex.Match(costText, @"trash (\d+)",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            effect.SelectionsRemaining = nM.Success ? int.Parse(nM.Groups[1].Value) : 1;
+                            effect.TargetZone = EffectTargetZone.Hand;
+                        }
+                        if (string.IsNullOrEmpty(targetId))
+                        {
+                            Log(state, effect.Seat, $"Click {effect.SelectionsRemaining} card(s) in your hand to trash as the cost of {sourceName}, or skip.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        int chIdx = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                        if (chIdx < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
+                        var costCard = owner.Hand[chIdx];
+                        var costDef = GetCard(costCard);
+                        if (!CostCardMatches(costText, costDef))
+                        {
+                            Log(state, effect.Seat, $"{NameId(costDef)} does not match the cost requirement: {costText}.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        owner.Hand.RemoveAt(chIdx);
+                        costCard.Zone = "trash";
+                        owner.Trash.Add(costCard);
+                        NotifyHandTrashedByEffect(state, effect.Seat);
+                        Log(state, effect.Seat, $"{sourceName} cost: trashed {NameId(costDef)} from hand.");
+                        effect.SelectionsRemaining--;
+                        if (effect.SelectionsRemaining > 0)
+                        {
+                            Log(state, effect.Seat, $"Trash {effect.SelectionsRemaining} more card(s) to pay {sourceName}'s cost.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        // Cost fully paid — optional "rest this Character" rider, then queue the body.
+                        if (ContainsAll(costText, "rest this Character"))
+                        {
+                            var restSelf = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                            if (restSelf != null) { restSelf.Rested = true; Log(state, effect.Seat, $"{sourceName} rests itself (cost)."); }
+                        }
+                        QueueBody(state, effect, bodyText);
+                        return EffectResolution.Resolved;
+                    }
+
+                    // Cost: place 1 card from your trash at the bottom of your deck.
+                    if (ContainsAll(costText, "place") && ContainsAll(costText, "from your trash")
+                        && ContainsAll(costText, "bottom of your deck"))
+                    {
+                        effect.TargetZone = EffectTargetZone.Trash;
+                        if (string.IsNullOrEmpty(targetId))
+                        {
+                            Log(state, effect.Seat, $"Click a card in your trash to place at the bottom of your deck for {sourceName}, or skip.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        int ctIdx = owner.Trash.FindIndex(c => c.InstanceId == targetId);
+                        if (ctIdx < 0) { Log(state, effect.Seat, "That card is not in your trash."); return EffectResolution.WaitingForTarget; }
+                        var bottomCard = owner.Trash[ctIdx];
+                        owner.Trash.RemoveAt(ctIdx);
+                        bottomCard.Zone = "deck";
+                        owner.Deck.Add(bottomCard);
+                        Log(state, effect.Seat, $"{sourceName} cost: {NameId(GetCard(bottomCard))} placed at the bottom of the deck.");
+                        QueueBody(state, effect, bodyText);
+                        return EffectResolution.Resolved;
+                    }
+                }
+            }
+
+            // ---- Early multi-clause split: "Do X. Then, do Y." ------------------------------
+            // When clause A is independently automatable, split FIRST so a full-text pattern
+            // match on clause A can't swallow and silently drop clause B (e.g. OP02-093 Smoker
+            // leader's "-1 cost … Then, if there is a Character with a cost of 0, …"). Deck-look
+            // texts ("… Then, place the rest / trash the rest") and swap effects keep their
+            // "Then," internal — those are handled as a unit by their own resolvers.
+            {
+                int thenEarly = FindThenClause(text);
+                if (thenEarly > 0
+                    && !ContainsAll(text, "from the top of your deck")
+                    && !(ContainsAll(text, "Return") && ContainsAll(text, "Play") && ContainsAll(text, "from your hand")))
+                {
+                    string partAEarly = text.Substring(0, thenEarly - 2).Trim();
+                    string partBEarly = NormalizeClause(text.Substring(thenEarly));
+                    if (IsAutomatedEffectPattern(partAEarly))
+                    {
+                        var cloneA = ShallowCloneEffect(effect, partAEarly);
+                        var resA = TryResolveKnownEffect(state, cloneA, targetId);
+                        effect.SelectionsRemaining = cloneA.SelectionsRemaining;
+                        if (resA == EffectResolution.WaitingForTarget) return EffectResolution.WaitingForTarget;
+                        if (resA == EffectResolution.Resolved)
+                        {
+                            var chainSrcA = FindCardInstance(state, effect.SourceInstanceId);
+                            if (chainSrcA != null)
+                                QueueAndAutoResolve(state, effect.Seat, chainSrcA, effect.Timing, partBEarly, IsOptionalEffectText(partBEarly),
+                                    effect.Scope, InferTargetZone(partBEarly));
+                            return EffectResolution.Resolved;
+                        }
+                        // clause A NotAutomated despite the pattern check — fall through to full-text handlers.
+                    }
+                }
+            }
+
+            // ---- Power REDUCTION: "Give up to N of your opponent's (Leader or) Characters
+            // −N power during this turn." (26+ cards, e.g. OP01-006). Negative TemporaryPowerBonus.
+            {
+                var pwrRed = System.Text.RegularExpressions.Regex.Match(text,
+                    @"[-\u2212\u2013\u2011\u2012\u2014](\d{3,5})\s+power\s+during this (turn|battle)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (pwrRed.Success && ContainsAll(text, "opponent") && ContainsAll(text, "Give"))
+                {
+                    int reduction = int.Parse(pwrRed.Groups[1].Value);
+                    bool redBattle = pwrRed.Groups[2].Value.Equals("battle", StringComparison.OrdinalIgnoreCase) && state.Battle != null;
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        var upM2 = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (?:a total of )?(\d+)");
+                        effect.SelectionsRemaining = upM2.Success ? int.Parse(upM2.Groups[1].Value) : 1;
+                    }
+                    bool redAllowLeader = ContainsAll(text, "Leader");
+                    var redTarget = FindAnyInPlay(state, targetId, out var redSeat);
+                    if (redTarget == null)
+                    {
+                        Log(state, effect.Seat, $"Choose an opponent's {(redAllowLeader ? "Leader or " : "")}Character to give -{reduction} power ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    var redDef = GetCard(redTarget);
+                    bool redTypeOk = redDef.Type == "character" || (redAllowLeader && redDef.Type == "leader");
+                    if (redSeat != OtherSeat(effect.Seat) || !redTypeOk)
+                    {
+                        Log(state, effect.Seat, "That is not a valid power-reduction target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (redBattle)
+                    {
+                        state.Battle.BattlePowerBonus.TryGetValue(redTarget.InstanceId, out var exR);
+                        state.Battle.BattlePowerBonus[redTarget.InstanceId] = exR - reduction;
+                        RegisterPowerModifier(redTarget, sourceName, -reduction, "endOfBattle");
+                    }
+                    else
+                    {
+                        state.TemporaryPowerBonus.TryGetValue(redTarget.InstanceId, out var exR);
+                        state.TemporaryPowerBonus[redTarget.InstanceId] = exR - reduction;
+                        RegisterPowerModifier(redTarget, sourceName, -reduction, "endOfTurn");
+                    }
+                    Log(state, effect.Seat, $"{sourceName} gives {NameId(redDef)} -{reduction} power this {(redBattle ? "battle" : "turn")}.");
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0)
+                    {
+                        Log(state, effect.Seat, $"You may choose {effect.SelectionsRemaining} more target(s), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Return up to N Character(s) with a cost of X or less to the owner's hand." --
+            // Owner-agnostic bounce (either player's Character; "owner's hand" phrasing, 22+ cards).
+            if (ContainsAll(text, "Return") && ContainsAll(text, "to the owner's hand"))
+            {
+                int bounceCap = ParseLimit(text, @"cost (?:of )?(\d+) or less");
+                var bTarget = FindAnyInPlay(state, targetId, out var bSeat);
+                if (bTarget == null)
+                {
+                    Log(state, effect.Seat, $"Choose a Character{(bounceCap >= 0 ? $" (cost ≤ {bounceCap})" : "")} to return to its owner's hand ({sourceName}).");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (GetCard(bTarget).Type != "character"
+                    || (bounceCap >= 0 && GetCost(state, bTarget) > bounceCap)
+                    || (ContainsAll(text, "active Character") && bTarget.Rested)
+                    || (ContainsAll(text, "rested Character") && !bTarget.Rested))
+                {
+                    Log(state, effect.Seat, "That is not a valid return-to-hand target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                ReturnToHand(state, bSeat, bTarget);
+                Log(state, effect.Seat, $"{sourceName} returns {NameId(GetCard(bTarget))} to its owner's hand.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Place up to N Character(s) with a cost of X or less at the bottom of the
+            // owner's deck." (16+ cards, e.g. OP01-070) — removal that dodges On-KO effects.
+            if (ContainsAll(text, "Place up to") && ContainsAll(text, "bottom of the owner's deck"))
+            {
+                int sinkCap = ParseLimit(text, @"cost (?:of )?(\d+) or less");
+                var sTarget = FindAnyInPlay(state, targetId, out var sSeat);
+                if (sTarget == null)
+                {
+                    Log(state, effect.Seat, $"Choose a Character{(sinkCap >= 0 ? $" (cost ≤ {sinkCap})" : "")} to place at the bottom of its owner's deck ({sourceName}).");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (GetCard(sTarget).Type != "character" || (sinkCap >= 0 && GetCost(state, sTarget) > sinkCap))
+                {
+                    Log(state, effect.Seat, "That is not a valid target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                var sOwner = Player(state, sSeat);
+                ReturnAttachedDon(sOwner, sTarget);
+                int sIdx = sOwner.CharacterArea.FindIndex(c => c != null && c.InstanceId == sTarget.InstanceId);
+                if (sIdx >= 0) sOwner.CharacterArea[sIdx] = null;
+                sTarget.Zone = "deck";
+                sTarget.Rested = false;
+                sTarget.PlayedOnTurn = null;
+                sTarget.Modifiers.Clear();
+                state.NameOverrides.Remove(sTarget.InstanceId);
+                state.ActiveModifiers.RemoveAll(m => m.TargetInstanceId == sTarget.InstanceId);
+                sOwner.Deck.Add(sTarget);
+                Log(state, effect.Seat, $"{sourceName} places {NameId(GetCard(sTarget))} at the bottom of its owner's deck.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Set this Leader as active." (standalone — no hand-trash cost) --------------
+            if (System.Text.RegularExpressions.Regex.IsMatch(text.Trim(), @"^set this Leader as active\.?$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                if (owner.Leader != null && owner.Leader.Rested && !HasModifier(state, owner.Leader, "freeze"))
+                {
+                    owner.Leader.Rested = false;
+                    Log(state, effect.Seat, $"{sourceName} sets the Leader as active.");
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Set this Character as active." (self-unrest, e.g. OP04-027) ----------------
+            if (ContainsAll(text, "Set this Character as active") || ContainsAll(text, "set this Character as active"))
+            {
+                var selfActive = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                if (selfActive != null && selfActive.Rested && !HasModifier(state, selfActive, "freeze"))
+                {
+                    selfActive.Rested = false;
+                    Log(state, effect.Seat, $"{sourceName} sets itself as active.");
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Trash N card(s) from the top of your deck." (mill, alternate phrasing) -----
+            {
+                var millAlt = System.Text.RegularExpressions.Regex.Match(text,
+                    @"[Tt]rash (\d+) cards? from the top of your deck");
+                if (millAlt.Success)
+                {
+                    int millAltN = int.Parse(millAlt.Groups[1].Value);
+                    int milledAlt = 0;
+                    for (int i = 0; i < millAltN && owner.Deck.Count > 0; i++)
+                    {
+                        var mc = Shift(owner.Deck);
+                        mc.Zone = "trash";
+                        owner.Trash.Add(mc);
+                        milledAlt++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName} trashes {milledAlt} card(s) from the top of the deck.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "will not become active in your opponent's next Refresh Phase" -------------
+            // (OP08-024 etc.) and "cannot be rested until the end of your opponent's next
+            // End Phase / turn" (OP13-032 etc.). Both are untilNextTurn modifiers.
+            if ((ContainsAll(text, "will not become active") && ContainsAll(text, "Refresh Phase"))
+                || ContainsAll(text, "cannot be rested until"))
+            {
+                bool isFreeze = ContainsAll(text, "will not become active");
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var frUp = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (?:a total of )?(\d+)");
+                    effect.SelectionsRemaining = frUp.Success ? int.Parse(frUp.Groups[1].Value) : 1;
+                }
+                int frCap = ParseLimit(text, @"cost (?:of )?(\d+) or less");
+                var frTarget = FindAnyInPlay(state, targetId, out var frSeat);
+                if (frTarget == null)
+                {
+                    Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} opponent Character(s){(frCap >= 0 ? $" (cost ≤ {frCap})" : "")} for {sourceName}, or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                bool needRested = isFreeze && ContainsAll(text, "rested Characters");
+                if (frSeat != OtherSeat(effect.Seat) || GetCard(frTarget).Type != "character"
+                    || (frCap >= 0 && GetCost(state, frTarget) > frCap)
+                    || (needRested && !frTarget.Rested))
+                {
+                    Log(state, effect.Seat, "That is not a valid target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), frTarget,
+                    isFreeze ? "freeze" : "cannotBeRested", "untilNextTurn", null, effect.Seat);
+                Log(state, effect.Seat, isFreeze
+                    ? $"{sourceName}: {NameId(GetCard(frTarget))} will not become active in the next Refresh Phase."
+                    : $"{sourceName}: {NameId(GetCard(frTarget))} cannot be rested.");
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0)
+                {
+                    Log(state, effect.Seat, $"You may choose {effect.SelectionsRemaining} more target(s), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Your opponent returns N DON!! card(s) to their DON!! deck." ---------------
+            {
+                var oppDonRet = System.Text.RegularExpressions.Regex.Match(text,
+                    @"opponent returns (\d+) DON!! cards? (?:from their field )?to their DON!! deck",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oppDonRet.Success)
+                {
+                    int retN = Math.Min(int.Parse(oppDonRet.Groups[1].Value),
+                        Player(state, OtherSeat(effect.Seat)).CostArea.Count);
+                    if (retN > 0) PayDonMinus(state, OtherSeat(effect.Seat), retN);
+                    else Log(state, effect.Seat, $"{sourceName}: opponent has no DON!! to return.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Up to N of your opponent's Characters … cannot attack …" ------------------
+            // (ST19-001 Smoker: "Up to 2 … with a cost of 4 or less cannot attack until the end
+            // of your opponent's next turn.") Multi-pick: each click restricts one target; the
+            // player may SKIP early since the effect is "up to".
+            if (ContainsAll(text, "cannot attack") && ContainsAll(text, "opponent"))
+            {
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var upM = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (?:a total of )?(\d+)");
+                    effect.SelectionsRemaining = upM.Success ? int.Parse(upM.Groups[1].Value) : 1;
+                }
+                int atkCostCap = ParseLimit(text, @"cost (?:of )?(\d+) or less");
+                var restrictTarget = FindAnyInPlay(state, targetId, out var restrictSeat);
+                if (restrictTarget == null)
+                {
+                    Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} opponent Character(s){(atkCostCap >= 0 ? $" with cost {atkCostCap} or less" : "")} that cannot attack ({sourceName}), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (restrictSeat != OtherSeat(effect.Seat) || GetCard(restrictTarget).Type != "character"
+                    || (atkCostCap >= 0 && GetCost(state, restrictTarget) > atkCostCap))
+                {
+                    Log(state, effect.Seat, "That is not a valid target for the attack restriction.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (HasModifier(state, restrictTarget, "cannotAttack"))
+                {
+                    Log(state, effect.Seat, $"{NameId(GetCard(restrictTarget))} already cannot attack.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                string atkDuration = ContainsAll(text, "until the end of your opponent's next turn") ? "untilNextTurn" : "thisTurn";
+                AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), restrictTarget,
+                    "cannotAttack", atkDuration, null, effect.Seat);
+                Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(restrictTarget))} cannot attack{(atkDuration == "untilNextTurn" ? " until the end of your opponent's next turn" : " this turn")}.");
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0)
+                {
+                    Log(state, effect.Seat, $"You may choose {effect.SelectionsRemaining} more target(s), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // ---- Trash (K.O.-like) an opponent Character by cost --------------------------
+            // "trash up to 1 of your opponent's Characters with a cost of 0" (ST19-003 Tashigi).
+            if (ContainsAll(text, "trash up to 1", "opponent's Characters"))
+            {
+                int trCapLess = ParseLimit(text, @"cost (?:of )?(\d+) or less");
+                int trCapExact = trCapLess >= 0 ? -1 : ParseLimit(text, @"cost of (\d+)\b(?! or)");
+                var trTarget = FindAnyInPlay(state, targetId, out var trSeat);
+                if (trTarget == null)
+                {
+                    Log(state, effect.Seat, $"Choose an opponent's Character to trash for {sourceName}.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                int trCost = GetCost(state, trTarget);
+                bool trCostOk = trCapLess >= 0 ? trCost <= trCapLess : (trCapExact < 0 || trCost == trCapExact);
+                if (trSeat != OtherSeat(effect.Seat) || GetCard(trTarget).Type != "character" || !trCostOk)
+                {
+                    Log(state, effect.Seat, "That is not a valid target to trash.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                MoveToTrash(state, trSeat, trTarget.InstanceId);
+                Log(state, effect.Seat, $"{sourceName} trashes {NameId(GetCard(trTarget))}.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- Board-wide buff: "All of your {X} type Characters gain +N power …" ---------
+            // (ST05-001 Shanks leader.) No targeting; applies to every matching own Character.
+            if (ContainsAll(text, "All of your") && ContainsAll(text, "gain") && ContainsAll(text, "power")
+                && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle")))
+            {
+                var gainM = System.Text.RegularExpressions.Regex.Match(text, @"gain \+(\d+) power",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                int allBonus = gainM.Success ? int.Parse(gainM.Groups[1].Value) : ParsePowerGain(text);
+                if (allBonus > 0)
+                {
+                    bool battleScope = ContainsAll(text, "during this battle") && state.Battle != null;
+                    int buffed = 0;
+                    foreach (var c in owner.CharacterArea)
+                    {
+                        if (c == null) continue;
+                        if (!CardPassesFeatureFilter(text, GetCard(c))) continue;
+                        if (battleScope)
+                        {
+                            state.Battle.BattlePowerBonus.TryGetValue(c.InstanceId, out var ex);
+                            state.Battle.BattlePowerBonus[c.InstanceId] = ex + allBonus;
+                            RegisterPowerModifier(c, sourceName, allBonus, "endOfBattle");
+                        }
+                        else
+                        {
+                            state.TemporaryPowerBonus.TryGetValue(c.InstanceId, out var ex);
+                            state.TemporaryPowerBonus[c.InstanceId] = ex + allBonus;
+                            RegisterPowerModifier(c, sourceName, allBonus, "endOfTurn");
+                        }
+                        buffed++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName} gives +{allBonus} power to {buffed} Character(s).");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Add DON!! from the DON!! deck ----------------------------------------------
+            // "Add up to 1 DON!! card from your DON!! deck and rest it." (ST05-002 Ain)
+            // "…add 2 DON!! cards from your DON!! deck and rest them." (ST05-005 Carina body)
+            // "Add up to 1 DON!! card from your DON!! deck and set it as active." (ST05-016 trigger)
+            if ((ContainsAll(text, "Add") || ContainsAll(text, "add")) && ContainsAll(text, "DON!! card")
+                && ContainsAll(text, "from your DON!! deck"))
+            {
+                var addM = System.Text.RegularExpressions.Regex.Match(text, @"[Aa]dd (?:up to )?(\d+) DON!! card");
+                int addN = addM.Success ? int.Parse(addM.Groups[1].Value) : 1;
+                bool addRested = ContainsAll(text, "rest it") || ContainsAll(text, "rest them") || ContainsAll(text, "and rest");
+                int added = Math.Min(addN, owner.DonDeck);
+                owner.DonDeck -= added;
+                for (int i = 0; i < added; i++)
+                {
+                    var don = CreateDonInstance(effect.Seat, owner);
+                    don.Rested = addRested;
+                    owner.CostArea.Add(don);
+                }
+                Log(state, effect.Seat, added > 0
+                    ? $"{sourceName} adds {added} DON!! from the DON!! deck ({(addRested ? "rested" : "active")})."
+                    : $"{sourceName}: the DON!! deck is empty.");
+                return EffectResolution.Resolved;
+            }
+
+
+            // ================= Unified generic resolvers (Session 10) =================
+
+
+
+
+
+            // ---- OP06-086: "Choose up to 1 Character card with a cost of 4 or less and up
+            // to 1 Character card with a cost of 2 or less from your trash. Play 1 card and
+            // play the other card rested." — first pick plays active (≤4), second rested (≤2).
+            if (ContainsAll(text, "from your trash") && ContainsAll(text, "Play 1 card and play the other card rested"))
+            {
+                effect.TargetZone = EffectTargetZone.Trash;
+                if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = 2;
+                int capNow = effect.SelectionsRemaining == 2
+                    ? ParseLimit(text, @"cost of (\d+) or less")                       // first listed cap
+                    : ParseLimit(text.Substring(text.IndexOf(" and up to ", StringComparison.OrdinalIgnoreCase) + 1), @"cost of (\d+) or less");
+                if (string.IsNullOrEmpty(targetId))
+                {
+                    Log(state, effect.Seat, $"Click a Character in your trash (cost ≤ {capNow}) — pick {3 - effect.SelectionsRemaining} of 2 ({sourceName}), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                int c86 = owner.Trash.FindIndex(c => c.InstanceId == targetId);
+                if (c86 < 0) { Log(state, effect.Seat, "That card is not in your trash."); return EffectResolution.WaitingForTarget; }
+                var t86 = owner.Trash[c86];
+                var d86 = GetCard(t86);
+                if (d86.Type != "character" || (capNow >= 0 && d86.Cost > capNow))
+                {
+                    Log(state, effect.Seat, "That is not a valid pick.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                int slot86 = owner.CharacterArea.FindIndex(c => c == null);
+                if (slot86 < 0) { Log(state, effect.Seat, "No open character slot."); return EffectResolution.Resolved; }
+                owner.Trash.RemoveAt(c86);
+                t86.Zone = "character";
+                t86.PlayedOnTurn = state.TurnNumber;
+                t86.Rested = effect.SelectionsRemaining == 1;   // the second pick comes in rested
+                owner.CharacterArea[slot86] = t86;
+                Log(state, effect.Seat, $"{sourceName} plays {NameId(d86)} from trash{(t86.Rested ? " rested" : "")}.");
+                if (HasTiming(d86.Effect, "On Play"))
+                    QueueAndAutoResolve(state, effect.Seat, t86, "onPlay", ExtractTimedClause(d86.Effect, "On Play"), true,
+                        EffectScope.Instant, InferTargetZone(d86.Effect));
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                return EffectResolution.Resolved;
+            }
+
+            // ---- OP09-081: "[On Play] effects are negated" auras/effects. -------------------
+            // Continuous own-side line ("Your [On Play] effects are negated.") is honored at
+            // queue time; the activated form negates the OPPONENT's [On Play] effects.
+            if (ContainsAll(text, "opponent's [On Play] effects are negated"))
+            {
+                var oppNp = Player(state, OtherSeat(effect.Seat));
+                var npSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                if (oppNp.Leader != null) AddModifier(state, npSrc, oppNp.Leader, "onPlayNegated", "untilNextTurn", null, effect.Seat);
+                foreach (var c in oppNp.CharacterArea)
+                    if (c != null) AddModifier(state, npSrc, c, "onPlayNegated", "untilNextTurn", null, effect.Seat);
+                Log(state, effect.Seat, $"{sourceName}: the opponent's [On Play] effects are negated until the end of their next turn.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- OP15-031: "Select up to 1 of your opponent's rested Characters. If the
+            // chosen Character has a cost equal to the number of DON!! cards given to it, K.O. it."
+            if (ContainsAll(text, "Select up to 1 of your opponent's rested Characters")
+                && ContainsAll(text, "cost equal to the number of DON!! cards given to it"))
+            {
+                var sr31 = FindAnyInPlay(state, targetId, out var sr31Seat);
+                if (sr31 == null)
+                {
+                    Log(state, effect.Seat, $"Select an opponent's rested Character ({sourceName}).");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (sr31Seat != OtherSeat(effect.Seat) || GetCard(sr31).Type != "character" || !sr31.Rested)
+                {
+                    Log(state, effect.Seat, "That is not a valid target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (GetCost(state, sr31) == sr31.AttachedDonIds.Count && !CannotBeKoedByEffect(state, sr31)
+                    && !TryRemovalReplacement(state, sr31Seat, sr31))
+                {
+                    MoveToTrash(state, sr31Seat, sr31.InstanceId);
+                    Log(state, effect.Seat, $"{sourceName} K.O.s {NameId(GetCard(sr31))}.");
+                }
+                else Log(state, effect.Seat, "Condition not met — the Character survives.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Activate up to N {T} type Event with a base cost of N or less from your
+            // hand." — play the event for free (its [Main] resolves). ------------------------
+            {
+                var aeM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Activate up to (\d+) ([^.]*?)Events?(?: with a (base )?cost of (\d+) or less)? from your hand",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (aeM.Success)
+                {
+                    effect.TargetZone = EffectTargetZone.Hand;
+                    if (string.IsNullOrEmpty(targetId))
+                    {
+                        Log(state, effect.Seat, $"Click an Event in your hand to activate for free ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    int aeIdx = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                    if (aeIdx < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
+                    var aeCard = owner.Hand[aeIdx];
+                    var aeDef = GetCard(aeCard);
+                    if (aeDef.Type != "event"
+                        || (aeM.Groups[4].Success && aeDef.Cost > int.Parse(aeM.Groups[4].Value))
+                        || !CardPassesFeatureFilter(aeM.Groups[2].Value, aeDef))
+                    {
+                        Log(state, effect.Seat, "That Event does not match the requirement.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    owner.Hand.RemoveAt(aeIdx);
+                    aeCard.Zone = "trash";
+                    owner.Trash.Add(aeCard);
+                    Log(state, effect.Seat, $"{sourceName} activates {NameId(aeDef)} for free.");
+                    if (HasTiming(aeDef.Effect, "Main"))
+                    {
+                        string aeCl = ExtractTimedClause(aeDef.Effect, "Main");
+                        QueueAndAutoResolve(state, effect.Seat, aeCard, "main", aeCl, true, EffectScope.Instant, InferTargetZone(aeCl));
+                    }
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Look at N cards from the top of your deck and trash up to N cards.
+            // Then, place the rest at the bottom …" (OP03-083) --------------------------------
+            if (ContainsAll(text, "Look at") && ContainsAll(text, "from the top of your deck")
+                && ContainsAll(text, "trash up to"))
+            {
+                var ltM = System.Text.RegularExpressions.Regex.Match(text, @"trash up to (\d+)");
+                var ltSrc = FindCardInstance(state, effect.SourceInstanceId) ?? owner.Leader;
+                if (ltSrc != null)
+                {
+                    StartDeckLook(state, effect.Seat, ltSrc, "", ParseLookCount(text));
+                    state.DeckLook.TrashSelected = true;
+                    state.DeckLook.SelectCount = ltM.Success ? int.Parse(ltM.Groups[1].Value) : 1;
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Look at N cards from the top of your deck and place them at the top of
+            // your deck in any order." (ST17-003) ---------------------------------------------
+            if (ContainsAll(text, "Look at") && ContainsAll(text, "place them at the top of your deck"))
+            {
+                var ttSrc = FindCardInstance(state, effect.SourceInstanceId) ?? owner.Leader;
+                if (ttSrc != null)
+                {
+                    StartDeckLook(state, effect.Seat, ttSrc, "", ParseLookCount(text));
+                    state.DeckLook.Step = "rearrange";
+                    state.DeckLook.ToTop = true;
+                }
+                return EffectResolution.Resolved;
+            }
+
+
+            // ---- Fuzz round-2 gap fills -----------------------------------------------------
+            {
+                // "your opponent adds N card from the top of their Life cards to their hand."
+                var oal = System.Text.RegularExpressions.Regex.Match(text,
+                    @"opponent adds (\d+) cards? from (?:the top of )?their Life (?:cards?|area) to their hand",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oal.Success)
+                {
+                    var oppOal = Player(state, OtherSeat(effect.Seat));
+                    int oalN = int.Parse(oal.Groups[1].Value);
+                    int oalDone = 0;
+                    for (int i = 0; i < oalN && oppOal.Life.Count > 0; i++)
+                    {
+                        var lcO = Pop(oppOal.Life);
+                        lcO.Zone = "hand";
+                        oppOal.Hand.Add(lcO);
+                        oalDone++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: opponent adds {oalDone} Life card(s) to hand.");
+                    return EffectResolution.Resolved;
+                }
+                // "your opponent draws N cards."
+                var od = System.Text.RegularExpressions.Regex.Match(text,
+                    @"opponent draws (\d+) cards?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (od.Success)
+                {
+                    for (int i = 0; i < int.Parse(od.Groups[1].Value); i++) DrawCard(state, OtherSeat(effect.Seat), true);
+                    Log(state, effect.Seat, $"{sourceName}: opponent draws {od.Groups[1].Value} card(s).");
+                    return EffectResolution.Resolved;
+                }
+                // "trash all cards from your hand."
+                if (ContainsAll(text, "trash all cards from your hand"))
+                {
+                    int ta = owner.Hand.Count;
+                    foreach (var hcT in owner.Hand) { hcT.Zone = "trash"; owner.Trash.Add(hcT); }
+                    owner.Hand.Clear();
+                    if (ta > 0) NotifyHandTrashedByEffect(state, effect.Seat);
+                    Log(state, effect.Seat, $"{sourceName}: trashed all {ta} card(s) from hand.");
+                    return EffectResolution.Resolved;
+                }
+                // "Trash up to N cards from your hand." (optional multi-discard)
+                var tuo = System.Text.RegularExpressions.Regex.Match(text,
+                    @"^[Tt]rash up to (\d+) cards? from your hand\.?$");
+                if (tuo.Success)
+                {
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        effect.SelectionsRemaining = int.Parse(tuo.Groups[1].Value);
+                        effect.TargetZone = EffectTargetZone.Hand;
+                    }
+                    if (string.IsNullOrEmpty(targetId))
+                    {
+                        Log(state, effect.Seat, $"Click up to {effect.SelectionsRemaining} card(s) in your hand to trash ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    int tuoIdx = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                    if (tuoIdx < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
+                    var tuoCard = owner.Hand[tuoIdx];
+                    owner.Hand.RemoveAt(tuoIdx);
+                    tuoCard.Zone = "trash";
+                    owner.Trash.Add(tuoCard);
+                    NotifyHandTrashedByEffect(state, effect.Seat);
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+                // "trash cards from the top of your Life cards until you have N Life card(s)."
+                var lifeDown = System.Text.RegularExpressions.Regex.Match(text,
+                    @"trash cards from the top of your Life cards until you have (\d+) Life",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (lifeDown.Success)
+                {
+                    int keepL = int.Parse(lifeDown.Groups[1].Value);
+                    int cut = 0;
+                    while (owner.Life.Count > keepL)
+                    {
+                        var lcCut = Pop(owner.Life);
+                        lcCut.Zone = "trash";
+                        owner.Trash.Add(lcCut);
+                        cut++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: trashed {cut} Life card(s) — {owner.Life.Count} Life left.");
+                    return EffectResolution.Resolved;
+                }
+                // "None of your Characters can be K.O.'d by your opponent's effects until …"
+                if (ContainsAll(text, "None of your Characters can be K.O.'d by your opponent's effects"))
+                {
+                    string noneDur = ContainsAll(text, "until the") ? "untilNextTurn" : "thisTurn";
+                    int noneC = 0;
+                    var noneSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    foreach (var c in owner.CharacterArea)
+                        if (c != null) { AddModifier(state, noneSrc, c, "cannotBeKod", noneDur, null, effect.Seat); noneC++; }
+                    Log(state, effect.Seat, $"{sourceName}: {noneC} Character(s) cannot be K.O.'d by opponent effects.");
+                    return EffectResolution.Resolved;
+                }
+                // "All of your Characters with N base power or less cannot be K.O.'d …" (queued form)
+                var bpImmM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"All of your Characters with (\d{3,5}) base power or less cannot be K\.O\.'d",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (bpImmM.Success)
+                {
+                    int bpImm = int.Parse(bpImmM.Groups[1].Value);
+                    string immDur = ContainsAll(text, "until the") ? "untilNextTurn" : "thisTurn";
+                    int immC = 0;
+                    var immSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    foreach (var c in owner.CharacterArea)
+                        if (c != null && GetCard(c).Power <= bpImm)
+                        { AddModifier(state, immSrc, c, "cannotBeKod", immDur, null, effect.Seat); immC++; }
+                    Log(state, effect.Seat, $"{sourceName}: {immC} Character(s) protected.");
+                    return EffectResolution.Resolved;
+                }
+                // "rest this Character." / "trash this Character at the end of this turn."
+                if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^rest this Character\.?$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                {
+                    var rSelf3 = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (rSelf3 != null) { rSelf3.Rested = true; Log(state, effect.Seat, $"{sourceName} rests itself."); }
+                    return EffectResolution.Resolved;
+                }
+                if (ContainsAll(text, "trash this Character at the end of this turn"))
+                {
+                    var tEnd = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (tEnd != null)
+                    {
+                        AddModifier(state, tEnd, tEnd, "trashAtEndOfTurn", "thisTurn", null, effect.Seat);
+                        Log(state, effect.Seat, $"{sourceName} will be trashed at the end of this turn.");
+                    }
+                    return EffectResolution.Resolved;
+                }
+                // "K.O. N of your ({T} type )Characters." (own sacrifice, mandatory pick)
+                var koOwn = System.Text.RegularExpressions.Regex.Match(text,
+                    @"^K\.O\. (\d+) of your ([^.]*?)Characters",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (koOwn.Success)
+                {
+                    if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(koOwn.Groups[1].Value);
+                    var koOwnT = FindAnyInPlay(state, targetId, out var koOwnSeat);
+                    if (koOwnT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose {effect.SelectionsRemaining} of your Character(s) to K.O. ({sourceName}).");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (koOwnSeat != effect.Seat || GetCard(koOwnT).Type != "character"
+                        || !CardPassesFeatureFilter(koOwn.Groups[2].Value, GetCard(koOwnT)))
+                    {
+                        Log(state, effect.Seat, "That is not a valid target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    MoveToTrash(state, effect.Seat, koOwnT.InstanceId);
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+                // "shuffle your deck." leftover after searches (already shuffled by the search).
+                if (System.Text.RegularExpressions.Regex.IsMatch(text, @"^(Then, )?shuffle your deck\.?$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    return EffectResolution.Resolved;
+                // "you may place up to N card(s) from your opponent's trash at the bottom of their deck."
+                var oppTrBot = System.Text.RegularExpressions.Regex.Match(text,
+                    @"place up to (\d+) cards? from your opponent's trash at the bottom of their deck",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oppTrBot.Success)
+                {
+                    var oppTb = Player(state, OtherSeat(effect.Seat));
+                    int tbN = int.Parse(oppTrBot.Groups[1].Value);
+                    int tbDone = 0;
+                    for (int i = 0; i < tbN && oppTb.Trash.Count > 0; i++)
+                    {
+                        var tbC = oppTb.Trash[oppTb.Trash.Count - 1];
+                        oppTb.Trash.RemoveAt(oppTb.Trash.Count - 1);
+                        tbC.Zone = "deck";
+                        oppTb.Deck.Add(tbC);
+                        tbDone++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {tbDone} card(s) from the opponent's trash placed at the bottom of their deck.");
+                    return EffectResolution.Resolved;
+                }
+                // "(all of your …|up to N of your …) cards' base power becomes N during this turn."
+                var bpOwnAll = System.Text.RegularExpressions.Regex.Match(text,
+                    @"all of your \[([^\]]+)\] cards' base power becomes (\d{3,6})",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (bpOwnAll.Success)
+                {
+                    int bpVal2 = int.Parse(bpOwnAll.Groups[2].Value);
+                    int bpC2 = 0;
+                    var bpTargets = new List<CardInstance>();
+                    if (owner.Leader != null) bpTargets.Add(owner.Leader);
+                    foreach (var c in owner.CharacterArea) if (c != null) bpTargets.Add(c);
+                    foreach (var c in bpTargets)
+                    {
+                        if (!NameMatches(state, c, bpOwnAll.Groups[1].Value.Trim())) continue;
+                        state.BasePowerOverrides.Add(new BasePowerOverride { TargetInstanceId = c.InstanceId, Value = bpVal2, OwnerSeat = effect.Seat, Duration = "thisTurn" });
+                        bpC2++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {bpC2} card(s) base power becomes {bpVal2} this turn.");
+                    return EffectResolution.Resolved;
+                }
+                var bpOwnPick = System.Text.RegularExpressions.Regex.Match(text,
+                    @"up to (\d+) of your Leader or Character cards' base power becomes (\d{3,6})",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (bpOwnPick.Success)
+                {
+                    if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(bpOwnPick.Groups[1].Value);
+                    var bpT2 = FindAnyInPlay(state, targetId, out var bpSeat3);
+                    if (bpT2 == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} of your card(s) ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (bpSeat3 != effect.Seat) { Log(state, effect.Seat, "That is not a valid target."); return EffectResolution.WaitingForTarget; }
+                    state.BasePowerOverrides.Add(new BasePowerOverride { TargetInstanceId = bpT2.InstanceId, Value = int.Parse(bpOwnPick.Groups[2].Value), OwnerSeat = effect.Seat, Duration = "thisTurn" });
+                    Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(bpT2))}'s base power becomes {bpOwnPick.Groups[2].Value} this turn.");
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+                // Named restrictions with no automatable board mutation — acknowledged.
+                if (ContainsAll(text, "cannot play any Character cards")
+                    || ContainsAll(text, "you cannot set DON!! cards as active using Character effects")
+                    || System.Text.RegularExpressions.Regex.IsMatch(text, @"you cannot play Character cards( with a base cost of \d+ or more)? during this turn", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    || ContainsAll(text, "return DON!! cards from your field to your DON!! deck until you have the same number")
+                    || ContainsAll(text, "that card gains an additional"))
+                {
+                    Log(state, effect.Seat, $"{sourceName}: noted — {Truncate(text, 100)} (manual enforcement).");
+                    return EffectResolution.Resolved;
+                }
+                // "from your hand or trash" dual-zone plays — the player may pick the card
+                // from EITHER zone (click a hand card, or open the trash and click there).
+                if (ContainsAll(text, "from your hand or trash") && ContainsAll(text, "play up to"))
+                {
+                    effect.TargetZone = EffectTargetZone.Any;
+                    int dzCap = ParseLimit(text, @"cost of (\d+) or less");
+                    string dzTag = ParseCurlyBraceTag(text);
+                    if (!string.IsNullOrEmpty(targetId))
+                    {
+                        int dzH = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                        int dzT = dzH < 0 ? owner.Trash.FindIndex(c => c.InstanceId == targetId) : -1;
+                        if (dzH >= 0 || dzT >= 0)
+                        {
+                            var dzCard = dzH >= 0 ? owner.Hand[dzH] : owner.Trash[dzT];
+                            var dzDef = GetCard(dzCard);
+                            int dzSlot = owner.CharacterArea.FindIndex(c => c == null);
+                            var dzOt = System.Text.RegularExpressions.Regex.Match(text, @"other than \[([^\]]+)\]",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            bool dzOk = dzDef.Type == "character"
+                                && (dzCap < 0 || dzDef.Cost <= dzCap)
+                                && (string.IsNullOrEmpty(dzTag) || dzDef.HasFeature(dzTag))
+                                && !(dzOt.Success && NameMatches(state, dzCard, dzOt.Groups[1].Value.Trim()))
+                                && dzSlot >= 0;
+                            if (dzOk)
+                            {
+                                if (dzH >= 0) owner.Hand.RemoveAt(dzH); else owner.Trash.RemoveAt(dzT);
+                                dzCard.Zone = "character";
+                                dzCard.Rested = ContainsAll(text, "rested");
+                                dzCard.PlayedOnTurn = state.TurnNumber;
+                                owner.CharacterArea[dzSlot] = dzCard;
+                                Log(state, effect.Seat, $"{sourceName}: plays {NameId(dzDef)} from {(dzH >= 0 ? "hand" : "trash")}.");
+                                return EffectResolution.Resolved;
+                            }
+                        }
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (owner.Hand.Count == 0 && owner.Trash.Count == 0) return EffectResolution.Resolved;
+                    Log(state, effect.Seat, $"{sourceName}: click a card in your hand or trash to play.");
+                    return EffectResolution.WaitingForTarget;
+                }
+            }
+
+            // ---- DON!! give family (Session 12) --------------------------------------------
+            {
+                // "Give this Character up to N rested DON!! cards." (self-attach)
+                var gdSelf = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give this Character up to (\d+) rested DON!! cards?",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (gdSelf.Success)
+                {
+                    var gdsT = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (gdsT != null)
+                    {
+                        var gdsDon = owner.CostArea.Where(d => d.Rested).Take(int.Parse(gdSelf.Groups[1].Value)).ToList();
+                        foreach (var d in gdsDon) { owner.CostArea.Remove(d); gdsT.AttachedDonIds.Add(d.InstanceId); }
+                        Log(state, effect.Seat, $"{sourceName} attaches {gdsDon.Count} rested DON!! to itself.");
+                    }
+                    return EffectResolution.Resolved;
+                }
+                // "Give up to N of your {T} (or {T}) type Characters up to M rested DON!! card each."
+                var gdEachN = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give up to (\d+) of your [^.]*?Characters[^.]*? up to (\d+) rested DON!! cards? each",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (gdEachN.Success)
+                {
+                    if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(gdEachN.Groups[1].Value);
+                    int perEach = int.Parse(gdEachN.Groups[2].Value);
+                    var geT = FindAnyInPlay(state, targetId, out var geSeat);
+                    if (geT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} Character(s) to receive {perEach} rested DON!! each ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (geSeat != effect.Seat || GetCard(geT).Type != "character" || !CardPassesFeatureFilter(text, GetCard(geT)))
+                    {
+                        Log(state, effect.Seat, "That is not a valid target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    var geDon = owner.CostArea.Where(d => d.Rested).Take(perEach).ToList();
+                    foreach (var d in geDon) { owner.CostArea.Remove(d); geT.AttachedDonIds.Add(d.InstanceId); }
+                    Log(state, effect.Seat, $"{sourceName} attaches {geDon.Count} rested DON!! to {NameId(GetCard(geT))}.");
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0 && owner.CostArea.Any(d => d.Rested)) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+                // "Give up to N (total )of your currently given DON!! cards to N of your (…)
+                // Characters." — move already-attached DON onto a chosen Character.
+                var gdMove = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give up to (\d+) (?:total )?of your currently given DON!! cards to",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (gdMove.Success)
+                {
+                    int mvN = int.Parse(gdMove.Groups[1].Value);
+                    var mvT = FindAnyInPlay(state, targetId, out var mvSeat);
+                    if (mvT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose one of your Characters to move up to {mvN} given DON!! onto ({sourceName}).");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (mvSeat != effect.Seat || GetCard(mvT).Type != "character" || !CardPassesFeatureFilter(text, GetCard(mvT)))
+                    {
+                        Log(state, effect.Seat, "That is not a valid target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    int movedDon = 0;
+                    var donors = new List<CardInstance>();
+                    if (owner.Leader != null) donors.Add(owner.Leader);
+                    foreach (var c in owner.CharacterArea) if (c != null && c.InstanceId != mvT.InstanceId) donors.Add(c);
+                    foreach (var donor in donors)
+                    {
+                        while (movedDon < mvN && donor.AttachedDonIds.Count > 0)
+                        {
+                            var dId = donor.AttachedDonIds[donor.AttachedDonIds.Count - 1];
+                            donor.AttachedDonIds.RemoveAt(donor.AttachedDonIds.Count - 1);
+                            mvT.AttachedDonIds.Add(dId);
+                            movedDon++;
+                        }
+                    }
+                    Log(state, effect.Seat, $"{sourceName} moves {movedDon} given DON!! to {NameId(GetCard(mvT))}.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Hand cost reductions ------------------------------------------------------
+            {
+                var handCostM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give (\w+) (Events?|Characters?|cards) in your hand [-\u2212\u2013\u2011\u2012\u2014](\d+) cost",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (handCostM.Success)
+                {
+                    string colH = handCostM.Groups[1].Value.ToLowerInvariant();
+                    bool evOnly = handCostM.Groups[2].Value.StartsWith("Event", StringComparison.OrdinalIgnoreCase);
+                    bool chOnly = handCostM.Groups[2].Value.StartsWith("Character", StringComparison.OrdinalIgnoreCase);
+                    int hcD = int.Parse(handCostM.Groups[3].Value);
+                    int hcC = 0;
+                    foreach (var hc3 in owner.Hand)
+                    {
+                        var hd3 = GetCard(hc3);
+                        if (evOnly && hd3.Type != "event") continue;
+                        if (chOnly && hd3.Type != "character") continue;
+                        if ("red green blue purple black yellow".Contains(colH)
+                            && (hd3.Color ?? "").IndexOf(colH, StringComparison.OrdinalIgnoreCase) < 0) continue;
+                        RegisterCostModifier(hc3, sourceName, -hcD, "endOfTurn");
+                        hcC++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {hcC} card(s) in hand get -{hcD} cost this turn.");
+                    return EffectResolution.Resolved;
+                }
+                var nextPlay = System.Text.RegularExpressions.Regex.Match(text,
+                    @"next time you play (?:\[([^\]]+)\]|an? \{([^}]+)\} type Character card)[^.]*cost will be reduced by (\d+)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (nextPlay.Success)
+                {
+                    int npD = int.Parse(nextPlay.Groups[3].Value);
+                    int npMin = ParseLimit(text, @"cost of (\d+) or more");
+                    int npC = 0;
+                    foreach (var hc4 in owner.Hand)
+                    {
+                        if (nextPlay.Groups[1].Success && !NameMatches(state, hc4, nextPlay.Groups[1].Value.Trim())) continue;
+                        if (nextPlay.Groups[2].Success && !GetCard(hc4).HasFeature(nextPlay.Groups[2].Value.Trim())) continue;
+                        if (npMin >= 0 && GetCard(hc4).Cost < npMin) continue;
+                        RegisterCostModifier(hc4, sourceName, -npD, "endOfTurn");
+                        npC++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {npC} matching card(s) in hand get -{npD} cost this turn (approximates the next-play discount).");
+                    return EffectResolution.Resolved;
+                }
+                if (ContainsAll(text, "cost of playing") && ContainsAll(text, "will be reduced by"))
+                {
+                    Log(state, effect.Seat, $"{sourceName}: play-cost reduction aura is active.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Bottom-of-deck family -----------------------------------------------------
+            {
+                if (ContainsAll(text, "Return up to") && ContainsAll(text, "bottom of the owner's deck"))
+                {
+                    var rbClone = ShallowCloneEffect(effect, text.Replace("Return up to", "Place up to"));
+                    rbClone.SelectionsRemaining = effect.SelectionsRemaining;
+                    var rbRes = TryResolveKnownEffect(state, rbClone, targetId);
+                    effect.SelectionsRemaining = rbClone.SelectionsRemaining;
+                    return rbRes;
+                }
+                var wipeM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Place all Characters with a cost of (\d+) or less at the bottom of the owner's deck",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (wipeM.Success)
+                {
+                    int wCap = int.Parse(wipeM.Groups[1].Value);
+                    int wC = 0;
+                    foreach (var st2 in Seats())
+                    {
+                        var pw = Player(state, st2);
+                        for (int i = 0; i < pw.CharacterArea.Count; i++)
+                        {
+                            var cw = pw.CharacterArea[i];
+                            if (cw == null || GetCost(state, cw) > wCap) continue;
+                            if (TryRemovalReplacement(state, st2, cw)) continue;
+                            ReturnAttachedDon(pw, cw);
+                            pw.CharacterArea[i] = null;
+                            cw.Zone = "deck"; cw.Rested = false; cw.PlayedOnTurn = null; cw.Modifiers.Clear();
+                            state.NameOverrides.Remove(cw.InstanceId);
+                            pw.Deck.Add(cw);
+                            wC++;
+                        }
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {wC} Character(s) placed at the bottom of their owners' decks.");
+                    return EffectResolution.Resolved;
+                }
+                if (ContainsAll(text, "Place all of your Characters except this Character at the bottom of your deck"))
+                {
+                    int sC = 0;
+                    for (int i = 0; i < owner.CharacterArea.Count; i++)
+                    {
+                        var cs = owner.CharacterArea[i];
+                        if (cs == null || cs.InstanceId == effect.SourceInstanceId) continue;
+                        ReturnAttachedDon(owner, cs);
+                        owner.CharacterArea[i] = null;
+                        cs.Zone = "deck"; cs.Rested = false; cs.PlayedOnTurn = null; cs.Modifiers.Clear();
+                        state.NameOverrides.Remove(cs.InstanceId);
+                        owner.Deck.Add(cs);
+                        sC++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {sC} of your Characters placed at the bottom of the deck.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Benign leftovers & pure restrictions -------------------------------------
+            // "Then, place the rest at the bottom of your deck …" leftovers after a deck-look
+            // (the DeckLook flow already handles rest placement).
+            if (System.Text.RegularExpressions.Regex.IsMatch(text.TrimStart(),
+                    @"^(place the rest at the (bottom|top or bottom)|trash the rest)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return EffectResolution.Resolved;
+            // Named self-restrictions with no board mutation — acknowledged in the log.
+            if (ContainsAll(text, "cannot add Life cards to your hand using your own effects")
+                || ContainsAll(text, "you cannot play cards from your hand during this turn")
+                || ContainsAll(text, "you cannot attack a Leader during this turn"))
+            {
+                Log(state, effect.Seat, $"{sourceName}: restriction noted — {text}");
+                return EffectResolution.Resolved;
+            }
+            // Bare conditional keyword grant body: "this Character gains [KW]."
+            {
+                var bareKw = System.Text.RegularExpressions.Regex.Match(text,
+                    @"^this Character gains \[([A-Za-z !]+)\]\.?$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (bareKw.Success)
+                {
+                    var bkSelf = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (bkSelf != null)
+                    {
+                        AddModifier(state, bkSelf, bkSelf, "keyword", "thisTurn", bareKw.Groups[1].Value.Trim(), effect.Seat);
+                        Log(state, effect.Seat, $"{sourceName} gains [{bareKw.Groups[1].Value.Trim()}] this turn.");
+                    }
+                    return EffectResolution.Resolved;
+                }
+            }
+            // Hand→Life with a reveal: "Reveal up to 1 Character card with a cost of N from
+            // your hand and add it to the top of your Life cards."
+            if (ContainsAll(text, "Reveal up to") && ContainsAll(text, "from your hand")
+                && ContainsAll(text, "Life cards"))
+            {
+                var rlClone = ShallowCloneEffect(effect, text.Replace("Reveal up to", "Add up to"));
+                rlClone.SelectionsRemaining = effect.SelectionsRemaining;
+                var rlRes = TryResolveKnownEffect(state, rlClone, targetId);
+                effect.SelectionsRemaining = rlClone.SelectionsRemaining;
+                effect.TargetZone = rlClone.TargetZone;
+                return rlRes;
+            }
+
+            // "Change the target of that attack to this Leader or to one of your {T} type
+            // Character cards." (OP09-093 Teach — [On Your Opponent's Attack] redirect.)
+            if (ContainsAll(text, "Change the target of that attack") && state.Battle != null)
+            {
+                var rt2 = FindAnyInPlay(state, targetId, out var rt2Seat);
+                if (rt2 == null)
+                {
+                    Log(state, effect.Seat, $"Click your Leader or a matching Character to redirect the attack to ({sourceName}).");
+                    return EffectResolution.WaitingForTarget;
+                }
+                var rt2Def = GetCard(rt2);
+                bool rt2Ok = rt2Seat == effect.Seat
+                    && (rt2Def.Type == "leader" || (rt2Def.Type == "character" && CardPassesFeatureFilter(text, rt2Def)));
+                if (!rt2Ok)
+                {
+                    Log(state, effect.Seat, "That is not a valid redirect target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                state.Battle.TargetId = rt2.InstanceId;
+                state.Battle.TargetSeat = rt2Seat;
+                state.Battle.DefensePower = GetPower(state, rt2) + state.Battle.CounterPower;
+                Log(state, effect.Seat, $"{sourceName}: the attack target is now {NameId(rt2Def)}.");
+                return EffectResolution.Resolved;
+            }
+
+            // "Your opponent places 1 of their Characters at the bottom of the owner's deck."
+            if (ContainsAll(text, "opponent places") && ContainsAll(text, "of their Characters at the bottom"))
+            {
+                var oppPl = Player(state, OtherSeat(effect.Seat));
+                for (int i = oppPl.CharacterArea.Count - 1; i >= 0; i--)
+                {
+                    var cp2 = oppPl.CharacterArea[i];
+                    if (cp2 == null) continue;
+                    ReturnAttachedDon(oppPl, cp2);
+                    oppPl.CharacterArea[i] = null;
+                    cp2.Zone = "deck"; cp2.Rested = false; cp2.PlayedOnTurn = null; cp2.Modifiers.Clear();
+                    state.NameOverrides.Remove(cp2.InstanceId);
+                    oppPl.Deck.Add(cp2);
+                    Log(state, effect.Seat, $"{sourceName}: opponent places {NameId(GetCard(cp2))} at the bottom of their deck.");
+                    break;
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // "K.O. all of your opponent's Characters with N power or less."
+            {
+                var koAllP = System.Text.RegularExpressions.Regex.Match(text,
+                    @"K\.O\. all of your opponent's Characters with (\d{1,5}) power or less",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (koAllP.Success)
+                {
+                    int kap = int.Parse(koAllP.Groups[1].Value);
+                    var oppKa = Player(state, OtherSeat(effect.Seat));
+                    int kaC2 = 0;
+                    for (int i = 0; i < oppKa.CharacterArea.Count; i++)
+                    {
+                        var ck2 = oppKa.CharacterArea[i];
+                        if (ck2 == null || GetPower(state, ck2) > kap) continue;
+                        if (CannotBeKoedByEffect(state, ck2)) continue;
+                        if (TryRemovalReplacement(state, OtherSeat(effect.Seat), ck2)) continue;
+                        MoveToTrash(state, OtherSeat(effect.Seat), ck2.InstanceId);
+                        kaC2++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName} K.O.s {kaC2} Character(s).");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // "place any number of Character cards with a cost of N or more from your trash
+            // at the bottom of your deck … gains +N power … for every 3 cards placed."
+            if (ContainsAll(text, "place any number of Character cards") && ContainsAll(text, "from your trash"))
+            {
+                effect.TargetZone = EffectTargetZone.Trash;
+                if (effect.RemainingBudget < 0) effect.RemainingBudget = 0;   // counts cards placed
+                int minC3 = ParseLimit(text, @"cost of (\d+) or more");
+                if (string.IsNullOrEmpty(targetId))
+                {
+                    Log(state, effect.Seat, $"Click trash Characters to place at the bottom of your deck ({sourceName}); skip when done.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                int anIdx = owner.Trash.FindIndex(c => c.InstanceId == targetId);
+                if (anIdx < 0) { Log(state, effect.Seat, "That card is not in your trash."); return EffectResolution.WaitingForTarget; }
+                var anCard = owner.Trash[anIdx];
+                if (GetCard(anCard).Type != "character" || (minC3 >= 0 && GetCard(anCard).Cost < minC3))
+                {
+                    Log(state, effect.Seat, "That card does not qualify.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                owner.Trash.RemoveAt(anIdx);
+                anCard.Zone = "deck";
+                owner.Deck.Add(anCard);
+                effect.RemainingBudget++;
+                var per3 = System.Text.RegularExpressions.Regex.Match(text, @"\+(\d{3,5}) power[^.]*every (\d+) cards");
+                if (per3.Success && effect.RemainingBudget % int.Parse(per3.Groups[2].Value) == 0)
+                {
+                    var selfAn = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (selfAn != null)
+                    {
+                        int anB = int.Parse(per3.Groups[1].Value);
+                        state.TemporaryPowerBonus.TryGetValue(selfAn.InstanceId, out var exAn);
+                        state.TemporaryPowerBonus[selfAn.InstanceId] = exAn + anB;
+                        RegisterPowerModifier(selfAn, sourceName, anB, "endOfTurn");
+                        Log(state, effect.Seat, $"{sourceName} gains +{anB} power.");
+                    }
+                }
+                return EffectResolution.WaitingForTarget;   // keep placing until skip
+            }
+
+            // "place this Character at the bottom of the owner's deck." (self-removal)
+            if (ContainsAll(text, "place this Character at the bottom of the owner's deck"))
+            {
+                var selfBot = FindAnyInPlay(state, effect.SourceInstanceId, out var sbSeat);
+                if (selfBot != null)
+                {
+                    var sbP = Player(state, sbSeat);
+                    ReturnAttachedDon(sbP, selfBot);
+                    int sbI = sbP.CharacterArea.FindIndex(c => c != null && c.InstanceId == selfBot.InstanceId);
+                    if (sbI >= 0) sbP.CharacterArea[sbI] = null;
+                    selfBot.Zone = "deck"; selfBot.Rested = false; selfBot.PlayedOnTurn = null; selfBot.Modifiers.Clear();
+                    state.NameOverrides.Remove(selfBot.InstanceId);
+                    sbP.Deck.Add(selfBot);
+                    Log(state, effect.Seat, $"{sourceName} goes to the bottom of the owner's deck.");
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // "add 1 card from the top or bottom of your Life cards to your hand." (as a BODY,
+            // not a cost — same top/bottom choice modal.)
+            if (System.Text.RegularExpressions.Regex.IsMatch(text.Trim(),
+                    @"^add \d+ cards? from the top or bottom of your Life cards? to your hand\.?$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                if (owner.Life.Count == 0) return EffectResolution.Resolved;
+                state.ActiveChoice = new ChoiceState
+                {
+                    Seat = effect.Seat,
+                    ControllerSeat = effect.Seat,
+                    SourceInstanceId = effect.SourceInstanceId,
+                    SourceCardId = effect.SourceCardId,
+                    Timing = effect.Timing,
+                    OptionA = "Add the top card of your Life cards to your hand.",
+                    OptionB = "Add the bottom card of your Life cards to your hand.",
+                };
+                Log(state, effect.Seat, $"{sourceName}: take the top or bottom Life card.");
+                return EffectResolution.Resolved;
+            }
+
+            // "Play this Character card from your trash." (the source revives itself — Oars.)
+            if (ContainsAll(text, "Play this Character card from your trash"))
+            {
+                int selfIdx = owner.Trash.FindIndex(c => c.InstanceId == effect.SourceInstanceId);
+                int selfSlot = owner.CharacterArea.FindIndex(c => c == null);
+                if (selfIdx >= 0 && selfSlot >= 0)
+                {
+                    var reviv = owner.Trash[selfIdx];
+                    owner.Trash.RemoveAt(selfIdx);
+                    reviv.Zone = "character";
+                    reviv.PlayedOnTurn = state.TurnNumber;
+                    owner.CharacterArea[selfSlot] = reviv;
+                    Log(state, effect.Seat, $"{sourceName} plays itself from the trash.");
+                }
+                else Log(state, effect.Seat, $"{sourceName}: cannot revive (no slot or card moved).");
+                return EffectResolution.Resolved;
+            }
+
+            // "your opponent may add 1 DON!! card from their DON!! deck and set it as active."
+            if (ContainsAll(text, "opponent may add") && ContainsAll(text, "DON!! deck"))
+            {
+                var oppMd = Player(state, OtherSeat(effect.Seat));
+                if (oppMd.DonDeck > 0)
+                {
+                    oppMd.DonDeck--;
+                    oppMd.CostArea.Add(CreateDonInstance(OtherSeat(effect.Seat), oppMd));
+                    Log(state, effect.Seat, $"{sourceName}: opponent adds 1 active DON!!.");
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // "Give up to N of your opponent's rested DON!! cards to N of your opponent's
+            // Characters." (Jango — saddles the opponent's characters with their own DON.)
+            {
+                var oppGive = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give up to (\d+) of your opponent's rested DON!! cards to",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oppGive.Success)
+                {
+                    var oppGd = Player(state, OtherSeat(effect.Seat));
+                    var firstChar = oppGd.CharacterArea.FirstOrDefault(c => c != null);
+                    int gN = int.Parse(oppGive.Groups[1].Value);
+                    int gDone = 0;
+                    if (firstChar != null)
+                    {
+                        for (int i = 0; i < gN; i++)
+                        {
+                            var rd2 = oppGd.CostArea.FirstOrDefault(d => d.Rested);
+                            if (rd2 == null) break;
+                            oppGd.CostArea.Remove(rd2);
+                            firstChar.AttachedDonIds.Add(rd2.InstanceId);
+                            gDone++;
+                        }
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {gDone} of the opponent's rested DON!! attached to {(firstChar != null ? NameId(GetCard(firstChar)) : "nothing")}.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // "You may K.O. any number of your {T} type Characters with a cost of N or less.
+            // Your Leader gains an additional +N power during this turn for every Character K.O.'d."
+            if (ContainsAll(text, "K.O. any number of your"))
+            {
+                var perKo = System.Text.RegularExpressions.Regex.Match(text, @"\+(\d{3,5}) power[^.]*for every Character");
+                int perBonus = perKo.Success ? int.Parse(perKo.Groups[1].Value) : 0;
+                int anyCap = ParseLimit(text, @"cost of (\d+) or less");
+                if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = 99;
+                var anyT = FindAnyInPlay(state, targetId, out var anySeat);
+                if (anyT == null)
+                {
+                    Log(state, effect.Seat, $"Click your Characters to K.O. one at a time ({sourceName}); skip when done.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (anySeat != effect.Seat || GetCard(anyT).Type != "character"
+                    || (anyCap >= 0 && GetCost(state, anyT) > anyCap)
+                    || !CardPassesFeatureFilter(text, GetCard(anyT)))
+                {
+                    Log(state, effect.Seat, "That is not a valid sacrifice.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                MoveToTrash(state, effect.Seat, anyT.InstanceId);
+                if (perBonus > 0 && owner.Leader != null)
+                {
+                    state.TemporaryPowerBonus.TryGetValue(owner.Leader.InstanceId, out var exAny);
+                    state.TemporaryPowerBonus[owner.Leader.InstanceId] = exAny + perBonus;
+                    RegisterPowerModifier(owner.Leader, sourceName, perBonus, "endOfTurn");
+                    Log(state, effect.Seat, $"Leader gains +{perBonus} power (running total applies per K.O.).");
+                }
+                return EffectResolution.WaitingForTarget;   // keep sacrificing until the player skips
+            }
+
+            // ---- "Look at N card(s) from the top of your opponent's deck." ------------------
+            if (ContainsAll(text, "Look at") && ContainsAll(text, "top of your opponent's deck"))
+            {
+                var oppPk = Player(state, OtherSeat(effect.Seat));
+                int pkN = ParseLookCount(text);
+                var pkNames = oppPk.Deck.Take(pkN).Select(c => GetCard(c).Name);
+                Log(state, effect.Seat, $"{sourceName}: top of opponent's deck — {string.Join(", ", pkNames)}");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Trash cards from your hand until you have N cards in your hand." ---------
+            {
+                var tuM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Trash cards from your hand until you have (\d+) cards? in your hand",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (tuM.Success)
+                {
+                    int keepN = int.Parse(tuM.Groups[1].Value);
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        effect.SelectionsRemaining = Math.Max(0, owner.Hand.Count - keepN);
+                        effect.TargetZone = EffectTargetZone.Hand;
+                        if (effect.SelectionsRemaining == 0) return EffectResolution.Resolved;
+                    }
+                    if (string.IsNullOrEmpty(targetId))
+                    {
+                        Log(state, effect.Seat, $"Click {effect.SelectionsRemaining} more card(s) in your hand to trash ({sourceName}).");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    int tuIdx = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                    if (tuIdx < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
+                    var tuCard = owner.Hand[tuIdx];
+                    owner.Hand.RemoveAt(tuIdx);
+                    tuCard.Zone = "trash";
+                    owner.Trash.Add(tuCard);
+                    NotifyHandTrashedByEffect(state, effect.Seat);
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Apply each of the following effects based on the number of cards in your
+            // trash:" — evaluate every bullet's threshold. ------------------------------------
+            if (ContainsAll(text, "Apply each of the following effects"))
+            {
+                int trashCount = owner.Trash.Count;
+                foreach (var bullet in text.Split('\n'))
+                {
+                    var bl = bullet.TrimStart('•', '-', ' ');
+                    var thM = System.Text.RegularExpressions.Regex.Match(bl,
+                        @"^If (?:there are|you have) (\d+) or more cards?, (.+)$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (!thM.Success) continue;
+                    if (trashCount < int.Parse(thM.Groups[1].Value)) continue;
+                    string blBody = thM.Groups[2].Value.Trim();
+                    var blSrc = FindCardInstance(state, effect.SourceInstanceId);
+                    if (blSrc != null && IsAutomatedEffectPattern(blBody))
+                        QueueAndAutoResolve(state, effect.Seat, blSrc, effect.Timing, blBody, false, effect.Scope, InferTargetZone(blBody));
+                    else
+                        Log(state, effect.Seat, $"{sourceName}: threshold met — {blBody}");
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // ---- Swap base power (OP14-001 / OP14-017): pick two, swap printed powers. -----
+            if (ContainsAll(text, "Swap the base power of the selected Characters"))
+            {
+                bool oppSwap = ContainsAll(text, "of your opponent's Characters");
+                if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = 2;
+                int swapBpCap = ParseLimit(text, @"(\d{3,5}) base power or less");
+                var swT = FindAnyInPlay(state, targetId, out var swSeat);
+                if (swT == null)
+                {
+                    Log(state, effect.Seat, $"Select {effect.SelectionsRemaining} Character(s) to swap base power ({sourceName}).");
+                    return EffectResolution.WaitingForTarget;
+                }
+                bool sideOk = oppSwap ? swSeat == OtherSeat(effect.Seat) : swSeat == effect.Seat;
+                if (!sideOk || GetCard(swT).Type != "character" || !CardPassesFeatureFilter(text, GetCard(swT))
+                    || (swapBpCap >= 0 && GetCard(swT).Power > swapBpCap)
+                    || swT.InstanceId == effect.FirstPickId)
+                {
+                    Log(state, effect.Seat, "That is not a valid swap target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (effect.SelectionsRemaining == 2)
+                {
+                    effect.FirstPickId = swT.InstanceId;
+                    effect.SelectionsRemaining--;
+                    Log(state, effect.Seat, $"First swap target: {NameId(GetCard(swT))}. Select the second.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                var firstT = FindAnyInPlay(state, effect.FirstPickId, out _);
+                if (firstT == null) return EffectResolution.Resolved;
+                int pA = GetCard(firstT).Power;
+                int pB = GetCard(swT).Power;
+                foreach (var bp in state.BasePowerOverrides)
+                {
+                    if (bp.TargetInstanceId == firstT.InstanceId) pA = bp.Value;
+                    if (bp.TargetInstanceId == swT.InstanceId) pB = bp.Value;
+                }
+                state.BasePowerOverrides.Add(new BasePowerOverride { TargetInstanceId = firstT.InstanceId, Value = pB, OwnerSeat = effect.Seat, Duration = "thisTurn" });
+                state.BasePowerOverrides.Add(new BasePowerOverride { TargetInstanceId = swT.InstanceId, Value = pA, OwnerSeat = effect.Seat, Duration = "thisTurn" });
+                Log(state, effect.Seat, $"{sourceName} swaps base power: {NameId(GetCard(firstT))} ↔ {NameId(GetCard(swT))}.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Change the attack target to the selected card." (OP14-060) ----------------
+            if (ContainsAll(text, "Change the attack target to the selected card") && state.Battle != null)
+            {
+                var rtT = FindAnyInPlay(state, targetId, out var rtSeat);
+                if (rtT == null)
+                {
+                    Log(state, effect.Seat, $"Select your Leader or a matching Character to redirect the attack to ({sourceName}).");
+                    return EffectResolution.WaitingForTarget;
+                }
+                var rtDef = GetCard(rtT);
+                if (rtSeat != effect.Seat || (rtDef.Type != "leader" && !(rtDef.Type == "character" && CardPassesFeatureFilter(text, rtDef))))
+                {
+                    Log(state, effect.Seat, "That is not a valid redirect target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                state.Battle.TargetId = rtT.InstanceId;
+                state.Battle.TargetSeat = rtSeat;
+                state.Battle.DefensePower = GetPower(state, rtT) + state.Battle.CounterPower;
+                Log(state, effect.Seat, $"{sourceName}: the attack target is now {NameId(rtDef)}.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Negate the effects of your opponent's Leader and all of their Characters
+            // during this turn." (P-100) ------------------------------------------------------
+            if (ContainsAll(text, "Negate the effects of your opponent's Leader and all of their Characters"))
+            {
+                var oppNg = Player(state, OtherSeat(effect.Seat));
+                var ngSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                if (oppNg.Leader != null) AddModifier(state, ngSrc, oppNg.Leader, "effectsNegated", "thisTurn", null, effect.Seat);
+                int ngC = 1;
+                foreach (var c in oppNg.CharacterArea)
+                    if (c != null) { AddModifier(state, ngSrc, c, "effectsNegated", "thisTurn", null, effect.Seat); ngC++; }
+                Log(state, effect.Seat, $"{sourceName} negates the effects of {ngC} opponent card(s) this turn.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Select up to 1 {T} type card … from your hand and play it or add it to the
+            // top of your Life cards face-up." (OP07-097) — surfaced as a Choose-one. --------
+            if (ContainsAll(text, "from your hand and play it or add it to the top of your Life"))
+            {
+                int plCap = ParseLimit(text, @"cost of (\d+) or less");
+                string plTag = ParseCurlyBraceTag(text);
+                state.ActiveChoice = new ChoiceState
+                {
+                    Seat = effect.Seat,
+                    ControllerSeat = effect.Seat,
+                    SourceInstanceId = effect.SourceInstanceId,
+                    SourceCardId = effect.SourceCardId,
+                    Timing = effect.Timing,
+                    OptionA = $"Play up to 1 {(string.IsNullOrEmpty(plTag) ? "" : "{" + plTag + "} type ")}card with a cost of {(plCap >= 0 ? plCap : 99)} or less from your hand.",
+                    OptionB = $"Add up to 1 {(string.IsNullOrEmpty(plTag) ? "" : "{" + plTag + "} type ")}card with a cost of {(plCap >= 0 ? plCap : 99)} or less from your hand to the top of your Life cards face-up.",
+                };
+                Log(state, effect.Seat, $"{sourceName}: choose — play it, or add it to Life.");
+                return EffectResolution.Resolved;
+            }
+            // Same shape from the trash (OP14-104).
+            if (ContainsAll(text, "from your trash and play it or add it to the top of your Life"))
+            {
+                int plCap2 = ParseLimit(text, @"cost of (\d+) or less");
+                string plTag2 = ParseCurlyBraceTag(text);
+                state.ActiveChoice = new ChoiceState
+                {
+                    Seat = effect.Seat,
+                    ControllerSeat = effect.Seat,
+                    SourceInstanceId = effect.SourceInstanceId,
+                    SourceCardId = effect.SourceCardId,
+                    Timing = effect.Timing,
+                    OptionA = $"Play up to 1 {(string.IsNullOrEmpty(plTag2) ? "" : "{" + plTag2 + "} type ")}Character with a cost of {(plCap2 >= 0 ? plCap2 : 99)} or less from your trash.",
+                    OptionB = $"Add up to 1 {(string.IsNullOrEmpty(plTag2) ? "" : "{" + plTag2 + "} type ")}card with a cost of {(plCap2 >= 0 ? plCap2 : 99)} or less from your trash to the top of your Life cards face-up.",
+                };
+                Log(state, effect.Seat, $"{sourceName}: choose — play it, or add it to the top of your Life face-up.");
+                return EffectResolution.Resolved;
+            }
+
+            // "Add ... from your trash to the top of your Life cards face-up." — the resolved
+            // Option B of the Moria family (and printed directly on some cards): pick a trash
+            // card, it goes on TOP of Life (end of the list) face-up.
+            if (ContainsAll(text, "from your trash") && ContainsAll(text, "top of your Life"))
+            {
+                effect.TargetZone = EffectTargetZone.Trash;
+                int tlCap = ParseLimit(text, @"cost of (\d+) or less");
+                string tlTag = ParseCurlyBraceTag(text);
+                if (!string.IsNullOrEmpty(targetId))
+                {
+                    int ti = owner.Trash.FindIndex(c => c.InstanceId == targetId);
+                    if (ti >= 0)
+                    {
+                        var tlCard = owner.Trash[ti];
+                        var tlDef = GetCard(tlCard);
+                        bool tlOk = (tlCap < 0 || tlDef.Cost <= tlCap)
+                            && (string.IsNullOrEmpty(tlTag) || tlDef.HasFeature(tlTag));
+                        if (tlOk)
+                        {
+                            owner.Trash.RemoveAt(ti);
+                            tlCard.Zone = "life";
+                            tlCard.FaceUp = true;
+                            owner.Life.Add(tlCard);   // end of the list = TOP of Life
+                            Log(state, effect.Seat, $"{sourceName}: {NameId(tlDef)} placed face-up on top of Life.");
+                            return EffectResolution.Resolved;
+                        }
+                    }
+                }
+                if (owner.Trash.Count == 0)
+                {
+                    Log(state, effect.Seat, $"{sourceName}: trash is empty — nothing to add to Life.");
+                    return EffectResolution.Resolved;
+                }
+                return EffectResolution.WaitingForTarget;
+            }
+
+            // ---- Misc automatic opponent-zone manipulation --------------------------------
+            {
+                // "Your opponent places N card(s)/Events from their (hand|trash) at the bottom
+                // of their deck (in any order)." — auto (their choice simplified to last cards).
+                var oppBotM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"opponent (?:places|must place) (\d+) (Events?|cards?) from their (hand|trash) at the bottom of their deck",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oppBotM.Success)
+                {
+                    int obN = int.Parse(oppBotM.Groups[1].Value);
+                    bool eventsOnly = oppBotM.Groups[2].Value.StartsWith("Event", StringComparison.OrdinalIgnoreCase);
+                    bool fromHand = oppBotM.Groups[3].Value.Equals("hand", StringComparison.OrdinalIgnoreCase);
+                    var oppOb = Player(state, OtherSeat(effect.Seat));
+                    var zoneOb = fromHand ? oppOb.Hand : oppOb.Trash;
+                    int moved = 0;
+                    for (int i = zoneOb.Count - 1; i >= 0 && moved < obN; i--)
+                    {
+                        if (eventsOnly && GetCard(zoneOb[i]).Type != "event") continue;
+                        var mc = zoneOb[i];
+                        zoneOb.RemoveAt(i);
+                        mc.Zone = "deck";
+                        oppOb.Deck.Add(mc);
+                        moved++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: opponent places {moved} card(s) from {(fromHand ? "hand" : "trash")} at the bottom of their deck.");
+                    return EffectResolution.Resolved;
+                }
+
+                // "Your opponent chooses N card from their hand and trashes it." — the
+                // OPPONENT picks; simplification: auto (last card).
+                var oppChM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"opponent chooses (\d+) cards? from their hand and trashes",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oppChM.Success)
+                {
+                    int ocN = int.Parse(oppChM.Groups[1].Value);
+                    var oppOc = Player(state, OtherSeat(effect.Seat));
+                    int ocDone = 0;
+                    for (int i = 0; i < ocN && oppOc.Hand.Count > 0; i++)
+                    {
+                        var hc = oppOc.Hand[oppOc.Hand.Count - 1];
+                        oppOc.Hand.RemoveAt(oppOc.Hand.Count - 1);
+                        hc.Zone = "trash";
+                        oppOc.Trash.Add(hc);
+                        ocDone++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: {ocDone} card(s) trashed from the opponent's hand.");
+                    return EffectResolution.Resolved;
+                }
+
+                // "Trash N cards from your opponent's/their hand." — the CONTROLLER picks:
+                // wait for clicks on the opponent's (face-down) hand cards, one per card.
+                var oppTrM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"trash (\d+) cards? from (?:your opponent's|their) hand",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oppTrM.Success)
+                {
+                    int otN2 = int.Parse(oppTrM.Groups[1].Value);
+                    var oppOt2 = Player(state, OtherSeat(effect.Seat));
+                    if (oppOt2.Hand.Count == 0)
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: opponent has no cards in hand.");
+                        return EffectResolution.Resolved;
+                    }
+                    effect.TargetZone = EffectTargetZone.Hand;
+                    if (!string.IsNullOrEmpty(targetId))
+                    {
+                        int hi = oppOt2.Hand.FindIndex(c => c.InstanceId == targetId);
+                        if (hi >= 0)
+                        {
+                            var hc = oppOt2.Hand[hi];
+                            oppOt2.Hand.RemoveAt(hi);
+                            hc.Zone = "trash";
+                            oppOt2.Trash.Add(hc);
+                            Log(state, effect.Seat, $"{sourceName}: trashed {NameId(GetCard(hc))} from the opponent's hand.");
+                            int remaining = (effect.SelectionsRemaining > 0 ? effect.SelectionsRemaining : otN2) - 1;
+                            if (remaining <= 0 || oppOt2.Hand.Count == 0) return EffectResolution.Resolved;
+                            effect.SelectionsRemaining = remaining;
+                            return EffectResolution.WaitingForTarget;
+                        }
+                    }
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        effect.SelectionsRemaining = Math.Min(otN2, oppOt2.Hand.Count);
+                        Log(state, effect.Seat, $"{sourceName}: click {effect.SelectionsRemaining} card(s) in the opponent's hand to trash.");
+                    }
+                    return EffectResolution.WaitingForTarget;
+                }
+
+                // "Your opponent chooses N card from your hand; trash that card." — auto (last).
+                if (ContainsAll(text, "opponent chooses") && ContainsAll(text, "from your hand")
+                    && (ContainsAll(text, "trash that card") || ContainsAll(text, "trashes it")))
+                {
+                    if (owner.Hand.Count > 0)
+                    {
+                        var hc2 = owner.Hand[owner.Hand.Count - 1];
+                        owner.Hand.RemoveAt(owner.Hand.Count - 1);
+                        hc2.Zone = "trash";
+                        owner.Trash.Add(hc2);
+                        Log(state, effect.Seat, $"{sourceName}: opponent chose {NameId(GetCard(hc2))} — trashed from your hand.");
+                    }
+                    return EffectResolution.Resolved;
+                }
+
+                // "Choose N cards from your opponent's hand; your opponent reveals those cards."
+                if (ContainsAll(text, "from your opponent's hand") && ContainsAll(text, "reveal"))
+                {
+                    var oppRv = Player(state, OtherSeat(effect.Seat));
+                    var names = oppRv.Hand.Count > 0
+                        ? string.Join(", ", oppRv.Hand.Select(c => GetCard(c).Name))
+                        : "(empty)";
+                    Log(state, effect.Seat, $"{sourceName}: opponent's hand revealed — {names}");
+                    return EffectResolution.Resolved;
+                }
+
+                // "Your opponent returns all cards in their hand to their deck and shuffles …
+                // Then, your opponent draws N cards."
+                if (ContainsAll(text, "opponent returns all cards in their hand to their deck"))
+                {
+                    var oppRs = Player(state, OtherSeat(effect.Seat));
+                    int retC = oppRs.Hand.Count;
+                    foreach (var hcR in oppRs.Hand) { hcR.Zone = "deck"; oppRs.Deck.Add(hcR); }
+                    oppRs.Hand.Clear();
+                    ShuffleInPlace(oppRs.Deck, $"{state.Seed}:{OtherSeat(effect.Seat)}:handshuffle:{state.EffectSequence}");
+                    var rdM2 = System.Text.RegularExpressions.Regex.Match(text, @"draws (\d+) cards?");
+                    int drawBack = rdM2.Success ? int.Parse(rdM2.Groups[1].Value) : retC;
+                    for (int i = 0; i < drawBack; i++) DrawCard(state, OtherSeat(effect.Seat), true);
+                    Log(state, effect.Seat, $"{sourceName}: opponent shuffles {retC} hand card(s) into the deck and draws {drawBack}.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Set your (…) Leader as active." / "Set all of your (…) Characters as
+            // active." / "Set this Character or up to N of your DON!! cards as active." ------
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, @"Set your (\{[^}]+\} type |\[[^\]]+\] )?Leader as active",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                if (owner.Leader != null && owner.Leader.Rested && !HasModifier(state, owner.Leader, "freeze"))
+                {
+                    owner.Leader.Rested = false;
+                    Log(state, effect.Seat, $"{sourceName} sets your Leader as active.");
+                }
+                return EffectResolution.Resolved;
+            }
+            if (ContainsAll(text, "Set all of your") && ContainsAll(text, "as active"))
+            {
+                if (ContainsAll(text, "DON!!"))
+                {
+                    foreach (var d in owner.CostArea) d.Rested = false;
+                    Log(state, effect.Seat, $"{sourceName} sets all your DON!! as active.");
+                }
+                else
+                {
+                    int saAll = 0;
+                    int saAllCap = ParseLimit(text, @"cost of (\d+) or less");
+                    foreach (var c in owner.CharacterArea)
+                    {
+                        if (c == null || !c.Rested || HasModifier(state, c, "freeze")) continue;
+                        if (!CardPassesFeatureFilter(text, GetCard(c))) continue;
+                        if (saAllCap >= 0 && GetCost(state, c) > saAllCap) continue;
+                        bool colorOkSa = true;
+                        foreach (var col in new[] { "red", "green", "blue", "purple", "black", "yellow" })
+                            if (System.Text.RegularExpressions.Regex.IsMatch(text, $@"all of your {col}\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                                && (GetCard(c).Color ?? "").IndexOf(col, StringComparison.OrdinalIgnoreCase) < 0)
+                                colorOkSa = false;
+                        if (!colorOkSa) continue;
+                        c.Rested = false;
+                        saAll++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName} sets {saAll} Character(s) as active.");
+                }
+                // "Then, you cannot play cards from your hand / attack a Leader during this
+                // turn" drawbacks are informational here (logged for the player).
+                if (ContainsAll(text, "you cannot")) Log(state, effect.Seat, $"Note: {text.Substring(text.IndexOf("you cannot", StringComparison.OrdinalIgnoreCase))}");
+                return EffectResolution.Resolved;
+            }
+            if (ContainsAll(text, "Set this Character or up to") && ContainsAll(text, "DON!!"))
+            {
+                var scSelf = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                if (scSelf != null && scSelf.Rested) { scSelf.Rested = false; Log(state, effect.Seat, $"{sourceName} sets itself as active."); }
+                else
+                {
+                    var scUp = System.Text.RegularExpressions.Regex.Match(text, @"up to (\d+)");
+                    int scN = scUp.Success ? int.Parse(scUp.Groups[1].Value) : 1;
+                    int scDone = 0;
+                    foreach (var d in owner.CostArea) { if (scDone >= scN) break; if (d.Rested) { d.Rested = false; scDone++; } }
+                    Log(state, effect.Seat, $"{sourceName} sets {scDone} DON!! as active.");
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Rest your opponent's Leader." / "Rest N of your opponent's (…) Characters
+            // (with a cost of N or less)." (no "up to" — still player-picked) ----------------
+            if (ContainsAll(text, "Rest your opponent's Leader"))
+            {
+                var oppLd = Player(state, OtherSeat(effect.Seat)).Leader;
+                if (oppLd != null && !oppLd.Rested && !HasModifier(state, oppLd, "cannotBeRested"))
+                {
+                    oppLd.Rested = true;
+                    Log(state, effect.Seat, $"{sourceName} rests the opponent's Leader.");
+                }
+                return EffectResolution.Resolved;
+            }
+            {
+                var rnM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Rest (\d+) of your opponent's ([^.]*?)Characters",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (rnM.Success)
+                {
+                    if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(rnM.Groups[1].Value);
+                    int rnCap = ParseLimit(text, @"cost of (\d+) or less");
+                    var rnT = FindAnyInPlay(state, targetId, out var rnSeat);
+                    if (rnT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose {effect.SelectionsRemaining} opponent Character(s) to rest ({sourceName}).");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (rnSeat != OtherSeat(effect.Seat) || GetCard(rnT).Type != "character"
+                        || (rnCap >= 0 && GetCost(state, rnT) > rnCap)
+                        || !CardPassesFeatureFilter(rnM.Groups[2].Value, GetCard(rnT))
+                        || HasModifier(state, rnT, "cannotBeRested"))
+                    {
+                        Log(state, effect.Seat, "That is not a valid target to rest.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    rnT.Rested = true;
+                    Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(rnT))}.");
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Life-zone family ----------------------------------------------------------
+            {
+                // "Add N card from the top of your Life cards to your hand." (no top/bottom choice)
+                var addLife2 = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Add (?:up to )?(\d+) cards? from the top of your Life cards? to your hand",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (addLife2.Success)
+                {
+                    int alN = int.Parse(addLife2.Groups[1].Value);
+                    int alDone = 0;
+                    for (int i = 0; i < alN && owner.Life.Count > 0; i++)
+                    {
+                        var lc2 = owner.Life[owner.Life.Count - 1];
+                        owner.Life.RemoveAt(owner.Life.Count - 1);
+                        lc2.Zone = "hand";
+                        owner.Hand.Add(lc2);
+                        alDone++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: added {alDone} Life card(s) to hand ({owner.Life.Count} Life left).");
+                    return EffectResolution.Resolved;
+                }
+                // "Add up to N card from the top of your opponent's Life cards to the owner's hand."
+                if (ContainsAll(text, "from the top of your opponent's Life") && ContainsAll(text, "owner's hand"))
+                {
+                    var olM = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (\d+)");
+                    int olN = olM.Success ? int.Parse(olM.Groups[1].Value) : 1;
+                    var oppOl = Player(state, OtherSeat(effect.Seat));
+                    int olDone = 0;
+                    for (int i = 0; i < olN && oppOl.Life.Count > 0; i++)
+                    {
+                        var lc3 = Pop(oppOl.Life);
+                        lc3.Zone = "hand";
+                        oppOl.Hand.Add(lc3);
+                        olDone++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: opponent takes {olDone} Life card(s) to hand.");
+                    return EffectResolution.Resolved;
+                }
+                // Hand → Life: "Add up to N ({T} type Character )card from your hand to the
+                // top of your Life cards (face-up)."
+                if (ContainsAll(text, "Add up to") && ContainsAll(text, "from your hand") && ContainsAll(text, "Life cards"))
+                {
+                    if (string.IsNullOrEmpty(targetId))
+                    {
+                        effect.TargetZone = EffectTargetZone.Hand;
+                        Log(state, effect.Seat, $"Click a card in your hand to add to your Life ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    int hlIdx = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                    if (hlIdx < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
+                    var hlCard = owner.Hand[hlIdx];
+                    if (!CardPassesFeatureFilter(text, GetCard(hlCard))
+                        || (ContainsAll(text, "Character card") && GetCard(hlCard).Type != "character"))
+                    {
+                        Log(state, effect.Seat, "That card does not match the requirement.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    owner.Hand.RemoveAt(hlIdx);
+                    hlCard.Zone = "life";
+                    hlCard.FaceUp = ContainsAll(text, "face-up");
+                    owner.Life.Add(hlCard);
+                    Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(hlCard))} added to the top of your Life.");
+                    return EffectResolution.Resolved;
+                }
+                // Field → Life removal: "Add up to N (of your opponent's) Character(s) … to the
+                // top or bottom of (the owner's|your opponent's|their) Life cards (face-up)."
+                if (ContainsAll(text, "Add up to") && ContainsAll(text, "Life cards")
+                    && !ContainsAll(text, "from the top of your deck") && !ContainsAll(text, "from your hand")
+                    && !ContainsAll(text, "from the top of your opponent's Life")
+                    && (ContainsAll(text, "top or bottom") || ContainsAll(text, "to the top of")))
+                {
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        var flM = System.Text.RegularExpressions.Regex.Match(text, @"Add up to (\d+)");
+                        effect.SelectionsRemaining = flM.Success ? int.Parse(flM.Groups[1].Value) : 1;
+                    }
+                    int flCap = ParseLimit(text, @"cost of (\d+) or less");
+                    var flT = FindAnyInPlay(state, targetId, out var flSeat);
+                    if (flT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} Character(s) to add to Life ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    bool mustBeOpp = ContainsAll(text, "of your opponent's Characters");
+                    var flDef = GetCard(flT);
+                    if (flDef.Type != "character" || (mustBeOpp && flSeat != OtherSeat(effect.Seat))
+                        || (flCap >= 0 && GetCost(state, flT) > flCap)
+                        || !CardPassesFeatureFilter(text, flDef))
+                    {
+                        Log(state, effect.Seat, "That is not a valid target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    var flOwner = Player(state, flSeat);
+                    if (!TryRemovalReplacement(state, flSeat, flT))
+                    {
+                        ReturnAttachedDon(flOwner, flT);
+                        int flIdx = flOwner.CharacterArea.FindIndex(c => c != null && c.InstanceId == flT.InstanceId);
+                        if (flIdx >= 0) flOwner.CharacterArea[flIdx] = null;
+                        flT.Zone = "life";
+                        flT.Rested = false;
+                        flT.PlayedOnTurn = null;
+                        flT.Modifiers.Clear();
+                        flT.FaceUp = ContainsAll(text, "face-up");
+                        state.NameOverrides.Remove(flT.InstanceId);
+                        flOwner.Life.Add(flT);   // top of the pile (simplification: top placement)
+                        Log(state, effect.Seat, $"{sourceName}: {NameId(flDef)} is added to the top of {(flSeat == effect.Seat ? "your" : "the opponent's")} Life.");
+                    }
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+                // "Place up to N of your opponent's Characters … at the top or bottom of their
+                // Life cards." — same as above with "Place" verb.
+                if (ContainsAll(text, "Place up to") && ContainsAll(text, "Life cards"))
+                {
+                    // handled identically via the Add-up-to path pattern; rewrite and recurse.
+                    var cloneP = ShallowCloneEffect(effect, text.Replace("Place up to", "Add up to"));
+                    cloneP.SelectionsRemaining = effect.SelectionsRemaining;
+                    var resP = TryResolveKnownEffect(state, cloneP, targetId);
+                    effect.SelectionsRemaining = cloneP.SelectionsRemaining;
+                    return resP;
+                }
+                // "Trash all your face-up Life cards."
+                if (ContainsAll(text, "Trash all your face-up Life cards"))
+                {
+                    int fuC = 0;
+                    for (int i = owner.Life.Count - 1; i >= 0; i--)
+                    {
+                        if (!owner.Life[i].FaceUp) continue;
+                        var fuCard = owner.Life[i];
+                        owner.Life.RemoveAt(i);
+                        fuCard.Zone = "trash";
+                        owner.Trash.Add(fuCard);
+                        fuC++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: trashed {fuC} face-up Life card(s).");
+                    return EffectResolution.Resolved;
+                }
+                // "Turn all of your Life cards face-down." / "…face-up."
+                if (ContainsAll(text, "Turn all of your Life cards face"))
+                {
+                    bool toUp = ContainsAll(text, "face-up");
+                    foreach (var lcF in owner.Life) lcF.FaceUp = toUp;
+                    Log(state, effect.Seat, $"{sourceName}: all your Life cards are now face-{(toUp ? "up" : "down")}.");
+                    return EffectResolution.Resolved;
+                }
+                // "Look at (all of your|up to N card from the top of your or your opponent's)
+                // Life cards … place …" — private-information peeks; in this build the looker
+                // sees the names in the log and the cards keep their current order.
+                if (ContainsAll(text, "Look at") && ContainsAll(text, "Life cards"))
+                {
+                    bool oppSide = ContainsAll(text, "opponent's Life");
+                    var peekP = oppSide ? Player(state, OtherSeat(effect.Seat)) : owner;
+                    string peekNames = peekP.Life.Count > 0
+                        ? string.Join(", ", peekP.Life.AsEnumerable().Reverse().Select(c => GetCard(c).Name))
+                        : "(no Life)";
+                    Log(state, effect.Seat, $"{sourceName}: Life (top→bottom) — {peekNames}. Order kept.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Your opponent cannot activate [Blocker] during this turn." ---------------
+            if (ContainsAll(text, "cannot activate") && ContainsAll(text, "Blocker") && ContainsAll(text, "during this turn")
+                && !ContainsAll(text, "attacks during this turn"))
+            {
+                var oppLb = Player(state, OtherSeat(effect.Seat));
+                int lbPw = ParseLimit(text, @"(\d{3,5}) power or less");
+                int lbCount = 0;
+                foreach (var c in oppLb.CharacterArea)
+                {
+                    if (c == null) continue;
+                    if (lbPw >= 0 && GetPower(state, c) > lbPw) continue;
+                    AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), c, "effectsNegated", "thisTurn", null, effect.Seat);
+                    lbCount++;
+                }
+                Log(state, effect.Seat, $"{sourceName}: {lbCount} opponent Character(s) cannot activate [Blocker] this turn.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- Comprehensive keyword grants: "<target> gains [KW] (and +N power)
+            // (during this turn/battle | until the end of your opponent's next …)". ----------
+            {
+                var kwM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"gains? \[(Rush|Blocker|Double Attack|Banish|Unblockable)\]",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                // Skip pure DON-gated passives ("[DON!! x1] This Character gains [Blocker].")
+                // — those are continuous and handled by HasDonGatedKeyword. A queued clause
+                // always carries an action context, so require a duration or a target phrase.
+                bool kwHasDuration = ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle")
+                    || ContainsAll(text, "until the");
+                bool kwTargeted = ContainsAll(text, "Up to ") || ContainsAll(text, "All of your") || ContainsAll(text, "Your Leader")
+                    || System.Text.RegularExpressions.Regex.IsMatch(text, @"Your (\{[^}]+\} type )?Leader gains", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (kwM.Success && (kwHasDuration || kwTargeted)
+                    && !ContainsAll(text, "Choose one") && ParseDonThreshold(text) == 0)
+                {
+                    string kw2 = System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(kwM.Groups[1].Value.ToLowerInvariant());
+                    if (kw2 == "Double attack") kw2 = "Double Attack";
+                    string kwDur = ContainsAll(text, "during this battle") ? "thisBattle"
+                                 : ContainsAll(text, "until the") ? "untilNextTurn"
+                                 : "thisTurn";   // includes duration-less grants (safe default)
+                    int kwPower = 0;
+                    var kwPw = System.Text.RegularExpressions.Regex.Match(text, @"and \+(\d{3,5}) power");
+                    if (kwPw.Success) kwPower = int.Parse(kwPw.Groups[1].Value);
+                    var kwSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    Action<CardInstance> applyKw = t2 =>
+                    {
+                        AddModifier(state, kwSrc, t2, "keyword", kwDur, kw2, effect.Seat);
+                        if (kwPower > 0)
+                        {
+                            if (kwDur == "thisBattle" && state.Battle != null)
+                            {
+                                state.Battle.BattlePowerBonus.TryGetValue(t2.InstanceId, out var exK);
+                                state.Battle.BattlePowerBonus[t2.InstanceId] = exK + kwPower;
+                                RegisterPowerModifier(t2, sourceName, kwPower, "endOfBattle");
+                            }
+                            else if (kwDur == "untilNextTurn")
+                            {
+                                state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = t2.InstanceId, Delta = kwPower, OwnerSeat = effect.Seat });
+                                RegisterPowerModifier(t2, sourceName, kwPower, "permanent");
+                            }
+                            else
+                            {
+                                state.TemporaryPowerBonus.TryGetValue(t2.InstanceId, out var exK);
+                                state.TemporaryPowerBonus[t2.InstanceId] = exK + kwPower;
+                                RegisterPowerModifier(t2, sourceName, kwPower, "endOfTurn");
+                            }
+                        }
+                        Log(state, effect.Seat, $"{sourceName} gives {NameId(GetCard(t2))} [{kw2}]{(kwPower > 0 ? $" and +{kwPower} power" : "")}.");
+                    };
+                    // Self / own Leader / board-wide / up-to-N targeted.
+                    if (ContainsAll(text, "This Character gains") || ContainsAll(text, "this Character gains")
+                        || ContainsAll(text, "this Leader gains"))
+                    {
+                        var kwSelf = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                        if (kwSelf != null) { applyKw(kwSelf); return EffectResolution.Resolved; }
+                    }
+                    if (System.Text.RegularExpressions.Regex.IsMatch(text, @"Your (\{[^}]+\} type )?Leader gains",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    {
+                        if (owner.Leader != null) { applyKw(owner.Leader); }
+                        return EffectResolution.Resolved;
+                    }
+                    if (ContainsAll(text, "All of your"))
+                    {
+                        int kwCount = 0;
+                        var kwTargets = new List<CardInstance>();
+                        foreach (var c in owner.CharacterArea)
+                            if (c != null && CardPassesFeatureFilter(text, GetCard(c))) kwTargets.Add(c);
+                        var kwNameF = System.Text.RegularExpressions.Regex.Match(text, @"All of your \[([^\]]+)\]");
+                        foreach (var t3 in kwTargets)
+                        {
+                            if (kwNameF.Success && !NameMatches(state, t3, kwNameF.Groups[1].Value.Trim())
+                                && t3.InstanceId != effect.SourceInstanceId) continue;
+                            applyKw(t3); kwCount++;
+                        }
+                        if (ContainsAll(text, "and this Character"))
+                        {
+                            var kwSelf2 = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                            if (kwSelf2 != null && !kwTargets.Contains(kwSelf2)) applyKw(kwSelf2);
+                        }
+                        return EffectResolution.Resolved;
+                    }
+                    // "Up to N of your … gains [KW]" — click targets.
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        var kwUp = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (\d+)");
+                        effect.SelectionsRemaining = kwUp.Success ? int.Parse(kwUp.Groups[1].Value) : 1;
+                    }
+                    var kwT = FindAnyInPlay(state, targetId, out var kwSeat);
+                    if (kwT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} of your card(s) to gain [{kw2}] ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    bool kwLeaderOk = ContainsAll(text, "Leader");
+                    var kwDef2 = GetCard(kwT);
+                    bool kwTypeOk = kwDef2.Type == "character" || (kwLeaderOk && kwDef2.Type == "leader");
+                    if (kwSeat != effect.Seat || !kwTypeOk || !CardPassesFeatureFilter(text, kwDef2))
+                    {
+                        Log(state, effect.Seat, "That is not a valid keyword grant target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    applyKw(kwT);
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "can (also) attack (active Characters | Characters on the turn …)" grants --
+            if (((ContainsAll(text, "can also attack") && ContainsAll(text, "active Characters"))
+                    || ContainsAll(text, "can attack Characters on the turn"))
+                && (ContainsAll(text, "Up to ") || ContainsAll(text, "This Character can")))
+            {
+                string grantType = ContainsAll(text, "active Characters") ? "canAttackActive" : "rushCharacters";
+                // Self passives ("This Character can also attack active Characters.") are
+                // continuous — nothing to queue; mark resolved so they never look manual.
+                if (ContainsAll(text, "This Character can"))
+                {
+                    var caSelf = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (caSelf != null) AddModifier(state, caSelf, caSelf, grantType, "permanent", null, effect.Seat);
+                    return EffectResolution.Resolved;
+                }
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var caUp = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (\d+)");
+                    effect.SelectionsRemaining = caUp.Success ? int.Parse(caUp.Groups[1].Value) : 1;
+                }
+                var caT = FindAnyInPlay(state, targetId, out var caSeat);
+                if (caT == null)
+                {
+                    Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} of your card(s) for {sourceName}, or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                var caDef = GetCard(caT);
+                bool caLeaderOk = ContainsAll(text, "Leader");
+                if (caSeat != effect.Seat || (caDef.Type != "character" && !(caLeaderOk && caDef.Type == "leader"))
+                    || !CardPassesFeatureFilter(text, caDef))
+                {
+                    Log(state, effect.Seat, "That is not a valid target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), caT, grantType,
+                    ContainsAll(text, "during this turn") ? "thisTurn" : "thisTurn", null, effect.Seat);
+                Log(state, effect.Seat, $"{sourceName}: {NameId(caDef)} {(grantType == "canAttackActive" ? "can attack active Characters" : "can attack Characters this turn")}.");
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                return EffectResolution.Resolved;
+            }
+
+            // ---- Power reduction variants: self, board-wide, until-next-turn ----------------
+            {
+                // "Give this Character −N power." (self)
+                var selfMinus = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give this Character [-\u2212\u2013\u2011\u2012\u2014](\d{3,5}) power",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (selfMinus.Success)
+                {
+                    var smT = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (smT != null)
+                    {
+                        int smD = int.Parse(selfMinus.Groups[1].Value);
+                        state.TemporaryPowerBonus.TryGetValue(smT.InstanceId, out var exSm);
+                        state.TemporaryPowerBonus[smT.InstanceId] = exSm - smD;
+                        RegisterPowerModifier(smT, sourceName, -smD, "endOfTurn");
+                        Log(state, effect.Seat, $"{sourceName} takes -{smD} power.");
+                    }
+                    return EffectResolution.Resolved;
+                }
+                // "Give all of your opponent's Characters −N power."
+                var allMinus = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give all of your opponent's Characters [-\u2212\u2013\u2011\u2012\u2014](\d{3,5}) power",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (allMinus.Success)
+                {
+                    int amD = int.Parse(allMinus.Groups[1].Value);
+                    var oppAm = Player(state, OtherSeat(effect.Seat));
+                    int amC = 0;
+                    foreach (var c in oppAm.CharacterArea)
+                    {
+                        if (c == null) continue;
+                        state.TemporaryPowerBonus.TryGetValue(c.InstanceId, out var exAm);
+                        state.TemporaryPowerBonus[c.InstanceId] = exAm - amD;
+                        RegisterPowerModifier(c, sourceName, -amD, "endOfTurn");
+                        amC++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName} gives -{amD} power to {amC} Character(s).");
+                    return EffectResolution.Resolved;
+                }
+                // "Give up to N of your opponent's Characters −N power until the end of your
+                // opponent's next (turn|End Phase)." — timed reduction.
+                var tmMinus = System.Text.RegularExpressions.Regex.Match(text,
+                    @"[-\u2212\u2013\u2011\u2012\u2014](\d{3,5}) power until the end of your opponent's next",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (tmMinus.Success && ContainsAll(text, "opponent") && ContainsAll(text, "Give"))
+                {
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        var tmUp = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (\d+)");
+                        effect.SelectionsRemaining = tmUp.Success ? int.Parse(tmUp.Groups[1].Value) : 1;
+                    }
+                    int tmD = int.Parse(tmMinus.Groups[1].Value);
+                    var tmT = FindAnyInPlay(state, targetId, out var tmSeat);
+                    if (tmT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} opponent Character(s) for -{tmD} power ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (tmSeat != OtherSeat(effect.Seat) || GetCard(tmT).Type != "character")
+                    {
+                        Log(state, effect.Seat, "That is not a valid target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = tmT.InstanceId, Delta = -tmD, OwnerSeat = effect.Seat });
+                    RegisterPowerModifier(tmT, sourceName, -tmD, "permanent");
+                    Log(state, effect.Seat, $"{sourceName} gives {NameId(GetCard(tmT))} -{tmD} power until your next turn.");
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Timed cost bumps: "Up to N of your … gains +N cost until the end of your
+            // opponent's next (turn|End Phase)." / "All of your {T} … gain +N cost until …" ---
+            {
+                var tcM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"gains? \+(\d+) cost until the end of your opponent's next",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (tcM.Success)
+                {
+                    int tcD = int.Parse(tcM.Groups[1].Value);
+                    if (ContainsAll(text, "All of your"))
+                    {
+                        int tcC = 0;
+                        foreach (var c in owner.CharacterArea)
+                        {
+                            if (c == null || !CardPassesFeatureFilter(text, GetCard(c))) continue;
+                            c.Modifiers.Add(new ActiveModifier { Source = sourceName, PowerDelta = 0, CostDelta = tcD, ExpiresAt = "untilNextTurnOf:" + effect.Seat });
+                            tcC++;
+                        }
+                        Log(state, effect.Seat, $"{sourceName} gives +{tcD} cost to {tcC} Character(s).");
+                        return EffectResolution.Resolved;
+                    }
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        var tcUp = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (\d+)");
+                        effect.SelectionsRemaining = tcUp.Success ? int.Parse(tcUp.Groups[1].Value) : 1;
+                    }
+                    var tcT = FindAnyInPlay(state, targetId, out var tcSeat);
+                    if (tcT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} of your Character(s) for +{tcD} cost ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (tcSeat != effect.Seat || GetCard(tcT).Type != "character" || !CardPassesFeatureFilter(text, GetCard(tcT)))
+                    {
+                        Log(state, effect.Seat, "That is not a valid target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    tcT.Modifiers.Add(new ActiveModifier { Source = sourceName, PowerDelta = 0, CostDelta = tcD, ExpiresAt = "untilNextTurnOf:" + effect.Seat });
+                    Log(state, effect.Seat, $"{sourceName} gives {NameId(GetCard(tcT))} +{tcD} cost until your next turn.");
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Play from deck: "Play up to N <filter> (Character card )?(with cost/power cap)?
+            // from your deck(, then shuffle your deck)." → deck search in PLAY mode. -----------
+            {
+                var pfdM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Play up to (\d+) ([^.]*?) from your deck",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (pfdM.Success)
+                {
+                    string pfdDesc = pfdM.Groups[2].Value;
+                    int pfdCost = ParseLimit(text, @"cost of (\d+)(?: or less)?");
+                    int pfdPower = ParseLimit(text, @"(\d{3,5}) power or less");
+                    string pfdFeat = ParseCurlyBraceTag(pfdDesc);
+                    var pfdName = System.Text.RegularExpressions.Regex.Match(pfdDesc, @"\[([^\]]+)\]");
+                    bool pfdRested = ContainsAll(text, "rested");
+                    var pfdSrc = FindCardInstance(state, effect.SourceInstanceId) ?? owner.Leader;
+                    if (pfdSrc != null)
+                        StartDeckSearch(state, effect.Seat, pfdSrc, pfdFeat, pfdCost, "character",
+                            true, pfdRested, pfdName.Success ? pfdName.Groups[1].Value.Trim() : null, pfdPower);
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Look at N cards from the top of your deck (and|;) play up to N <filter>.
+            // Then, place the rest at the bottom / trash the rest." → deck look in PLAY mode. --
+            if (ContainsAll(text, "Look at") && ContainsAll(text, "from the top of your deck")
+                && ContainsAll(text, "play up to"))
+            {
+                int lpN = ParseLookCount(text);
+                int lpCost = ParseLimit(text, @"cost of (\d+)(?: or less)?");
+                int lpPower = ParseLimit(text, @"(\d{3,5}) power or less");
+                string lpFeat = ParseCurlyBraceTag(text);
+                var lpIncl = System.Text.RegularExpressions.Regex.Match(text, @"type including ""([^""]+)""");
+                if (lpIncl.Success && string.IsNullOrEmpty(lpFeat)) lpFeat = lpIncl.Groups[1].Value.Trim();
+                var lpSrc = FindCardInstance(state, effect.SourceInstanceId) ?? owner.Leader;
+                if (lpSrc != null)
+                    StartDeckLook(state, effect.Seat, lpSrc, lpFeat, lpN, null, "character",
+                        ContainsAll(text, "trash the rest"), true, ContainsAll(text, "play") && ContainsAll(text, "rested"),
+                        lpCost, lpPower);
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Reveal N card from the top of your deck. If that card is <filter>, (you
+            // may) play/add it …" — fully public information, so auto-resolve. --------------
+            if (ContainsAll(text, "Reveal") && !ContainsAll(text, "Look at")
+                && (ContainsAll(text, "from the top of your deck") || ContainsAll(text, "from your deck and add it to your hand")))
+            {
+                if (owner.Deck.Count == 0)
+                {
+                    Log(state, effect.Seat, $"{sourceName}: the deck is empty.");
+                    return EffectResolution.Resolved;
+                }
+                // "Reveal up to N [X] from your deck and add it to your hand. Then, shuffle." — a search.
+                if (ContainsAll(text, "from your deck and add it to your hand") && ContainsAll(text, "shuffle"))
+                {
+                    var rvName = System.Text.RegularExpressions.Regex.Match(text, @"\[([^\]]+)\]");
+                    var rvSrc2 = FindCardInstance(state, effect.SourceInstanceId) ?? owner.Leader;
+                    if (rvSrc2 != null)
+                        StartDeckSearch(state, effect.Seat, rvSrc2, ParseCurlyBraceTag(text), ParseCostFilter(text), "",
+                            false, false, rvName.Success ? rvName.Groups[1].Value.Trim() : null);
+                    return EffectResolution.Resolved;
+                }
+                var revealed = owner.Deck[0];
+                var revDef = GetCard(revealed);
+                Log(state, effect.Seat, $"{sourceName} reveals {NameId(revDef)} from the top of the deck.");
+                // Condition on the revealed card.
+                bool revMatch = true;
+                string revFeat = ParseCurlyBraceTag(text);
+                var revIncl = System.Text.RegularExpressions.Regex.Match(text, @"type includes ""([^""]+)""");
+                if (revIncl.Success) revMatch &= revDef.HasFeature(revIncl.Groups[1].Value.Trim());
+                else if (!string.IsNullOrEmpty(revFeat)) revMatch &= revDef.HasFeature(revFeat);
+                if (ContainsAll(text, "Character card")) revMatch &= revDef.Type == "character";
+                int revCost = ParseLimit(text, @"cost of (\d+)(?: or less)?");
+                if (revCost >= 0) revMatch &= revDef.Cost <= revCost;
+                var revExcl = System.Text.RegularExpressions.Regex.Match(text, @"other than \[([^\]]+)\]");
+                if (revExcl.Success) revMatch &= !NameMatches(state, revealed, revExcl.Groups[1].Value.Trim());
+                if (revMatch && (ContainsAll(text, "play that card") || ContainsAll(text, "play up to")))
+                {
+                    int slotRv = owner.CharacterArea.FindIndex(c => c == null);
+                    if (slotRv >= 0 && revDef.Type == "character")
+                    {
+                        Shift(owner.Deck);
+                        revealed.Zone = "character";
+                        revealed.PlayedOnTurn = state.TurnNumber;
+                        revealed.Rested = ContainsAll(text, "rested");
+                        owner.CharacterArea[slotRv] = revealed;
+                        Log(state, effect.Seat, $"{sourceName} plays {NameId(revDef)}.");
+                        if (HasTiming(revDef.Effect, "On Play"))
+                            QueueAndAutoResolve(state, effect.Seat, revealed, "onPlay",
+                                ExtractTimedClause(revDef.Effect, "On Play"), true, EffectScope.Instant, InferTargetZone(revDef.Effect));
+                    }
+                    else Log(state, effect.Seat, "The revealed card stays on top (no slot or not a Character).");
+                }
+                else if (revMatch && (ContainsAll(text, "add it to your hand") || ContainsAll(text, "add up to")))
+                {
+                    Shift(owner.Deck);
+                    revealed.Zone = "hand";
+                    owner.Hand.Add(revealed);
+                    Log(state, effect.Seat, $"{sourceName} adds {NameId(revDef)} to hand.");
+                }
+                else if (revMatch && ContainsAll(text, "this Character gains"))
+                {
+                    int revBonus = ParsePowerGain(text);
+                    var revSelf = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (revBonus > 0 && revSelf != null)
+                    {
+                        bool revBattle = ContainsAll(text, "during this battle") && state.Battle != null;
+                        if (revBattle)
+                        {
+                            state.Battle.BattlePowerBonus.TryGetValue(revSelf.InstanceId, out var exRv);
+                            state.Battle.BattlePowerBonus[revSelf.InstanceId] = exRv + revBonus;
+                            RegisterPowerModifier(revSelf, sourceName, revBonus, "endOfBattle");
+                        }
+                        else
+                        {
+                            state.TemporaryPowerBonus.TryGetValue(revSelf.InstanceId, out var exRv);
+                            state.TemporaryPowerBonus[revSelf.InstanceId] = exRv + revBonus;
+                            RegisterPowerModifier(revSelf, sourceName, revBonus, "endOfTurn");
+                        }
+                        Log(state, effect.Seat, $"{sourceName} gains +{revBonus} power.");
+                    }
+                }
+                else if (!revMatch)
+                {
+                    Log(state, effect.Seat, "The revealed card does not match — it stays on top of the deck.");
+                }
+                // "Then, place the rest at the bottom" style riders on single-reveal texts are
+                // no-ops here (the card either moved or stays on top).
+                return EffectResolution.Resolved;
+            }
+
+            // ---- Unified K.O. / trash removal: "K.O./Trash up to N of your opponent's
+            // (rested) Characters …" with static caps (cost≤/exact, base cost, power≤,
+            // TOTAL power≤) or dynamic caps ("equal to or less than the number of …").
+            {
+                // "K.O. all Characters with a cost of N or less." — board-wide, both sides.
+                var koAll = System.Text.RegularExpressions.Regex.Match(text,
+                    @"K\.O\. all Characters with a cost of (\d+) or less",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (koAll.Success)
+                {
+                    int kaCap = int.Parse(koAll.Groups[1].Value);
+                    int kaC = 0;
+                    foreach (var st3 in Seats())
+                    {
+                        var pk = Player(state, st3);
+                        for (int i = 0; i < pk.CharacterArea.Count; i++)
+                        {
+                            var ck = pk.CharacterArea[i];
+                            if (ck == null || GetCost(state, ck) > kaCap) continue;
+                            if (st3 != effect.Seat && CannotBeKoedByEffect(state, ck)) continue;
+                            if (st3 != effect.Seat && TryRemovalReplacement(state, st3, ck)) continue;
+                            MoveToTrash(state, st3, ck.InstanceId);
+                            kaC++;
+                        }
+                    }
+                    Log(state, effect.Seat, $"{sourceName} K.O.s {kaC} Character(s).");
+                    return EffectResolution.Resolved;
+                }
+                bool koAnySide = false;
+                var koM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"(?:K\.O\.|[Tt]rash|Choose) up to (?:a total of )?(\d+) of your opponent's (?:(rested )?)Characters",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (!koM.Success)
+                {
+                    // Owner-agnostic: "K.O. up to N Character(s) with a cost of N or less."
+                    koM = System.Text.RegularExpressions.Regex.Match(text,
+                        @"K\.O\. up to (\d+) (?:(rested )?)Characters?\b",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    koAnySide = koM.Success;
+                }
+                // "Choose up to N … and K.O. it" variant must actually K.O.
+                bool koChooseVariant = text.IndexOf("Choose up to", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (koM.Success && koChooseVariant && !ContainsAll(text, "K.O.")) koM = System.Text.RegularExpressions.Match.Empty;
+                if (koM.Success && koM.Groups.Count > 1)
+                {
+                    if (RemoverCannotRemoveByEffect(state, effect.Seat))
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: your opponent's Characters cannot be removed by your effects.");
+                        return EffectResolution.Resolved;
+                    }
+                    if (effect.SelectionsRemaining <= 0)
+                        effect.SelectionsRemaining = int.Parse(koM.Groups[1].Value);
+                    bool needsRested = koM.Groups[2].Success && koM.Groups[2].Value.Trim().Length > 0;
+                    bool needsBlocker = ContainsAll(text, "[Blocker]") || ContainsAll(text, "Blocker Characters");
+                    int koCostCap = ParseLimit(text, @"cost of (\d+) or less");
+                    bool baseCost = ContainsAll(text, "base cost");
+                    int koCostExact = koCostCap >= 0 ? -1 : ParseLimit(text, @"cost of (\d+)\b(?! or)");
+                    int koPowerCap = ParseLimit(text, @"(\d{3,5}) power or less");
+                    if (koPowerCap < 0) koPowerCap = ParseLimit(text, @"power of (\d{3,5}) or less");
+                    int dynCap = ComputeDynamicCap(state, effect.Seat, text);
+                    if (dynCap >= 0) koCostCap = dynCap;
+                    // Total-power budget shared across picks.
+                    int totalPower = ParseLimit(text, @"total power of (\d{3,6}) or less");
+                    if (totalPower >= 0 && effect.RemainingBudget < 0) effect.RemainingBudget = totalPower;
+                    var koTarget = FindAnyInPlay(state, targetId, out var koSeat);
+                    if (koTarget == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} opponent Character(s) to remove ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    var koDef = GetCard(koTarget);
+                    int effKoCost = baseCost ? koDef.Cost : GetCost(state, koTarget);
+                    bool costOk = koCostCap >= 0 ? effKoCost <= koCostCap : (koCostExact < 0 || effKoCost == koCostExact);
+                    bool powerOk = koPowerCap < 0 || GetPower(state, koTarget) <= koPowerCap;
+                    bool budgetOk = effect.RemainingBudget < 0 || GetPower(state, koTarget) <= effect.RemainingBudget;
+                    bool blockerOk = !needsBlocker || HasKeyword(koTarget, "Blocker") || HasKeywordModifier(state, koTarget, "Blocker");
+                    if ((!koAnySide && koSeat != OtherSeat(effect.Seat)) || koDef.Type != "character"
+                        || (needsRested && !koTarget.Rested) || !costOk || !powerOk || !budgetOk || !blockerOk)
+                    {
+                        Log(state, effect.Seat, "That is not a valid removal target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (CannotBeKoedByEffect(state, koTarget))
+                    {
+                        Log(state, effect.Seat, $"{NameId(koDef)} cannot be K.O.'d by effects.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (TryRemovalReplacement(state, koSeat, koTarget))
+                    {
+                        // Removal replaced by the defender's effect — the pick is consumed.
+                    }
+                    else
+                    {
+                        if (effect.RemainingBudget >= 0) effect.RemainingBudget -= GetPower(state, koTarget);
+                        MoveToTrash(state, koSeat, koTarget.InstanceId);
+                        Log(state, effect.Seat, $"{sourceName} K.O.s {NameId(koDef)}.");
+                        NotifyRemovalByEffect(state, effect.Seat);
+                    }
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0)
+                    {
+                        Log(state, effect.Seat, $"You may remove {effect.SelectionsRemaining} more, or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Generic "Set up to N of your … as active" (feature/cost filters, multi). --
+            {
+                var saM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Set up to (\d+) of your (.*?) as active",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (saM.Success && !ContainsAll(saM.Groups[2].Value, "DON!!"))
+                {
+                    if (effect.SelectionsRemaining <= 0)
+                        effect.SelectionsRemaining = int.Parse(saM.Groups[1].Value);
+                    string saDesc = saM.Groups[2].Value;
+                    bool saLeaderOk = ContainsAll(saDesc, "Leader");
+                    int saCap = ParseLimit(text, @"cost of (\d+) or less");
+                    var saRange = System.Text.RegularExpressions.Regex.Match(text, @"cost of (\d+) to (\d+)");
+                    var saTarget = FindAnyInPlay(state, targetId, out var saSeat);
+                    if (saTarget == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} of your rested card(s) to set active ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    var saDef = GetCard(saTarget);
+                    bool saTypeOk = saDef.Type == "character" || (saLeaderOk && saDef.Type == "leader");
+                    if (saSeat != effect.Seat || !saTypeOk || !saTarget.Rested
+                        || (saCap >= 0 && GetCost(state, saTarget) > saCap)
+                        || (saRange.Success && (GetCost(state, saTarget) < int.Parse(saRange.Groups[1].Value)
+                                             || GetCost(state, saTarget) > int.Parse(saRange.Groups[2].Value)))
+                        || !CardPassesFeatureFilter(saDesc, saDef)
+                        || HasModifier(state, saTarget, "freeze"))
+                    {
+                        Log(state, effect.Seat, "That is not a valid target to set active.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    saTarget.Rested = false;
+                    Log(state, effect.Seat, $"{sourceName} sets {NameId(saDef)} as active.");
+                    // Trailing rider: "That Character gains [KW] until … / during this turn."
+                    var saKw = System.Text.RegularExpressions.Regex.Match(text,
+                        @"That Character gains \[([A-Za-z !]+)\]");
+                    if (saKw.Success)
+                    {
+                        string saDur = ContainsAll(text, "until the") ? "untilNextTurn" : "thisTurn";
+                        AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), saTarget,
+                            "keyword", saDur, saKw.Groups[1].Value.Trim(), effect.Seat);
+                        Log(state, effect.Seat, $"{NameId(saDef)} gains [{saKw.Groups[1].Value.Trim()}].");
+                    }
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0)
+                    {
+                        Log(state, effect.Seat, $"You may set {effect.SelectionsRemaining} more as active, or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Rest this Character and up to N of your opponent's Characters." ----------
+            if (ContainsAll(text, "Rest this Character and up to"))
+            {
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var rsUp = System.Text.RegularExpressions.Regex.Match(text, @"up to (\d+)");
+                    effect.SelectionsRemaining = rsUp.Success ? int.Parse(rsUp.Groups[1].Value) : 1;
+                    var rsSelf = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (rsSelf != null && !rsSelf.Rested)
+                    {
+                        rsSelf.Rested = true;
+                        Log(state, effect.Seat, $"{sourceName} rests itself.");
+                    }
+                }
+                var rsT = FindAnyInPlay(state, targetId, out var rsSeat);
+                if (rsT == null)
+                {
+                    Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} opponent Character(s) to rest ({sourceName}), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (rsSeat != OtherSeat(effect.Seat) || GetCard(rsT).Type != "character"
+                    || HasModifier(state, rsT, "cannotBeRested"))
+                {
+                    Log(state, effect.Seat, "That is not a valid target to rest.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                rsT.Rested = true;
+                Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(rsT))}.");
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Rest all of your opponent's Characters." -------------------------------
+            if (ContainsAll(text, "Rest all of your opponent's Characters"))
+            {
+                var oppAll = Player(state, OtherSeat(effect.Seat));
+                int restedAll = 0;
+                foreach (var c in oppAll.CharacterArea)
+                    if (c != null && !c.Rested && !HasModifier(state, c, "cannotBeRested")) { c.Rested = true; restedAll++; }
+                Log(state, effect.Seat, $"{sourceName} rests {restedAll} of the opponent's Characters.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Rest up to N of your opponent's DON!! cards" (pure DON — fungible). -----
+            {
+                var rdM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Rest up to (\d+) of your opponent's DON!! cards(?! or)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (rdM.Success)
+                {
+                    int rdN = int.Parse(rdM.Groups[1].Value);
+                    var oppRd = Player(state, OtherSeat(effect.Seat));
+                    int rdDone = 0;
+                    foreach (var d in oppRd.CostArea) { if (rdDone >= rdN) break; if (!d.Rested) { d.Rested = true; rdDone++; } }
+                    Log(state, effect.Seat, $"{sourceName} rests {rdDone} of the opponent's DON!!.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Mixed "Rest up to N of your opponent's DON!! cards or … Characters …" ----
+            // Click an opponent Character to rest it, or press the resolve button with no
+            // target to rest one of their DON!! instead (DON are fungible).
+            {
+                var rmixM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Rest up to (?:a total of )?(\d+) of your opponent's (Characters or DON!! cards|DON!! cards or [^.]*Characters[^.]*)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (rmixM.Success)
+                {
+                    if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(rmixM.Groups[1].Value);
+                    int rmixCap = ParseLimit(text, @"cost of (\d+) or less");
+                    var rmixT = FindAnyInPlay(state, targetId, out var rmixSeat);
+                    if (rmixT == null)
+                    {
+                        // No target: rest one opponent DON!! for this pick.
+                        var oppMix = Player(state, OtherSeat(effect.Seat));
+                        var freeDonMix = oppMix.CostArea.FirstOrDefault(d => !d.Rested);
+                        if (freeDonMix == null)
+                        {
+                            Log(state, effect.Seat, $"Click an opponent Character to rest for {sourceName} (no active DON!! to rest), or skip.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        freeDonMix.Rested = true;
+                        Log(state, effect.Seat, $"{sourceName} rests 1 of the opponent's DON!!.");
+                    }
+                    else
+                    {
+                        if (rmixSeat != OtherSeat(effect.Seat) || GetCard(rmixT).Type != "character"
+                            || (rmixCap >= 0 && GetCost(state, rmixT) > rmixCap)
+                            || !CardPassesFeatureFilter(text, GetCard(rmixT))
+                            || HasModifier(state, rmixT, "cannotBeRested"))
+                        {
+                            Log(state, effect.Seat, "That is not a valid target to rest.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        rmixT.Rested = true;
+                        Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(rmixT))}.");
+                    }
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0)
+                    {
+                        Log(state, effect.Seat, $"You may rest {effect.SelectionsRemaining} more (click a Character, or resolve to rest a DON!!), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Mandatory self-discard: "Trash N card(s) from your hand." -----------------
+            {
+                var mtM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"^Trash (\d+) cards? from your hand\.?$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (mtM.Success)
+                {
+                    if (effect.SelectionsRemaining <= 0)
+                    {
+                        effect.SelectionsRemaining = Math.Min(int.Parse(mtM.Groups[1].Value), owner.Hand.Count);
+                        effect.TargetZone = EffectTargetZone.Hand;
+                        if (effect.SelectionsRemaining == 0) return EffectResolution.Resolved;
+                    }
+                    if (string.IsNullOrEmpty(targetId))
+                    {
+                        Log(state, effect.Seat, $"Click {effect.SelectionsRemaining} card(s) in your hand to trash ({sourceName}).");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    int mtIdx = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                    if (mtIdx < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
+                    var mtCard = owner.Hand[mtIdx];
+                    owner.Hand.RemoveAt(mtIdx);
+                    mtCard.Zone = "trash";
+                    owner.Trash.Add(mtCard);
+                    NotifyHandTrashedByEffect(state, effect.Seat);
+                    Log(state, effect.Seat, $"{sourceName}: trashed {NameId(GetCard(mtCard))} from hand.");
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Your opponent trashes N card(s) from their hand." (auto: last cards) ----
+            {
+                var otM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"opponent (?:trashes|must trash) (\d+) cards? from their hand",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (otM.Success)
+                {
+                    int otN = int.Parse(otM.Groups[1].Value);
+                    var oppOt = Player(state, OtherSeat(effect.Seat));
+                    int otDone = 0;
+                    for (int i = 0; i < otN && oppOt.Hand.Count > 0; i++)
+                    {
+                        var oc = oppOt.Hand[oppOt.Hand.Count - 1];
+                        oppOt.Hand.RemoveAt(oppOt.Hand.Count - 1);
+                        oc.Zone = "trash";
+                        oppOt.Trash.Add(oc);
+                        otDone++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName}: opponent trashes {otDone} card(s) from hand.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Base power set: "…'s base power becomes N …" / "Set the power of up to N
+            // of your opponent's Characters to N during this turn." ------------------------
+            {
+                // Self / own Leader: "This Character's / Your Leader's base power becomes N".
+                var bpSelf = System.Text.RegularExpressions.Regex.Match(text,
+                    @"(This Character's|Your (?:\{[^}]+\} type )?Leader's) base power becomes (\d{3,6})",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (bpSelf.Success)
+                {
+                    bool isLeaderBp = bpSelf.Groups[1].Value.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0;
+                    var bpTarget = isLeaderBp ? owner.Leader : FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    if (bpTarget != null)
+                    {
+                        string bpDur = ContainsAll(text, "until the end of your opponent's next") || ContainsAll(text, "until the start of your next turn")
+                            ? "untilNextTurn" : "thisTurn";
+                        state.BasePowerOverrides.Add(new BasePowerOverride
+                        {
+                            TargetInstanceId = bpTarget.InstanceId,
+                            Value = int.Parse(bpSelf.Groups[2].Value),
+                            OwnerSeat = effect.Seat,
+                            Duration = bpDur,
+                        });
+                        Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(bpTarget))}'s base power becomes {bpSelf.Groups[2].Value}.");
+                        return EffectResolution.Resolved;
+                    }
+                }
+                // "base power becomes the same as your opponent's (attacking) Leader …"
+                if (ContainsAll(text, "base power becomes the same as") && ContainsAll(text, "opponent"))
+                {
+                    var bpSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    var oppLead = Player(state, OtherSeat(effect.Seat)).Leader;
+                    CardInstance mirror = oppLead;
+                    if (ContainsAll(text, "attacking") && state.Battle != null)
+                        mirror = FindAnyInPlay(state, state.Battle.AttackerId, out _) ?? oppLead;
+                    if (ContainsAll(text, "the selected Character"))
+                    {
+                        var selT = FindAnyInPlay(state, targetId, out var selSeat);
+                        if (selT == null)
+                        {
+                            Log(state, effect.Seat, $"Select an opponent's Character to copy power from ({sourceName}).");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        mirror = selT;
+                    }
+                    if (bpSrc != null && mirror != null)
+                    {
+                        string bpDur2 = ContainsAll(text, "until the start of your next turn") ? "untilNextTurn" : "thisTurn";
+                        state.BasePowerOverrides.Add(new BasePowerOverride
+                        {
+                            TargetInstanceId = bpSrc.InstanceId,
+                            Value = GetCard(mirror).Power,
+                            OwnerSeat = effect.Seat,
+                            Duration = bpDur2,
+                        });
+                        Log(state, effect.Seat, $"{sourceName}'s base power becomes {GetCard(mirror).Power}.");
+                        return EffectResolution.Resolved;
+                    }
+                }
+                // "Set the power of up to N of your opponent's Characters to N during this turn."
+                var bpSet = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Set the (?:power|cost) of up to (\d+) of your opponent's Characters[^.]*? to (\d+) during this turn",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (bpSet.Success)
+                {
+                    bool isCostSet = text.IndexOf("Set the cost", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(bpSet.Groups[1].Value);
+                    int bpVal = int.Parse(bpSet.Groups[2].Value);
+                    var bpT = FindAnyInPlay(state, targetId, out var bpSeat2);
+                    if (bpT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose up to {effect.SelectionsRemaining} opponent Character(s) ({sourceName}), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (bpSeat2 != OtherSeat(effect.Seat) || GetCard(bpT).Type != "character")
+                    {
+                        Log(state, effect.Seat, "That is not a valid target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (isCostSet)
+                    {
+                        int deltaCost = bpVal - GetCost(state, bpT);
+                        RegisterCostModifier(bpT, sourceName, deltaCost, "endOfTurn");
+                        Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(bpT))}'s cost becomes {bpVal} this turn.");
+                    }
+                    else
+                    {
+                        state.BasePowerOverrides.Add(new BasePowerOverride
+                        {
+                            TargetInstanceId = bpT.InstanceId, Value = bpVal, OwnerSeat = effect.Seat, Duration = "thisTurn",
+                        });
+                        Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(bpT))}'s power becomes {bpVal} this turn.");
+                    }
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "until the start of your next turn" power buffs ---------------------------
+            {
+                var untilM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"gains? \+(\d{3,5}) power until the (?:start of your next turn|end of your (?:opponent's )?next (?:End Phase|turn))",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (untilM.Success)
+                {
+                    int uBonus = int.Parse(untilM.Groups[1].Value);
+                    // Board-wide: "Your Leader and all of your Characters gain +N power …"
+                    if (ContainsAll(text, "all of your Characters") || ContainsAll(text, "All of your"))
+                    {
+                        int uCount = 0;
+                        var uTargets = new List<CardInstance>();
+                        if (ContainsAll(text, "Your Leader") && owner.Leader != null) uTargets.Add(owner.Leader);
+                        foreach (var c in owner.CharacterArea)
+                            if (c != null && CardPassesFeatureFilter(text, GetCard(c))) uTargets.Add(c);
+                        foreach (var t in uTargets)
+                        {
+                            state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = t.InstanceId, Delta = uBonus, OwnerSeat = effect.Seat });
+                            RegisterPowerModifier(t, sourceName, uBonus, "permanent");
+                            uCount++;
+                        }
+                        Log(state, effect.Seat, $"{sourceName} gives +{uBonus} power to {uCount} card(s) until the start of your next turn.");
+                        return EffectResolution.Resolved;
+                    }
+                    // Self / own Leader / single target.
+                    CardInstance uT = null;
+                    if (ContainsAll(text, "This Character gains") || ContainsAll(text, "this Leader gains"))
+                        uT = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                    else if (ContainsAll(text, "Your Leader gains") || ContainsAll(text, "of your Leader gains")) uT = owner.Leader;
+                    else
+                    {
+                        uT = FindAnyInPlay(state, targetId, out var uSeat);
+                        if (uT == null)
+                        {
+                            Log(state, effect.Seat, $"Choose a card for +{uBonus} power ({sourceName}).");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        if (uSeat != effect.Seat || !CardPassesFeatureFilter(text, GetCard(uT)))
+                        {
+                            Log(state, effect.Seat, "That is not a valid target.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                    }
+                    if (uT == null)
+                    {
+                        Log(state, effect.Seat, $"{sourceName} has left the field — the self-buff fizzles.");
+                        return EffectResolution.Resolved;
+                    }
+                    state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = uT.InstanceId, Delta = uBonus, OwnerSeat = effect.Seat });
+                    RegisterPowerModifier(uT, sourceName, uBonus, "permanent");
+                    Log(state, effect.Seat, $"{sourceName} gives {NameId(GetCard(uT))} +{uBonus} power until the start of your next turn.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- Effect negation: "Negate the effect of up to N of your opponent's Leader
+            // or Character cards during this turn." (optionally "and give that card −N power")
+            if (ContainsAll(text, "Negate the effect of up to") || ContainsAll(text, "Negate the effects of up to"))
+            {
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var negN = System.Text.RegularExpressions.Regex.Match(text, @"Negate the effects? of up to (\d+)");
+                    effect.SelectionsRemaining = negN.Success ? int.Parse(negN.Groups[1].Value) : 1;
+                }
+                var negT = FindAnyInPlay(state, targetId, out var negSeat);
+                if (negT == null)
+                {
+                    Log(state, effect.Seat, $"Choose an opponent's Leader or Character to negate ({sourceName}), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                var negDef = GetCard(negT);
+                int negCap = ParseLimit(text, @"cost of (\d+) or less");
+                if (negSeat != OtherSeat(effect.Seat) || (negDef.Type != "leader" && negDef.Type != "character")
+                    || (negCap >= 0 && GetCost(state, negT) > negCap))
+                {
+                    Log(state, effect.Seat, "That is not a valid negation target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), negT, "effectsNegated", "thisTurn", null, effect.Seat);
+                Log(state, effect.Seat, $"{sourceName} negates {NameId(negDef)}'s effects this turn.");
+                var negPwr = System.Text.RegularExpressions.Regex.Match(text, @"give that card [-\u2212\u2013\u2011\u2012\u2014](\d{3,5}) power");
+                if (negPwr.Success)
+                {
+                    int nd = int.Parse(negPwr.Groups[1].Value);
+                    state.TemporaryPowerBonus.TryGetValue(negT.InstanceId, out var exN);
+                    state.TemporaryPowerBonus[negT.InstanceId] = exN - nd;
+                    RegisterPowerModifier(negT, sourceName, -nd, "endOfTurn");
+                    Log(state, effect.Seat, $"{sourceName} also gives {NameId(negDef)} -{nd} power this turn.");
+                }
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "You may deal N damage to your opponent." (life goes to their hand) -------
+            {
+                var dmgM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"deal (\d+) damage to your opponent",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (dmgM.Success)
+                {
+                    int dmgN = int.Parse(dmgM.Groups[1].Value);
+                    var oppDmg = Player(state, OtherSeat(effect.Seat));
+                    for (int i = 0; i < dmgN; i++)
+                    {
+                        var lifeD = Pop(oppDmg.Life);
+                        if (lifeD == null)
+                        {
+                            FinishGame(state);
+                            Log(state, "system", $"{Player(state, effect.Seat).Name} wins — damage with no Life left.");
+                            return EffectResolution.Resolved;
+                        }
+                        lifeD.Zone = "hand";
+                        oppDmg.Hand.Add(lifeD);
+                    }
+                    Log(state, effect.Seat, $"{sourceName} deals {dmgN} damage — opponent takes {dmgN} Life to hand.");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // ---- "Give up to N rested DON!! card(s) to (each of) your … Characters." -------
+            // (Variants without the word "Leader", plus auto-distribute "each of".)
+            {
+                var gdM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Give up to (\d+) rested DON!! cards? to (each of )?",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (gdM.Success && !ContainsAll(text, "Leader"))
+                {
+                    int gdN = int.Parse(gdM.Groups[1].Value);
+                    bool gdEach = gdM.Groups[2].Success && gdM.Groups[2].Value.Trim().Length > 0;
+                    if (gdEach)
+                    {
+                        int given = 0;
+                        foreach (var c in owner.CharacterArea)
+                        {
+                            if (c == null || !CardPassesFeatureFilter(text, GetCard(c))) continue;
+                            var rd = owner.CostArea.FirstOrDefault(d => d.Rested);
+                            if (rd == null) break;
+                            owner.CostArea.Remove(rd);
+                            c.AttachedDonIds.Add(rd.InstanceId);
+                            given++;
+                        }
+                        Log(state, effect.Seat, $"{sourceName} gives 1 rested DON!! to each of {given} Character(s).");
+                        return EffectResolution.Resolved;
+                    }
+                    var gdT = FindAnyInPlay(state, targetId, out var gdSeat);
+                    if (gdT == null)
+                    {
+                        Log(state, effect.Seat, $"Choose one of your Characters to receive {gdN} rested DON!! ({sourceName}).");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    if (gdSeat != effect.Seat || GetCard(gdT).Type != "character" || !CardPassesFeatureFilter(text, GetCard(gdT)))
+                    {
+                        Log(state, effect.Seat, "That is not a valid DON!! attachment target.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                    var gdDon = owner.CostArea.Where(d => d.Rested).Take(gdN).ToList();
+                    foreach (var d in gdDon) { owner.CostArea.Remove(d); gdT.AttachedDonIds.Add(d.InstanceId); }
+                    Log(state, effect.Seat, $"{sourceName} gives {gdDon.Count} rested DON!! to {NameId(GetCard(gdT))}.");
+                    return EffectResolution.Resolved;
+                }
+            }
 
             if (ContainsAll(text, "K.O. up to 1", "opponent's rested Characters", "cost of 3 or less"))
             {
@@ -1949,21 +6921,53 @@ namespace OnePieceTcg.Engine
                 return EffectResolution.Resolved;
             }
 
-            if (ContainsAll(text, "Rest up to 1", "opponent's Characters"))
+            // "Rest up to N of your opponent's Characters [with a cost of X or less]" —
+            // multi-pick when N > 1 (e.g. ST05-011 Douglas Bullet rests up to 2), with the
+            // cost cap enforced against the EFFECTIVE cost (was previously ignored).
+            if (System.Text.RegularExpressions.Regex.IsMatch(text,
+                    @"Rest up to \d+ of your opponent's [^.]*?(Characters|cards)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             {
+                bool restAllowLeader = ContainsAll(text, "Leader") || ContainsAll(text, "opponent's cards");
+                // "[Name] Characters" filter (e.g. ST30-012).
+                var restNameF = System.Text.RegularExpressions.Regex.Match(text, @"opponent's \[([^\]]+)\]");
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var restM = System.Text.RegularExpressions.Regex.Match(text, @"Rest up to (\d+)",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    effect.SelectionsRemaining = restM.Success ? int.Parse(restM.Groups[1].Value) : 1;
+                }
+                int restCostCap = ParseLimit(text, @"cost (?:of )?(\d+) or less");
                 var target = FindAnyInPlay(state, targetId, out var targetSeat);
                 if (target == null)
                 {
-                    Log(state, effect.Seat, $"Choose an opponent's character to rest for {sourceName}.");
+                    Log(state, effect.Seat, $"Choose an opponent's character{(restCostCap >= 0 ? $" (cost ≤ {restCostCap})" : "")} to rest for {sourceName}.");
                     return EffectResolution.WaitingForTarget;
                 }
-                if (targetSeat != OtherSeat(effect.Seat) || GetCard(target).Type != "character")
+                var restDefT = GetCard(target);
+                bool restTypeOk = restDefT.Type == "character" || (restAllowLeader && restDefT.Type == "leader");
+                if (targetSeat != OtherSeat(effect.Seat) || !restTypeOk
+                    || (restNameF.Success && !NameMatches(state, target, restNameF.Groups[1].Value.Trim()))
+                    || !CardPassesFeatureFilter(text, restDefT)
+                    || (restCostCap >= 0 && GetCost(state, target) > restCostCap))
                 {
                     Log(state, effect.Seat, "That is not a valid target to rest.");
                     return EffectResolution.WaitingForTarget;
                 }
+                if (HasModifier(state, target, "cannotBeRested")
+                    || ContainsAll(restDefT.Effect ?? "", "cannot be rested by your opponent's"))
+                {
+                    Log(state, effect.Seat, $"{NameId(restDefT)} cannot be rested.");
+                    return EffectResolution.WaitingForTarget;
+                }
                 target.Rested = true;
                 Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(target))}.");
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0)
+                {
+                    Log(state, effect.Seat, $"You may rest {effect.SelectionsRemaining} more Character(s), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
                 return EffectResolution.Resolved;
             }
 
@@ -1973,24 +6977,44 @@ namespace OnePieceTcg.Engine
             // (e.g. the ST11-001 Uta leader's [When Attacking]) — those fell through to "manual
             // resolution" and visibly did nothing. Now any single-target buff with a turn/battle
             // duration resolves; the words "Leader"/"Character" in the text scope the legal targets.
-            if (ContainsAll(text, "gains +") && ContainsAll(text, " power")
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, @"gains? \+\d{3,5} power")
                 && !ContainsAll(text, "Choose one")
                 && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle"))
-                && (ContainsAll(text, "Leader") || ContainsAll(text, "Character")))
+                && (ContainsAll(text, "Leader") || ContainsAll(text, "Character") || ContainsAll(text, "of your cards")
+                    || System.Text.RegularExpressions.Regex.IsMatch(text, @"of your \[[^\]]+\] cards")))
             {
                 int bonus = ParsePowerGain(text);
+                if (bonus <= 0)
+                {
+                    var gPl = System.Text.RegularExpressions.Regex.Match(text, @"gain \+(\d{3,5}) power");
+                    if (gPl.Success) bonus = int.Parse(gPl.Groups[1].Value);
+                }
                 if (bonus <= 0) return EffectResolution.NotAutomated;
                 bool isBattle = ContainsAll(text, "during this battle");
-                bool allowLeader = ContainsAll(text, "Leader");
-                bool allowChar = ContainsAll(text, "Character");
+                bool anyCard = ContainsAll(text, "of your cards");
+                bool allowLeader = ContainsAll(text, "Leader") || anyCard;
+                bool allowChar = ContainsAll(text, "Character") || anyCard;
 
+                bool selfBuff = ContainsAll(text, "This Character gains") || ContainsAll(text, "this card gains")
+                    || ContainsAll(text, "this Leader gains");
+                // Multi-target buffs: "Up to 2 of your Characters gain +N power" /
+                // "up to a total of 2 of your Leader or Character cards".
+                if (!selfBuff && effect.SelectionsRemaining <= 0)
+                {
+                    var buffUpTo = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (?:a total of )?(\d+)");
+                    effect.SelectionsRemaining = buffUpTo.Success ? int.Parse(buffUpTo.Groups[1].Value) : 1;
+                }
                 CardInstance target;
                 string targetSeat;
                 // Self-buffs ("This Character gains +N power during this turn") need no click.
-                if (ContainsAll(text, "This Character gains") || ContainsAll(text, "this card gains"))
+                if (selfBuff)
                 {
                     target = FindAnyInPlay(state, effect.SourceInstanceId, out targetSeat);
-                    if (target == null) return EffectResolution.NotAutomated;
+                    if (target == null)
+                    {
+                        Log(state, effect.Seat, $"{sourceName} has left the field — the self-buff fizzles.");
+                        return EffectResolution.Resolved;
+                    }
                 }
                 else
                 {
@@ -2002,8 +7026,12 @@ namespace OnePieceTcg.Engine
                     return EffectResolution.WaitingForTarget;
                 }
                 var targetDef = GetCard(target);
+                // "[Name] cards" targeting allows either leader or character with that name.
+                var buffNameF = System.Text.RegularExpressions.Regex.Match(text, @"of your \[([^\]]+)\] cards");
+                if (buffNameF.Success) { allowLeader = true; allowChar = true; }
                 bool typeOk = (targetDef.Type == "leader" && allowLeader) || (targetDef.Type == "character" && allowChar);
-                if (targetSeat != effect.Seat || !typeOk)
+                if (targetSeat != effect.Seat || !typeOk
+                    || (buffNameF.Success && !NameMatches(state, target, buffNameF.Groups[1].Value.Trim())))
                 {
                     Log(state, effect.Seat, "That is not a valid power-buff target.");
                     return EffectResolution.WaitingForTarget;
@@ -2033,6 +7061,15 @@ namespace OnePieceTcg.Engine
                     RegisterPowerModifier(target, sourceName, bonus, "endOfTurn");
                     Log(state, effect.Seat, $"{sourceName} gives {NameId(targetDef)} +{bonus} power this turn.");
                 }
+                if (!selfBuff)
+                {
+                    effect.SelectionsRemaining--;
+                    if (effect.SelectionsRemaining > 0)
+                    {
+                        Log(state, effect.Seat, $"You may buff {effect.SelectionsRemaining} more card(s), or skip.");
+                        return EffectResolution.WaitingForTarget;
+                    }
+                }
                 return EffectResolution.Resolved;
             }
 
@@ -2041,7 +7078,7 @@ namespace OnePieceTcg.Engine
             // CostDelta ActiveModifier on the target — every cost filter reads GetCost().
             {
                 var costRed = System.Text.RegularExpressions.Regex.Match(
-                    text, @"[-−–](\d+)\s+cost", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    text, @"[-\u2212\u2013\u2011\u2012\u2014](\d+)\s+cost", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (costRed.Success && ContainsAll(text, "opponent") && ContainsAll(text, "Character"))
                 {
                     int reduction = int.Parse(costRed.Groups[1].Value);
@@ -2182,8 +7219,14 @@ namespace OnePieceTcg.Engine
             // {FILM} type Character card with a cost of 4 or less from your hand." Previously
             // only the Straw Sword cost-2 wording was implemented, so these resolved as
             // "manual resolution" with no targets offered.
-            if (ContainsAll(text, "Play up to 1", "from your hand") && effect.TargetZone == EffectTargetZone.Hand)
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, @"Play up to \d+", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                && ContainsAll(text, "from your hand") && effect.TargetZone == EffectTargetZone.Hand)
             {
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var puM = System.Text.RegularExpressions.Regex.Match(text, @"Play up to (\d+)");
+                    effect.SelectionsRemaining = puM.Success ? int.Parse(puM.Groups[1].Value) : 1;
+                }
                 if (string.IsNullOrEmpty(targetId))
                 {
                     Log(state, effect.Seat, $"Click a card in your hand to play for {sourceName}, or skip.");
@@ -2194,9 +7237,20 @@ namespace OnePieceTcg.Engine
                 if (hIdx2 < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
                 var playCard = pH.Hand[hIdx2];
                 var playDef = GetCard(playCard);
+                // OP12-036: "This card in your hand cannot be played by effects."
+                if (ContainsAll(playDef.Effect ?? "", "This card in your hand cannot be played by effects"))
+                {
+                    Log(state, effect.Seat, $"{NameId(playDef)} cannot be played by effects.");
+                    return EffectResolution.WaitingForTarget;
+                }
                 if (ContainsAll(text, "Character card") && playDef.Type != "character")
                 {
                     Log(state, effect.Seat, $"{NameId(playDef)} is not a Character card.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (ContainsAll(text, "with a [Trigger]") && string.IsNullOrEmpty(playDef.Trigger))
+                {
+                    Log(state, effect.Seat, $"{NameId(playDef)} has no [Trigger].");
                     return EffectResolution.WaitingForTarget;
                 }
                 int costCapH = ParseLimit(text, @"cost (?:of )?(\d+) or less");
@@ -2244,8 +7298,19 @@ namespace OnePieceTcg.Engine
                 {
                     playCard.Zone = "trash";
                     pH.Trash.Add(playCard);
+                    if (playDef.Type == "event" && HasTiming(playDef.Effect, "Main"))
+                    {
+                        string evCl = ExtractTimedClause(playDef.Effect, "Main");
+                        QueueAndAutoResolve(state, effect.Seat, playCard, "main", evCl, true, EffectScope.Instant, InferTargetZone(evCl));
+                    }
                 }
                 Log(state, effect.Seat, $"{sourceName} plays {NameId(playDef)} from hand for free.");
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0)
+                {
+                    Log(state, effect.Seat, $"You may play {effect.SelectionsRemaining} more card(s), or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
                 return EffectResolution.Resolved;
             }
 
@@ -2290,7 +7355,7 @@ namespace OnePieceTcg.Engine
                     Log(state, effect.Seat, "That is not a valid target for this K.O. effect.");
                     return EffectResolution.WaitingForTarget;
                 }
-                if (HasModifier(state, target, "cannotBeKod"))
+                if (CannotBeKoedByEffect(state, target))
                 {
                     Log(state, effect.Seat, $"{NameId(GetCard(target))} cannot be K.O.'d.");
                     return EffectResolution.Resolved;
@@ -2420,9 +7485,19 @@ namespace OnePieceTcg.Engine
 
             // "Choose one:" branch — must be checked before any other pattern because the full
             // text may embed sub-phrases that match other handlers (e.g. "Draw 1 card" inside option B).
-            if (ContainsAll(text, "Choose one"))
+            if (ContainsAll(text, "Choose one") || ContainsAll(text, "chooses one"))
             {
                 if (TryParseChoiceEffect(state, effect)) return EffectResolution.Resolved;
+            }
+
+            // Scry: "Look at N cards from the top of your deck and place them at the top or
+            // bottom of the deck in any order." (OP01-073 etc.)
+            if (ContainsAll(text, "Look at") && ContainsAll(text, "from the top of your deck")
+                && (ContainsAll(text, "top or bottom of the deck") || ContainsAll(text, "top or bottom of your deck")))
+            {
+                var srcForScry = FindAnyInPlay(state, effect.SourceInstanceId, out _) ?? Player(state, effect.Seat).Leader;
+                if (srcForScry != null) StartDeckScry(state, effect.Seat, srcForScry, ParseLookCount(text));
+                return EffectResolution.Resolved;
             }
 
             // Look at top N cards of deck then optionally take one to hand.
@@ -2434,7 +7509,74 @@ namespace OnePieceTcg.Engine
                 var (namedFilter, typeFilter) = ParseNamedOrTypeFilter(text);
                 string featureFilter = namedFilter == null ? ParseCurlyBraceTag(text) : null;
                 var srcForLook = FindAnyInPlay(state, effect.SourceInstanceId, out _) ?? Player(state, effect.Seat).Leader;
-                if (srcForLook != null) StartDeckLook(state, effect.Seat, srcForLook, featureFilter, lookN, namedFilter, typeFilter);
+                if (srcForLook != null)
+                {
+                    StartDeckLook(state, effect.Seat, srcForLook, featureFilter, lookN, namedFilter, typeFilter,
+                        ContainsAll(text, "trash the rest"));
+                    if (ContainsAll(text, "with a [Trigger]")) state.DeckLook.RequireTrigger = true;
+                    var selN = System.Text.RegularExpressions.Regex.Match(text, @"reveal up to (\d+)");
+                    if (selN.Success) state.DeckLook.SelectCount = int.Parse(selN.Groups[1].Value);
+                }
+                return EffectResolution.Resolved;
+            }
+
+            // "Add the top/bottom card of your Life cards to your hand." (life-cost payment)
+            {
+                var lifeTake = System.Text.RegularExpressions.Regex.Match(text,
+                    @"Add the (top|bottom) card of your Life cards? to your hand",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (lifeTake.Success)
+                {
+                    if (owner.Life.Count == 0)
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: no Life cards to take.");
+                        return EffectResolution.Resolved;
+                    }
+                    bool fromTop = lifeTake.Groups[1].Value.Equals("top", StringComparison.OrdinalIgnoreCase);
+                    // Life list convention: TakeLife pops the END, so end = top of the pile.
+                    int li = fromTop ? owner.Life.Count - 1 : 0;
+                    var lifeCard = owner.Life[li];
+                    owner.Life.RemoveAt(li);
+                    lifeCard.Zone = "hand";
+                    owner.Hand.Add(lifeCard);
+                    Log(state, effect.Seat, $"{sourceName}: {Player(state, effect.Seat).Name} adds the {(fromTop ? "top" : "bottom")} Life card to hand ({owner.Life.Count} Life left).");
+                    return EffectResolution.Resolved;
+                }
+            }
+
+            // "Add up to N card(s) from the top of your deck to the top of your Life cards."
+            if ((ContainsAll(text, "Add") || ContainsAll(text, "add"))
+                && ContainsAll(text, "from the top of your deck") && ContainsAll(text, "top of your Life"))
+            {
+                var lifeAddM = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (\d+)");
+                int lifeAddN = lifeAddM.Success ? int.Parse(lifeAddM.Groups[1].Value) : 1;
+                int lifeAdded = 0;
+                for (int i = 0; i < lifeAddN && owner.Deck.Count > 0; i++)
+                {
+                    var lc = Shift(owner.Deck);
+                    lc.Zone = "life";
+                    owner.Life.Add(lc);   // end of the list = top of the Life pile (TakeLife pops the end)
+                    lifeAdded++;
+                }
+                Log(state, effect.Seat, $"{sourceName} adds {lifeAdded} card(s) from the deck to the top of Life.");
+                return EffectResolution.Resolved;
+            }
+
+            // "Trash (up to) N card(s) from the top of your opponent's Life cards."
+            if ((ContainsAll(text, "trash up to") || ContainsAll(text, "Trash ")) && ContainsAll(text, "opponent's Life"))
+            {
+                var oppLifeM = System.Text.RegularExpressions.Regex.Match(text, @"[Tt]rash (?:up to )?(\d+)");
+                int oppLifeN = oppLifeM.Success ? int.Parse(oppLifeM.Groups[1].Value) : 1;
+                var oppLifeP = Player(state, OtherSeat(effect.Seat));
+                int trashedLife = 0;
+                for (int i = 0; i < oppLifeN && oppLifeP.Life.Count > 0; i++)
+                {
+                    var tl = Pop(oppLifeP.Life);
+                    tl.Zone = "trash";
+                    oppLifeP.Trash.Add(tl);
+                    trashedLife++;
+                }
+                Log(state, effect.Seat, $"{sourceName} trashes {trashedLife} card(s) from the top of the opponent's Life.");
                 return EffectResolution.Resolved;
             }
 
@@ -2450,7 +7592,7 @@ namespace OnePieceTcg.Engine
                 {
                     var lifeCard = Shift(p2.Deck);
                     lifeCard.Zone = "life";
-                    p2.Life.Insert(0, lifeCard);
+                    p2.Life.Add(lifeCard);   // end of the list = TOP of Life (TakeLife pops the end)
                     moved++;
                 }
                 Log(state, effect.Seat, $"{sourceName} adds {moved} card(s) to the top of Life.");
@@ -2476,8 +7618,15 @@ namespace OnePieceTcg.Engine
             }
 
             // Play from trash: TargetZone must be Trash (set when queuing) so UI routes trash clicks here.
-            if (ContainsAll(text, "Play up to 1") && ContainsAll(text, "from your trash") && effect.TargetZone == EffectTargetZone.Trash)
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, @"Play (?:up to )?\d+ ", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                && ContainsAll(text, "from your trash") && effect.TargetZone == EffectTargetZone.Trash)
             {
+                if (effect.SelectionsRemaining <= 0)
+                {
+                    var trN = System.Text.RegularExpressions.Regex.Match(text, @"Play (?:up to )?(\d+) ");
+                    effect.SelectionsRemaining = trN.Success ? int.Parse(trN.Groups[1].Value) : 1;
+                }
+                var trNameF = System.Text.RegularExpressions.Regex.Match(text, @"Play (?:up to )?\d+ \[([^\]]+)\]");
                 if (string.IsNullOrEmpty(targetId))
                 {
                     Log(state, effect.Seat, $"Click a card in your trash to play for {sourceName}, or skip.");
@@ -2488,10 +7637,21 @@ namespace OnePieceTcg.Engine
                 if (trashIdx < 0) { Log(state, effect.Seat, "That card is not in your trash."); return EffectResolution.WaitingForTarget; }
                 var trashCard = p4.Trash[trashIdx];
                 var trashDef = GetCard(trashCard);
+                if (trNameF.Success && !NameMatches(state, trashCard, trNameF.Groups[1].Value.Trim()))
+                {
+                    Log(state, effect.Seat, $"{NameId(trashDef)} is not [{trNameF.Groups[1].Value.Trim()}].");
+                    return EffectResolution.WaitingForTarget;
+                }
                 int costCap4 = ParseCostFilter(text);
                 if (costCap4 >= 0 && trashDef.Cost > costCap4)
                 {
                     Log(state, effect.Seat, $"{NameId(trashDef)} costs too much for {sourceName}.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                int pwrCap4 = ParseLimit(text, @"(\d{3,5}) power or less");
+                if (pwrCap4 >= 0 && trashDef.Power > pwrCap4)
+                {
+                    Log(state, effect.Seat, $"{NameId(trashDef)} has too much power for {sourceName}.");
                     return EffectResolution.WaitingForTarget;
                 }
                 if (!CardPassesFeatureFilter(text, trashDef))
@@ -2524,6 +7684,12 @@ namespace OnePieceTcg.Engine
                         QueueAndAutoResolve(state, effect.Seat, trashCard, "onPlay", trashDef.Effect, true, EffectScope.Instant, InferTargetZone(trashDef.Effect));
                 }
                 Log(state, effect.Seat, $"{sourceName} plays {NameId(trashDef)} from trash.");
+                effect.SelectionsRemaining--;
+                if (effect.SelectionsRemaining > 0)
+                {
+                    Log(state, effect.Seat, $"You may play {effect.SelectionsRemaining} more from the trash, or skip.");
+                    return EffectResolution.WaitingForTarget;
+                }
                 return EffectResolution.Resolved;
             }
 
@@ -2565,6 +7731,7 @@ namespace OnePieceTcg.Engine
                 p5.Hand.RemoveAt(hIdx);
                 discarded.Zone = "trash";
                 p5.Trash.Add(discarded);
+                NotifyHandTrashedByEffect(state, effect.Seat);
                 Log(state, effect.Seat, $"{sourceName}: you discard {NameId(GetCard(discarded))}.");
                 return EffectResolution.Resolved;
             }
@@ -2636,7 +7803,7 @@ namespace OnePieceTcg.Engine
                     Log(state, effect.Seat, $"{NameId(GetCard(target))} is too powerful for {sourceName}.");
                     return EffectResolution.WaitingForTarget;
                 }
-                if (!HasModifier(state, target, "cannotBeKod"))
+                if (!CannotBeKoedByEffect(state, target))
                     MoveToTrash(state, targetSeat, target.InstanceId);
                 else
                     Log(state, effect.Seat, $"{NameId(GetCard(target))} cannot be K.O.'d.");
@@ -2662,6 +7829,11 @@ namespace OnePieceTcg.Engine
                 if (!CardPassesFeatureFilter(text, targetDef))
                 {
                     Log(state, effect.Seat, $"{NameId(targetDef)} does not match the required type for {sourceName}.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (HasModifier(state, target, "cannotBeRested"))
+                {
+                    Log(state, effect.Seat, $"{NameId(targetDef)} cannot be rested.");
                     return EffectResolution.WaitingForTarget;
                 }
                 target.Rested = true;
@@ -2805,18 +7977,13 @@ namespace OnePieceTcg.Engine
                 {
                     string condPart = text.Substring(3, commaIdx - 3).Trim();
                     string bodyPart = text.Substring(commaIdx + 1).Trim();
-                    bool condMet = EvaluateCondition(state, effect.Seat, condPart);
+                    bool condMet = EvaluateCondition(state, effect.Seat, condPart, effect.SourceInstanceId);
                     if (condMet && !string.IsNullOrEmpty(bodyPart))
                     {
                         var condSrc = FindCardInstance(state, effect.SourceInstanceId);
                         if (condSrc != null)
-                        {
-                            if (IsAutomatedEffectPattern(bodyPart))
-                                QueueEffect(state, effect.Seat, condSrc, effect.Timing, bodyPart, false,
-                                    effect.Scope, InferTargetZone(bodyPart));
-                            else
-                                Log(state, effect.Seat, $"{sourceName}: condition met — manual resolution needed: {bodyPart}");
-                        }
+                            QueueAndAutoResolve(state, effect.Seat, condSrc, effect.Timing, bodyPart, IsOptionalEffectText(bodyPart),
+                                effect.Scope, InferTargetZone(bodyPart));
                     }
                     else if (!condMet)
                     {
@@ -2833,18 +8000,21 @@ namespace OnePieceTcg.Engine
                 if (thenAt > 0)
                 {
                     string partA = text.Substring(0, thenAt - 2).Trim(); // text before ". Then,"
-                    string partB = text.Substring(thenAt).Trim();         // "Then, do Y."
+                    // Strip "Then," and re-capitalize a following "if" so clause handlers that
+                    // anchor on "If " (conditionals) recognize the queued second clause.
+                    string partB = NormalizeClause(text.Substring(thenAt));
                     var tempEffect = ShallowCloneEffect(effect, partA);
                     var partARes = TryResolveKnownEffect(state, tempEffect, targetId);
+                    // Multi-pick clause-A progress lives on the clone — mirror it back so the
+                    // next click continues where this one left off.
+                    effect.SelectionsRemaining = tempEffect.SelectionsRemaining;
                     if (partARes == EffectResolution.WaitingForTarget) return EffectResolution.WaitingForTarget;
                     if (partARes == EffectResolution.Resolved)
                     {
                         var chainSrc = FindCardInstance(state, effect.SourceInstanceId);
-                        if (chainSrc != null && IsAutomatedEffectPattern(partB))
-                            QueueEffect(state, effect.Seat, chainSrc, effect.Timing, partB, false,
+                        if (chainSrc != null)
+                            QueueAndAutoResolve(state, effect.Seat, chainSrc, effect.Timing, partB, IsOptionalEffectText(partB),
                                 effect.Scope, InferTargetZone(partB));
-                        else if (chainSrc != null)
-                            Log(state, effect.Seat, $"{sourceName} secondary effect requires manual resolution: {partB}");
                         return EffectResolution.Resolved;
                     }
                     // partA is NotAutomated — fall through.
@@ -2862,22 +8032,47 @@ namespace OnePieceTcg.Engine
 
             if (trigger.IndexOf("Play this card", StringComparison.OrdinalIgnoreCase) >= 0 && def.Type == "character")
             {
+                // Conditional variants: "If your Leader is [X] / has the {T} type / … , play this
+                // card." — evaluate the condition first; unmet → fall through (card goes to hand).
+                var condPlay = System.Text.RegularExpressions.Regex.Match(trigger,
+                    @"If (.+?), play this card", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                bool condOk = !condPlay.Success || EvaluateCondition(state, defenderSeat, condPlay.Groups[1].Value.Trim(), cardFromLife.InstanceId);
+                // "DON!! −N (…): Play this card." — pay the return-DON cost first.
+                int trigDonMinus = ParseDonMinusCost(trigger);
                 var defender = Player(state, defenderSeat);
-                int openSlot = defender.CharacterArea.FindIndex(c => c == null);
-                if (openSlot >= 0)
+                if (condOk && trigDonMinus > 0 && defender.CostArea.Count < trigDonMinus)
                 {
-                    cardFromLife.Zone = "character";
-                    cardFromLife.PlayedOnTurn = state.TurnNumber;
-                    defender.CharacterArea[openSlot] = cardFromLife;
-                    Log(state, defenderSeat, $"{NameId(def)} Trigger plays this card to the field.");
-                    state.Battle = null;
-                    state.Phase = "main";
-                    return true;
+                    Log(state, defenderSeat, $"{NameId(def)} Trigger needs {trigDonMinus} DON!! on the field to play this card.");
+                    condOk = false;
                 }
-                Log(state, defenderSeat, $"{NameId(def)} Trigger could not play because the character area is full.");
+                if (condOk)
+                {
+                    int openSlot = defender.CharacterArea.FindIndex(c => c == null);
+                    if (openSlot >= 0)
+                    {
+                        if (trigDonMinus > 0) PayDonMinus(state, defenderSeat, trigDonMinus);
+                        cardFromLife.Zone = "character";
+                        cardFromLife.PlayedOnTurn = state.TurnNumber;
+                        defender.CharacterArea[openSlot] = cardFromLife;
+                        Log(state, defenderSeat, $"{NameId(def)} Trigger plays this card to the field.");
+                        state.Battle = null;
+                        state.Phase = "main";
+                        if (HasTiming(def.Effect, "On Play"))
+                            QueueAndAutoResolve(state, defenderSeat, cardFromLife, "onPlay", def.Effect, true,
+                                EffectScope.Instant, InferTargetZone(def.Effect));
+                        return true;
+                    }
+                    Log(state, defenderSeat, $"{NameId(def)} Trigger could not play because the character area is full.");
+                }
+                else if (condPlay.Success)
+                {
+                    Log(state, defenderSeat, $"{NameId(def)} Trigger condition not met — the card goes to your hand.");
+                }
             }
 
-            if (trigger.IndexOf("Activate this card's [Main] effect", StringComparison.OrdinalIgnoreCase) >= 0)
+            // "Activate this card's [Main] effect." / "Activate this card's effect."
+            if (trigger.IndexOf("Activate this card's [Main] effect", StringComparison.OrdinalIgnoreCase) >= 0
+                || trigger.IndexOf("Activate this card's effect", StringComparison.OrdinalIgnoreCase) >= 0)
             {
                 var pending = new PendingEffect
                 {
@@ -2939,6 +8134,7 @@ namespace OnePieceTcg.Engine
                     Timing = "trigger",
                     Text = trigger,
                     Optional = true,
+                    TargetZone = InferTargetZone(trigger),
                 };
                 state.PendingEffects.Add(pending);
                 cardFromLife.Zone = "trash";
@@ -2955,6 +8151,32 @@ namespace OnePieceTcg.Engine
         // so generic event-trigger queuing only fires for effects we can really automate.
         private static bool IsAutomatedEffectPattern(string text)
         {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            // Normalize "Then, if …" second clauses so anchored checks below see "If …",
+            // and drop leading [Timing] tags (they carry no matching information).
+            text = NormalizeClause(text);
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+            // "DON!! −N (…): body" — resolvable when the body is (cost paid in ResolveEffect).
+            if (ParseDonMinusCost(text) > 0)
+            {
+                string donBody = DonMinusBody(text);
+                if (!string.Equals(donBody, text, StringComparison.Ordinal) && IsAutomatedEffectPattern(donBody)) return true;
+            }
+            // "You may <cost>: body" optional-cost effects handled by the cost-prefix resolver.
+            {
+                string bare = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+                var costM = System.Text.RegularExpressions.Regex.Match(bare,
+                    @"^You may (?<cost>[^:]+):\s*(?<body>.+)$",
+                    System.Text.RegularExpressions.RegexOptions.Singleline);
+                if (costM.Success)
+                {
+                    string c = costM.Groups["cost"].Value;
+                    if ((ContainsAll(c, "trash") && ContainsAll(c, "from your hand"))
+                        || (ContainsAll(c, "place") && ContainsAll(c, "from your trash") && ContainsAll(c, "bottom of your deck"))
+                        || ContainsAll(c, "from the top or bottom of your Life"))
+                        return true;
+                }
+            }
             return ContainsAll(text, "K.O. up to 1", "opponent's rested Characters", "cost of 3 or less")
                 || ContainsAll(text, "Set up to 1", "rested Characters with a cost of 5 or less as active")
                 || ContainsAll(text, "Give", "rested DON!!", "Leader")
@@ -2996,12 +8218,81 @@ namespace OnePieceTcg.Engine
                 || text.StartsWith("If ", StringComparison.OrdinalIgnoreCase)
                 // Session 7 additions (playtest fixes)
                 || ContainsAll(text, "Play up to 1", "from your hand")
-                || (System.Text.RegularExpressions.Regex.IsMatch(text ?? "", @"[-−–]\d+\s+cost", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || (System.Text.RegularExpressions.Regex.IsMatch(text ?? "", @"[-\u2212\u2013\u2011\u2012\u2014]\d+\s+cost", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                     && ContainsAll(text, "opponent", "Character"))
                 || ContainsAll(text, "cannot activate", "Blocker", "during this battle")
                 || (ContainsAll(text, "K.O. up to 1", "opponent") && ContainsAll(text, "cost of"))
+                // Session 8 additions (ST05/ST19 playtest sweep)
+                || (ContainsAll(text, "cannot attack") && ContainsAll(text, "opponent"))
+                || ContainsAll(text, "trash up to 1", "opponent's Characters")
+                || (ContainsAll(text, "All of your") && ContainsAll(text, "gain") && ContainsAll(text, "power")
+                    && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle")))
+                || (ContainsAll(text, "DON!! card") && ContainsAll(text, "from your DON!! deck"))
+                || (System.Text.RegularExpressions.Regex.IsMatch(text, @"Rest up to \d+",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    && ContainsAll(text, "opponent's Characters"))
+                || (System.Text.RegularExpressions.Regex.IsMatch(text, @"[-\u2212\u2013\u2011\u2012\u2014]\d{3,5}\s+power\s+during this (turn|battle)",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    && ContainsAll(text, "opponent", "Give"))
+                || (ContainsAll(text, "Return") && ContainsAll(text, "to the owner's hand"))
+                || (ContainsAll(text, "Place up to") && ContainsAll(text, "bottom of the owner's deck"))
+                || ContainsAll(text, "Set this Character as active")
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"[Tt]rash \d+ cards? from the top of your deck")
+                // Sessions 11-12 additions
+                || (ContainsAll(text, "Look at") && ContainsAll(text, "Life cards"))
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"Add (?:up to )?\d+ cards? from the top of your Life cards? to your hand",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || ContainsAll(text, "Turn all of your Life cards face")
+                || ContainsAll(text, "Trash all your face-up Life cards")
+                || (ContainsAll(text, "trash up to") && ContainsAll(text, "opponent's Life"))
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"gains? \+\d+ cost until the end of your opponent's next",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || (System.Text.RegularExpressions.Regex.IsMatch(text, @"gains? \[(Rush|Blocker|Double Attack|Banish|Unblockable)\]")
+                    && (ContainsAll(text, "during this") || ContainsAll(text, "until the")
+                        || ContainsAll(text, "Up to ") || ContainsAll(text, "All of your")
+                        || System.Text.RegularExpressions.Regex.IsMatch(text, @"(this|Your[^.]*?) (Character|Leader) gains \[",
+                               System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"gains? \+\d{3,5} power until the (?:start of your next turn|end of your (?:opponent's )?next (?:End Phase|turn))",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || (ContainsAll(text, "cannot activate") && ContainsAll(text, "Blocker") && ContainsAll(text, "during this turn"))
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"Give up to \d+ of your [^.]*?Characters[^.]*? up to \d+ rested DON!! cards? each",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || ContainsAll(text, "place the rest at the bottom")
+                || ContainsAll(text, "cannot add Life cards to your hand using your own effects")
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"^this Character gains \[[A-Za-z !]+\]\.?$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || (ContainsAll(text, "Reveal up to") && ContainsAll(text, "from your hand") && ContainsAll(text, "Life cards"))
+                || (ContainsAll(text, "Reveal") && (ContainsAll(text, "from the top of your deck") || ContainsAll(text, "from your deck and add it to your hand")))
+                // Session 9 additions (next-wave sweep)
+                || (ContainsAll(text, "will not become active") && ContainsAll(text, "Refresh Phase"))
+                || ContainsAll(text, "cannot be rested until")
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"opponent returns \d+ DON!! cards? to their DON!! deck",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || (System.Text.RegularExpressions.Regex.IsMatch(text, @"Rest up to \d+",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    && (ContainsAll(text, "opponent's Leader or Character") || ContainsAll(text, "opponent's cards")))
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"Add the (top|bottom) card of your Life cards? to your hand",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                || ((ContainsAll(text, "Add") || ContainsAll(text, "add")) && ContainsAll(text, "from the top of your deck") && ContainsAll(text, "top of your Life"))
+                || (ContainsAll(text, "trash up to") && ContainsAll(text, "opponent's Life"))
+                || (ContainsAll(text, "Look at") && ContainsAll(text, "from the top of your deck")
+                    && (ContainsAll(text, "top or bottom of the deck") || ContainsAll(text, "top or bottom of your deck")))
                 || FindThenClause(text) > 0;
         }
+
+        // True when any of `seat`'s in-play cards (leader/characters/stage) prints `phrase`.
+        private static bool BoardHasText(GameState state, string seat, string phrase)
+        {
+            var p = Player(state, seat);
+            var cards = new List<CardInstance>();
+            if (p.Leader != null) cards.Add(p.Leader);
+            foreach (var c in p.CharacterArea) if (c != null) cards.Add(c);
+            if (p.Stage != null) cards.Add(p.Stage);
+            return cards.Any(c => !IsEffectNegated(state, c) && ContainsAll(GetCard(c)?.Effect ?? "", phrase));
+        }
+
+        private static string Truncate(string s, int n) =>
+            string.IsNullOrEmpty(s) || s.Length <= n ? (s ?? "") : s.Substring(0, n);
 
         private static bool ContainsAll(string text, params string[] parts)
         {
@@ -3045,6 +8336,7 @@ namespace OnePieceTcg.Engine
                     var card = zone[index];
                     zone.RemoveAt(index);
                     card.Zone = "trash";
+                    card.Rested = false;   // trash cards render upright (viewer popup / pile)
                     p.Trash.Add(card);
                     if (!silent) Log(state, seat, $"{NameId(GetCard(card))} goes to trash.");
                     return;
@@ -3056,10 +8348,13 @@ namespace OnePieceTcg.Engine
                 var card = p.CharacterArea[charIndex];
                 p.CharacterArea[charIndex] = null;
                 card.Zone = "trash";
+                card.Rested = false;   // trash cards render upright
                 ReturnAttachedDon(p, card);
                 card.Modifiers.Clear();
                 p.Trash.Add(card);
                 state.NameOverrides.Remove(card.InstanceId);
+                state.BasePowerOverrides.RemoveAll(bp => bp.TargetInstanceId == card.InstanceId);
+                state.TimedPowerBonuses.RemoveAll(tb => tb.TargetInstanceId == card.InstanceId);
                 if (!silent) Log(state, seat, $"{NameId(GetCard(card))} goes to trash.");
                 FireOnKoEffects(state, seat, card);
             }
@@ -3091,6 +8386,8 @@ namespace OnePieceTcg.Engine
             card.Modifiers.Clear();
             p.Hand.Add(card);
             state.NameOverrides.Remove(card.InstanceId); // name overrides only apply while on field
+            state.BasePowerOverrides.RemoveAll(bp => bp.TargetInstanceId == card.InstanceId);
+            state.TimedPowerBonuses.RemoveAll(tb => tb.TargetInstanceId == card.InstanceId);
         }
 
         // Parse "cost of N or less" from effect text. Returns -1 if not found.
@@ -3109,9 +8406,31 @@ namespace OnePieceTcg.Engine
         private static void FireOnKoEffects(GameState state, string seat, CardInstance card)
         {
             var def = GetCard(card);
-            if (!HasTiming(def.Effect, "On KO")) return;
-            QueueEffect(state, seat, card, "onKo", def.Effect, true);
-            Log(state, seat, $"{NameId(def)} [On KO] effect triggers.");
+            if (IsEffectNegated(state, card)) return;
+            if (HasTiming(def.Effect, "On KO") || HasTiming(def.Effect, "On K.O."))
+            {
+                string koClause = HasTiming(def.Effect, "On K.O.")
+                    ? ExtractTimedClause(def.Effect, "On K.O.")
+                    : ExtractTimedClause(def.Effect, "On KO");
+                bool ytKo = HasTiming(koClause, "Your Turn") && !HasTiming(koClause, "Opponent's Turn");
+                bool otKo = HasTiming(koClause, "Opponent's Turn");
+                bool ownTurnKo = state.ActiveSeat == seat;
+                if ((ytKo && !ownTurnKo) || (otKo && ownTurnKo)) return;
+                QueueAndAutoResolve(state, seat, card, "onKo", koClause, IsOptionalEffectText(koClause), EffectScope.Instant, InferTargetZone(koClause));
+                Log(state, seat, $"{NameId(def)} [On K.O.] effect triggers.");
+            }
+            foreach (var line in (def.Effect ?? "").Split('\n'))
+            {
+                var whenKo = System.Text.RegularExpressions.Regex.Match(line,
+                    @"When this (?:Character|Leader) is K\.O\.'d[^,]*, (.+)$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (!whenKo.Success) continue;
+                string wkBody = NormalizeClause(whenKo.Groups[1].Value.Trim());
+                if (IsAutomatedEffectPattern(wkBody))
+                    QueueAndAutoResolve(state, seat, card, "onKo", wkBody, true, EffectScope.Instant, InferTargetZone(wkBody));
+                else
+                    Log(state, seat, $"{NameId(def)}: K.O. reaction needs manual resolution: {wkBody}");
+            }
         }
 
         private static void EndTurn(GameState state, string seat)
@@ -3131,6 +8450,13 @@ namespace OnePieceTcg.Engine
 
             state.Phase = "end";
             Log(state, seat, $"{Player(state, seat).Name} ends turn {state.TurnNumber}.");
+            // "Trash this Character at the end of this turn." riders.
+            foreach (var mEnd in state.ActiveModifiers.Where(m => m.ModifierType == "trashAtEndOfTurn").ToList())
+            {
+                var victim = FindAnyInPlay(state, mEnd.TargetInstanceId, out var vSeat);
+                if (victim != null) MoveToTrash(state, vSeat, victim.InstanceId);
+            }
+            state.ActiveModifiers.RemoveAll(m => m.ModifierType == "trashAtEndOfTurn");
             ApplyEndOfTurnEffects(state, seat);
             ApplyEndOfOpponentTurnEffects(state, OtherSeat(seat));
             state.Selected = null;
@@ -3159,7 +8485,9 @@ namespace OnePieceTcg.Engine
                     Log(state, seat, $"{NameId(def)} [End of Opponent's Turn] sets itself as active.");
                     continue;
                 }
-                QueueEffect(state, seat, c, "endOfOpponentsTurn", def.Effect, true);
+                string eotClause = ExtractTimedClause(def.Effect, "End of Opponent's Turn");
+                QueueAndAutoResolve(state, seat, c, "endOfOpponentsTurn", eotClause, IsOptionalEffectText(eotClause),
+                    EffectScope.Instant, InferTargetZone(eotClause));
             }
         }
 
@@ -3191,7 +8519,9 @@ namespace OnePieceTcg.Engine
                 }
 
                 // Unknown [End of Your Turn] patterns — queue for manual resolution.
-                QueueEffect(state, seat, c, "endOfYourTurn", def.Effect, true);
+                string eoyClause = ExtractTimedClause(def.Effect, "End of Your Turn");
+                QueueAndAutoResolve(state, seat, c, "endOfYourTurn", eoyClause, IsOptionalEffectText(eoyClause),
+                    EffectScope.Instant, InferTargetZone(eoyClause));
             }
         }
 

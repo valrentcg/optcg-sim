@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.4",
-  "buildNumber": 5,
-  "minSupportedBuildNumber": 5,
+  "buildVersion": "1.0.5",
+  "buildNumber": 6,
+  "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "First playtest feedback: card effects fixed, defender priority, trigger privacy, mulligan flow, in-match chat, live opponent presence, friends online status, win-on-disconnect.",
+  "notes": "Card engine now auto-resolves 100% of ability lines (fuzz-tested, 316+ games). Trash viewer, animated/reorderable mulligan, DON!! grouping, deck picking moved into the Duel portal with per-account memory, uniform rounded-card art everywhere.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

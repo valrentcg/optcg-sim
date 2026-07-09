@@ -960,18 +960,19 @@ public partial class DeckBuilderManager : MonoBehaviour
         fit.aspectMode  = AspectRatioFitter.AspectMode.FitInParent;
         fit.aspectRatio = cardAspect;
 
+        // Shader-clipped rounding (RoundedCardMask) — the same anti-aliased transparent
+        // edge mask the in-game cards use, replacing the old binary sprite Mask so every
+        // card surface in the app matches.
         var hImg = holder.GetComponent<Image>();
-        hImg.sprite = big ? RoundSpriteBig() : RoundSprite();
-        hImg.type   = Image.Type.Sliced;
+        hImg.color = new Color(0f, 0f, 0f, 0f);
         hImg.raycastTarget = false;
-        var mask = holder.gameObject.AddComponent<Mask>();
-        mask.showMaskGraphic = false;   // clip only; rounded corners become transparent
 
         var art = Panel("Art", holder, Color.white);
         Stretch(art, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var aImg = art.GetComponent<Image>();
         aImg.preserveAspect = false;    // holder already matches card aspect
         aImg.raycastTarget  = false;
+        RoundedCardMask.ApplyTo(aImg);
         return aImg;
     }
 
@@ -1136,6 +1137,7 @@ public partial class DeckBuilderManager : MonoBehaviour
             var imImg = im.GetComponent<Image>();
             imImg.preserveAspect = true;
             Stretch(im, Vector2.zero, Vector2.one, new Vector2(3, 3), new Vector2(-3, -3));
+            RoundedCardMask.ApplyTo(imImg);   // uniform rounded card edges (shader mask)
             if (cachedLsp != null) imImg.sprite = cachedLsp;
             else RequestThumbArt(imImg, d.leaderId);
         }
@@ -3433,6 +3435,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         Stretch(holder, Vector2.zero, Vector2.one, new Vector2(3f, 26f), new Vector2(-3f, -3f));
         Round(holder);
         var artImg = holder.GetComponent<Image>(); artImg.raycastTarget = false;
+        RoundedCardMask.ApplyTo(artImg);   // uniform rounded card edges (shader mask)
 
         var cost = Panel("Cost", tile, new Color32(6, 32, 44, 235));
         cost.anchorMin = cost.anchorMax = new Vector2(0f, 1f);

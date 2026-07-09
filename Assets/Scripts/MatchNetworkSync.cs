@@ -79,6 +79,7 @@ public class PresencePayload
 {
     public string hoverCardId;        // instance/card id being hovered, or null/empty for none
     public int[] raisedHandIndexes;   // indexes of the sender's hand cards currently lifted
+    public int[] donGroups;           // sender's DON!! group partition (empty/null = ungrouped)
 }
 
 public static class MatchNetworkSync

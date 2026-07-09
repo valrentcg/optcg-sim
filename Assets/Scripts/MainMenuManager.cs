@@ -70,6 +70,51 @@ public partial class MainMenuManager : MonoBehaviour
     // Static because the deck picker tears down this MainMenuManager instance and
     // a new one is built when the picker closes — same pattern as p1/p2DeckId.
     private static string lobbyDeckId;            // our pick: DeckStore id or "starter:stXX"; null = seat default
+    // Duel-portal deck pick (the deck you queue with). Kept in sync with lobbyDeckId so the
+    // lobby waiting room shows the same deck you chose on the main screen.
+    private static string duelDeckId;
+    private static bool deckPicksLoaded;   // per-account picks restored from PlayerPrefs this run
+
+    // ── Per-account deck-pick persistence ────────────────────────────────────
+    // Solo (south/north) and Duel deck choices lock in per account: saved to
+    // PlayerPrefs under the account identity and restored whenever the menu is
+    // built, so the player never has to repopulate them between launches.
+    private static string DeckPickAccountKey()
+    {
+        return AccountManager.CurrentUsername ?? AccountManager.CachedUsername
+            ?? AccountManager.GuestDisplayName ?? "local";
+    }
+
+    private static string DeckPickPrefKey(string slot)
+    {
+        return "optcg.deckpick." + DeckPickAccountKey() + "." + slot;
+    }
+
+    private static void SaveDeckPick(string slot, string id)
+    {
+        if (string.IsNullOrEmpty(id)) PlayerPrefs.DeleteKey(DeckPickPrefKey(slot));
+        else PlayerPrefs.SetString(DeckPickPrefKey(slot), id);
+        PlayerPrefs.Save();
+    }
+
+    private static string LoadDeckPick(string slot)
+    {
+        var v = PlayerPrefs.GetString(DeckPickPrefKey(slot), null);
+        return string.IsNullOrEmpty(v) ? null : v;
+    }
+
+    private void EnsureDeckPicksLoaded()
+    {
+        if (deckPicksLoaded) return;
+        deckPicksLoaded = true;
+        if (p1DeckId == null) p1DeckId = LoadDeckPick("p1");
+        if (p2DeckId == null) p2DeckId = LoadDeckPick("p2");
+        if (duelDeckId == null) duelDeckId = LoadDeckPick("duel");
+        // A saved deck that has since been deleted clears itself instead of showing broken.
+        if (p1DeckId != null && ResolveMenuDeck(p1DeckId) == null) { p1DeckId = null; SaveDeckPick("p1", null); }
+        if (p2DeckId != null && ResolveMenuDeck(p2DeckId) == null) { p2DeckId = null; SaveDeckPick("p2", null); }
+        if (duelDeckId != null && ResolveMenuDeck(duelDeckId) == null) { duelDeckId = null; SaveDeckPick("duel", null); }
+    }
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
     private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
     private static bool reopenLobbyAfterPicker;   // restore the waiting room after the picker closes
@@ -3929,9 +3974,7 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void BuildStage(RectTransform stage)
     {
-        const float titleH   = 60f;
-        const float launchH  = 78f;
-        const float launchGap = 16f;
+        const float titleH = 60f;
 
         // Title row (pinned to top)
         var titleRow = PanelObject("Title Row", stage, new Color(0, 0, 0, 0));
@@ -3943,18 +3986,11 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.75f, 1f),
             new Vector2(4f, 0f), Vector2.zero);
 
-        // Launch bar (pinned to bottom)
-        var launchBar = PanelObject("Launch Bar", stage, new Color32(8, 14, 21, 153));
-        Stretch(launchBar, Vector2.zero, new Vector2(1f, 0f),
-            new Vector2(0f, 0f), new Vector2(0f, launchH));
-        Round(launchBar);
-        AddRoundedCardBorder(launchBar, MenuB, 1f);
-        BuildLaunchBar(launchBar);
-
-        // Portal row (fills middle)
+        // Portal row fills everything under the title — deck picks, CTAs and mode
+        // tabs all live INSIDE the portals now (no separate bottom launch bar).
         var portalRow = PanelObject("Portal Row", stage, new Color(0, 0, 0, 0));
         Stretch(portalRow, Vector2.zero, Vector2.one,
-            new Vector2(0f, launchH + launchGap), new Vector2(0f, -titleH));
+            new Vector2(0f, 0f), new Vector2(0f, -titleH));
         BuildPortalRow(portalRow);
     }
 
@@ -4049,49 +4085,55 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void BuildDuelPortal(RectTransform portal)
     {
-        // MULTIPLAYER label
-        var lbl = TextObject("Label", portal, "MULTIPLAYER", 11,
-            new Color32(207, 232, 240, 255), TextAnchor.UpperLeft, monoFont);
-        lbl.fontStyle = FontStyle.Bold;
-        Stretch(lbl.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(14f, -16f), new Vector2(-14f, -32f));
-
-        // Top-edge highlight (lit-from-above rim)
+        EnsureDeckPicksLoaded();
         AddTopHighlight(portal);
 
-        // Art slot placeholder (Image child named DuelArtSlot for easy replacement)
-        var artSlot = PanelObject("DuelArtSlot", portal, new Color(0f, 0f, 0f, 0f));
-        Stretch(artSlot, new Vector2(0f, 0.40f), new Vector2(1f, 0.90f),
-            new Vector2(18f, 0f), new Vector2(-18f, 0f));
-        DecorateArtSlot(artSlot, "[ DUEL ART ]");
-
-        // Bottom content scrim — smooth vertical gradient that melts into the art
-        var scrim = AddScrim(portal);
-
-        // Inside the scrim, position content top-down
-        var portalTitle = TextObject("Portal Title", scrim, "Duel", 30,
+        // Header: portal title + description
+        var portalTitle = TextObject("Portal Title", portal, "Duel", 30,
             new Color32(245, 250, 252, 255), TextAnchor.UpperLeft);
         portalTitle.fontStyle = FontStyle.Bold;
         Stretch(portalTitle.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(16f, -42f), new Vector2(-16f, -6f));
+            new Vector2(18f, -52f), new Vector2(-18f, -12f));
 
-        var desc = TextObject("Desc", scrim,
+        var desc = TextObject("Desc", portal,
             "Find an opponent and play for rank, or set your own table.",
-            13, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
+            12, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
         desc.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(desc.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(16f, -82f), new Vector2(-16f, -46f));
+            new Vector2(18f, -78f), new Vector2(-18f, -52f));
 
-        // Sub-tiles row (Ranked, Casual, Private) — pinned to bottom of scrim
-        var subRow = PanelObject("Sub Row", scrim, new Color(0f, 0f, 0f, 0f));
-        Stretch(subRow, Vector2.zero, new Vector2(1f, 0f),
-            new Vector2(12f, 8f), new Vector2(-12f, 66f));
+        // Deck panel — pick your queue deck FIRST, before entering any mode.
+        var deck = ResolveMenuDeck(duelDeckId);
+        BuildDeckPanel(portal, new Vector2(0.028f, 0.225f), new Vector2(0.972f, 0.90f),
+            "YOUR DECK", duelDeckId, PickDuelDeck, enterAlert && deck == null);
+
+        // Status caption under the panel.
+        var cap = TextObject("Deck Caption", portal,
+            deck == null ? "Select a deck to continue" : deck.name + " — ready to queue",
+            10, deck == null ? Muted : Accent, TextAnchor.MiddleCenter, monoFont);
+        Stretch(cap.rectTransform, new Vector2(0f, 0.185f), new Vector2(1f, 0.222f),
+            new Vector2(12f, 0f), new Vector2(-12f, 0f));
+
+        // Primary CTA: VIEW LOBBIES (the Custom/Private flow — the only live mode).
+        bool deckReady = deck != null;
+        BuildPortalCta(portal, "VIEW LOBBIES  ▸", deckReady,
+            new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.178f), () =>
+            {
+                if (ResolveMenuDeck(duelDeckId) == null) { enterAlert = true; RenderMenu(); return; }
+                lobbyDeckId = duelDeckId;
+                OpenLobbyHub();
+            });
+
+        // Mode tabs (Ranked / Casual / Custom) — selected tab gets the accent border.
+        var subRow = PanelObject("Sub Row", portal, new Color(0f, 0f, 0f, 0f));
+        Stretch(subRow, new Vector2(0f, 0f), new Vector2(1f, 0.09f),
+            new Vector2(12f, 10f), new Vector2(-12f, 0f));
 
         var duelSubs = new (string label, string modeId)[]
         {
             ("Ranked",  "ranked"),
             ("Casual",  "casual"),
-            ("Private", "privateRoom"),
+            ("Custom",  "privateRoom"),
         };
 
         for (int i = 0; i < duelSubs.Length; i++)
@@ -4099,51 +4141,180 @@ public partial class MainMenuManager : MonoBehaviour
                 FindMode(duelSubs[i].modeId).Status, i, duelSubs.Length, 9f);
     }
 
+    // Resolve a menu deck id to a DeckStore deck (falling back to the active deck
+    // when nothing was explicitly picked yet returns null — the pick is explicit
+    // by design: the mockup flow wants the player to choose before queueing).
+    private DeckData ResolveMenuDeck(string deckId) => DeckStore.Get(deckId);
+
+    // Deck pick for the Duel portal — one-shot picker, stored for the lobby flow too.
+    private void PickDuelDeck()
+    {
+        CancelInvoke();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        DeckBuilderManager.OpenPicker("CHOOSE YOUR DECK", "the deck you will queue with — pick, then confirm",
+            chosenId =>
+            {
+                duelDeckId = chosenId;
+                SaveDeckPick("duel", chosenId);
+                lobbyDeckId = chosenId;
+                EnsureMenu();
+            },
+            EnsureMenu);
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    // ── Shared portal widgets ─────────────────────────────────────────────────
+
+    // Framed deck panel with a header row ("YOUR DECK   Choose a deck / <name>")
+    // and a large centered card slot: dashed-feel placeholder with a diamond
+    // emblem when empty, the deck's leader art when picked. Clicking anywhere
+    // in the panel opens the picker.
+    private void BuildDeckPanel(RectTransform portal, Vector2 aMin, Vector2 aMax,
+        string microLabel, string deckId, UnityEngine.Events.UnityAction onPick, bool flagged)
+    {
+        var deck = DeckStore.Get(deckId);
+
+        var panel = PanelObject(microLabel + " Panel", portal, new Color32(10, 18, 28, 140));
+        Stretch(panel, aMin, aMax, Vector2.zero, Vector2.zero);
+        Round(panel);
+        AddRoundedCardBorder(panel, flagged ? RedAccent : ZoneBorder, flagged ? 1.6f : 1f);
+
+        // Header row
+        var micro = TextObject("Micro", panel, microLabel, 9,
+            new Color32(110, 132, 148, 255), TextAnchor.MiddleLeft, monoFont);
+        micro.fontStyle = FontStyle.Bold;
+        Stretch(micro.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(14f, -30f), new Vector2(-14f, -10f));
+
+        var head = TextObject("Head", panel, deck == null ? "Choose a deck" : deck.name,
+            14, deck == null ? new Color32(198, 212, 222, 255) : Ink, TextAnchor.MiddleLeft);
+        head.fontStyle = FontStyle.Bold;
+        Stretch(head.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(76f, -32f), new Vector2(-14f, -8f));
+
+        // Card slot — centered, card aspect (5:7), sized against the panel.
+        var slot = PanelObject("Card Slot", panel, new Color32(8, 14, 22, 120));
+        slot.anchorMin = new Vector2(0.5f, 0.5f);
+        slot.anchorMax = new Vector2(0.5f, 0.5f);
+        slot.pivot     = new Vector2(0.5f, 0.5f);
+        // Height-driven size: fill ~66% of panel height, keep card aspect.
+        var slotFit = slot.gameObject.AddComponent<UnityEngine.UI.AspectRatioFitter>();
+        slotFit.aspectMode  = UnityEngine.UI.AspectRatioFitter.AspectMode.None;
+        slot.anchorMin = new Vector2(0.5f, 0.06f);
+        slot.anchorMax = new Vector2(0.5f, 0.82f);
+        slot.pivot     = new Vector2(0.5f, 0.5f);
+        slot.sizeDelta = new Vector2(0f, 0f);
+        var slotAspect = slot.gameObject.GetComponent<UnityEngine.UI.AspectRatioFitter>();
+        slotAspect.aspectMode  = UnityEngine.UI.AspectRatioFitter.AspectMode.HeightControlsWidth;
+        slotAspect.aspectRatio = 5f / 7f;
+        Round(slot);
+
+        if (deck != null)
+        {
+            // Leader art fills the slot; clean rounded border, no placeholder chrome.
+            AddRoundedCardBorder(slot, new Color(Accent.r, Accent.g, Accent.b, 0.55f), 1.4f);
+            var art = LoadArt(deck.leaderId);
+            if (art != null)
+            {
+                var im = PanelObject("Leader Art", slot, Color.white);
+                var img = im.GetComponent<Image>();
+                img.sprite = art;
+                img.preserveAspect = true;
+                img.raycastTarget = false;
+                Stretch(im, Vector2.zero, Vector2.one, new Vector2(3f, 3f), new Vector2(-3f, -3f));
+                RoundedCardMask.ApplyTo(img);   // uniform rounded card edges (shader mask)
+            }
+            var hint = TextObject("Hint", panel, "tap to change", 9, Accent,
+                TextAnchor.MiddleCenter, monoFont);
+            Stretch(hint.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0.055f),
+                Vector2.zero, Vector2.zero);
+        }
+        else
+        {
+            // Empty slot: faint border + single diamond emblem — clean, intentional.
+            AddRoundedCardBorder(slot, new Color(1f, 1f, 1f, flagged ? 0.30f : 0.13f), 1f);
+            var dia = PanelObject("Emblem", slot, new Color(0f, 0f, 0f, 0f));
+            dia.anchorMin = dia.anchorMax = new Vector2(0.5f, 0.5f);
+            dia.pivot     = new Vector2(0.5f, 0.5f);
+            dia.sizeDelta = new Vector2(34f, 34f);
+            dia.localRotation = Quaternion.Euler(0f, 0f, 45f);
+            AddRoundedCardBorder(dia, new Color(Accent.r, Accent.g, Accent.b, 0.30f), 1.4f);
+        }
+
+        var btn = panel.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(onPick);
+    }
+
+    // Full-width portal CTA button ("VIEW LOBBIES ▸" / "START MATCH ▸").
+    private void BuildPortalCta(RectTransform portal, string label, bool enabled,
+        Vector2 aMin, Vector2 aMax, UnityEngine.Events.UnityAction onClick)
+    {
+        var btnBg = enabled ? (Color)new Color32(14, 30, 44, 235) : (Color)new Color32(10, 18, 26, 160);
+        var cta = PanelObject("Portal CTA", portal, btnBg);
+        Stretch(cta, aMin, aMax, new Vector2(12f, 0f), new Vector2(-12f, 0f));
+        Round(cta);
+        AddRoundedCardBorder(cta, enabled ? Accent : MenuB, enabled ? 1.4f : 1f);
+
+        var txt = TextObject("Text", cta, label, 12,
+            enabled ? new Color32(207, 236, 244, 255) : new Color32(96, 116, 132, 255),
+            TextAnchor.MiddleCenter, monoFont);
+        txt.fontStyle = FontStyle.Bold;
+        Stretch(txt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        var b = cta.gameObject.AddComponent<Button>();
+        b.onClick.AddListener(onClick);   // click always allowed — disabled state flags instead
+    }
+
     // ── Solo portal ───────────────────────────────────────────────────────────
 
     private void BuildSoloPortal(RectTransform portal)
     {
-        // SOLO label
-        var lbl = TextObject("Label", portal, "SOLO", 11,
-            new Color32(207, 232, 240, 255), TextAnchor.UpperLeft, monoFont);
-        lbl.fontStyle = FontStyle.Bold;
-        Stretch(lbl.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(14f, -16f), new Vector2(-14f, -32f));
-
-        // Top-edge highlight (lit-from-above rim)
         AddTopHighlight(portal);
 
-        // Art slot placeholder
-        var artSlot = PanelObject("SoloArtSlot", portal, new Color(0f, 0f, 0f, 0f));
-        Stretch(artSlot, new Vector2(0f, 0.40f), new Vector2(1f, 0.90f),
-            new Vector2(18f, 0f), new Vector2(-18f, 0f));
-        DecorateArtSlot(artSlot, "[ SOLO ART ]");
-
-        // Bottom content scrim — smooth vertical gradient that melts into the art
-        var scrim = AddScrim(portal);
-
-        var portalTitle = TextObject("Portal Title", scrim, "Solo Play", 30,
+        // Header: portal title + description
+        var portalTitle = TextObject("Portal Title", portal, "Solo Play", 30,
             new Color32(245, 250, 252, 255), TextAnchor.UpperLeft);
         portalTitle.fontStyle = FontStyle.Bold;
         Stretch(portalTitle.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(16f, -42f), new Vector2(-16f, -6f));
+            new Vector2(18f, -52f), new Vector2(-18f, -12f));
 
-        var desc = TextObject("Desc", scrim,
+        var desc = TextObject("Desc", portal,
             "Practice lines and goldfish new builds at your own pace.",
-            13, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
+            12, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
         desc.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(desc.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(16f, -82f), new Vector2(-16f, -46f));
+            new Vector2(18f, -78f), new Vector2(-18f, -52f));
 
-        // Sub-tiles row (Versus Self, Versus A.I.) — left-title / right-chip layout
-        var subRow = PanelObject("Sub Row", scrim, new Color(0f, 0f, 0f, 0f));
-        Stretch(subRow, Vector2.zero, new Vector2(1f, 0f),
-            new Vector2(12f, 8f), new Vector2(-12f, 66f));
+        // Two stacked deck panels: NORTH (top, player 2) and SOUTH (bottom, player 1).
+        var northDeck = DeckStore.Get(p2DeckId);
+        var southDeck = DeckStore.Get(p1DeckId);
+        BuildDeckPanel(portal, new Vector2(0.028f, 0.575f), new Vector2(0.972f, 0.90f),
+            "NORTH", p2DeckId, () => PickPlayerDeck(2), enterAlert && northDeck == null);
+        BuildDeckPanel(portal, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.560f),
+            "SOUTH", p1DeckId, () => PickPlayerDeck(1), enterAlert && southDeck == null);
 
-        // Versus Self
+        // Status caption
+        bool bothReady = northDeck != null && southDeck != null;
+        string capText = bothReady ? "Both seats ready"
+            : (northDeck == null && southDeck == null) ? "Select 2 decks to begin"
+            : "Select 1 more deck to begin";
+        var cap = TextObject("Deck Caption", portal, capText, 10,
+            bothReady ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(cap.rectTransform, new Vector2(0f, 0.195f), new Vector2(1f, 0.232f),
+            new Vector2(12f, 0f), new Vector2(-12f, 0f));
+
+        // Primary CTA: START MATCH.
+        BuildPortalCta(portal, "START MATCH  ▸", bothReady,
+            new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterVersusSelf);
+
+        // Mode tabs (Versus Self / Versus A.I.)
+        var subRow = PanelObject("Sub Row", portal, new Color(0f, 0f, 0f, 0f));
+        Stretch(subRow, new Vector2(0f, 0f), new Vector2(1f, 0.09f),
+            new Vector2(12f, 10f), new Vector2(-12f, 0f));
+
         BuildSoloSubTile(subRow, "Versus Self", "soloSelf", ModeStatus.Ready,
             0f, 0.5f, 4f, true);
-        // Versus A.I.
         BuildSoloSubTile(subRow, "Versus A.I.", "soloAi", ModeStatus.Dev,
             0.5f, 1f, 4f, false);
     }
@@ -4219,18 +4390,17 @@ public partial class MainMenuManager : MonoBehaviour
             AddRoundedCardBorder(tile, MenuB, 1f);
         }
 
-        // Title (left-aligned)
+        // Centered label with the status chip below it — same rhythm as the Duel tabs.
         var titleText = TextObject("Label", tile, label, 13,
-            new Color32(219, 230, 236, 255), TextAnchor.MiddleLeft);
+            new Color32(219, 230, 236, 255), TextAnchor.MiddleCenter);
         titleText.fontStyle = FontStyle.Bold;
-        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.58f, 1f),
-            new Vector2(12f, 0f), Vector2.zero);
+        Stretch(titleText.rectTransform, new Vector2(0f, 0.45f), Vector2.one,
+            new Vector2(6f, 0f), new Vector2(-6f, -4f));
 
-        // Status chip (right-aligned)
         var chipAnchor = PanelObject("Chip Anchor", tile, new Color(0f, 0f, 0f, 0f));
-        Stretch(chipAnchor, new Vector2(0.55f, 0.18f), new Vector2(1f, 0.82f),
-            Vector2.zero, new Vector2(-10f, 0f));
-        BuildStatusChipFull(chipAnchor, status);
+        Stretch(chipAnchor, new Vector2(0.25f, 0f), new Vector2(0.75f, 0.45f),
+            Vector2.zero, new Vector2(0f, -2f));
+        BuildStatusChip(chipAnchor, status);
 
         var idCap = modeId;
         var btn = tile.gameObject.AddComponent<Button>();
@@ -4438,6 +4608,7 @@ public partial class MainMenuManager : MonoBehaviour
             chosenId =>
             {
                 if (playerNum == 1) p1DeckId = chosenId; else p2DeckId = chosenId;
+                SaveDeckPick(playerNum == 1 ? "p1" : "p2", chosenId);
                 EnsureMenu();
             },
             EnsureMenu);
@@ -4493,9 +4664,11 @@ public partial class MainMenuManager : MonoBehaviour
         if (art != null)
         {
             var im = PanelObject("Art", thumb, Color.white);
-            im.GetComponent<Image>().sprite = art;
-            im.GetComponent<Image>().preserveAspect = true;
+            var imArt = im.GetComponent<Image>();
+            imArt.sprite = art;
+            imArt.preserveAspect = true;
             Stretch(im, Vector2.zero, Vector2.one, new Vector2(2f, 2f), new Vector2(-2f, -2f));
+            RoundedCardMask.ApplyTo(imArt);   // uniform rounded card edges (shader mask)
         }
 
         // Deck info labels

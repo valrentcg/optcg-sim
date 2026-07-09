@@ -150,6 +150,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private CardInstance previewLockCard;   // last left-clicked card, shown in the docked left preview
     private bool menuOpen;                   // game menu (upper-right) open/closed
     private RectTransform deckLookOverlay;    // full-screen search/look overlay (lives on the canvas)
+    private RectTransform trashOverlay;       // trash-viewer popup (confined to the local play area)
+    private RectTransform mulliganOverlay;    // opening-hand overlay (deck-look style)
+    private bool trashSortLowestFirst = true; // next SORT click: lowest cost at the top (toggles)
+    private string mulliganAnimShownKey;      // seat+hand fingerprint already dealt-animated (re-animates after a mulligan redraw)
+    private string mulliganRedrawSeat;        // seat whose post-mulligan fresh 5 should be shown/animated
+    private readonly Dictionary<string, RectTransform> presenceGlowRects = new Dictionary<string, RectTransform>();  // hover-glow targets beyond board cards (DON, piles, life)
+    private readonly List<RectTransform> opponentPresenceHandGlows = new List<RectTransform>();
+    private string lastPresenceHover;         // last applied opponent hover (skip identical packets — re-creating the glow at 10Hz reads as blinking)
+    private string lastPresenceRaised;
+    private string lastPresenceGroups;
+    private bool mulliganPeeking;             // player toggled the mulligan overlay away to see the board
+    private List<string> deckLookScryTopIds;  // scry step: ids chosen to stay on TOP, in click order
     private bool deckLookPeeking;              // true while the player has toggled the overlay away to check the board/hand
     private DeckLookState deckLookRevealSession; // which DeckLookState (by reference) we've already started/finished revealing
     private bool deckLookRevealing;              // true while cards are still being drawn in one at a time; selection is disabled meanwhile
@@ -293,6 +305,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             {
                 hoverCardId = presenceHoverCardId,
                 raisedHandIndexes = presenceRaisedHandIndex >= 0 ? new[] { presenceRaisedHandIndex } : new int[0],
+                donGroups = (localSeat == state.ActiveSeat && donGroupSizes.Count > 1) ? donGroupSizes.ToArray() : new int[0],
             });
         }
 
@@ -350,8 +363,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     card.life > 0 ? card.life : (int?)null,
                     card.counter,
                     card.keywords,
-                    card.effect,
-                    card.trigger,
+                    NormalizeEffectText(card.effect),
+                    NormalizeEffectText(card.trigger),
                     NormalizeFeatures(card));
             }
             Debug.Log($"Loaded {seen.Count} official One Piece card definitions.");
@@ -360,6 +373,31 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             Debug.LogWarning($"Official card library failed to load: {ex.Message}");
         }
+    }
+
+    // ~200 library entries glue ability clauses together with no newline between them
+    // ("…Characters.[On Your Opponent's Attack] …"), which breaks the engine's per-clause
+    // parsing. Insert a newline before a timing tag whenever it directly follows the end of
+    // a sentence ('.', ')' or a closing quote) — and ONLY then, so mid-sentence tag
+    // references ("a card with a [Trigger]") and combined tags ("[Main]/[Counter]") survive.
+    private static readonly string[] ClauseTags =
+    {
+        "[On Play]", "[Activate: Main]", "[When Attacking]", "[On Block]", "[On K.O.]",
+        "[Main]", "[Counter]", "[Trigger]", "[End of Your Turn]", "[Start of Your Turn]",
+        "[On Your Opponent's Attack]", "[End of Opponent's Turn]",
+    };
+
+    private static string NormalizeEffectText(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        foreach (var tag in ClauseTags)
+        {
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text,
+                "(?<=[.)\u201D\"])" + @"\s*" + System.Text.RegularExpressions.Regex.Escape(tag),
+                "\n" + tag);
+        }
+        return System.Text.RegularExpressions.Regex.Replace(text, "\n+", "\n").Trim();
     }
 
     private static string[] NormalizeFeatures(OfficialCardRecord card)
@@ -698,7 +736,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (state == null || string.IsNullOrEmpty(seat) || !state.Players.TryGetValue(seat, out var player)) return;
         if (index < 0 || index >= player.CostArea.Count) return;
         var don = player.CostArea[index];
-        if (don == null || don.InstanceId != instanceId || !CanSelectDon(seat, don)) return;
+        if (don == null || don.InstanceId != instanceId) return;
+
+        // A "DON!! -N" cost is being paid one DON!! at a time — route this click there
+        // (the player chooses active vs rested DON!!, which matters for the rest of the turn).
+        if (state.PendingEffects.Count > 0)
+        {
+            var peDon = state.PendingEffects[0];
+            if (peDon.DonPaymentRemaining > 0 && peDon.Seat == seat)
+            {
+                Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId, Target = instanceId });
+                return;
+            }
+        }
+
+        if (!CanSelectDon(seat, don)) return;
 
         selectedId = null;
         selectedSeat = null;
@@ -920,19 +972,32 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             AddMysticalCardOutline(holder, true);
             AddOutline(holder.gameObject, new Color32(255, 214, 112, 230), 2.4f);
         }
+        else if (state != null && state.PendingEffects.Count > 0
+                 && state.PendingEffects[0].DonPaymentRemaining > 0
+                 && state.PendingEffects[0].Seat == seat)
+        {
+            // Valid pick for a pending DON!! -N payment — highlight green.
+            AddOutline(holder.gameObject, new Color32(96, 240, 150, 230), 2.6f);
+        }
         if (don.Rested) holder.localRotation = Quaternion.Euler(0, 0, inverted ? 270f : 90f);
         else if (inverted) holder.localRotation = Quaternion.Euler(0, 0, 180f);
         var catcher = PanelObject("DON Hover Catcher", holder, new Color(0, 0, 0, 0));
         Stretch(catcher, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         catcher.gameObject.AddComponent<DonHover>().Init(this);
         catcher.gameObject.AddComponent<DonSelector>().Init(this, canvas, seat, don.InstanceId, origIndex);
+        if (isNetworked)
+        {
+            presenceGlowRects[don.InstanceId] = holder;
+            catcher.gameObject.AddComponent<ZoneHoverPresence>().Init(this, don.InstanceId);
+        }
         if (groupTag >= 0) catcher.gameObject.AddComponent<DonGroupTag>().GroupIndex = groupTag;
     }
 
     // Grouped cost-area display from donGroupSizes: rested DON cluster, then one cluster per group,
     // gaps auto-justified so the groups fill the cost region (and shrink to fit when crowded).
-    private void DrawGroupedDonRow(RectTransform parent, IList<DonInstance> donCards, string seat, bool inverted)
+    private void DrawGroupedDonRow(RectTransform parent, IList<DonInstance> donCards, string seat, bool inverted, IList<int> groupsOverride = null)
     {
+        var groupSizes = groupsOverride ?? donGroupSizes;
         if (donCards == null || donCards.Count == 0) return;
         var rested = new List<(DonInstance don, int index)>();
         var active = new List<(DonInstance don, int index)>();
@@ -945,9 +1010,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var clusterTags = new List<int>();
         if (rested.Count > 0) { clusterCards.Add(rested); clusterTags.Add(-1); }
         int pos = 0;
-        for (int g = 0; g < donGroupSizes.Count && pos < active.Count; g++)
+        for (int g = 0; g < groupSizes.Count && pos < active.Count; g++)
         {
-            int take = Mathf.Min(donGroupSizes[g], active.Count - pos);
+            int take = Mathf.Min(groupSizes[g], active.Count - pos);
             if (take <= 0) continue;
             var grp = new List<(DonInstance don, int index)>();
             for (int k = 0; k < take; k++) grp.Add(active[pos + k]);
@@ -960,7 +1025,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             var grp = new List<(DonInstance don, int index)>();
             for (int k = pos; k < active.Count; k++) grp.Add(active[k]);
             clusterCards.Add(grp);
-            clusterTags.Add(donGroupSizes.Count);
+            clusterTags.Add(groupSizes.Count);
         }
         if (clusterCards.Count == 0) return;
 
@@ -1123,6 +1188,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         handCardRects.Clear();
         boardDeckPileRects.Clear();
         cardTargetRects.Clear();
+        presenceGlowRects.Clear();
+        lastPresenceHover = lastPresenceRaised = null;   // rebuilt board → re-apply presence once
         // Presence visuals live on board objects that Clear() just destroyed.
         opponentPresenceGlow = null;
         opponentHandSlots.Clear();
@@ -1166,6 +1233,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         DrawCoinFlipOverlay();
         DrawMulliganOverlay();
         DrawDeckLookOverlay();
+        DrawTrashOverlay();
         DrawResolvedTargetingArrows();
         DrawSidePanel();
         DrawLeftPanel();
@@ -1272,10 +1340,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             deckLookPeeking = false;
             deckLookRevealSession = null;
             deckLookRevealing = false;
+            deckLookScryTopIds = null;
             return;
         }
         var dl = state.DeckLook;
         bool selecting = dl.Step == "select";
+        bool scrying = dl.Step == "scry";
+        if (scrying && deckLookScryTopIds == null) deckLookScryTopIds = new List<string>();
 
         // Peeking: player toggled the overlay away to check the board/hand before deciding.
         // Skip the dim + cards entirely so the board underneath (already drawn this Render pass)
@@ -1296,7 +1367,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             return;
         }
 
-        if (!selecting)
+        if (!selecting && !scrying)
         {
             bool valid = deckLookWorkingOrder != null && deckLookWorkingOrder.Count == dl.Cards.Count && deckLookWorkingOrder.All(c => dl.Cards.Contains(c));
             if (!valid) deckLookWorkingOrder = new List<CardInstance>(dl.Cards);
@@ -1337,34 +1408,40 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             string costDesc   = dl.MaxCost >= 0 ? $" (cost ≤ {dl.MaxCost})" : "";
             titleText = $"{dl.SourceName}: search — choose 1 {filterDesc}card to add to hand{costDesc}";
         }
+        else if (scrying)
+        {
+            titleText = $"{dl.SourceName}: click cards to keep on TOP of the deck (click order = top order) — the rest go to the bottom";
+        }
         else
         {
             titleText = selecting
                 ? $"{dl.SourceName}: choose up to 1 {DeckLookFilterDesc(dl)}card to add to your hand"
                 : "Drag to set the order these return to the bottom of the deck, then Confirm";
         }
-        var title = TextObject("Deck Look Title", dim, titleText, 25, Ink, TextAnchor.MiddleCenter);
-        Stretch(title.rectTransform, new Vector2(0.06f, 0.90f), new Vector2(0.78f, 0.985f), Vector2.zero, Vector2.zero);
-
-        // Lets the player dismiss the overlay to check the board/hand before deciding; reopens
-        // via the small "Show Cards" button drawn above when deckLookPeeking is true. Hidden while
-        // cards are still being drawn in, since toggling it would call Render() and tear down the
-        // in-flight animation (see DrawDeckLookOverlay's teardown at the very top of this method).
-        if (!revealingNow)
-        {
-            AddOverlayButton(dim, "View Board / Hand", new Vector2(0.80f, 0.918f), new Vector2(0.935f, 0.965f),
-                () => { deckLookPeeking = true; Render(); });
-        }
+        // Title: centered, hugging the card row (same rhythm as the mulligan overlay).
+        var title = TextObject("Deck Look Title", dim, titleText, 22, Ink, TextAnchor.LowerCenter);
+        Stretch(title.rectTransform, new Vector2(0.08f, 0.845f), new Vector2(0.92f, 0.93f), Vector2.zero, Vector2.zero);
 
         deckLookCardRects.Clear();
 
         var row = new GameObject("Deck Look Row").AddComponent<RectTransform>();
         row.SetParent(dim, false);
         // In search mode always show all (revealed) cards in select step; rearrange never happens.
-        var displayCards = (selecting || dl.SearchMode) ? dl.Cards : deckLookWorkingOrder;
-        var cardSize = DeckLookCardSize(displayCards?.Count ?? 0, selecting || dl.SearchMode);
-        Stretch(row, new Vector2(0.03f, 0.07f), new Vector2(0.97f, 0.875f), Vector2.zero, Vector2.zero);
-        DrawDeckLookCards(row, displayCards, selecting || dl.SearchMode, cardSize);
+        var displayCards = (selecting || scrying || dl.SearchMode) ? dl.Cards : deckLookWorkingOrder;
+        var cardSize = DeckLookCardSize(displayCards?.Count ?? 0, selecting || scrying || dl.SearchMode);
+        Stretch(row, new Vector2(0.03f, 0.215f), new Vector2(0.97f, 0.835f), Vector2.zero, Vector2.zero);
+        DrawDeckLookCards(row, displayCards, selecting || scrying || dl.SearchMode, cardSize);
+
+        // Scry: badge the chosen TOP cards with their placement order.
+        if (scrying && deckLookScryTopIds != null)
+        {
+            for (int ti = 0; ti < deckLookScryTopIds.Count; ti++)
+            {
+                if (deckLookCardRects.TryGetValue(deckLookScryTopIds[ti], out var scryHolder) && scryHolder != null)
+                    AddBadge(scryHolder, $"TOP {ti + 1}", new Vector2(0.06f, 0.84f), new Vector2(0.62f, 0.97f),
+                        new Color32(26, 92, 46, 240));
+            }
+        }
 
         if (revealingNow)
         {
@@ -1390,15 +1467,257 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // Resolve buttons live ON the overlay (it covers the side-panel actions, so those aren't
         // reachable while a search/look is up).
-        if (dl.SearchMode)
-            AddOverlayButton(dim, "Take None / Shuffle", new Vector2(0.40f, 0.012f), new Vector2(0.60f, 0.058f),
+        // Action buttons: condensed, directly below the cards; the board-view toggle
+        // centered beneath them (matches the mulligan overlay).
+        if (scrying)
+            AddOverlayButton(dim, $"CONFIRM ({deckLookScryTopIds?.Count ?? 0} ON TOP, {dl.Cards.Count - (deckLookScryTopIds?.Count ?? 0)} TO BOTTOM)",
+                new Vector2(0.36f, 0.125f), new Vector2(0.64f, 0.185f),
+                () => Dispatch(new GameCommand { Type = "deckLookScryConfirm", Seat = dl.Seat, OrderedInstanceIds = new List<string>(deckLookScryTopIds ?? new List<string>()) }));
+        else if (dl.SearchMode)
+            AddOverlayButton(dim, "TAKE NONE / SHUFFLE", new Vector2(0.40f, 0.125f), new Vector2(0.60f, 0.185f),
                 () => Dispatch(new GameCommand { Type = "deckLookSelect", Seat = dl.Seat, Target = null }));
         else if (selecting)
-            AddOverlayButton(dim, "Take None", new Vector2(0.43f, 0.012f), new Vector2(0.57f, 0.058f),
+            AddOverlayButton(dim, "TAKE NONE", new Vector2(0.415f, 0.125f), new Vector2(0.585f, 0.185f),
                 () => Dispatch(new GameCommand { Type = "deckLookSelect", Seat = dl.Seat, Target = null }));
         else
-            AddOverlayButton(dim, deckLookAnimating ? "Placing..." : "Confirm Order", new Vector2(0.42f, 0.205f), new Vector2(0.58f, 0.252f),
+            AddOverlayButton(dim, deckLookAnimating ? "PLACING..." : "CONFIRM ORDER", new Vector2(0.415f, 0.125f), new Vector2(0.585f, 0.185f),
                 ConfirmDeckLookOrder, !deckLookAnimating);
+
+        AddOverlayButton(dim, "VIEW BOARD / HAND", new Vector2(0.40f, 0.052f), new Vector2(0.60f, 0.112f),
+            () => { deckLookPeeking = true; Render(); });
+    }
+
+    // ---- Trash viewer popup ---------------------------------------------------------------
+    // Large browser spanning the play area. Opens by clicking either trash pile (or
+    // automatically when an effect targets the trash). Card size scales with the pile
+    // (a 50-card trash still fits on screen), the OWNER can drag cards to re-arrange or
+    // auto-sort the pile by cost, and SHOW/HIDE tucks the window away to see the board.
+    private readonly Dictionary<string, RectTransform> trashCardRects = new Dictionary<string, RectTransform>();
+    private int trashGridCols = 1;
+    private Vector2 trashGridCell = new Vector2(96f, 134f);
+    private Vector2 trashGridOrigin;
+    private const float TrashGridSpacing = 8f;
+
+    private void DrawTrashOverlay()
+    {
+        if (trashOverlay != null)
+        {
+            Destroy(trashOverlay.gameObject);
+            trashOverlay = null;
+        }
+        if (state == null || state.DeckLook != null) return;
+
+        string seatToShow = null;
+        PendingEffect trashEffect = null;
+        if (state.PendingEffects.Count > 0)
+        {
+            var pe = state.PendingEffects[0];
+            bool wantsTrash = pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash
+                || (pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any
+                    && (pe.Text ?? "").IndexOf("trash", System.StringComparison.OrdinalIgnoreCase) >= 0);
+            if (wantsTrash && (!isNetworked || pe.Seat == localSeat))
+            {
+                seatToShow = pe.Seat;
+                trashEffect = pe;
+            }
+        }
+        if (seatToShow == null) seatToShow = trashViewSeat;
+        if (seatToShow == null || !state.Players.TryGetValue(seatToShow, out var trashPlayer)) return;
+        var trashCards = trashPlayer.Trash;
+
+        // Big panel across the play area — kept clear of both trash-pile corners so the
+        // pile itself stays clickable to close the viewer (click pile or its cards to toggle).
+        var panel = PanelObject("Trash Overlay", canvas.transform, new Color32(7, 11, 17, 242));
+        Stretch(panel, new Vector2(0.265f, 0.06f), new Vector2(0.735f, 0.94f), Vector2.zero, Vector2.zero);
+        panel.SetAsLastSibling();
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, Accent, 1.6f);
+        trashOverlay = panel;
+
+        bool ownerView = !isNetworked ? true : seatToShow == localSeat;
+        bool canArrange = trashEffect == null && ownerView && (!isNetworked || seatToShow == localSeat);
+
+        string titleText;
+        if (trashEffect != null)
+        {
+            var srcDef = CardData.GetCard(trashEffect.SourceCardId);
+            string extra = trashEffect.SelectionsRemaining > 1 ? $" ({trashEffect.SelectionsRemaining} picks left)" : "";
+            titleText = $"{(srcDef != null ? srcDef.Name : "Effect")}: choose a card from the trash{extra}";
+        }
+        else
+        {
+            titleText = $"{trashPlayer.Name}'s trash — {trashCards.Count} card(s)" + (canArrange ? "   ·   drag to arrange" : "");
+        }
+        var title = TextObject("Trash Overlay Title", panel, titleText, 16, Ink, TextAnchor.MiddleLeft, monoFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0.02f, 0.945f), new Vector2(0.60f, 0.995f), Vector2.zero, Vector2.zero);
+
+        // Header buttons: SKIP (optional effect) · SORT BY COST (owner, toggles direction).
+        // No CLOSE/HIDE — clicking the trash pile (or its cards) toggles the viewer.
+        float bx = 0.985f;
+        if (trashEffect != null && trashEffect.Optional)
+        {
+            AddOverlayButton(panel, "SKIP", new Vector2(bx - 0.12f, 0.945f), new Vector2(bx, 0.995f),
+                () => Dispatch(new GameCommand { Type = "passEffect", Seat = trashEffect.Seat, EffectId = trashEffect.EffectId }));
+            bx -= 0.13f;
+        }
+        if (canArrange && trashCards.Count > 1)
+        {
+            string sortLabel = trashSortLowestFirst ? "SORT: COST LOW→HIGH" : "SORT: COST HIGH→LOW";
+            AddOverlayButton(panel, sortLabel, new Vector2(bx - 0.26f, 0.945f), new Vector2(bx, 0.995f),
+                () =>
+                {
+                    Dispatch(new GameCommand { Type = "sortTrash", Seat = seatToShow, Amount = trashSortLowestFirst ? 1 : -1 });
+                    trashSortLowestFirst = !trashSortLowestFirst;
+                });
+        }
+
+        // Card grid area — cell size computed so the WHOLE pile fits (up to ~50+ cards),
+        // scaling the cards down as the pile grows. Newest card first.
+        var gridArea = new GameObject("Trash Grid Area").AddComponent<RectTransform>();
+        gridArea.SetParent(panel, false);
+        Stretch(gridArea, new Vector2(0.012f, 0.015f), new Vector2(0.988f, 0.935f), Vector2.zero, Vector2.zero);
+
+        if (trashCards.Count == 0)
+        {
+            var empty = TextObject("Trash Empty", gridArea, "(trash is empty)", 15, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(empty.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            return;
+        }
+
+        // Solve the largest card size whose grid fits the area.
+        Canvas.ForceUpdateCanvases();
+        float areaW = Mathf.Max(200f, gridArea.rect.width);
+        float areaH = Mathf.Max(200f, gridArea.rect.height);
+        if (areaW < 10f || areaH < 10f) { areaW = 980f; areaH = 640f; }   // first-frame fallback
+        int n = trashCards.Count;
+        // For every row count, the card height is limited by BOTH the column width and the
+        // row height; take the layout that yields the biggest card. 2 cards → near full
+        // height; 50 cards → small grid. Scales continuously with pile size.
+        float bestH = 40f; int bestCols = Mathf.Max(1, n);
+        for (int rows = 1; rows <= 10; rows++)
+        {
+            int cols = Mathf.CeilToInt(n / (float)rows);
+            float cwByW = (areaW - (cols - 1) * TrashGridSpacing) / cols;
+            float chByH = (areaH - (rows - 1) * TrashGridSpacing) / rows;
+            float ch = Mathf.Min(cwByW * 7f / 5f, chByH);
+            if (ch > bestH) { bestH = ch; bestCols = cols; }
+        }
+        trashGridCell = new Vector2(bestH * 5f / 7f, bestH);
+        trashGridCols = Mathf.Max(1, bestCols);
+        trashGridOrigin = new Vector2(-areaW * 0.5f + trashGridCell.x * 0.5f,
+                                       areaH * 0.5f - trashGridCell.y * 0.5f);
+
+        trashCardRects.Clear();
+        for (int i = 0; i < trashCards.Count; i++)
+        {
+            var tc = trashCards[trashCards.Count - 1 - i];   // newest first
+            var holder = new GameObject("Trash Overlay Card").AddComponent<RectTransform>();
+            holder.SetParent(gridArea, false);
+            holder.anchorMin = holder.anchorMax = new Vector2(0.5f, 0.5f);
+            holder.pivot = new Vector2(0.5f, 0.5f);
+            holder.sizeDelta = trashGridCell;
+            holder.anchoredPosition = TrashSlotPosition(i);
+            AddCard(holder, tc, null, true, Vector2.zero, true);
+            trashCardRects[tc.InstanceId] = holder;
+            if (trashEffect != null && !GameEngine.IsValidEffectTarget(state, trashEffect, tc))
+            {
+                var dimGroup = holder.gameObject.AddComponent<CanvasGroup>();
+                dimGroup.alpha = 0.35f;
+            }
+            if (canArrange)
+            {
+                var drag = holder.gameObject.AddComponent<TrashCardDrag>();
+                drag.Init(this, seatToShow, tc.InstanceId, i, trashCards.Count);
+            }
+        }
+    }
+
+    // Grid slot centre for display index i (row-major, newest first, centered origin).
+    private Vector2 TrashSlotPosition(int i)
+    {
+        int col = i % trashGridCols;
+        int row = i / trashGridCols;
+        return trashGridOrigin + new Vector2(col * (trashGridCell.x + TrashGridSpacing),
+                                             -row * (trashGridCell.y + TrashGridSpacing));
+    }
+
+    // Pointer position → display index within the trash grid (clamped).
+    private int TrashSlotFromPointer(RectTransform gridArea, Vector2 screenPos, int count)
+    {
+        Vector2 local;
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(gridArea, screenPos, null, out local))
+            return -1;
+        float stepX = trashGridCell.x + TrashGridSpacing;
+        float stepY = trashGridCell.y + TrashGridSpacing;
+        int col = Mathf.Clamp(Mathf.RoundToInt((local.x - trashGridOrigin.x) / stepX), 0, trashGridCols - 1);
+        int row = Mathf.Clamp(Mathf.RoundToInt((trashGridOrigin.y - local.y) / stepY), 0, Mathf.CeilToInt(count / (float)trashGridCols) - 1);
+        return Mathf.Clamp(row * trashGridCols + col, 0, count - 1);
+    }
+
+    // Drag-to-arrange for the owner's trash pile. Display order is newest-first, so the
+    // drop converts the display index back to a list index before dispatching reorderTrash.
+    private sealed class TrashCardDrag : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
+    {
+        private GameManager manager;
+        private string seat;
+        private string instanceId;
+        private int displayIndex;
+        private int count;
+        private RectTransform holder;
+        private RectTransform gridArea;
+        private CanvasGroup group;
+        private bool dragging;
+
+        public void Init(GameManager owner, string trashSeat, string id, int index, int total)
+        {
+            manager = owner;
+            seat = trashSeat;
+            instanceId = id;
+            displayIndex = index;
+            count = total;
+        }
+
+        public void OnBeginDrag(PointerEventData eventData)
+        {
+            holder = transform as RectTransform;
+            gridArea = holder != null ? holder.parent as RectTransform : null;
+            if (holder == null || gridArea == null) return;
+            group = GetComponent<CanvasGroup>();
+            if (group == null) group = gameObject.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false;
+            holder.SetAsLastSibling();
+            dragging = true;
+        }
+
+        public void OnDrag(PointerEventData eventData)
+        {
+            if (!dragging || holder == null || gridArea == null) return;
+            Vector2 local;
+            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(gridArea, eventData.position, null, out local))
+                holder.anchoredPosition = local;
+            // Lightweight preview: only the dragged card follows the cursor; the grid
+            // re-lays out for real on drop, which reads clearly at these card sizes.
+        }
+
+        public void OnEndDrag(PointerEventData eventData)
+        {
+            if (group != null) group.blocksRaycasts = true;
+            if (!dragging || holder == null || gridArea == null) { dragging = false; return; }
+            dragging = false;
+            int target = manager.TrashSlotFromPointer(gridArea, eventData.position, count);
+            if (target < 0 || target == displayIndex) { manager.Render(); return; }
+            // display index (newest-first) → list index (oldest-first): list = count-1-display.
+            // ReorderTrash inserts BEFORE the list index, so convert the drop slot too.
+            int listTarget = count - 1 - target;
+            manager.Dispatch(new GameCommand
+            {
+                Type = "reorderTrash",
+                Seat = seat,
+                InstanceId = instanceId,
+                SlotIndex = listTarget + (target < displayIndex ? 1 : 0),
+            });
+        }
     }
 
     private void AddOverlayButton(RectTransform parent, string label, Vector2 min, Vector2 max, UnityEngine.Events.UnityAction action, bool enabled = true)
@@ -1585,7 +1904,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private bool IsDeckLookSelectable(CardInstance card)
     {
         var dl = state?.DeckLook;
-        if (dl == null || dl.Step != "select" || card == null) return false;
+        if (dl == null || card == null) return false;
+        if (dl.Step == "scry") return true;   // scry: every looked card is choosable (top vs bottom)
+        if (dl.Step != "select") return false;
         var def = GameEngine.GetCard(card);
         if (def == null) return false;
         if (!string.IsNullOrEmpty(dl.NamedCardFilter))
@@ -1600,7 +1921,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (!string.IsNullOrEmpty(dl.FeatureFilter) && !def.HasFeature(dl.FeatureFilter)) return false;
             if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !string.Equals(def.Type, dl.CardTypeFilter, System.StringComparison.OrdinalIgnoreCase)) return false;
         }
+        if (dl.RequireTrigger && string.IsNullOrEmpty(def.Trigger)) return false;
         if (dl.MaxCost >= 0 && def.Cost > dl.MaxCost) return false;
+        if (dl.MaxPower >= 0 && def.Power > dl.MaxPower) return false;
         return true;
     }
 
@@ -1901,6 +2224,44 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
     }
 
+    // Mulligan deal: fly each of the 5 opening cards from the seat's deck pile to its
+    // overlay slot, staggered, flipping from card back to face at the midpoint (reuses
+    // AnimateCardFromDeck). Ghosts parent to the overlay itself so they render above
+    // the full-screen dim.
+    private IEnumerator AnimateMulliganDeal(string seat, List<CardInstance> cards, List<RectTransform> holders, Vector2 cardSize, RectTransform overlayRoot)
+    {
+        const float stagger = 0.18f;
+        const float duration = 0.45f;
+        var deckSource = GetBoardDeckTarget(seat);
+        if (deckSource == null || overlayRoot == null)
+        {
+            foreach (var holder in holders)
+            {
+                var g = holder != null ? holder.GetComponent<CanvasGroup>() : null;
+                if (g != null) { g.alpha = 1f; g.blocksRaycasts = true; g.interactable = true; }
+            }
+            yield break;
+        }
+        for (int i = 0; i < holders.Count && i < cards.Count; i++)
+        {
+            if (holders[i] == null) continue;
+            var ghost = new GameObject("Mulligan Deal Ghost").AddComponent<RectTransform>();
+            ghost.SetParent(overlayRoot, false);
+            ghost.SetAsLastSibling();
+            ghost.sizeDelta = cardSize;
+            ghost.position = deckSource.position;
+            ghost.rotation = deckSource.rotation;
+            ghost.localScale = Vector3.one * 0.34f;
+            var art = AddRoundedCardImage(ghost, "Art", GetBackSprite());
+            art.raycastTarget = false;
+            var gGroup = ghost.gameObject.AddComponent<CanvasGroup>();
+            gGroup.blocksRaycasts = false;
+            gGroup.interactable = false;
+            StartCoroutine(AnimateCardFromDeck(ghost, holders[i], GetCardSprite(cards[i].CardId), i * stagger, duration));
+        }
+        yield break;
+    }
+
     private RectTransform CreateDeckLookDrawGhost(RectTransform deckSource, Vector2 cardSize)
     {
         if (deckSource == null) return null;
@@ -2090,46 +2451,299 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
     }
 
-    // Mulligan choice: no modal — the freshly dealt hands are visible on the board, and each
-    // undecided player gets two choice bubbles (KEEP / MULLIGAN) tucked under their own hand
-    // (mirrored above the top hand for the hotseat second player). Networked PvP: each client
-    // only sees/controls its own choice, so nothing leaks before both have decided.
+    // Mulligan choice — deck-look-style overlay: your freshly dealt 5 cards pop out large
+    // across the center of the screen with KEEP / MULLIGAN buttons underneath, plus a
+    // "View Board / Hand" toggle that hides the overlay to inspect the table (a small
+    // "Show Cards" button brings it back). Hotseat shows one undecided seat at a time
+    // (south first); networked PvP only ever shows the local seat's hand.
     private void DrawMulliganOverlay()
     {
-        if (state.Status != "mulligan") return;
-
-        var hint = TextObject("Mulligan Hint", boardRoot,
-            "Look at your 5 cards — keep this hand, or mulligan once for a fresh 5.",
-            13, Muted, TextAnchor.MiddleCenter, titleFont);
-        Stretch(hint.rectTransform, new Vector2(0.25f, 0.515f), new Vector2(0.75f, 0.545f), Vector2.zero, Vector2.zero);
-        hint.raycastTarget = false;
-
-        var mulliganSeats = isNetworked ? new[] { BottomSeat } : new[] { "south", "north" };
-        foreach (var seat in mulliganSeats)
+        // Canvas-parented like the deck-look overlay — Render()'s Clear() doesn't touch the
+        // canvas, so tear down the previous overlay ourselves.
+        if (mulliganOverlay != null)
         {
-            var p = state.Players[seat];
-            bool top = seat == TopSeat;
-            var holder = PanelObject(seat + " Mulligan Choice", boardRoot, new Color(0, 0, 0, 0));
-            Stretch(holder,
-                top ? new Vector2(0.30f, 0.952f) : new Vector2(0.30f, 0.004f),
-                top ? new Vector2(0.70f, 0.996f) : new Vector2(0.70f, 0.048f),
-                Vector2.zero, Vector2.zero);
-            holder.GetComponent<Image>().raycastTarget = false;
-
-            if (p.MulliganDecided)
+            Destroy(mulliganOverlay.gameObject);
+            mulliganOverlay = null;
+        }
+        // Post-mulligan reveal: the decision is already made, but the player should SEE
+        // their fresh 5 cards dealt (deck → row animation) before play moves on.
+        if (mulliganRedrawSeat != null)
+        {
+            if (isNetworked && mulliganRedrawSeat != localSeat)
             {
-                var ready = TextObject(seat + " Mulligan Ready", holder, "READY — waiting for opponent...", 11, Muted, TextAnchor.MiddleCenter, monoFont);
-                Stretch(ready.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-                ready.raycastTarget = false;
-                continue;
+                mulliganRedrawSeat = null;
             }
+            else if (state.Players.TryGetValue(mulliganRedrawSeat, out var redrawP) && redrawP != null)
+            {
+                DrawMulliganRedrawOverlay(redrawP);
+                return;
+            }
+        }
 
-            var row = RowObject(seat + " Mulligan Buttons", holder, 12, TextAnchor.MiddleCenter);
-            Stretch(row, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            AddButton(row, "KEEP", () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = false }));
-            AddButton(row, "MULLIGAN", () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = true }));
+        if (state.Status != "mulligan")
+        {
+            mulliganPeeking = false;
+            return;
+        }
+
+        // Whose decision is on screen right now?
+        string seat = null;
+        var mulliganSeats = isNetworked ? new[] { BottomSeat } : new[] { "south", "north" };
+        foreach (var cand in mulliganSeats)
+            if (!state.Players[cand].MulliganDecided) { seat = cand; break; }
+
+        if (seat == null)
+        {
+            // Local player(s) done — just a small status chip while waiting on the peer.
+            var wait = TextObject("Mulligan Waiting", boardRoot,
+                "READY — waiting for opponent...", 12, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(wait.rectTransform, new Vector2(0.3f, 0.48f), new Vector2(0.7f, 0.52f), Vector2.zero, Vector2.zero);
+            wait.raycastTarget = false;
+            return;
+        }
+
+        var p = state.Players[seat];
+
+        // Peeking: overlay dismissed to look at the board; leave a button to bring it back.
+        if (mulliganPeeking)
+        {
+            var peekBtn = PanelObject("Mulligan Peek Btn", canvas.transform, (Color)new Color32(34, 58, 78, 245));
+            Stretch(peekBtn, new Vector2(0.80f, 0.918f), new Vector2(0.935f, 0.965f), Vector2.zero, Vector2.zero);
+            peekBtn.SetAsLastSibling();
+            RoundBig(peekBtn);
+            AddRoundedCardBorder(peekBtn, Accent, 1.4f);
+            var peekText = TextObject("Text", peekBtn, "Show Cards", 15, Ink, TextAnchor.MiddleCenter, monoFont);
+            peekText.fontStyle = FontStyle.Bold;
+            Stretch(peekText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var peekButton = peekBtn.gameObject.AddComponent<Button>();
+            peekButton.onClick.AddListener(() => { mulliganPeeking = false; Render(); });
+            mulliganOverlay = peekBtn;
+            return;
+        }
+
+        // Full-screen dim over everything (side panels included), like the search overlay.
+        var dim = PanelObject("Mulligan Dim", canvas.transform, new Color32(5, 7, 10, 225));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+        mulliganOverlay = dim;
+
+        // Title: centered, tight above the card row.
+        string who = isNetworked ? "Your opening hand" : (p.Name + "'s opening hand");
+        var title = TextObject("Mulligan Title", dim,
+            who + " — keep these 5, or mulligan once for a fresh 5", 22, Ink, TextAnchor.LowerCenter);
+        Stretch(title.rectTransform, new Vector2(0.10f, 0.845f), new Vector2(0.90f, 0.92f), Vector2.zero, Vector2.zero);
+
+        var dragHint = TextObject("Mulligan Drag Hint", dim,
+            "drag cards to arrange your hand", 11, Muted, TextAnchor.UpperCenter, monoFont);
+        Stretch(dragHint.rectTransform, new Vector2(0.30f, 0.805f), new Vector2(0.70f, 0.842f), Vector2.zero, Vector2.zero);
+        dragHint.raycastTarget = false;
+
+        // The 5 dealt cards — slot-positioned (not a layout group) so they can be
+        // drag-reordered exactly like the deck-look rearrange step. Dropping a card
+        // dispatches the engine's reorderHand command, so the new order is real.
+        var row = new GameObject("Mulligan Row").AddComponent<RectTransform>();
+        row.SetParent(dim, false);
+        Stretch(row, new Vector2(0.03f, 0.215f), new Vector2(0.97f, 0.80f), Vector2.zero, Vector2.zero);
+        var cardSize = DeckLookCardSize(p.Hand.Count, true) * 0.92f;
+        // Deal animation: the first time this exact hand is shown (including the fresh 5
+        // after a mulligan), the cards fly out of the deck pile one by one, flipping face
+        // up mid-flight — same feel as the search/deck-look reveal. The fingerprint is
+        // order-independent so drag-reordering doesn't re-trigger it.
+        var handIds = new List<string>();
+        foreach (var hc in p.Hand) handIds.Add(hc.InstanceId);
+        handIds.Sort(System.StringComparer.Ordinal);
+        string dealKey = seat + ":" + string.Join(",", handIds.ToArray());
+        bool animateDeal = dealKey != mulliganAnimShownKey;
+
+        mulliganCardRects.Clear();
+        var dealHolders = new List<RectTransform>();
+        var dealCards = new List<CardInstance>();
+        for (int mi = 0; mi < p.Hand.Count; mi++)
+        {
+            var card = p.Hand[mi];
+            var holder = new GameObject("Mulligan Card").AddComponent<RectTransform>();
+            holder.SetParent(row, false);
+            ApplyDeckLookSlot(holder, row, mi, p.Hand.Count, cardSize);
+            AddCard(holder, card, null, true, Vector2.zero, true);
+            mulliganCardRects[card.InstanceId] = holder;
+            var drag = holder.gameObject.AddComponent<MulliganCardDrag>();
+            drag.Init(this, seat, card.InstanceId, cardSize);
+            if (animateDeal)
+            {
+                var hideGroup = holder.gameObject.AddComponent<CanvasGroup>();
+                hideGroup.alpha = 0f;
+                hideGroup.blocksRaycasts = false;
+                hideGroup.interactable = false;
+                dealHolders.Add(holder);
+                dealCards.Add(card);
+            }
+        }
+        if (animateDeal)
+        {
+            mulliganAnimShownKey = dealKey;
+            StartCoroutine(AnimateMulliganDeal(seat, dealCards, dealHolders, cardSize, dim));
+        }
+
+        // Decision buttons — condensed, side by side, directly under the cards;
+        // the board-view toggle centered beneath them (matches the sketch).
+        string capSeat = seat;
+        AddOverlayButton(dim, "KEEP HAND", new Vector2(0.335f, 0.125f), new Vector2(0.495f, 0.185f),
+            () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = capSeat, Mulligan = false }));
+        AddOverlayButton(dim, "MULLIGAN", new Vector2(0.505f, 0.125f), new Vector2(0.665f, 0.185f),
+            () =>
+            {
+                mulliganRedrawSeat = capSeat;   // show + animate the fresh 5 before moving on
+                Dispatch(new GameCommand { Type = "mulliganDecision", Seat = capSeat, Mulligan = true });
+            });
+        AddOverlayButton(dim, "VIEW BOARD / HAND", new Vector2(0.40f, 0.052f), new Vector2(0.60f, 0.112f),
+            () => { mulliganPeeking = true; Render(); });
+
+        // Hotseat courtesy note: whose turn to decide next.
+        if (!isNetworked && !state.Players[OtherSeatLocal(seat)].MulliganDecided && seat == "south")
+        {
+            var next = TextObject("Mulligan Next", dim, "North decides next", 11, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(next.rectTransform, new Vector2(0.35f, 0.012f), new Vector2(0.65f, 0.042f), Vector2.zero, Vector2.zero);
         }
     }
+
+    // Post-mulligan reveal overlay: the fresh 5 cards fly from the deck (same deal
+    // animation), with a single CONTINUE button to move on. Read-only — the mulligan
+    // decision is already committed.
+    private void DrawMulliganRedrawOverlay(PlayerState p)
+    {
+        var dim = PanelObject("Mulligan Redraw Dim", canvas.transform, new Color32(5, 7, 10, 225));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+        mulliganOverlay = dim;
+
+        string who = isNetworked ? "Your new hand" : (p.Name + "'s new hand");
+        var title = TextObject("Mulligan Redraw Title", dim, who + " — mulligan used", 22, Ink, TextAnchor.LowerCenter);
+        Stretch(title.rectTransform, new Vector2(0.10f, 0.845f), new Vector2(0.90f, 0.92f), Vector2.zero, Vector2.zero);
+
+        var row = new GameObject("Mulligan Redraw Row").AddComponent<RectTransform>();
+        row.SetParent(dim, false);
+        Stretch(row, new Vector2(0.03f, 0.215f), new Vector2(0.97f, 0.80f), Vector2.zero, Vector2.zero);
+        var cardSize = DeckLookCardSize(p.Hand.Count, true) * 0.92f;
+
+        var handIds = new List<string>();
+        foreach (var hc in p.Hand) handIds.Add(hc.InstanceId);
+        handIds.Sort(System.StringComparer.Ordinal);
+        string dealKey = "redraw:" + p.Seat + ":" + string.Join(",", handIds.ToArray());
+        bool animateDeal = dealKey != mulliganAnimShownKey;
+
+        var dealHolders = new List<RectTransform>();
+        var dealCards = new List<CardInstance>();
+        for (int mi = 0; mi < p.Hand.Count; mi++)
+        {
+            var card = p.Hand[mi];
+            var holder = new GameObject("Mulligan Redraw Card").AddComponent<RectTransform>();
+            holder.SetParent(row, false);
+            ApplyDeckLookSlot(holder, row, mi, p.Hand.Count, cardSize);
+            AddCard(holder, card, null, true, Vector2.zero, true);
+            if (animateDeal)
+            {
+                var hideGroup = holder.gameObject.AddComponent<CanvasGroup>();
+                hideGroup.alpha = 0f;
+                hideGroup.blocksRaycasts = false;
+                hideGroup.interactable = false;
+                dealHolders.Add(holder);
+                dealCards.Add(card);
+            }
+        }
+        if (animateDeal)
+        {
+            mulliganAnimShownKey = dealKey;
+            StartCoroutine(AnimateMulliganDeal(p.Seat, dealCards, dealHolders, cardSize, dim));
+        }
+
+        AddOverlayButton(dim, "CONTINUE", new Vector2(0.42f, 0.10f), new Vector2(0.58f, 0.165f),
+            () => { mulliganRedrawSeat = null; Render(); });
+    }
+
+    // Drag-to-reorder for the mulligan overlay: same slot mechanics as the deck-look
+    // rearrange step, but the drop is committed through the engine's reorderHand command
+    // so the arranged order IS the real hand order when the match starts.
+    private readonly Dictionary<string, RectTransform> mulliganCardRects = new Dictionary<string, RectTransform>();
+
+    private sealed class MulliganCardDrag : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
+    {
+        private GameManager manager;
+        private string seat;
+        private string instanceId;
+        private Vector2 cardSize;
+        private RectTransform holder;
+        private RectTransform row;
+        private CanvasGroup group;
+        private List<string> previewOrder;
+        private int startIndex;
+
+        public void Init(GameManager owner, string handSeat, string id, Vector2 size)
+        {
+            manager = owner;
+            seat = handSeat;
+            instanceId = id;
+            cardSize = size;
+        }
+
+        public void OnBeginDrag(PointerEventData eventData)
+        {
+            holder = transform as RectTransform;
+            row = holder != null ? holder.parent as RectTransform : null;
+            if (holder == null || row == null || manager.state == null) return;
+            previewOrder = manager.state.Players[seat].Hand.Select(c => c.InstanceId).ToList();
+            startIndex = previewOrder.IndexOf(instanceId);
+            if (startIndex < 0) { previewOrder = null; return; }
+            group = GetComponent<CanvasGroup>();
+            if (group == null) group = gameObject.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false;
+            holder.SetAsLastSibling();
+            UpdatePreview(eventData);
+        }
+
+        public void OnDrag(PointerEventData eventData)
+        {
+            if (previewOrder == null || holder == null) return;
+            UpdatePreview(eventData);
+        }
+
+        public void OnEndDrag(PointerEventData eventData)
+        {
+            if (group != null) group.blocksRaycasts = true;
+            if (previewOrder == null || holder == null || row == null) return;
+            int target = manager.DeckLookTargetSlot(row, eventData.position, previewOrder.Count, cardSize);
+            previewOrder = null;
+            holder = null;
+            row = null;
+            if (target != startIndex)
+                // ReorderHand treats SlotIndex as a pre-removal insertion point, so moving
+                // right needs +1 to land on the intended final slot (same as EngineHandTargetIndex).
+                manager.Dispatch(new GameCommand { Type = "reorderHand", Seat = seat, InstanceId = instanceId, SlotIndex = startIndex < target ? target + 1 : target });
+            else
+                manager.Render();   // snap everything back
+        }
+
+        private void UpdatePreview(PointerEventData eventData)
+        {
+            // Dragged card follows the cursor.
+            Vector2 local;
+            if (RectTransformUtility.ScreenPointToLocalPointInRectangle(row, eventData.position, null, out local))
+                holder.anchoredPosition = local;
+            // Others slide into the projected order.
+            int target = manager.DeckLookTargetSlot(row, eventData.position, previewOrder.Count, cardSize);
+            var projected = new List<string>(previewOrder);
+            projected.Remove(instanceId);
+            projected.Insert(Mathf.Clamp(target, 0, projected.Count), instanceId);
+            for (int i = 0; i < projected.Count; i++)
+            {
+                if (projected[i] == instanceId) continue;
+                RectTransform other;
+                if (manager.mulliganCardRects.TryGetValue(projected[i], out other) && other != null)
+                    manager.SlideDeckLookSlot(other, row, i, projected.Count, cardSize);
+            }
+        }
+    }
+
+    private static string OtherSeatLocal(string seat) => seat == "south" ? "north" : "south";
 
     private void DrawCoinFlipOverlay()
     {
@@ -2363,8 +2977,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var donRow = new GameObject("Cost DON Cards").AddComponent<RectTransform>();
         donRow.SetParent(cost, false);
         Stretch(donRow, new Vector2(0.02f, 0.06f), new Vector2(0.98f, 0.94f), Vector2.zero, Vector2.zero);
-        if (state != null && seat == state.ActiveSeat && donGroupSizes.Count > 1)
+        bool ownDonGroups = state != null && seat == state.ActiveSeat
+            && (!isNetworked || seat == localSeat) && donGroupSizes.Count > 1;
+        if (ownDonGroups)
             DrawGroupedDonRow(donRow, p.CostArea, seat, top);
+        else if (state != null && isNetworked && seat == state.ActiveSeat && seat != localSeat
+                 && opponentPresence != null && opponentPresence.donGroups != null && opponentPresence.donGroups.Length > 1)
+            // The opponent streamed their DON!! grouping — mirror it so both players see
+            // the same planned splits live.
+            DrawGroupedDonRow(donRow, p.CostArea, seat, top, opponentPresence.donGroups);
         else
             DrawFittedDonRow(donRow, p.CostArea, seat, top);
         // ("No DON!!" placeholder text removed per design.)
@@ -2390,6 +3011,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var deckMax = top ? new Vector2(0.13f, 0.66f) : new Vector2(1.00f, 0.64f);
         var deck = MatZone(half, "DECK", deckMin, deckMax, new Color32(221, 226, 211, 225), top);
         boardDeckPileRects[seat] = AddPileCardToZone(deck, "Deck", p.Deck.Count, true, null, top);
+        if (isNetworked) { presenceGlowRects["pile:deck:" + seat] = deck; deck.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:deck:" + seat); }
         var deckSz = FittedCardSize(deck);
         float deckDepth = p.Deck.Count > 0 ? StackDepth(p.Deck.Count) : 0f;
         SnugZone(deck, deckMin, deckMax, deckSz.x * 1.06f, deckSz.y * 1.06f + deckDepth);
@@ -2399,6 +3021,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var donDeckMax = top ? new Vector2(1.00f, 0.98f) : new Vector2(0.13f, 0.31f);
         var donDeck = MatZone(half, "DON!! DECK", donDeckMin, donDeckMax, new Color32(221, 226, 211, 225), top);
         AddDonDeckPileToZone(donDeck, p.DonDeck, top);
+        if (isNetworked) { presenceGlowRects["pile:dondeck:" + seat] = donDeck; donDeck.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:dondeck:" + seat); }
         var donSz = FittedCardSize(donDeck);
         float donDepth = p.DonDeck > 0 ? StackDepth(p.DonDeck) : 0f;
         SnugZone(donDeck, donDeckMin, donDeckMax, donSz.x * 1.06f, donSz.y * 1.06f + donDepth);
@@ -2407,6 +3030,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var trashMax = top ? new Vector2(0.13f, 0.98f) : new Vector2(1.00f, 0.31f);
         var trash = MatZone(half, "TRASH", trashMin, trashMax, new Color32(172, 169, 73, 220), top);
         AddPileCardToZone(trash, "Trash", p.Trash.Count, false, p.Trash.LastOrDefault(), top);
+        if (isNetworked) { presenceGlowRects["pile:trash:" + seat] = trash; trash.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:trash:" + seat); }
+        // Clicking a trash pile (yours or the opponent's) opens the trash viewer for that side.
+        {
+            string trashSeatCap = p.Seat;
+            var trashBtn = trash.gameObject.GetComponent<Button>();
+            if (trashBtn == null) trashBtn = trash.gameObject.AddComponent<Button>();
+            trashBtn.transition = Selectable.Transition.None;
+            trashBtn.onClick.AddListener(() =>
+            {
+                trashViewSeat = trashViewSeat == trashSeatCap ? null : trashSeatCap;
+                Render();
+            });
+        }
         var trashSz = FittedCardSize(trash);
         float trashDepth = p.Trash.Count > 1 ? StackDepth(p.Trash.Count) : 0f;
         SnugZone(trash, trashMin, trashMax, trashSz.x * 1.06f, trashSz.y * 1.06f + trashDepth);
@@ -2416,7 +3052,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var lifeMin = top ? new Vector2(0.85f, 0.03f) : new Vector2(0.02f, 0.40f);
         var lifeMax = top ? new Vector2(0.98f, 0.60f) : new Vector2(0.15f, 0.97f);
         var life = MatZone(half, "LIFE", lifeMin, lifeMax, new Color32(226, 230, 216, 235), top);
-        AddLifeStackToZone(life, p.Life.Count, top);
+        AddLifeStackToZone(life, p.Life.Count, top, seat);
     }
 
     private void DrawExternalHand(PlayerState p, string seat, bool top)
@@ -2492,6 +3128,32 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (showPower) AddPreviewChip(chips, "POWER " + GameEngine.GetPower(state, focus), false);
         }
 
+        // Status detail: one line per active indicator on the focused card, colored to
+        // match the on-card chips ("Cannot attack (this turn).", "Power +2000 ...", ...).
+        var previewBadges = focus != null ? GameEngine.GetStatusBadges(state, focus) : null;
+        if (previewBadges != null && previewBadges.Count > 0)
+        {
+            var sbLines = new System.Text.StringBuilder();
+            foreach (var sb in previewBadges)
+            {
+                string hex = sb.Kind == "buff" ? "6fe08f" : sb.Kind == "debuff" ? "ff8b8b"
+                           : sb.Kind == "restrict" ? "ffce7a" : "8fc3ff";
+                sbLines.Append("<color=#").Append(hex).Append(">● ").Append(sb.Detail).Append("</color>\n");
+            }
+            var sbBox = PanelObject("Preview Status", leftRoot, LogBgDark);
+            Stretch(sbBox, new Vector2(0.06f, 0.352f), new Vector2(0.94f, 0.442f), Vector2.zero, Vector2.zero);
+            RoundBig(sbBox);
+            AddRoundedCardBorder(sbBox, MenuB, 1f);
+            var sbTxt = TextObject("Preview Status Text", sbBox, sbLines.ToString().TrimEnd('\n'), 10, Ink, TextAnchor.UpperLeft);
+            sbTxt.supportRichText = true;
+            sbTxt.horizontalOverflow = HorizontalWrapMode.Wrap;
+            sbTxt.verticalOverflow = VerticalWrapMode.Truncate;
+            sbTxt.resizeTextForBestFit = true;
+            sbTxt.resizeTextMinSize = 8;
+            sbTxt.resizeTextMaxSize = 10;
+            Stretch(sbTxt.rectTransform, new Vector2(0.07f, 0.06f), new Vector2(0.93f, 0.94f), Vector2.zero, Vector2.zero);
+        }
+
         var effBox = PanelObject("Preview Effect", leftRoot, LogBgDark);
         Stretch(effBox, new Vector2(0.06f, 0.45f), new Vector2(0.94f, 0.552f), Vector2.zero, Vector2.zero);
         RoundBig(effBox);
@@ -2501,6 +3163,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(eff.rectTransform, new Vector2(0.07f, 0.06f), new Vector2(0.93f, 0.94f), Vector2.zero, Vector2.zero);
 
         DrawCombatLogPanel();
+    }
+
+    private static Color StatusBadgeColor(string kind)
+    {
+        switch (kind)
+        {
+            case "buff":     return new Color32(20, 92, 46, 235);    // green
+            case "debuff":   return new Color32(110, 26, 26, 235);   // red
+            case "restrict": return new Color32(122, 84, 16, 235);   // amber
+            default:         return new Color32(26, 64, 118, 235);   // blue (info)
+        }
     }
 
     private void AddPreviewChip(RectTransform parent, string label, bool primary)
@@ -3002,7 +3675,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddCountBadge(zone, count);
     }
 
-    private void AddLifeStackToZone(RectTransform zone, int count, bool top)
+    private void AddLifeStackToZone(RectTransform zone, int count, bool top, string seat = null)
     {
         int visible = Mathf.Min(count, 5);
         // Sideways cards stacked vertically. No per-card border or divider - hovering a card shows the
@@ -3018,6 +3691,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             RoundedCardVisual("Life Back", card, GetBackSprite(), out var img);
             img.raycastTarget = false;
             card.gameObject.AddComponent<BackHover>().Init(this);
+            // Per-CARD presence: the opponent's glow lands on this exact Life card,
+            // not the whole Life region.
+            if (isNetworked && seat != null)
+            {
+                string lifeToken = "life:" + seat + ":" + i;
+                presenceGlowRects[lifeToken] = card;
+                card.gameObject.AddComponent<ZoneHoverPresence>().Init(this, lifeToken);
+            }
         }
 
         AddCountBadge(zone, count);
@@ -3417,6 +4098,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (!isNetworked || isReplayMode) return;
         opponentPresence = payload;
+        // Presence streams at ~10 packets/sec with the FULL state each time. Re-applying an
+        // unchanged packet destroys and recreates the glow 10x a second — visible blinking.
+        // Only re-apply when something actually changed.
+        string hoverNow = payload != null ? (payload.hoverCardId ?? "") : "";
+        string raisedNow = payload != null && payload.raisedHandIndexes != null ? string.Join(",", System.Array.ConvertAll(payload.raisedHandIndexes, x => x.ToString())) : "";
+        string groupsNow = payload != null && payload.donGroups != null ? string.Join(",", System.Array.ConvertAll(payload.donGroups, x => x.ToString())) : "";
+        bool groupsChanged = groupsNow != lastPresenceGroups;
+        if (hoverNow == lastPresenceHover && raisedNow == lastPresenceRaised && !groupsChanged) return;
+        lastPresenceHover = hoverNow;
+        lastPresenceRaised = raisedNow;
+        lastPresenceGroups = groupsNow;
+        if (groupsChanged)
+        {
+            Render();   // opponent re-partitioned their DON!! — redraw their cost row grouped
+            return;     // Render() re-applies presence at the end
+        }
         ApplyOpponentPresence();
     }
 
@@ -3424,30 +4121,57 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         // Clear previous cosmetic state first (also handles the empty-payload case).
         if (opponentPresenceGlow != null) { Destroy(opponentPresenceGlow.gameObject); opponentPresenceGlow = null; }
+        foreach (var g in opponentPresenceHandGlows) if (g != null) Destroy(g.gameObject);
+        opponentPresenceHandGlows.Clear();
         for (int i = 0; i < opponentHandSlots.Count; i++)
             if (opponentHandSlots[i] != null) opponentHandSlots[i].anchoredPosition = opponentHandSlotHomes[i];
 
         if (!isNetworked || opponentPresence == null) return;
 
-        // (i) Gold hover glow on the board card the opponent is pointing at.
-        if (!string.IsNullOrEmpty(opponentPresence.hoverCardId)
-            && cardTargetRects.TryGetValue(opponentPresence.hoverCardId, out var cardRect) && cardRect != null)
+        // (i) Gold hover glow on whatever the opponent is pointing at — board cards first,
+        // then the extended registry (cost-area DON!!, deck / DON!! deck / trash piles, Life).
+        if (!string.IsNullOrEmpty(opponentPresence.hoverCardId))
         {
-            var host = (cardRect.Find("Card Face") as RectTransform) ?? cardRect;
-            opponentPresenceGlow = AddMysticalCardOutline(host, false);
+            RectTransform glowRect = null;
+            if (cardTargetRects.TryGetValue(opponentPresence.hoverCardId, out var cardRect) && cardRect != null)
+                glowRect = (cardRect.Find("Card Face") as RectTransform) ?? cardRect;
+            else if (presenceGlowRects.TryGetValue(opponentPresence.hoverCardId, out var zoneRect) && zoneRect != null)
+                glowRect = zoneRect;
+            if (glowRect != null)
+                opponentPresenceGlow = AddMysticalCardOutline(glowRect, false);
         }
 
-        // (ii) Lift the opponent's face-down hand cards they're inspecting by ~12px (they stay
-        // face-down; the top hand lifts toward the board centre, i.e. downward on screen).
+        // (ii) The opponent's inspected hand cards lift ~12px AND glow (the lift alone was
+        // easy to miss; the glow matches every other "opponent is looking here" cue).
         if (opponentPresence.raisedHandIndexes != null)
         {
             foreach (var idx in opponentPresence.raisedHandIndexes)
             {
                 if (idx < 0 || idx >= opponentHandSlots.Count) continue;
                 var slot = opponentHandSlots[idx];
-                if (slot != null) slot.anchoredPosition = opponentHandSlotHomes[idx] + new Vector2(0f, -12f);
+                if (slot == null) continue;
+                slot.anchoredPosition = opponentHandSlotHomes[idx] + new Vector2(0f, -12f);
+                opponentPresenceHandGlows.Add(AddMysticalCardOutline(slot, false));
             }
         }
+    }
+
+    // Publishes hover on non-card zones (DON!!, deck/DON!!-deck/trash piles, Life stacks) so
+    // the opponent sees a glow on EVERYTHING the player inspects, not just board cards.
+    private void SetZonePresenceHover(string token, bool entered)
+    {
+        if (!isNetworked || string.IsNullOrEmpty(token)) return;
+        if (entered) presenceHoverCardId = token;
+        else if (presenceHoverCardId == token) presenceHoverCardId = null;
+    }
+
+    private sealed class ZoneHoverPresence : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        private GameManager manager;
+        private string token;
+        public void Init(GameManager m, string t) { manager = m; token = t; }
+        public void OnPointerEnter(PointerEventData e) { if (manager != null) manager.SetZonePresenceHover(token, true); }
+        public void OnPointerExit(PointerEventData e) { if (manager != null) manager.SetZonePresenceHover(token, false); }
     }
 
     // Networked-match chat: a collapsed tab on the LEFT screen edge; clicking it expands a
@@ -3711,7 +4435,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 AddInfo(body, $"{dl.SourceName}: opponent is looking at cards — waiting on opponent...");
                 return;
             }
-            if (dl.SearchMode)
+            if (dl.Step == "scry")
+            {
+                AddInfo(body, $"{dl.SourceName}: click cards to keep on top of the deck; the rest go to the bottom.");
+                AddButton(body, "Confirm Placement", () => Dispatch(new GameCommand { Type = "deckLookScryConfirm", Seat = dl.Seat, OrderedInstanceIds = new List<string>(deckLookScryTopIds ?? new List<string>()) }));
+            }
+            else if (dl.SearchMode)
             {
                 string costHint = dl.MaxCost >= 0 ? $" (cost ≤ {dl.MaxCost})" : "";
                 AddInfo(body, $"{dl.SourceName}: search the deck — click a card to add to hand{costHint}.");
@@ -3759,17 +4488,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         // ---- Trash viewer --------------------------------------------------------
+        // The cards themselves render in the trash popup (DrawTrashOverlay) over the play
+        // area; the side panel just offers the close action.
         if (trashViewSeat != null)
         {
             state.Players.TryGetValue(trashViewSeat, out var tvp);
-            var trash = tvp?.Trash ?? new List<CardInstance>();
-            AddInfo(body, $"{trashViewSeat} trash ({trash.Count} cards):");
-            for (int ti = trash.Count - 1; ti >= 0; ti--)
-            {
-                var tc = trash[ti];
-                var td = GameEngine.GetCard(tc);
-                AddInfo(body, $"  [{td.Cost}] {td.Name} ({td.Type})");
-            }
+            int tvCount = tvp?.Trash.Count ?? 0;
+            AddInfo(body, $"Viewing {trashViewSeat} trash ({tvCount} cards). Hover a card for a preview.");
             AddButton(body, "Close Trash View", () => { trashViewSeat = null; Render(); });
             return;
         }
@@ -3886,14 +4611,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         // ---- Default -------------------------------------------------------------
-        AddInfo(body, "Click one of your board cards to select it, or play cards from your hand.");
-        foreach (var kvp in state.Players)
-        {
-            string seat = kvp.Key;
-            int tCount = kvp.Value.Trash.Count;
-            var captSeat = seat;
-            AddButton(body, $"View {seat} Trash ({tCount})", () => { trashViewSeat = captSeat; Render(); });
-        }
+        AddInfo(body, "Click one of your board cards to select it, or play cards from your hand. Click a trash pile to browse it.");
     }
 
     private void DrawPendingEffectActions(RectTransform body)
@@ -3910,8 +4628,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             return;
         }
         AddEffectCardVisual(body, effect.SourceCardId);
-        AddInfo(body, source.Name + " - " + EffectTimingLabel(effect.Timing));
-        AddInfo(body, effect.Text);
+        AddInfo(body, source.Name + " — " + EffectTimingLabel(effect.Timing));
+        AddScaledInfo(body, effect.Text);
+        if (effect.SelectionsRemaining > 1)
+            AddInfo(body, $"Choose {effect.SelectionsRemaining} more target(s) — or skip to stop early.");
 
         string targetHint;
         if (effect.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand)
@@ -3924,70 +4644,32 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             targetHint = "Click a valid target on the board if the effect needs one.";
         AddInfo(body, targetHint);
 
-        // For trash-targeting effects: show each trash card as a clickable button so the player
-        // doesn't have to navigate a pile.  This mirrors how hand cards are routed above.
-        if (effect.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash
-            && state.Players.TryGetValue(effect.Seat, out var trashOwner) && trashOwner.Trash.Count > 0)
-        {
-            AddInfo(body, "Select from your trash:");
-            foreach (var tc in trashOwner.Trash)
-            {
-                var captured = tc;
-                var tcDef = GameEngine.GetCard(captured);
-                AddButton(body, $"{tcDef.Name} (Cost {tcDef.Cost})", () => Dispatch(new GameCommand
-                {
-                    Type = "resolveEffect",
-                    Seat = effect.Seat,
-                    EffectId = effect.EffectId,
-                    Target = captured.InstanceId,
-                }));
-            }
-        }
+        // Trash-targeting effects open the trash popup over the play area (DrawTrashOverlay);
+        // the player clicks a card there directly, with hover previews.
 
         AddButton(body, ResolveEffectLabel(effect), () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
         AddButton(body, "SKIP", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional);
     }
 
-    // Short, descriptive label for the resolve button, derived from the queued effect:
-    // "UTA: +2000 POWER", "ROBIN: PLAY FROM HAND", ... Falls back to the first ~30 chars
-    // of the effect clause, uppercased.
+    // Button label for the resolve button: the card's effect text VERBATIM (players
+    // know how to read card text — paraphrasing loses context). Only the leading
+    // timing tags (already shown in the panel header) and the standard DON!!-return
+    // reminder parenthetical are stripped, and whitespace is collapsed.
     private static string ResolveEffectLabel(PendingEffect effect)
     {
-        var src = CardData.GetCard(effect.SourceCardId);
-        string name = src != null && !string.IsNullOrEmpty(src.Name) ? src.Name.ToUpperInvariant() : "EFFECT";
-        // Keep the prefix compact for multi-word names ("NICO ROBIN" -> "ROBIN" is nicer, but
-        // ambiguous to derive; just cap the whole name's length instead).
-        if (name.Length > 14) name = name.Substring(0, 14).TrimEnd();
-        string clause = SummarizeEffectClause(effect.Text);
-        return string.IsNullOrEmpty(clause) ? name + ": RESOLVE" : name + ": " + clause;
+        string text = effect.Text ?? "";
+        // Strip leading timing tags like [Activate: Main] / [On Play]/[On K.O.].
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]*\]\s*/?\s*)+", "").Trim();
+        // Strip the boilerplate DON!!-return reminder text.
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"\(You may return the specified number of DON!! cards from your field to your DON!! deck\.?\)", "");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        return string.IsNullOrEmpty(text) ? "Resolve effect" : UpperFirst(text);
     }
 
-    private static string SummarizeEffectClause(string text)
+    private static string UpperFirst(string s)
     {
-        if (string.IsNullOrWhiteSpace(text)) return null;
-        var Rx = new System.Func<string, System.Text.RegularExpressions.Match>(pat =>
-            System.Text.RegularExpressions.Regex.Match(text, pat,
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase));
-
-        var m = Rx(@"([+\-−–]\s?\d{3,5})\s*power");
-        if (m.Success) return NormalizeSign(m.Groups[1].Value) + " POWER";
-        m = Rx(@"([+\-−–]\s?\d{1,2})\s*cost");
-        if (m.Success) return NormalizeSign(m.Groups[1].Value) + " COST";
-        if (Rx(@"\bK\.?O\.?\b").Success) return "K.O. TARGET";
-        if (Rx(@"play\b[^.]*from your hand").Success) return "PLAY FROM HAND";
-        if (Rx(@"play\b[^.]*from your trash").Success) return "PLAY FROM TRASH";
-        m = Rx(@"draw (\d+|a) cards?");
-        if (m.Success) return "DRAW " + (m.Groups[1].Value.Equals("a", System.StringComparison.OrdinalIgnoreCase) ? "1" : m.Groups[1].Value);
-
-        // Fallback: strip leading timing/cost tags, take the first clause, cap ~30 chars.
-        string t = System.Text.RegularExpressions.Regex.Replace(text,
-            @"^\s*(\[[^\]]*\]\s*|[①②③④⑤⑥⑦⑧⑨⑩]\s*:?\s*|DON!!\s*[x×]?\s*\d+\s*:?\s*)+", "");
-        int cut = t.IndexOfAny(new[] { '.', ';', ':' });
-        if (cut > 0) t = t.Substring(0, cut);
-        t = t.Trim();
-        if (t.Length == 0) return null;
-        if (t.Length > 30) t = t.Substring(0, 30).TrimEnd();
-        return t.ToUpperInvariant();
+        return string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
     }
 
     private static string NormalizeSign(string value)
@@ -4027,6 +4709,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             case "endOfOpponentsTurn":  return "End of Opponent's Turn";
             case "startOfYourTurn":     return "Start of Your Turn";
             case "counter":             return "Counter";
+            case "onBlock":             return "On Block";
+            case "onOpponentsAttack":   return "On Your Opponent's Attack";
+            case "reactive":            return "Triggered Effect";
             default: return string.IsNullOrEmpty(timing) ? "Effect" : timing;
         }
     }
@@ -4087,10 +4772,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (card != null) previewLockCard = card;
         if (state.DeckLook != null)
         {
-            // Only the "select" step is click-driven; "rearrange" is drag-to-reorder (see
-            // DeckLookCardDrag) plus an explicit Confirm button, not handled here.
+            // "select" is click-driven; "scry" clicks toggle a card in/out of the TOP set;
+            // "rearrange" is drag-to-reorder plus an explicit Confirm button, not handled here.
             if (state.DeckLook.Step == "select")
                 SelectDeckLookCard(card.InstanceId);
+            else if (state.DeckLook.Step == "scry")
+            {
+                if (deckLookScryTopIds == null) deckLookScryTopIds = new List<string>();
+                if (!deckLookScryTopIds.Remove(card.InstanceId)) deckLookScryTopIds.Add(card.InstanceId);
+                Render();
+            }
             return;
         }
 
@@ -4100,9 +4791,46 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             return;
         }
 
+        // Clicking the trash pile's top card toggles the trash viewer, same as clicking
+        // the pile zone itself. (Overlay cards pass seat == null, so they don't re-toggle;
+        // and while an effect is picking from the trash, clicks keep routing to targeting.)
+        if (card != null && card.Zone == "trash" && seat != null)
+        {
+            bool trashTargeting = state.PendingEffects.Count > 0
+                && state.PendingEffects[0].TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash;
+            if (!trashTargeting)
+            {
+                trashViewSeat = trashViewSeat == card.Owner ? null : card.Owner;
+                Render();
+                return;
+            }
+        }
+
         if (seat != null && seat.EndsWith("-hand"))
         {
             var handSeat = seat.Replace("-hand", "");
+
+            // Pending effects that want a HAND target take priority even mid-battle —
+            // reactions like Nami's [On Your Opponent's Attack] "trash 1 card: …" queue
+            // during the block step, and their cost is paid by clicking a hand card.
+            if (state.PendingEffects.Count > 0)
+            {
+                var peBattle = state.PendingEffects[0];
+                if ((peBattle.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand ||
+                     peBattle.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
+                    && peBattle.Seat == handSeat)
+                {
+                    Dispatch(new GameCommand
+                    {
+                        Type = "resolveEffect",
+                        Seat = peBattle.Seat,
+                        EffectId = peBattle.EffectId,
+                        Target = card.InstanceId,
+                    });
+                    return;
+                }
+            }
+
             if (state.Battle != null)
             {
                 if (state.Battle.Step == "counter" && state.Battle.TargetSeat == handSeat)
@@ -4716,24 +5444,27 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             if (card.AttachedDonIds.Count > 0) AddBadge(cardBody, "+" + card.AttachedDonIds.Count, new Vector2(0.62f, 0.82f), new Vector2(0.98f, 0.98f), new Color32(13, 68, 34, 230));
 
-            // Active-modifier badges: sum the per-card deltas (ENGINE_NOTES: PowerDelta mirrors
-            // the power dicts, CostDelta is authoritative) and overlay compact chips near the
-            // bottom of the card, matching the attached-DON badge style. Zero sums are skipped.
-            if (card.Modifiers != null && card.Modifiers.Count > 0)
+            // Status indicator chips — everything currently affecting this card (OPTCGSim-style
+            // insight): power/cost changes, base overrides, keyword grants, restrictions
+            // (can't attack / frozen / negated / ...), protections. Engine-computed, so the
+            // chips can never disagree with the rules. Stacked from the bottom-left; the
+            // hover preview lists the full detail for each.
+            if (state != null && (card.Zone == "character" || card.Zone == "leader" || card.Zone == "stage"))
             {
-                int powerDelta = 0, costDelta = 0;
-                foreach (var mod in card.Modifiers) { powerDelta += mod.PowerDelta; costDelta += mod.CostDelta; }
+                var statusBadges = GameEngine.GetStatusBadges(state, card);
                 float badgeY = 0.02f;
-                if (powerDelta != 0)
+                for (int sbI = 0; sbI < statusBadges.Count && sbI < 5; sbI++)
                 {
-                    AddBadge(cardBody, (powerDelta > 0 ? "+" : "") + powerDelta + " POWER",
-                        new Vector2(0.02f, badgeY), new Vector2(0.72f, badgeY + 0.13f),
-                        powerDelta > 0 ? (Color)new Color32(20, 92, 46, 235) : (Color)new Color32(110, 26, 26, 235));
-                    badgeY += 0.145f;
+                    var sb = statusBadges[sbI];
+                    AddBadge(cardBody, sb.Label,
+                        new Vector2(0.02f, badgeY), new Vector2(0.80f, badgeY + 0.125f),
+                        StatusBadgeColor(sb.Kind));
+                    badgeY += 0.138f;
                 }
-                if (costDelta != 0)
-                    AddBadge(cardBody, (costDelta > 0 ? "+" : "") + costDelta + " COST",
-                        new Vector2(0.02f, badgeY), new Vector2(0.72f, badgeY + 0.13f), new Color32(26, 64, 118, 235));
+                if (statusBadges.Count > 5)
+                    AddBadge(cardBody, "+" + (statusBadges.Count - 5) + " MORE",
+                        new Vector2(0.02f, badgeY), new Vector2(0.80f, badgeY + 0.125f),
+                        new Color32(52, 58, 70, 235));
             }
 
             // Persistent GREEN glow on every card that is a VALID target for the pending effect
@@ -5108,9 +5839,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void AddButton(RectTransform parent, string label, UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true)
     {
+        // Long labels (rethought effect descriptions) wrap onto extra lines: grow the
+        // button instead of clipping, and let the text best-fit down a notch if needed.
+        int estLines = 1 + (label != null ? label.Length : 0) / 30;
+        float btnH = 34f + Mathf.Clamp(estLines - 1, 0, 2) * 13f;
         var root = PanelObject(label + " Button", parent, enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
-        SetPreferred(root, new Vector2(118, 34));
-        root.sizeDelta = new Vector2(118, 34);
+        SetPreferred(root, new Vector2(118, btnH));
+        root.sizeDelta = new Vector2(118, btnH);
         Round(root);
         AddRoundedCardBorder(root, enabled ? MenuB : (Color)new Color32(50, 58, 74, 80), 1.1f);
         Color textColor = enabled ? Ink : (Color)new Color32(120, 130, 146, 160);
@@ -5123,7 +5858,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             d.anchoredPosition = new Vector2(12f, 0f);
             RoundCircle(d);
             var text = TextObject("Text", root, label, 11, textColor, TextAnchor.MiddleLeft);
-            Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(26, 0), new Vector2(-8, 0));
+            text.horizontalOverflow = HorizontalWrapMode.Wrap;
+            text.resizeTextForBestFit = true;
+            text.resizeTextMinSize = 8;
+            text.resizeTextMaxSize = 11;
+            Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(26, 3), new Vector2(-8, -3));
         }
         else
         {
@@ -5176,6 +5915,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // No fixed/min width: let the vertical layout control the width (it force-expands to fill the
         // panel) so the text wraps to the real panel width instead of a 260px guess that clips.
         // Height auto-sizes from the wrapped Text's preferred height.
+    }
+
+    // Info text that shrinks (and finally truncates) with length, so even wordy card
+    // texts fit in the action panel without scrolling — the full text is always readable
+    // on the card preview itself.
+    private void AddScaledInfo(RectTransform parent, string message)
+    {
+        message ??= "";
+        int size = message.Length <= 140 ? 10 : message.Length <= 240 ? 9 : 8;
+        if (message.Length > 340) message = message.Substring(0, 337).TrimEnd() + "…";
+        var text = TextObject("Info", parent, message, size, Muted, TextAnchor.UpperLeft);
+        text.horizontalOverflow = HorizontalWrapMode.Wrap;
+        text.verticalOverflow = VerticalWrapMode.Overflow;
+        text.lineSpacing = 0.9f;
     }
 
     private void AddCenteredText(RectTransform parent, string message)

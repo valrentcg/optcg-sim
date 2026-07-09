@@ -249,3 +249,148 @@ Remaining: APNAP simultaneous trigger ordering (architectural note only; no card
 3. If the card has Activate:Main with a unique cost: add case to `ActivateMain` switch
 4. If the card has When Attacking with a unique effect: add case to `ApplyWhenAttackingEffects`
 5. For passive auras: add to `GetPower` (like DrakeAuraBonus)
+
+---
+
+## Session 7 Implementation (2026-07-08 — ST05/ST19 playtest fixes + resolver sweep)
+
+### Reported bugs fixed
+1. **Sengoku ST19-002 [On Play] not coming up** — no resolver for optional costs. New generic
+   **"You may <cost>: <body>" cost-prefix resolver** (runs FIRST in TryResolveKnownEffect):
+   trash-N-from-hand costs (with color + {Type} filter validation via `CostCardMatches`) and
+   place-1-from-trash-to-bottom-of-deck costs. Body queued via `QueueBody` after payment.
+2. **Smoker ST19-001 trash worked but no character selection** — new multi-target
+   **"cannot attack" resolver** (`PendingEffect.SelectionsRemaining` tracks picks; new
+   CardModifier duration `"untilNextTurn"` + `OwnerSeat` expires at the controller's next
+   refresh, i.e. end of opponent's next turn).
+3. **Uta ST05-004 [On Block] never fired** — new **[On Block] hook** in `BlockAttack`
+   (queues the `[On Block]` clause via `ExtractTimedClause`; pending-effect panel takes
+   priority over battle UI).
+4. **Gild Tesoro ST05-006 drew but didn't pay DON −2** — new **DON!! −N cost system**:
+   `ParseDonMinusCost` / `DonMinusBody` / `PayDonMinus` (returns DON from cost area to DON
+   deck, rested first). Paid in `ResolveEffect` when the player commits; affordability
+   prechecked in `ActivateMain`.
+5. **Hina ST19-004 button dead + cost aura missing** — (a) `ActivateMain` generic fallback now
+   parses/queues only the `[Activate: Main]` clause (`ExtractTimedClause`), so the passive
+   line's `[DON!! x1]` no longer blocks activation; trash→bottom-of-deck cost handled by the
+   cost-prefix resolver. (b) New `GetPassiveCostBonus` in `GetCost`: per-line
+   "[DON!! xN] [Opponent's Turn] This Character gains +N cost" evaluated live.
+6. **Shanks vs Smoker match sweep** — Shanks leader board-wide buff ("All of your {T} type
+   Characters gain +N power"), Smoker leader (DON-attached Activate gate + early "Then,"
+   clause splitting + "there is a Character with a cost of 0" condition + self-Leader buff),
+   Ain/Carina/Lion's Threat (add DON from DON deck, rested or active), Bullet (Rest up to N
+   with cost cap), Vergo/Shiki (battle-K.O. immunity `IsBattleKoImmune`), Brannew (deck look
+   "Then, trash the rest" — `DeckLookState.TrashRest`), Koby/Tsuru/Helmeppo/Ice Age (cost
+   reduction + Then-chains), Tashigi ("Leader is [Name]" / "was played on this turn"
+   conditions + "trash up to 1 … cost of 0" resolver).
+
+### Trash viewer popup (UI)
+`DrawTrashOverlay()` in GameManager: search-style popup confined to YOUR play area
+(bottom-center), scrollable card grid with the standard hover-preview on the right.
+Opens for "View Trash" buttons AND automatically for any pending effect with
+`TargetZone.Trash` (click a card in the popup to resolve; SKIP for optional).
+Side-panel text list + trash button list replaced. Trash cards now unrest on entry
+(`MoveToTrash`) so they render upright.
+
+### Library-wide resolver sweep (4,572 cards / 2,634 unique)
+New generic resolvers: power REDUCTION ("Give up to N … −N power", multi-target),
+return-to-owner's-hand bounce, place-at-bottom-of-owner's-deck removal,
+"Set this Character as active", alt mill phrasing ("Trash N cards from the top of your deck"),
+"of your cards gains +N power", trigger variants ("Activate this card's effect.",
+conditional "If …, play this card.", "DON!! −N: Play this card.", trigger-played cards now
+fire [On Play]), life-count + compound-"and" conditions, printed passives
+("This Leader cannot attack.", "can also attack your opponent's active Characters",
+"cannot be K.O.'d by effects" honored in effect-K.O. paths, DON-gated keyword grants
+`HasDonGatedKeyword` for Rush/Blocker/Double Attack/Banish).
+
+**Coverage: 78% of ability lines / 72.5% of cards fully automated** (was 64% / 56%).
+See EFFECT_COVERAGE_REPORT.md for the remaining gap list.
+
+
+## Session 8 Implementation (2026-07-08 — wave 2 resolver sweep)
+
+- **Scry UI**: new DeckLook step "scry" (`StartDeckScry` / `ResolveDeckLookScryConfirm`,
+  command `deckLookScryConfirm`). Overlay: click cards to keep on TOP (badged with click
+  order); the rest go to the bottom. Covers "Look at N … place them at the top or bottom
+  of the deck" (OP01-073 etc.).
+- **Life-as-cost**: "You may add 1 card from the top or bottom of your Life cards to your
+  hand: …" routes through the Choose-one modal (top vs bottom), then chains the body.
+  New resolvers: "Add the top/bottom card of your Life to your hand", "Add up to N from
+  the top of your deck to the top of your Life", "Trash up to N from the top of your
+  opponent's Life". Life pile ordering unified: END of the list = top (TakeLife pops the end);
+  the old add-to-Life handler inserted at index 0 (bottom) — fixed.
+- **Multi-target buffs**: "Up to (a total of) N … gain(s) +N power" now loops via
+  SelectionsRemaining (same for power reduction / cannot-attack / freeze).
+- **Freeze & rest-lock**: "will not become active in your opponent's next Refresh Phase"
+  (freeze) and "cannot be rested until …" (cannotBeRested) — both untilNextTurn modifiers;
+  rest resolvers now respect cannotBeRested.
+- **Opponent DON!! return**: "your opponent returns N DON!! cards to their DON!! deck"
+  (+ "opponent has N or more DON!! on their field" condition).
+- **Rest variants**: opponent's "Leader or Character" and bare "cards" targets.
+- **Anchoring fix**: leading [Timing]/[DON!! xN] tags are stripped before pattern matching,
+  so "If …" conditionals and "You may …:" costs fire on tag-prefixed texts (big coverage win).
+
+**Coverage: 85.4% of ability lines / 81.5% of cards fully automated** (≈88% of lines
+excluding no-op reminder text). See EFFECT_COVERAGE_REPORT.md.
+
+## Sessions 9–12 (2026-07-08 — the 100% sweep)
+
+Iterated resolver waves until the library sweep reports **100% of ability lines /
+100% of cards** auto-resolvable (reminder text = no-op; "Under the rules…" lines are
+CardData/deck-builder scope). Headline additions: unified K.O./removal resolver with
+dynamic caps + total-power budgets, base-power override + swap system, timed
+(until-next-turn) power/cost effects, effect negation (incl. [On Play] suppression and
+negation auras), removal-replacement effects, a generic cost engine (auto-pay + pick-based
++ Life top/bottom choices), deck play/trash/scry-to-top look modes, reveal-top
+auto-resolution, Life-zone moves with face-up tracking, continuous power/cost/counter/
+keyword auras with color/base-stat/multi-name filters and "for every X" scaling, reactive
+hooks (event tax, DON-return, hand-trash, removal, end-of-battle, K.O. reactions),
+opponent-made choose-one, attack redirection, and ~20 printed passives. Fixed a latent
+DonMinusBody double-charge and made all timed-clause queuing per-clause (multi-ability
+cards no longer leak sibling lines into queued effects).
+
+See EFFECT_COVERAGE_REPORT.md for the wave-by-wave numbers and the documented
+simplifications list.
+
+## Session 13 (2026-07-08 — headless fuzz-test sanity check + playtest fixes)
+
+**Real verification this time:** the engine (pure C#) was compiled headless with Mono and a
+fuzz harness played full games — all 43 starter-deck matchups plus hundreds of "random soup"
+decks sampled from the entire 2,634-card library, with random plays/attacks/blocks/counters/
+triggers and exhaustive target-clicking on every pending effect.
+
+**Final result: 316+ games, 0 exceptions, 0 deadlocked effects, 0 stuck battles/looks; only
+2 rare effects fall back to logged manual resolution (Rebecca OP10-058's dual-reveal-play,
+and a source-left-field edge).**
+
+Bugs the fuzzer + playtest found and fixed:
+- **[On Your Opponent's Attack] timing didn't exist** (OP11-041 blue/yellow Nami leader,
+  Teach's redirect, etc.) — new hook in DeclareAttack scans the DEFENDER's board, honors
+  [DON!! xN] + [Once Per Turn], and queues the reaction before the block step.
+- **Mandatory effects offered a skip and mislabeled buttons** (PRB02-008 Marco): effect
+  optionality is now derived from the text ("You may…"/"up to N" ⇒ optional; otherwise the
+  SKIP button is disabled), and the button-label summarizer strips timing tags first so
+  "[On K.O.] Draw 2 cards" reads "DRAW 2", not "K.O. TARGET".
+- **Deadlocks**: mandatory effects with no legal target could soft-lock the game — "up to"
+  effects may always choose zero, and truly-stuck effects can be dismissed with a log note.
+- **Lost bullet lines**: "Choose one:" options and "Apply each…" bullets were dropped when
+  queuing a clause (ExtractTimedClause now carries continuation lines) — this silently broke
+  EVERY multi-line choice card (Backlight, Soul Pocus, Jango, …).
+- **Choice interception**: "Choose one:" is now parsed before all other resolvers so option
+  text can't accidentally resolve as a single effect.
+- **~200 library entries glue clauses together with no newline** ("…Characters.[When
+  Attacking]…") — the JSON loader (ParseOfficialCardLibrary) now normalizes clause breaks,
+  and mid-sentence tag references ("a card with a [Trigger]") are preserved and honored as
+  eligibility filters (hand plays, deck looks, costs).
+- Minus-sign character classes are now unicode-escaped (−, –, ‑, ‒, —) — encoding-proof.
+- Self-effects whose source left the field now fizzle with a log instead of going manual.
+- ~25 additional resolvers/conditions from fuzz findings (K.O.-all variants, opponent zone
+  manipulation, self-revive, attack redirection, sacrifice-count buffs, cost ranges, …).
+
+### Green-glow targeting (IsValidEffectTarget)
+Rewritten to mirror the resolver set: leading-tag stripping, cost-payment phase validation
+(hand-trash costs glow only matching color/{Type}/[Trigger] cards), self-target effects glow
+only the source, owner-agnostic removal ("owner's hand/deck"), base-power/base-cost caps,
+cost ranges ("cost of 3 to 8"), named-card filters, swap-pick exclusion, "cannot be played
+by effects" guard, and trash/hand type filters. Deck-look eligibility (IsDeckLookSelectable)
+now also honors [Trigger]-required and max-power filters.

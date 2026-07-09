@@ -269,6 +269,7 @@ public partial class DeckBuilderManager
             var ai = art.GetComponent<Image>();
             ai.preserveAspect = false; ai.raycastTarget = false;
             Stretch(art, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            RoundedCardMask.ApplyTo(ai);   // uniform rounded card edges (shader mask)
             if (cached != null) { ai.sprite = cached; ai.type = Image.Type.Simple; }
             else RequestThumbArt(ai, rec.id);
         }
