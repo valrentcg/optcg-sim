@@ -1797,6 +1797,18 @@ namespace OnePieceTcg.Engine
         private static void FinishDeckLook(GameState state, string seat, DeckLookState dl)
         {
             var p = Player(state, seat);
+            if (dl.LifeMode)
+            {
+                // Arranged left→right = top→bottom of Life; the Life list stores TOP at the END.
+                for (int i = dl.Ordered.Count - 1; i >= 0; i--)
+                {
+                    dl.Ordered[i].Zone = "life";
+                    p.Life.Add(dl.Ordered[i]);
+                }
+                Log(state, seat, $"{p.Name} rearranges their Life cards.");
+                state.DeckLook = null;
+                return;
+            }
             if (dl.ToTop)
             {
                 // First in the arranged order ends up topmost.
@@ -1989,6 +2001,45 @@ namespace OnePieceTcg.Engine
                     QueueEffect(state, defSeat, rc, "onOpponentsAttack", oaClause, true,
                         EffectScope.Instant, InferTargetZone(oaClause));
                 }
+            }
+
+            // No legal Blocker on the defending board → skip the block step entirely instead
+            // of making the defender click "Pass Blockers" for nothing.
+            MaybeAutoPassBlock(state);
+        }
+
+        // Advances block → counter automatically when no defending Character could legally
+        // block: needs the [Blocker] keyword (printed or granted), must be active, not the
+        // attack target, not negated, not power-banned, not un-restable (blocking rests it),
+        // and the attacker must not be unblockable / NoBlocker-flagged.
+        private static void MaybeAutoPassBlock(GameState state)
+        {
+            if (state.Battle == null || state.Battle.Step != "block") return;
+            var defSeat = state.Battle.TargetSeat;
+            var d = Player(state, defSeat);
+            bool anyBlocker = false;
+            if (!state.Battle.NoBlocker)
+            {
+                var atk = FindInPlay(Player(state, state.Battle.AttackerSeat), state.Battle.AttackerId);
+                bool unblockable = atk != null && (HasKeyword(atk, "Unblockable") || HasKeywordModifier(state, atk, "Unblockable"));
+                if (!unblockable)
+                {
+                    foreach (var c in d.CharacterArea)
+                    {
+                        if (c == null || c.Rested || c.InstanceId == state.Battle.TargetId) continue;
+                        if (IsEffectNegated(state, c)) continue;
+                        if (!HasKeyword(c, "Blocker") && !HasKeywordModifier(state, c, "Blocker") && !HasPrintedKeywordGrant(state, c, "Blocker")) continue;
+                        if (state.Battle.BlockerPowerBan.HasValue && GetPower(state, c) >= state.Battle.BlockerPowerBan.Value) continue;
+                        if (HasModifier(state, c, "cannotBeRested")) continue;   // blocking rests the blocker
+                        anyBlocker = true;
+                        break;
+                    }
+                }
+            }
+            if (!anyBlocker)
+            {
+                Log(state, defSeat, $"{d.Name} has no available Blocker — block step skipped.");
+                state.Battle.Step = "counter";
             }
         }
 
@@ -3373,9 +3424,12 @@ namespace OnePieceTcg.Engine
             EffectScope scope = EffectScope.Instant, EffectTargetZone targetZone = EffectTargetZone.Play)
         {
             QueueEffect(state, seat, source, timing, text, optional, scope, targetZone);
-            // "You may ..." effects are a real decision — never auto-resolve them; the
-            // player opts in by clicking the effect button (or a highlighted target).
-            if (optional || IsOptionalEffectText(text)) return;
+            // Only explicit "you may" wording is a real opt-in decision — those wait for the
+            // player. Everything else auto-resolves: mandatory effects (including "If <cond>,
+            // ..." — the CONDITION decides, not the player, e.g. Kikunojo's set-Leader-active)
+            // fire immediately, and "up to N" targeting effects auto-enter target selection
+            // (the pick itself is the decision; SKIP stays available for the zero-pick option).
+            if (!string.IsNullOrEmpty(text) && text.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0) return;
             if (!IsAutomatedEffectPattern(text)) return;
             var queued = state.PendingEffects[state.PendingEffects.Count - 1];
             ResolveEffect(state, seat, queued.EffectId, null);
@@ -3776,6 +3830,24 @@ namespace OnePieceTcg.Engine
             text = NormalizeClause(text);   // strip stray leading "Then," connectives
             var owner = Player(state, effect.Seat);
             var sourceName = NameId(CardData.GetCard(effect.SourceCardId));
+
+            // Leading "If <condition>," gate — evaluated BEFORE any handler, so a body
+            // phrase can never resolve while its printed condition is unmet (EB04-058
+            // Borsalino: "If you have 2 or less Life cards, add ... to your Life").
+            // Met → strip the clause and resolve the body; unmet/unknown → skip.
+            {
+                var leadIf = System.Text.RegularExpressions.Regex.Match(text,
+                    @"^If ([^,]{3,90}), (.+)$", System.Text.RegularExpressions.RegexOptions.Singleline);
+                if (leadIf.Success && !ContainsAll(text, "Choose one") && !ContainsAll(text, "chooses one"))
+                {
+                    if (!EvaluateCondition(state, effect.Seat, leadIf.Groups[1].Value.Trim(), effect.SourceInstanceId))
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: condition not met — effect skipped.");
+                        return EffectResolution.Resolved;
+                    }
+                    text = leadIf.Groups[2].Value.Trim();
+                }
+            }
 
             // "Choose one:" branches must be parsed BEFORE any other handler — option texts
             // routinely embed phrases (K.O., -N power, draw) that would otherwise match a
@@ -5461,6 +5533,38 @@ namespace OnePieceTcg.Engine
                         moved++;
                     }
                     Log(state, effect.Seat, $"{sourceName}: opponent places {moved} card(s) from {(fromHand ? "hand" : "trash")} at the bottom of their deck.");
+                    return EffectResolution.Resolved;
+                }
+
+                // "Look at all of your Life cards and place them back in any order." — real
+                // rearrange (ST13-012 Makino): Life opens in the deck-look rearrange UI
+                // (LifeMode); the confirmed order is written back to Life.
+                if (ContainsAll(text, "Look at all of your Life cards")
+                    && (ContainsAll(text, "any order") || ContainsAll(text, "place them back")))
+                {
+                    if (owner.Life.Count <= 1)
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: not enough Life cards to rearrange.");
+                        return EffectResolution.Resolved;
+                    }
+                    var dlLife = new DeckLookState
+                    {
+                        Seat = effect.Seat,
+                        SourceInstanceId = effect.SourceInstanceId,
+                        SourceName = sourceName,
+                        Step = "rearrange",
+                        LifeMode = true,
+                        MaxCost = -1,
+                    };
+                    for (int i = owner.Life.Count - 1; i >= 0; i--)   // display top-of-Life first
+                    {
+                        var lc = owner.Life[i];
+                        lc.Zone = "look";
+                        dlLife.Cards.Add(lc);
+                    }
+                    owner.Life.Clear();
+                    state.DeckLook = dlLife;
+                    Log(state, effect.Seat, $"{sourceName}: rearrange your Life cards (leftmost = top).");
                     return EffectResolution.Resolved;
                 }
 
@@ -8123,7 +8227,7 @@ namespace OnePieceTcg.Engine
             // (Diable Jambe's K.O., Guard Point's power buff, Scalpel's set-DON-active, etc.).
             // Using the trigger uses the event, so it goes to trash just like the [Main]-effect
             // case above, not to hand.
-            if (def.Type == "event" && IsAutomatedEffectPattern(trigger))
+            if (IsAutomatedEffectPattern(trigger))
             {
                 var pending = new PendingEffect
                 {
@@ -8137,8 +8241,19 @@ namespace OnePieceTcg.Engine
                     TargetZone = InferTargetZone(trigger),
                 };
                 state.PendingEffects.Add(pending);
-                cardFromLife.Zone = "trash";
-                Player(state, defenderSeat).Trash.Add(cardFromLife);
+                if (def.Type == "event")
+                {
+                    // Using an event's trigger uses the event — it goes to the trash.
+                    cardFromLife.Zone = "trash";
+                    Player(state, defenderSeat).Trash.Add(cardFromLife);
+                }
+                else
+                {
+                    // Characters/stages: the life card goes to hand after its trigger
+                    // resolves (unless the trigger itself plays the card — handled above).
+                    cardFromLife.Zone = "hand";
+                    Player(state, defenderSeat).Hand.Add(cardFromLife);
+                }
                 state.Battle = null;
                 state.Phase = "main";
                 return true;

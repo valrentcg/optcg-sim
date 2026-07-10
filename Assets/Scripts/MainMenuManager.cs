@@ -50,7 +50,7 @@ public partial class MainMenuManager : MonoBehaviour
     private readonly MenuMode[] modes = new MenuMode[]
     {
         new MenuMode { Id = "soloSelf",    Parent = "SOLO PLAY",   Label = "Versus Self",   Status = ModeStatus.Ready, Launch = "ENTER SANDBOX" },
-        new MenuMode { Id = "soloAi",      Parent = "SOLO PLAY",   Label = "Versus A.I.",   Status = ModeStatus.Dev,   Launch = "START MATCH"   },
+        new MenuMode { Id = "soloAi",      Parent = "SOLO PLAY",   Label = "Versus A.I.",   Status = ModeStatus.Ready, Launch = "START MATCH"   },
         new MenuMode { Id = "ranked",      Parent = "MULTIPLAYER", Label = "Ranked Match",  Status = ModeStatus.Soon,  Launch = "FIND MATCH"    },
         new MenuMode { Id = "casual",      Parent = "MULTIPLAYER", Label = "Casual Match",  Status = ModeStatus.Soon,  Launch = "FIND MATCH"    },
         new MenuMode { Id = "privateRoom", Parent = "MULTIPLAYER", Label = "Private Room",  Status = ModeStatus.Ready, Launch = "CREATE ROOM"   },
@@ -73,6 +73,8 @@ public partial class MainMenuManager : MonoBehaviour
     // Duel-portal deck pick (the deck you queue with). Kept in sync with lobbyDeckId so the
     // lobby waiting room shows the same deck you chose on the main screen.
     private static string duelDeckId;
+    // Versus A.I. — the deck Basic Bot pilots (north seat).
+    private static string aiDeckId;
     private static bool deckPicksLoaded;   // per-account picks restored from PlayerPrefs this run
 
     // ── Per-account deck-pick persistence ────────────────────────────────────
@@ -103,17 +105,24 @@ public partial class MainMenuManager : MonoBehaviour
         return string.IsNullOrEmpty(v) ? null : v;
     }
 
+    private static string deckPicksLoadedFor;   // account key the picks were restored under
+
     private void EnsureDeckPicksLoaded()
     {
-        if (deckPicksLoaded) return;
+        // Re-restore when the account identity changes (login completes after the first
+        // menu build — the picks were saved under the account key, not "local").
+        string acct = DeckPickAccountKey();
+        if (deckPicksLoaded && deckPicksLoadedFor == acct) return;
         deckPicksLoaded = true;
+        deckPicksLoadedFor = acct;
         if (p1DeckId == null) p1DeckId = LoadDeckPick("p1");
         if (p2DeckId == null) p2DeckId = LoadDeckPick("p2");
         if (duelDeckId == null) duelDeckId = LoadDeckPick("duel");
-        // A saved deck that has since been deleted clears itself instead of showing broken.
-        if (p1DeckId != null && ResolveMenuDeck(p1DeckId) == null) { p1DeckId = null; SaveDeckPick("p1", null); }
-        if (p2DeckId != null && ResolveMenuDeck(p2DeckId) == null) { p2DeckId = null; SaveDeckPick("p2", null); }
-        if (duelDeckId != null && ResolveMenuDeck(duelDeckId) == null) { duelDeckId = null; SaveDeckPick("duel", null); }
+        if (aiDeckId == null) aiDeckId = LoadDeckPick("ai");
+        // IMPORTANT: never clear the SAVED pick just because it can't resolve right now —
+        // custom (non-starter) decks load asynchronously from DeckStore, and clearing here
+        // wiped the persisted slot before the store was ready. Unresolvable picks simply
+        // render as empty until the store catches up (or the player picks anew).
     }
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
     private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
@@ -265,6 +274,13 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void Awake()
     {
+        // Restore the last game mode the player had selected (AI, private room, ...)
+        // so the menu reopens where they left off — across menu rebuilds AND app restarts.
+        var savedMode = PlayerPrefs.GetString("optcg.lastmode", null);
+        if (!string.IsNullOrEmpty(savedMode))
+            foreach (var m in modes)
+                if (m.Id == savedMode) { selectedId = savedMode; break; }
+
         font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         if (font == null) font = Resources.GetBuiltinResource<Font>("Arial.ttf");
         try
@@ -614,6 +630,8 @@ public partial class MainMenuManager : MonoBehaviour
     private void SelectMode(string id)
     {
         selectedId = id;
+        PlayerPrefs.SetString("optcg.lastmode", id);
+        PlayerPrefs.Save();
         RenderMenu();
     }
 
@@ -2223,6 +2241,43 @@ public partial class MainMenuManager : MonoBehaviour
         else if (accountSettingsRecoveryMode) BuildRecoveryEmailFields(panel);
         else if (AccountManager.HasEmailLinked) BuildEmailLinkedSummary(panel);
         else BuildLinkEmailFields(panel);
+
+        // ── Audio ── SFX volume (shared with the in-game slider via PlayerPrefs).
+        var audioLbl = TextObject("Audio Label", panel, "AUDIO — SFX VOLUME", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(audioLbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 64f), new Vector2(-24f, 84f));
+        var track = PanelObject("SFX Track", panel, new Color(1f, 1f, 1f, 0.08f));
+        Stretch(track, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 34f), new Vector2(-24f, 54f));
+        Round(track);
+        var fillArea = PanelObject("Fill Area", track, new Color(0f, 0f, 0f, 0f));
+        Stretch(fillArea, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        fillArea.GetComponent<Image>().raycastTarget = false;
+        var fill = PanelObject("Fill", fillArea, Accent);
+        // Explicit anchors: fresh rects default to a centred 100×100 block otherwise.
+        fill.anchorMin = new Vector2(0f, 0f);
+        fill.anchorMax = new Vector2(0f, 1f);   // Slider drives anchorMax.x = value
+        fill.pivot = new Vector2(0f, 0.5f);
+        fill.sizeDelta = Vector2.zero;
+        fill.anchoredPosition = Vector2.zero;
+        Round(fill);
+        fill.GetComponent<Image>().raycastTarget = false;
+        var handleArea = PanelObject("Handle Area", track, new Color(0f, 0f, 0f, 0f));
+        Stretch(handleArea, Vector2.zero, Vector2.one, new Vector2(8f, 0f), new Vector2(-8f, 0f));
+        handleArea.GetComponent<Image>().raycastTarget = false;
+        var handle = PanelObject("Handle", handleArea, new Color32(230, 240, 248, 255));
+        handle.anchorMin = new Vector2(0f, 0f);
+        handle.anchorMax = new Vector2(0f, 1f);   // Slider drives anchor x = value
+        handle.pivot = new Vector2(0.5f, 0.5f);
+        handle.sizeDelta = new Vector2(16f, 6f);
+        handle.anchoredPosition = Vector2.zero;
+        RoundCircle(handle);
+        var slider = track.gameObject.AddComponent<Slider>();
+        slider.transition = Selectable.Transition.None;
+        slider.fillRect = fill;
+        slider.handleRect = handle;
+        slider.minValue = 0f;
+        slider.maxValue = 1f;
+        slider.value = GameManager.SfxVolume;
+        slider.onValueChanged.AddListener(v => GameManager.SfxVolume = v);
     }
 
     private void BuildGuestSettingsFields(RectTransform panel)
@@ -4086,6 +4141,7 @@ public partial class MainMenuManager : MonoBehaviour
     private void BuildDuelPortal(RectTransform portal)
     {
         EnsureDeckPicksLoaded();
+        // (re-checks per build: cheap, and re-restores after async account login)
         AddTopHighlight(portal);
 
         // Header: portal title + description
@@ -4270,6 +4326,7 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void BuildSoloPortal(RectTransform portal)
     {
+        EnsureDeckPicksLoaded();
         AddTopHighlight(portal);
 
         // Header: portal title + description
@@ -4286,17 +4343,29 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(desc.rectTransform, new Vector2(0f, 1f), Vector2.one,
             new Vector2(18f, -78f), new Vector2(-18f, -52f));
 
-        // Two stacked deck panels: NORTH (top, player 2) and SOUTH (bottom, player 1).
-        var northDeck = DeckStore.Get(p2DeckId);
+        // Two stacked deck panels. Versus Self: NORTH/SOUTH (both yours).
+        // Versus A.I.: BASIC BOT (top, AI-piloted) / YOUR DECK (bottom).
+        bool aiMode = selectedId == "soloAi";
+        var northDeck = DeckStore.Get(aiMode ? aiDeckId : p2DeckId);
         var southDeck = DeckStore.Get(p1DeckId);
-        BuildDeckPanel(portal, new Vector2(0.028f, 0.575f), new Vector2(0.972f, 0.90f),
-            "NORTH", p2DeckId, () => PickPlayerDeck(2), enterAlert && northDeck == null);
-        BuildDeckPanel(portal, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.560f),
-            "SOUTH", p1DeckId, () => PickPlayerDeck(1), enterAlert && southDeck == null);
+        if (aiMode)
+        {
+            BuildDeckPanel(portal, new Vector2(0.028f, 0.575f), new Vector2(0.972f, 0.90f),
+                "BASIC BOT", aiDeckId, PickAiDeck, enterAlert && northDeck == null);
+            BuildDeckPanel(portal, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.560f),
+                "YOUR DECK", p1DeckId, () => PickPlayerDeck(1), enterAlert && southDeck == null);
+        }
+        else
+        {
+            BuildDeckPanel(portal, new Vector2(0.028f, 0.575f), new Vector2(0.972f, 0.90f),
+                "NORTH", p2DeckId, () => PickPlayerDeck(2), enterAlert && northDeck == null);
+            BuildDeckPanel(portal, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.560f),
+                "SOUTH", p1DeckId, () => PickPlayerDeck(1), enterAlert && southDeck == null);
+        }
 
         // Status caption
         bool bothReady = northDeck != null && southDeck != null;
-        string capText = bothReady ? "Both seats ready"
+        string capText = bothReady ? (aiMode ? "Ready — Basic Bot pilots the top deck" : "Both seats ready")
             : (northDeck == null && southDeck == null) ? "Select 2 decks to begin"
             : "Select 1 more deck to begin";
         var cap = TextObject("Deck Caption", portal, capText, 10,
@@ -4306,7 +4375,8 @@ public partial class MainMenuManager : MonoBehaviour
 
         // Primary CTA: START MATCH.
         BuildPortalCta(portal, "START MATCH  ▸", bothReady,
-            new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterVersusSelf);
+            new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f),
+            aiMode ? (UnityEngine.Events.UnityAction)EnterVersusAi : EnterVersusSelf);
 
         // Mode tabs (Versus Self / Versus A.I.)
         var subRow = PanelObject("Sub Row", portal, new Color(0f, 0f, 0f, 0f));
@@ -4315,7 +4385,7 @@ public partial class MainMenuManager : MonoBehaviour
 
         BuildSoloSubTile(subRow, "Versus Self", "soloSelf", ModeStatus.Ready,
             0f, 0.5f, 4f, true);
-        BuildSoloSubTile(subRow, "Versus A.I.", "soloAi", ModeStatus.Dev,
+        BuildSoloSubTile(subRow, "Versus A.I.", "soloAi", ModeStatus.Ready,
             0.5f, 1f, 4f, false);
     }
 
@@ -4613,6 +4683,38 @@ public partial class MainMenuManager : MonoBehaviour
             },
             EnsureMenu);
 
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    private void PickAiDeck()
+    {
+        CancelInvoke();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        DeckBuilderManager.OpenPicker("CHOOSE BASIC BOT'S DECK", "the AI pilots this deck — pick one, then confirm",
+            chosenId =>
+            {
+                aiDeckId = chosenId;
+                SaveDeckPick("ai", chosenId);
+                EnsureMenu();
+            },
+            EnsureMenu);
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    // Launch human (south) vs Basic Bot (north).
+    private void EnterVersusAi()
+    {
+        if (DeckStore.Get(p1DeckId) == null || DeckStore.Get(aiDeckId) == null)
+        {
+            enterAlert = true;
+            RenderMenu();
+            return;
+        }
+        CancelInvoke();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        GameManager.LaunchVersusAi(p1DeckId, aiDeckId);
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
     }

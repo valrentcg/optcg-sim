@@ -290,6 +290,7 @@ namespace OnePieceTcg.Engine
         public bool RequireTrigger;  // eligibility: card must have printed [Trigger] text
         public int SelectCount = 1;  // how many picks the select step allows
         public bool ToTop;           // rearranged cards go to the TOP of the deck (ST17-003)
+        public bool LifeMode;        // cards came from LIFE; confirmed order writes back to Life (ST13-012 Makino)
     }
 
     /// <summary>

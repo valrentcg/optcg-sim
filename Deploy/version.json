@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.5",
-  "buildNumber": 6,
+  "buildVersion": "1.0.6",
+  "buildNumber": 7,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Card engine now auto-resolves 100% of ability lines (fuzz-tested, 316+ games). Trash viewer, animated/reorderable mulligan, DON!! grouping, deck picking moved into the Duel portal with per-account memory, uniform rounded-card art everywhere.",
+  "notes": "Versus A.I. (Basic Bot) is live, card draw/DON!! sound effects with a volume slider, animated card movement between zones, turn-start banner and ambient VFX, and a targeting arrow for character/event drags. Plus rules fixes: auto-skip block with no legal Blocker, Life-trigger-to-hand fix, custom deck pick no longer gets cleared before the store loads, and mandatory/optional effect auto-resolve fixes.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

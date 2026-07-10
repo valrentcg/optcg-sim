@@ -149,12 +149,53 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private RectTransform previewRoot;
     private CardInstance previewLockCard;   // last left-clicked card, shown in the docked left preview
     private bool menuOpen;                   // game menu (upper-right) open/closed
+    private bool soundMenuOpen;              // sound settings panel (opened from the game menu)
     private RectTransform deckLookOverlay;    // full-screen search/look overlay (lives on the canvas)
     private RectTransform trashOverlay;       // trash-viewer popup (confined to the local play area)
     private RectTransform mulliganOverlay;    // opening-hand overlay (deck-look style)
     private bool trashSortLowestFirst = true; // next SORT click: lowest cost at the top (toggles)
+    private RectTransform trashOverlayCatcher; // full-screen click-outside-to-close catcher (browse mode)
+    // ── Basic Bot (Versus A.I.) ──────────────────────────────────────────────
+    // Strawtable-style greedy heuristics: no search, deterministic choices, one
+    // command per "think" tick so moves are watchable. aiTriedThisTurn prevents
+    // re-attempting actions the engine rejected (state unchanged → infinite loop).
+    private string aiSeat;
+    private float aiNextActionAt;
+    private readonly HashSet<string> aiTriedThisTurn = new HashSet<string>();
+    private int aiLastTurnSeen = -1;
+    private int lastBannerTurn = -1;          // last (turn, seat) a turn banner was shown for
+    private string lastBannerSeat;
     private string mulliganAnimShownKey;      // seat+hand fingerprint already dealt-animated (re-animates after a mulligan redraw)
     private string mulliganRedrawSeat;        // seat whose post-mulligan fresh 5 should be shown/animated
+    // ── Universal card-movement animation ────────────────────────────────────
+    // After every Render, card positions are snapshotted; any card whose ZONE changed
+    // since the previous snapshot gets a ghost flight from old to new position (event use
+    // flares, counters fly hand→trash, life→hand, board→life, DON!! attaches, ...).
+    private sealed class CardPose { public Vector3 pos; public Vector2 size; public string zone; public bool don; public string cardId; public string owner; public RectTransform rt; }
+    private readonly Dictionary<string, CardPose> lastCardPoses = new Dictionary<string, CardPose>();
+    private readonly HashSet<string> suppressMoveAnim = new HashSet<string>();   // ids the LOCAL player just drag-placed (their drag was the animation)
+    private int activeMoveGhosts;             // in-flight zone-move ghosts (bot waits on these)
+    private RectTransform northHalfRect;      // playmat halves (turn-particle rim path)
+    private float turnFusePhase;              // 0..1 rim-lap position of the particle swarm (persists across renders)
+    private RectTransform turnCrestRect;      // center "TURN N · X'S TURN" pill (particles hide behind it)
+    private RectTransform southHalfRect;
+    // ── SFX ──────────────────────────────────────────────────────────────────
+    private AudioSource sfxSource;
+    private AudioClip cardDrawClip;
+    private bool sfxLoadStarted;
+    public static float SfxVolume
+    {
+        get => PlayerPrefs.GetFloat("optcg.sfx", 0.8f);
+        set { PlayerPrefs.SetFloat("optcg.sfx", Mathf.Clamp01(value)); PlayerPrefs.Save(); }
+    }
+    // Phase-tracker display override: sequences REFRESH → DRAW → DON at turn start so
+    // the pills mirror what the animations are showing (the engine jumps straight to
+    // "main" inside one command).
+    private string phaseDisplayOverride;
+    private Coroutine phaseSeqCo;
+    private readonly Dictionary<string, RectTransform> moveZoneAnchors = new Dictionary<string, RectTransform>();
+    private readonly Dictionary<string, RectTransform> donMoveRects = new Dictionary<string, RectTransform>();
+    private readonly Dictionary<string, List<RectTransform>> lifeMoveRects = new Dictionary<string, List<RectTransform>>();
     private readonly Dictionary<string, RectTransform> presenceGlowRects = new Dictionary<string, RectTransform>();  // hover-glow targets beyond board cards (DON, piles, life)
     private readonly List<RectTransform> opponentPresenceHandGlows = new List<RectTransform>();
     private string lastPresenceHover;         // last applied opponent hover (skip identical packets — re-creating the glow at 10Hz reads as blinking)
@@ -293,6 +334,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             int dots = (int)(Time.unscaledTime * 2f) % 4;
             coinFlipWaitingText.text = coinFlipWaitingBaseMessage + new string('.', dots);
+        }
+
+        // Basic Bot: one heuristic action per think-tick whenever any decision belongs
+        // to the AI seat (turn actions, effect targets, choices, battle responses).
+        if (aiSeat != null && !isReplayMode && state != null && state.Status != "finished"
+            && Time.unscaledTime >= aiNextActionAt)
+        {
+            if (AiTick()) aiNextActionAt = Time.unscaledTime + 2.0f;                       // thinking pause
+            else aiNextActionAt = Mathf.Max(aiNextActionAt, Time.unscaledTime + 0.25f);    // respect delays AiTick set
         }
 
         // Presence OUT: stream our current hover/raised-hand state to the opponent every frame;
@@ -434,6 +484,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         PendingSouthDeckId = southDeckId;
         PendingNorthDeckId = northDeckId;
+        PendingAiNorth = false;
+        EnsureBoard();
+    }
+
+    /// <summary>Human (south) vs Basic Bot piloting `aiDeckId` (north).</summary>
+    public static bool PendingAiNorth;
+    public static void LaunchVersusAi(string southDeckId, string aiDeckId)
+    {
+        PendingSouthDeckId = southDeckId;
+        PendingNorthDeckId = aiDeckId;
+        PendingAiNorth = true;
         EnsureBoard();
     }
 
@@ -473,9 +534,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             }
         }
         currentMatchConfig = config;
+        aiSeat = PendingAiNorth ? "north" : null;
+        aiTriedThisTurn.Clear();
+        aiLastTurnSeen = -1;
+        // Fresh match: stale animation bookkeeping from the previous game must not
+        // suppress the new game's opening-deal / Life-deal animations.
+        mulliganAnimShownKey = null;
+        mulliganRedrawSeat = null;
+        handDealAnimating = false;
+        mulliganDealAnimating = 0;
+        lastCardPoses.Clear();
+        suppressMoveAnim.Clear();
         // Hotseat/versus-self: both seats are this player; generic names.
         southDisplayName = "Player 1";
-        northDisplayName = "Player 2";
+        northDisplayName = aiSeat != null ? "Basic Bot" : "Player 2";
         state = GameEngine.CreateMatch(config);
         selectedId = null;
         selectedSeat = null;
@@ -985,6 +1057,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(catcher, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         catcher.gameObject.AddComponent<DonHover>().Init(this);
         catcher.gameObject.AddComponent<DonSelector>().Init(this, canvas, seat, don.InstanceId, origIndex);
+        donMoveRects[don.InstanceId] = holder;
         if (isNetworked)
         {
             presenceGlowRects[don.InstanceId] = holder;
@@ -1086,6 +1159,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (!CanAttachSelectedDonTo(seat, card)) return false;
         var donIds = selectedDonIds.ToList();
         ClearDonSelection(false);
+        foreach (var dId in donIds) suppressMoveAnim.Add(dId);   // player placed these themselves
         Dispatch(new GameCommand
         {
             Type = "attachDon",
@@ -1189,6 +1263,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         boardDeckPileRects.Clear();
         cardTargetRects.Clear();
         presenceGlowRects.Clear();
+        donMoveRects.Clear();
+        moveZoneAnchors.Clear();
+        lifeMoveRects.Clear();
         lastPresenceHover = lastPresenceRaised = null;   // rebuilt board → re-apply presence once
         // Presence visuals live on board objects that Clear() just destroyed.
         opponentPresenceGlow = null;
@@ -1242,6 +1319,721 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (opponentLeft) DrawOpponentLeftOverlay();
         // Re-apply the opponent's hover/raised-hand presence to the freshly built board.
         ApplyOpponentPresence();
+        // Snapshot positions and fly ghosts for any card whose zone changed this render.
+        CaptureAndAnimateCardMoves();
+        MaybeShowTurnBanner();
+        DrawTurnFuse();
+    }
+
+    // Subtle ambient sparks in the ACTIVE player's board colour — cool blue for
+    // north, teal for south. A handful of tiny star sparks drift slowly around that
+    // player's half of the playmat, twinkling in and out. Quiet, decorative, and
+    // drawn UNDER hands/cards so it never obstructs anything.
+    private void DrawTurnFuse()
+    {
+        if (state == null || state.Status != "active" || isReplayMode) return;
+        var half = state.ActiveSeat == TopSeat ? northHalfRect : southHalfRect;
+        if (half == null || playRoot == null) return;
+        var accent = state.ActiveSeat == TopSeat
+            ? new Color(0.42f, 0.62f, 1f)      // north: blue
+            : new Color(0.22f, 0.88f, 0.76f);  // south: teal
+        var root = new GameObject("Turn Sparks").AddComponent<RectTransform>();
+        root.SetParent(playRoot, false);
+        Stretch(root, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        // Slot the sparks directly above the playmat in draw order so hands, cards and
+        // overlays (later siblings of the mat) all render ON TOP of them.
+        var matAncestor = half;
+        while (matAncestor.parent != null && matAncestor.parent != playRoot)
+            matAncestor = matAncestor.parent as RectTransform;
+        if (matAncestor != null && matAncestor.parent == playRoot)
+            root.SetSiblingIndex(matAncestor.GetSiblingIndex() + 1);
+        var grp = root.gameObject.AddComponent<CanvasGroup>();
+        grp.blocksRaycasts = false;
+        grp.interactable = false;
+        root.gameObject.AddComponent<TurnFuse>().Init(this, half, accent);
+    }
+
+    private sealed class TurnFuse : MonoBehaviour
+    {
+        // A loose swarm of particles progressing around the RIM of the active player's
+        // half. New particles twinkle INTO existence just around the moving front,
+        // linger roughly in place (tiny drift), and twinkle OUT at the rear of the
+        // trail — reading as a soft comet of dust working its way around the board.
+        private GameManager mgr;
+        private RectTransform half;
+        private Color accent;
+        private const int Pool = 72;
+        private readonly RectTransform[] parts = new RectTransform[Pool];
+        private readonly Image[] partImgs = new Image[Pool];
+        private readonly Vector2[] drift = new Vector2[Pool];
+        private readonly float[] age = new float[Pool];
+        private readonly float[] life = new float[Pool];
+        private readonly float[] spin = new float[Pool];
+        private readonly float[] size = new float[Pool];
+        private readonly float[] seed = new float[Pool];
+        private readonly float[] baseAng = new float[Pool];   // rim tangent at spawn (streaks align with travel)
+        private float nextSpawnAt;
+        private const float LapSeconds = 30f;
+        private const float Inset = 5f;
+
+        public void Init(GameManager manager, RectTransform halfRect, Color accentCol)
+        {
+            mgr = manager;
+            half = halfRect;
+            accent = accentCol;
+            var starSprite = mgr.LoadFxSprite("fuse_spark") ?? mgr.GetSoftDotSprite();
+            for (int i = 0; i < Pool; i++)
+            {
+                var img = mgr.ImageObject("Rim Particle", transform, starSprite);
+                img.raycastTarget = false;
+                img.color = new Color(0f, 0f, 0f, 0f);
+                parts[i] = img.rectTransform;
+                partImgs[i] = img;
+                life[i] = 0f;   // inactive until spawned at the moving front
+            }
+            // Pre-seed the trail behind the current front so a fresh render doesn't
+            // start with an empty rim while the swarm rebuilds.
+            for (int i = 0; i < Pool / 2; i++)
+            {
+                int slot = SpawnAt(Mathf.Repeat(mgr.turnFusePhase - UnityEngine.Random.Range(0f, 0.10f), 1f));
+                if (slot >= 0) age[slot] = UnityEngine.Random.Range(0f, life[slot] * 0.8f);
+            }
+        }
+
+        // Spawns one particle near rim position t (with loose scatter); returns slot or -1.
+        private int SpawnAt(float t)
+        {
+            for (int i = 0; i < Pool; i++)
+            {
+                if (life[i] > 0f) continue;
+                if (parts[i] == null) continue;   // image destroyed (teardown/failed init): skip the slot
+                float tt = Mathf.Repeat(t, 1f);
+                Vector3 basePos = PerimeterPoint(tt);
+                // Streaks lie along the rim: remember the local tangent direction.
+                Vector3 fwd = PerimeterPoint(Mathf.Repeat(tt + 0.002f, 1f)) - basePos;
+                baseAng[i] = fwd.sqrMagnitude > 0.0001f ? Mathf.Atan2(fwd.y, fwd.x) * Mathf.Rad2Deg : 0f;
+                // Loose density: scatter around the rim point in both axes.
+                basePos += new Vector3(UnityEngine.Random.Range(-4f, 4f), UnityEngine.Random.Range(-4f, 4f), 0f);
+                parts[i].position = basePos;
+                parts[i].localRotation = Quaternion.Euler(0f, 0f, baseAng[i] + UnityEngine.Random.Range(-14f, 14f));
+                // Mostly stationary — just a whisper of drift so the trail shimmers.
+                drift[i] = new Vector2(UnityEngine.Random.Range(-2.5f, 2.5f), UnityEngine.Random.Range(-1.5f, 3f));
+                age[i] = 0f;
+                life[i] = UnityEngine.Random.Range(2.4f, 3.6f);   // longer life = longer fading tail behind the front
+                spin[i] = UnityEngine.Random.Range(-16f, 16f);   // gentle — keeps streaks roughly rim-aligned
+                size[i] = UnityEngine.Random.Range(3.5f, 7f);
+                seed[i] = UnityEngine.Random.Range(0f, 100f);
+                return i;
+            }
+            return -1;
+        }
+
+        private void Update()
+        {
+            if (mgr == null || half == null) return;
+            // Children gone but the component still ticking (mid-teardown, failed init):
+            // stop instead of spawning into destroyed slots every frame.
+            if (parts[0] == null && parts[Pool - 1] == null) { enabled = false; return; }
+            // The invisible "front" works its way around the rim; particles are born there.
+            mgr.turnFusePhase = Mathf.Repeat(mgr.turnFusePhase + Time.deltaTime / LapSeconds, 1f);
+            if (Time.unscaledTime >= nextSpawnAt)
+            {
+                nextSpawnAt = Time.unscaledTime + UnityEngine.Random.Range(0.030f, 0.055f);
+                // Spawn just around the front (slightly ahead through slightly behind).
+                SpawnAt(mgr.turnFusePhase + UnityEngine.Random.Range(-0.004f, 0.002f));
+            }
+
+            // The center "TURN N · ..." crest sits on the rim path — particles must not
+            // show through it. Test against its (slightly padded) world rect each frame.
+            Vector3 crestMin = Vector3.zero, crestMax = Vector3.zero;
+            bool hasCrest = mgr.turnCrestRect != null;
+            if (hasCrest)
+            {
+                var cc = new Vector3[4];
+                mgr.turnCrestRect.GetWorldCorners(cc);
+                const float pad = 8f;
+                crestMin = new Vector3(Mathf.Min(cc[0].x, cc[2].x) - pad, Mathf.Min(cc[0].y, cc[2].y) - pad);
+                crestMax = new Vector3(Mathf.Max(cc[0].x, cc[2].x) + pad, Mathf.Max(cc[0].y, cc[2].y) + pad);
+            }
+            for (int i = 0; i < Pool; i++)
+            {
+                if (life[i] <= 0f || parts[i] == null) continue;
+                age[i] += Time.deltaTime;
+                if (age[i] >= life[i]) { life[i] = 0f; partImgs[i].color = new Color(0f, 0f, 0f, 0f); continue; }
+                float f = age[i] / life[i];                                 // 0 → 1
+                parts[i].position += (Vector3)(drift[i] * Time.deltaTime);
+                parts[i].localRotation = Quaternion.Euler(0f, 0f,
+                    parts[i].localEulerAngles.z + spin[i] * Time.deltaTime);
+                // Twinkle in fast at the front, twinkle out slow at the rear;
+                // per-particle noise makes the shimmer non-uniform.
+                float envelope = f < 0.22f ? Mathf.SmoothStep(0f, 1f, f / 0.22f)
+                                           : Mathf.SmoothStep(1f, 0f, (f - 0.22f) / 0.78f);
+                float twinkle = 0.55f + 0.45f * Mathf.PerlinNoise(Time.unscaledTime * 3.4f, seed[i]);
+                float alpha = 0.78f * envelope * twinkle;
+                var pos = parts[i].position;
+                if (hasCrest && pos.x > crestMin.x && pos.x < crestMax.x && pos.y > crestMin.y && pos.y < crestMax.y)
+                    alpha = 0f;   // passing behind the turn crest
+                // Elongated streak lying along the rim.
+                float s = size[i] * (0.7f + 0.5f * envelope);
+                parts[i].sizeDelta = new Vector2(s * 2.3f, s * 0.9f);
+                var col = Color.Lerp(accent, Color.white, 0.55f * envelope * twinkle);
+                partImgs[i].color = new Color(col.r, col.g, col.b, alpha);
+            }
+        }
+
+        // World-space point at parameter t (0..1) along the half's inset perimeter,
+        // clockwise from the top-left corner.
+        private Vector3 PerimeterPoint(float t)
+        {
+            var c = new Vector3[4];
+            half.GetWorldCorners(c);   // 0=BL 1=TL 2=TR 3=BR
+            float w = (c[2] - c[1]).magnitude - Inset * 2f;
+            float h = (c[1] - c[0]).magnitude - Inset * 2f;
+            if (w <= 0f || h <= 0f) return c[0];
+            float per = 2f * (w + h);
+            float d = t * per;
+            Vector3 right = (c[2] - c[1]).normalized;
+            Vector3 up = (c[1] - c[0]).normalized;
+            Vector3 tl = c[1] + right * Inset - up * Inset;
+            if (d < w) return tl + right * d;                              // top edge →
+            d -= w;
+            if (d < h) return tl + right * w - up * d;                     // right edge ↓
+            d -= h;
+            if (d < w) return tl + right * (w - d) - up * h;               // bottom edge ←
+            d -= w;
+            return tl - up * (h - d);                                      // left edge ↑
+        }
+    }
+
+    // MTG-Arena-style turn-transition banner: a glowing light streak sweeps across the
+    // middle of the screen with "YOUR TURN" / "OPPONENT'S TURN" (or the player's name in
+    // hotseat), gold for the bottom/local player and cool blue for the opponent.
+    private void MaybeShowTurnBanner()
+    {
+        if (state == null || state.Status != "active" || isReplayMode) return;
+        if (state.TurnNumber == lastBannerTurn && state.ActiveSeat == lastBannerSeat) return;
+        bool firstObservation = lastBannerTurn < 0 && state.TurnNumber > 1;
+        lastBannerTurn = state.TurnNumber;
+        lastBannerSeat = state.ActiveSeat;
+        if (firstObservation) return;   // joining mid-match: don't flash a stale banner
+
+        // Sequence the phase pills alongside the turn-start animations.
+        if (phaseSeqCo != null) StopCoroutine(phaseSeqCo);
+        phaseSeqCo = StartCoroutine(PhaseIntroSequence());
+
+        bool mine = isNetworked ? state.ActiveSeat == localSeat : state.ActiveSeat == BottomSeat;
+        string label;
+        if (isNetworked) label = mine ? "YOUR TURN" : "OPPONENT'S TURN";
+        else
+        {
+            var ap = state.Players.TryGetValue(state.ActiveSeat, out var apv) ? apv : null;
+            label = (ap != null ? ap.Name.ToUpperInvariant() : state.ActiveSeat.ToUpperInvariant()) + "'S TURN";
+        }
+        var accent = mine ? new Color(1f, 0.72f, 0.22f) : new Color(0.38f, 0.72f, 1f);
+        StartCoroutine(ShowTurnBanner(label, accent));
+    }
+
+    // END (previous turn wrapping) → REFRESH → DRAW → DON, then hand back to the live
+    // mapping (MAIN/ATTACK). Each step re-renders only the pill row via Render-free
+    // override + a light redraw of the tracker on the next natural Render; we force one
+    // Render per step so the pills visibly walk even when nothing else changes.
+    private IEnumerator PhaseIntroSequence()
+    {
+        phaseDisplayOverride = "END";
+        RedrawPhaseTracker();
+        yield return new WaitForSeconds(0.6f);
+        phaseDisplayOverride = "REFRESH";
+        RedrawPhaseTracker();
+        yield return new WaitForSeconds(0.9f);
+        phaseDisplayOverride = "DRAW";
+        RedrawPhaseTracker();
+        yield return new WaitForSeconds(1.0f);
+        phaseDisplayOverride = "DON";
+        RedrawPhaseTracker();
+        yield return new WaitForSeconds(1.0f);
+        phaseDisplayOverride = null;
+        RedrawPhaseTracker();
+        phaseSeqCo = null;
+    }
+
+    // Rebuilds just the phase pill row in place (cheap, no full Render).
+    private void RedrawPhaseTracker()
+    {
+        if (sideRoot == null || state == null) return;
+        var old = sideRoot.Find("Phase Tracker");
+        if (old != null) Destroy(old.gameObject);
+        DrawPhaseTracker();
+    }
+
+    private IEnumerator ShowTurnBanner(string label, Color accent)
+    {
+        var root = new GameObject("Turn Banner").AddComponent<RectTransform>();
+        root.SetParent(canvas.transform, false);
+        Stretch(root, new Vector2(0f, 0.34f), new Vector2(1f, 0.66f), Vector2.zero, Vector2.zero);
+        root.SetAsLastSibling();
+        var grp = root.gameObject.AddComponent<CanvasGroup>();
+        grp.blocksRaycasts = false;
+        grp.interactable = false;
+        grp.alpha = 0f;
+
+        float screenW = boardRoot != null && boardRoot.rect.width > 1f ? boardRoot.rect.width : 1600f;
+        var dot = GetSoftDotSprite();
+
+        // Dark vignette band for contrast (soft dot stretched to a wide pill).
+        var band = ImageObject("Banner Band", root, dot);
+        band.color = new Color(0f, 0f, 0f, 0.62f);
+        band.raycastTarget = false;
+        var bandRt = band.rectTransform;
+        bandRt.anchorMin = bandRt.anchorMax = new Vector2(0.5f, 0.5f);
+        bandRt.sizeDelta = new Vector2(screenW * 1.35f, 340f);
+
+        // Main colored streak + hot white core.
+        var streak = ImageObject("Banner Streak", root, dot);
+        streak.color = new Color(accent.r, accent.g, accent.b, 0.85f);
+        streak.raycastTarget = false;
+        var streakRt = streak.rectTransform;
+        streakRt.anchorMin = streakRt.anchorMax = new Vector2(0.5f, 0.5f);
+        var hot = ImageObject("Banner Streak Hot", root, dot);
+        hot.color = new Color(1f, 0.99f, 0.94f, 0.9f);
+        hot.raycastTarget = false;
+        var hotRt = hot.rectTransform;
+        hotRt.anchorMin = hotRt.anchorMax = new Vector2(0.5f, 0.5f);
+
+        // Sweeping light: a bright knot that races across the streak once.
+        var sweep = ImageObject("Banner Sweep", root, dot);
+        sweep.color = new Color(1f, 1f, 1f, 0f);
+        sweep.raycastTarget = false;
+        var sweepRt = sweep.rectTransform;
+        sweepRt.anchorMin = sweepRt.anchorMax = new Vector2(0.5f, 0.5f);
+        sweepRt.sizeDelta = new Vector2(260f, 120f);
+
+        // Drifting embers.
+        var embers = new List<RectTransform>();
+        var emberSeeds = new List<Vector3>();
+        for (int i = 0; i < 9; i++)
+        {
+            var e = ImageObject("Banner Ember", root, dot);
+            e.raycastTarget = false;
+            e.color = new Color(accent.r, Mathf.Min(1f, accent.g + 0.15f), accent.b, 0f);
+            var ert = e.rectTransform;
+            ert.anchorMin = ert.anchorMax = new Vector2(0.5f, 0.5f);
+            float ex = ((i * 73) % 100 / 100f - 0.5f) * screenW * 0.7f;
+            float ey = ((i * 37) % 100 / 100f - 0.5f) * 90f;
+            float esz = 6f + (i * 29) % 100 / 100f * 14f;
+            ert.sizeDelta = new Vector2(esz, esz);
+            ert.anchoredPosition = new Vector2(ex, ey);
+            embers.Add(ert);
+            emberSeeds.Add(new Vector3(ex, ey, 14f + (i * 53) % 100 / 100f * 30f));
+        }
+
+        // Text: dark drop layer + bright main layer.
+        var shadow = TextObject("Banner Text Shadow", root, label, 58, new Color(0f, 0f, 0f, 0.85f), TextAnchor.MiddleCenter, titleFont);
+        shadow.fontStyle = FontStyle.Bold;
+        shadow.raycastTarget = false;
+        Stretch(shadow.rectTransform, Vector2.zero, Vector2.one, new Vector2(3f, -3f), new Vector2(3f, -3f));
+        var text = TextObject("Banner Text", root, label, 58, new Color(1f, 0.97f, 0.88f), TextAnchor.MiddleCenter, titleFont);
+        text.fontStyle = FontStyle.Bold;
+        text.raycastTarget = false;
+        AddOutline(text.gameObject, new Color(accent.r * 0.8f, accent.g * 0.62f, accent.b * 0.4f, 1f), 2.6f);
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        const float inDur = 0.30f, hold = 1.05f, outDur = 0.45f;
+        float t = 0f;
+        while (t < inDur)
+        {
+            t += Time.deltaTime;
+            float f = Mathf.Clamp01(t / inDur);
+            float e = SmoothStep(f);
+            // Ease-out-back overshoot for the text.
+            float back = 1f + 1.9f * Mathf.Pow(f - 1f, 3f) + 0.9f * Mathf.Pow(f - 1f, 2f);
+            grp.alpha = e;
+            streakRt.sizeDelta = new Vector2(Mathf.Lerp(screenW * 0.12f, screenW * 1.2f, e), Mathf.Lerp(230f, 120f, e));
+            hotRt.sizeDelta = new Vector2(Mathf.Lerp(screenW * 0.06f, screenW * 0.8f, e), Mathf.Lerp(120f, 40f, e));
+            text.rectTransform.localScale = shadow.rectTransform.localScale = Vector3.one * Mathf.Lerp(1.35f, 1f, back);
+            yield return null;
+        }
+        // Hold: embers drift up, the sweep knot races across once.
+        t = 0f;
+        while (t < hold && root != null)
+        {
+            t += Time.deltaTime;
+            float f = Mathf.Clamp01(t / hold);
+            for (int i = 0; i < embers.Count; i++)
+            {
+                if (embers[i] == null) continue;
+                var seed = emberSeeds[i];
+                embers[i].anchoredPosition = new Vector2(seed.x, seed.y + f * seed.z);
+                var img = embers[i].GetComponent<Image>();
+                if (img != null) img.color = new Color(img.color.r, img.color.g, img.color.b, 0.75f * Mathf.Sin(f * Mathf.PI));
+            }
+            float sw = Mathf.Clamp01(f * 1.6f);
+            sweepRt.anchoredPosition = new Vector2(Mathf.Lerp(-screenW * 0.45f, screenW * 0.45f, sw), 0f);
+            sweep.color = new Color(1f, 1f, 1f, 0.55f * Mathf.Sin(sw * Mathf.PI));
+            yield return null;
+        }
+        t = 0f;
+        while (t < outDur && root != null)
+        {
+            t += Time.deltaTime;
+            float f = Mathf.Clamp01(t / outDur);
+            grp.alpha = 1f - SmoothStep(f);
+            streakRt.sizeDelta = new Vector2(screenW * (1.2f + 0.4f * f), 120f * (1f - 0.55f * f));
+            hotRt.sizeDelta = new Vector2(screenW * 0.8f * (1f + 0.35f * f), 40f * (1f - 0.7f * f));
+            text.rectTransform.localScale = shadow.rectTransform.localScale = Vector3.one * (1f + 0.06f * f);
+            yield return null;
+        }
+        if (root != null) Destroy(root.gameObject);
+    }
+
+    // Plateau dot: solid centre (~55% radius) with a quick smooth fade — used for the
+    // ribbon CORE and prongs so they read crisp instead of blurry.
+    private Sprite _coreDotSprite;
+    private Sprite GetCoreDotSprite()
+    {
+        if (_coreDotSprite != null) return _coreDotSprite;
+        const int S = 64;
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[S * S];
+        float c = (S - 1) * 0.5f;
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float dx = (x - c) / c, dy = (y - c) / c;
+                float r = Mathf.Sqrt(dx * dx + dy * dy);
+                float a = Mathf.Clamp01((1f - r) * 2.4f);   // plateau then fast falloff
+                a = a * a * (3f - 2f * a);
+                px[y * S + x] = new Color32(255, 255, 255, (byte)(a * 255f));
+            }
+        tex.SetPixels32(px);
+        tex.Apply();
+        _coreDotSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f));
+        return _coreDotSprite;
+    }
+
+    private void EnsureSfx()
+    {
+        if (sfxSource == null)
+        {
+            sfxSource = gameObject.GetComponent<AudioSource>();
+            if (sfxSource == null) sfxSource = gameObject.AddComponent<AudioSource>();
+            sfxSource.playOnAwake = false;
+        }
+        if (!sfxLoadStarted)
+        {
+            sfxLoadStarted = true;
+            StartCoroutine(LoadSfxClip("card_draw", clip => cardDrawClip = clip));
+        }
+    }
+
+    private IEnumerator LoadSfxClip(string name, System.Action<AudioClip> assign)
+    {
+        string path = System.IO.Path.Combine(Application.streamingAssetsPath, "sfx", name + ".wav");
+        if (!System.IO.File.Exists(path)) yield break;
+        using (var req = UnityEngine.Networking.UnityWebRequestMultimedia.GetAudioClip("file://" + path, AudioType.WAV))
+        {
+            yield return req.SendWebRequest();
+            if (req.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
+            {
+                var raw = UnityEngine.Networking.DownloadHandlerAudioClip.GetContent(req);
+                assign(TrimSilence(raw));
+            }
+        }
+    }
+
+    // Strips leading/trailing dead air from a clip so the sound lands the instant
+    // it's triggered (draw SFX feels snappy). Threshold is relative to the clip's
+    // own peak so quiet-but-real tails survive; keeps a tiny fade-in/out margin.
+    private static AudioClip TrimSilence(AudioClip clip)
+    {
+        if (clip == null || clip.samples <= 0) return clip;
+        var data = new float[clip.samples * clip.channels];
+        if (!clip.GetData(data, 0)) return clip;
+
+        float peak = 0f;
+        for (int i = 0; i < data.Length; i++)
+        {
+            float a = data[i] < 0f ? -data[i] : data[i];
+            if (a > peak) peak = a;
+        }
+        if (peak <= 0.0001f) return clip;
+        float thresh = peak * 0.04f;   // 4% of peak = "audible"
+
+        int first = 0, last = data.Length - 1;
+        while (first < data.Length && Mathf.Abs(data[first]) < thresh) first++;
+        while (last > first && Mathf.Abs(data[last]) < thresh) last--;
+        if (first >= last) return clip;
+
+        // Snap to frame boundaries and keep a ~5ms head / ~30ms tail margin.
+        int head = Mathf.Max(0, first / clip.channels - clip.frequency / 200);
+        int tail = Mathf.Min(clip.samples - 1, last / clip.channels + clip.frequency / 33);
+        int frames = tail - head + 1;
+        if (frames <= 0 || (head == 0 && tail == clip.samples - 1)) return clip;
+
+        var trimmedData = new float[frames * clip.channels];
+        System.Array.Copy(data, head * clip.channels, trimmedData, 0, trimmedData.Length);
+        var trimmed = AudioClip.Create(clip.name + "_trim", frames, clip.channels, clip.frequency, false);
+        trimmed.SetData(trimmedData, 0);
+        return trimmed;
+    }
+
+    private void PlayCardDrawSfx(float delay = 0f)
+    {
+        EnsureSfx();
+        if (cardDrawClip == null) return;
+        if (delay <= 0f) sfxSource.PlayOneShot(cardDrawClip, SfxVolume);
+        else StartCoroutine(PlaySfxDelayed(cardDrawClip, delay));
+    }
+
+    private IEnumerator PlaySfxDelayed(AudioClip clip, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+        if (clip != null && sfxSource != null) sfxSource.PlayOneShot(clip, SfxVolume);
+    }
+
+    // Soft radial dot used by the energy arrows, banner streaks and glow effects.
+    private Sprite _softDotSprite;
+    private Sprite GetSoftDotSprite()
+    {
+        if (_softDotSprite != null) return _softDotSprite;
+        const int S = 64;
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[S * S];
+        float c = (S - 1) * 0.5f;
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float dx = (x - c) / c, dy = (y - c) / c;
+                float r = Mathf.Sqrt(dx * dx + dy * dy);
+                float a = Mathf.Clamp01(1f - r);
+                a = a * a * (3f - 2f * a);
+                px[y * S + x] = new Color32(255, 255, 255, (byte)(a * 255f));
+            }
+        tex.SetPixels32(px);
+        tex.Apply();
+        _softDotSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f));
+        return _softDotSprite;
+    }
+
+    private void CaptureAndAnimateCardMoves()
+    {
+        if (state == null) return;
+        Canvas.ForceUpdateCanvases();
+        var now = new Dictionary<string, CardPose>();
+        foreach (var seatKey in state.Players.Keys)
+        {
+            var pMv = state.Players[seatKey];
+            System.Action<string, string, string, RectTransform, bool> addPose = (id, cardId, zone, rt, don) =>
+            {
+                if (rt == null || string.IsNullOrEmpty(id)) return;
+                now[id] = new CardPose { pos = rt.position, size = rt.rect.size, zone = zone, don = don, cardId = cardId, owner = seatKey, rt = rt };
+            };
+            System.Func<string, RectTransform> anchor = k => moveZoneAnchors.TryGetValue(k, out var a) ? a : null;
+
+            if (pMv.Leader != null && cardTargetRects.TryGetValue(pMv.Leader.InstanceId, out var lr)) addPose(pMv.Leader.InstanceId, pMv.Leader.CardId, "board", lr, false);
+            foreach (var c in pMv.CharacterArea) if (c != null && cardTargetRects.TryGetValue(c.InstanceId, out var cr)) addPose(c.InstanceId, c.CardId, "board", cr, false);
+            if (pMv.Stage != null && cardTargetRects.TryGetValue(pMv.Stage.InstanceId, out var sr)) addPose(pMv.Stage.InstanceId, pMv.Stage.CardId, "board", sr, false);
+
+            bool bottomHand = seatKey == BottomSeat;
+            for (int i = 0; i < pMv.Hand.Count; i++)
+            {
+                var hc = pMv.Hand[i];
+                RectTransform rt = null;
+                if (handCardRects.TryGetValue(hc.InstanceId, out var hr) && hr != null) rt = hr;
+                else if (!bottomHand && i < opponentHandSlots.Count) rt = opponentHandSlots[i];
+                if (rt == null) rt = anchor("hand:" + seatKey);
+                addPose(hc.InstanceId, hc.CardId, "hand:" + seatKey, rt, false);
+            }
+            lifeMoveRects.TryGetValue(seatKey, out var lifeRects);
+            for (int i = 0; i < pMv.Life.Count; i++)
+            {
+                var rt = lifeRects != null && i < lifeRects.Count && lifeRects[i] != null ? lifeRects[i] : anchor("life:" + seatKey);
+                addPose(pMv.Life[i].InstanceId, pMv.Life[i].CardId, "life:" + seatKey, rt, false);
+            }
+            for (int i = 0; i < pMv.Trash.Count; i++)
+            {
+                var tc = pMv.Trash[i];
+                RectTransform rt = cardTargetRects.TryGetValue(tc.InstanceId, out var tr) && tr != null ? tr : anchor("trash:" + seatKey);
+                addPose(tc.InstanceId, tc.CardId, "trash:" + seatKey, rt, false);
+            }
+            var deckAnchor = boardDeckPileRects.TryGetValue(seatKey, out var da) ? da : null;
+            foreach (var dc in pMv.Deck) addPose(dc.InstanceId, dc.CardId, "deck:" + seatKey, deckAnchor, false);
+            foreach (var dn in pMv.CostArea)
+            {
+                RectTransform rt = donMoveRects.TryGetValue(dn.InstanceId, out var dr) && dr != null ? dr : anchor("cost:" + seatKey);
+                addPose(dn.InstanceId, null, "cost:" + seatKey, rt, true);
+            }
+            System.Action<CardInstance> attached = host =>
+            {
+                if (host == null || !cardTargetRects.TryGetValue(host.InstanceId, out var hr2) || hr2 == null) return;
+                foreach (var dId in host.AttachedDonIds) addPose(dId, null, "don@" + host.InstanceId, hr2, true);
+            };
+            attached(pMv.Leader);
+            foreach (var c in pMv.CharacterArea) attached(c);
+            attached(pMv.Stage);
+        }
+
+        // The Life setup deal (deck → Life) may share its render with the post-mulligan
+        // hand redeal (the final decision triggers both). AnimateHandDeal owns the
+        // deck → hand flights that render, so suppress everything EXCEPT the Life deal
+        // instead of gating the whole pass — otherwise Life just pops into place.
+        bool suppressNonLife = handDealAnimating || mulliganRedrawSeat != null;
+        bool animOk = state.Status == "active" && lastCardPoses.Count > 0;
+        if (animOk)
+        {
+            // Turn-start sequencing: the phase pills say DRAW then DON, so the flights match —
+            // the deck draw flies first, then each new DON!! follows one at a time.
+            bool hasTurnDraw = false;
+            foreach (var kv in now)
+                if (lastCardPoses.TryGetValue(kv.Key, out var o) && o.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("hand:")) { hasTurnDraw = true; break; }
+            int donSeq = 0;
+            int moves = 0;
+            int lifeDealt = 0;
+            foreach (var kv in now)
+            {
+                if (!lastCardPoses.TryGetValue(kv.Key, out var old))
+                {
+                    // Brand-new DON!! in the cost area = drawn from the DON!! deck this action.
+                    if (kv.Value.don && kv.Value.zone.StartsWith("cost:") && !suppressMoveAnim.Contains(kv.Key)
+                        && moveZoneAnchors.TryGetValue("dondeck:" + kv.Value.owner, out var dda) && dda != null)
+                    {
+                        if (++moves > 12) break;
+                        var fromDonDeck = new CardPose { pos = dda.position, size = kv.Value.size, zone = "dondeck:" + kv.Value.owner, don = true, owner = kv.Value.owner };
+                        // After the draw finishes (if there was one), then one DON at a time.
+                        float donDelay = (hasTurnDraw ? 0.55f : 0f) + 0.40f * donSeq;
+                        donSeq++;
+                        PlayCardDrawSfx(donDelay);
+                        StartCoroutine(AnimateCardMoveGhost(fromDonDeck, kv.Value, null, false, false, HideForFlight(kv.Value), donDelay));
+                    }
+                    continue;
+                }
+                if (old.zone == kv.Value.zone) continue;
+                if (suppressMoveAnim.Contains(kv.Key)) continue;
+                bool isLifeDeal = old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("life:");
+                if (suppressNonLife && !isLifeDeal) continue;   // hand redeal render: AnimateHandDeal covers those flights
+                if ((old.pos - kv.Value.pos).sqrMagnitude < 25f) continue;
+                if (++moves > 24) break;   // mass reshuffles: skip the ghost flood
+                // Life setup (deck → Life): deal bottom-of-Life first, staggered upward.
+                float moveDelay = 0f;
+                if (isLifeDeal)
+                {
+                    var lifeOwner = state.Players[kv.Value.owner];
+                    int li = lifeOwner.Life.FindIndex(c => c.InstanceId == kv.Key);
+                    moveDelay = 0.20f * Mathf.Max(0, li);   // ≥ SFX length: one full sound per card
+                    lifeDealt++;
+                }
+                bool flare = old.zone.StartsWith("hand:") && kv.Value.zone.StartsWith("trash:");
+                // Card-draw sound: deck → hand, Life → hand (damage/effects) and the
+                // Life setup deal (deck → Life), timed with each card's flight.
+                if ((old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("hand:"))
+                    || (old.zone.StartsWith("life:") && kv.Value.zone.StartsWith("hand:"))
+                    || (old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("life:")))
+                    PlayCardDrawSfx(moveDelay);
+                bool showFace = !kv.Value.don &&
+                    (kv.Value.zone == "board" || kv.Value.zone.StartsWith("trash:") || old.zone == "board" || old.zone.StartsWith("trash:")
+                     || (kv.Value.zone.StartsWith("hand:") && kv.Value.owner == BottomSeat && (!isNetworked || kv.Value.owner == localSeat)));
+                StartCoroutine(AnimateCardMoveGhost(old, kv.Value, kv.Value.don ? null : kv.Value.cardId, showFace, flare, HideForFlight(kv.Value), moveDelay));
+            }
+        }
+        lastCardPoses.Clear();
+        foreach (var kv in now) lastCardPoses[kv.Key] = kv.Value;
+        suppressMoveAnim.Clear();
+    }
+
+    // Hides the freshly rendered destination card so it doesn't sit there while its own
+    // ghost is still flying in; returns the CanvasGroup-carrying rect to reveal on landing.
+    private RectTransform HideForFlight(CardPose to)
+    {
+        if (to == null || to.rt == null) return null;
+        if (to.zone.StartsWith("don@")) return null;         // the "rect" is the HOST character
+        if (IsMoveAnchorRect(to.rt)) return null;            // shared pile anchor, not this card
+        var g = to.rt.GetComponent<CanvasGroup>();
+        if (g == null) g = to.rt.gameObject.AddComponent<CanvasGroup>();
+        g.alpha = 0f;
+        return to.rt;
+    }
+
+    private bool IsMoveAnchorRect(RectTransform rt)
+    {
+        if (rt == null) return true;
+        foreach (var kv in moveZoneAnchors) if (kv.Value == rt) return true;
+        if (boardDeckPileRects.ContainsValue(rt)) return true;
+        return false;
+    }
+
+    // One ghost flight from a card's previous on-screen spot to its new one. `flare`
+    // (event/counter use from hand) adds a gold outline + a stronger scale pulse.
+    private IEnumerator AnimateCardMoveGhost(CardPose from, CardPose to, string cardId, bool showFace, bool flare, RectTransform reveal = null, float delay = 0f)
+    {
+        activeMoveGhosts++;
+        try {
+        var ghost = new GameObject("Move Ghost").AddComponent<RectTransform>();
+        // DON!! flights (deck → cost area, attach/return) happen entirely on the table
+        // surface, so they fly UNDER the hand rows: slot them just above the playmat in
+        // playRoot instead of canvas-top, where they'd streak over the player's hand.
+        bool underHand = cardId == null && playRoot != null;
+        if (underHand)
+        {
+            ghost.SetParent(playRoot, false);
+            var mat = playRoot.Find("Reference Playmat") as RectTransform;
+            if (mat != null) ghost.SetSiblingIndex(mat.GetSiblingIndex() + 1);
+        }
+        else
+        {
+            ghost.SetParent(canvas.transform, false);
+            ghost.SetAsLastSibling();
+        }
+        Vector2 gSize = from.size.x > 4f ? from.size : (boardCardSize.x > 1f ? boardCardSize : new Vector2(70f, 98f));
+        // Zone-anchor poses (whole hand row, pile zones) are huge — a ghost must always
+        // be CARD sized, never region sized.
+        Vector2 gCap = boardCardSize.x > 1f ? boardCardSize : new Vector2(70f, 98f);
+        if (gSize.x > gCap.x * 1.6f || gSize.y > gCap.y * 1.6f) gSize = gCap;
+        ghost.sizeDelta = gSize;
+        ghost.position = from.pos;
+        // Match the DESTINATION's orientation for the whole flight — a card played onto
+        // the opponent's (upside-down) side must look upside down from the moment it
+        // appears, not land and then flip.
+        if (to.rt != null) ghost.rotation = to.rt.rotation;
+        Sprite sprite = cardId != null ? (showFace ? GetCardSprite(cardId) : GetBackSprite()) : GetDonSprite();
+        var art = AddRoundedCardImage(ghost, "Art", sprite);
+        art.raycastTarget = false;
+        var grp = ghost.gameObject.AddComponent<CanvasGroup>();
+        grp.blocksRaycasts = false;
+        grp.interactable = false;
+        if (flare) AddMysticalCardOutline(ghost, true);
+        if (delay > 0f)
+        {
+            grp.alpha = 0f;                      // invisible until its stagger slot
+            yield return new WaitForSeconds(delay);
+            if (ghost == null) yield break;
+            grp.alpha = 1f;
+        }
+
+        const float duration = 0.38f;
+        float t = 0f;
+        Vector3 a = from.pos, b = to.pos;
+        while (t < duration && ghost != null)
+        {
+            t += Time.deltaTime;
+            float f = Mathf.Clamp01(t / duration);
+            ghost.position = Vector3.Lerp(a, b, SmoothStep(f));
+            float pulse = 1f + (flare ? 0.35f : 0.10f) * Mathf.Sin(f * Mathf.PI);
+            ghost.localScale = Vector3.one * pulse;
+            if (f > 0.85f) grp.alpha = Mathf.InverseLerp(1f, 0.85f, f);
+            // Cross-fade: the real card fades IN as the ghost fades out at the landing.
+            if (reveal != null && f > 0.85f)
+            {
+                var rg = reveal.GetComponent<CanvasGroup>();
+                if (rg != null) rg.alpha = Mathf.InverseLerp(0.85f, 1f, f);
+            }
+            yield return null;
+        }
+        if (reveal != null)
+        {
+            var rg = reveal.GetComponent<CanvasGroup>();
+            if (rg != null) rg.alpha = 1f;
+        }
+        if (ghost != null) Destroy(ghost.gameObject);
+        } finally { activeMoveGhosts--; }
     }
 
     // Modal shown when the networked peer disconnects before the match finished.
@@ -1505,6 +2297,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             Destroy(trashOverlay.gameObject);
             trashOverlay = null;
         }
+        if (trashOverlayCatcher != null)
+        {
+            Destroy(trashOverlayCatcher.gameObject);
+            trashOverlayCatcher = null;
+        }
         if (state == null || state.DeckLook != null) return;
 
         string seatToShow = null;
@@ -1524,6 +2321,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (seatToShow == null) seatToShow = trashViewSeat;
         if (seatToShow == null || !state.Players.TryGetValue(seatToShow, out var trashPlayer)) return;
         var trashCards = trashPlayer.Trash;
+
+        // Browse mode: clicking anywhere OUTSIDE the panel minimizes the trash view
+        // (a full-screen invisible catcher behind the panel; the panel blocks it).
+        if (trashEffect == null)
+        {
+            var outside = PanelObject("Trash Outside Catcher", canvas.transform, new Color(0f, 0f, 0f, 0f));
+            Stretch(outside, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            outside.SetAsLastSibling();
+            var outsideBtn = outside.gameObject.AddComponent<Button>();
+            outsideBtn.transition = Selectable.Transition.None;
+            outsideBtn.onClick.AddListener(() => { trashViewSeat = null; Render(); });
+            trashOverlayCatcher = outside;
+        }
 
         // Big panel across the play area — kept clear of both trash-pile corners so the
         // pile itself stays clickable to close the viewer (click pile or its cards to toggle).
@@ -1602,6 +2412,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             float chByH = (areaH - (rows - 1) * TrashGridSpacing) / rows;
             float ch = Mathf.Min(cwByW * 7f / 5f, chByH);
             if (ch > bestH) { bestH = ch; bestCols = cols; }
+        }
+        // Cap: tiny piles shouldn't produce massive cards — max is only slightly larger
+        // than a board card; the grid still scales all the way down for ~50-card piles.
+        float trashCapH = boardCardSize.y > 1f ? boardCardSize.y * 1.35f : 190f;
+        if (bestH > trashCapH)
+        {
+            bestH = trashCapH;
+            bestCols = Mathf.Max(1, Mathf.FloorToInt((areaW + TrashGridSpacing) / (bestH * 5f / 7f + TrashGridSpacing)));
         }
         trashGridCell = new Vector2(bestH * 5f / 7f, bestH);
         trashGridCols = Mathf.Max(1, bestCols);
@@ -1759,12 +2577,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             return;
         }
 
-        if (selecting && cards != null && cards.Count == 5)
+        if (selecting && cards != null && cards.Count > 0 && cards.Count <= 5)
         {
-            int topCount = cards.Count == 5 ? 3 : 2;
-            var top = DeckLookChoiceRow(row, "Deck Look Top Row", new Vector2(0f, 0.54f), new Vector2(1f, 1f), selecting ? 24f : 18f);
-            var bottom = DeckLookChoiceRow(row, "Deck Look Bottom Row", new Vector2(0f, 0f), new Vector2(1f, 0.46f), selecting ? 24f : 18f);
-            for (int i = 0; i < cards.Count; i++) AddDeckLookChoiceCard(i < topCount ? top : bottom, cards[i], selecting, cardSize);
+            // Mulligan-style single row with manual slots: cards can be drag-rearranged
+            // (cosmetic) and slide around each other live, exactly like the mulligan screen.
+            if (deckLookWorkingOrder == null || deckLookWorkingOrder.Count != cards.Count
+                || deckLookWorkingOrder.Exists(c => !ContainsInstance(cards, c.InstanceId)))
+                deckLookWorkingOrder = new List<CardInstance>(cards);
+            for (int i = 0; i < deckLookWorkingOrder.Count; i++)
+            {
+                var holder = new GameObject("Deck Look Card").AddComponent<RectTransform>();
+                holder.SetParent(row, false);
+                ApplyDeckLookSlot(holder, row, i, deckLookWorkingOrder.Count, cardSize);
+                AddDeckLookChoiceCardVisual(holder, deckLookWorkingOrder[i], true, cardSize);
+                var selDrag = holder.gameObject.AddComponent<DeckLookCardDrag>();
+                selDrag.Init(this, deckLookWorkingOrder[i].InstanceId, cardSize);
+            }
             return;
         }
 
@@ -1873,6 +2701,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         layout.childForceExpandWidth = false;
         layout.childForceExpandHeight = false;
         return row;
+    }
+
+    private static bool ContainsInstance(IList<CardInstance> cards, string instanceId)
+    {
+        for (int i = 0; i < cards.Count; i++) if (cards[i].InstanceId == instanceId) return true;
+        return false;
     }
 
     private void AddDeckLookChoiceCard(RectTransform parent, CardInstance card, bool selecting, Vector2 cardSize)
@@ -2228,38 +3062,50 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // overlay slot, staggered, flipping from card back to face at the midpoint (reuses
     // AnimateCardFromDeck). Ghosts parent to the overlay itself so they render above
     // the full-screen dim.
-    private IEnumerator AnimateMulliganDeal(string seat, List<CardInstance> cards, List<RectTransform> holders, Vector2 cardSize, RectTransform overlayRoot)
+    private IEnumerator AnimateMulliganDeal(string seat, List<CardInstance> cards, List<RectTransform> holders, Vector2 cardSize, RectTransform overlayRoot, string dealKey)
     {
-        const float stagger = 0.18f;
-        const float duration = 0.45f;
-        var deckSource = GetBoardDeckTarget(seat);
-        if (deckSource == null || overlayRoot == null)
+        mulliganDealAnimating++;   // holds the Basic Bot's decisions (its dispatch would re-render and cut this short)
+        try
         {
-            foreach (var holder in holders)
+            const float stagger = 0.20f;   // ≥ the draw SFX length so each card gets its own full sound
+            const float duration = 0.45f;
+            var deckSource = GetBoardDeckTarget(seat);
+            if (deckSource == null || overlayRoot == null)
             {
-                var g = holder != null ? holder.GetComponent<CanvasGroup>() : null;
-                if (g != null) { g.alpha = 1f; g.blocksRaycasts = true; g.interactable = true; }
+                foreach (var holder in holders)
+                {
+                    var g = holder != null ? holder.GetComponent<CanvasGroup>() : null;
+                    if (g != null) { g.alpha = 1f; g.blocksRaycasts = true; g.interactable = true; }
+                }
+                mulliganAnimShownKey = dealKey;   // nothing to animate; don't retry forever
+                yield break;
             }
-            yield break;
+            for (int i = 0; i < holders.Count && i < cards.Count; i++)
+            {
+                if (holders[i] == null) continue;
+                if (overlayRoot == null) yield break;   // overlay torn down mid-deal: rebuilt one restarts
+                var ghost = new GameObject("Mulligan Deal Ghost").AddComponent<RectTransform>();
+                ghost.SetParent(overlayRoot, false);
+                ghost.SetAsLastSibling();
+                ghost.sizeDelta = cardSize;
+                ghost.position = deckSource.position;
+                ghost.rotation = deckSource.rotation;
+                ghost.localScale = Vector3.one * 0.34f;
+                var art = AddRoundedCardImage(ghost, "Art", GetBackSprite());
+                art.raycastTarget = false;
+                var gGroup = ghost.gameObject.AddComponent<CanvasGroup>();
+                gGroup.blocksRaycasts = false;
+                gGroup.interactable = false;
+                PlayCardDrawSfx();
+                // Spawn-then-wait (not precomputed delays): a long frame (scene-load hitch)
+                // used to consume several delays at once, launching the first cards together.
+                StartCoroutine(AnimateCardFromDeck(ghost, holders[i], GetCardSprite(cards[i].CardId), 0f, duration));
+                yield return new WaitForSeconds(stagger);
+            }
+            yield return new WaitForSeconds(0.5f);   // let the last card land before the bot may act
+            if (overlayRoot != null) mulliganAnimShownKey = dealKey;   // completed uninterrupted — never replay for this hand
         }
-        for (int i = 0; i < holders.Count && i < cards.Count; i++)
-        {
-            if (holders[i] == null) continue;
-            var ghost = new GameObject("Mulligan Deal Ghost").AddComponent<RectTransform>();
-            ghost.SetParent(overlayRoot, false);
-            ghost.SetAsLastSibling();
-            ghost.sizeDelta = cardSize;
-            ghost.position = deckSource.position;
-            ghost.rotation = deckSource.rotation;
-            ghost.localScale = Vector3.one * 0.34f;
-            var art = AddRoundedCardImage(ghost, "Art", GetBackSprite());
-            art.raycastTarget = false;
-            var gGroup = ghost.gameObject.AddComponent<CanvasGroup>();
-            gGroup.blocksRaycasts = false;
-            gGroup.interactable = false;
-            StartCoroutine(AnimateCardFromDeck(ghost, holders[i], GetCardSprite(cards[i].CardId), i * stagger, duration));
-        }
-        yield break;
+        finally { mulliganDealAnimating--; }
     }
 
     private RectTransform CreateDeckLookDrawGhost(RectTransform deckSource, Vector2 cardSize)
@@ -2284,8 +3130,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private IEnumerator AnimateCardFromDeck(RectTransform rect, RectTransform targetHolder, Sprite frontSprite, float delay, float duration)
     {
         if (rect == null) yield break;
-        if (delay > 0f) yield return new WaitForSeconds(delay);
+        // Waiting ghosts stay INVISIBLE until their stagger delay elapses — otherwise the
+        // next card is already sitting on the deck while the previous one flies, which
+        // reads as two cards leaving together.
+        var selfGroup = rect.GetComponent<CanvasGroup>();
+        if (delay > 0f)
+        {
+            if (selfGroup != null) selfGroup.alpha = 0f;
+            yield return new WaitForSeconds(delay);
+        }
         if (rect == null) yield break;
+        if (selfGroup != null) selfGroup.alpha = 1f;
 
         var startPos = rect.position;
         var startRotation = rect.rotation;
@@ -2465,17 +3320,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             Destroy(mulliganOverlay.gameObject);
             mulliganOverlay = null;
         }
-        // Post-mulligan reveal: the decision is already made, but the player should SEE
-        // their fresh 5 cards dealt (deck → row animation) before play moves on.
+        // Post-mulligan: the fresh 5 deal INTO THE BOARD HAND (deck → hand-slot flight),
+        // no overlay. While the deal plays, hold off drawing the next decision overlay.
+        if (handDealAnimating) return;
         if (mulliganRedrawSeat != null)
         {
-            if (isNetworked && mulliganRedrawSeat != localSeat)
+            string dealSeat = mulliganRedrawSeat;
+            mulliganRedrawSeat = null;
+            if (!isNetworked || dealSeat == localSeat)
             {
-                mulliganRedrawSeat = null;
-            }
-            else if (state.Players.TryGetValue(mulliganRedrawSeat, out var redrawP) && redrawP != null)
-            {
-                DrawMulliganRedrawOverlay(redrawP);
+                handDealAnimating = true;
+                StartCoroutine(AnimateHandDeal(dealSeat));
                 return;
             }
         }
@@ -2488,7 +3343,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // Whose decision is on screen right now?
         string seat = null;
-        var mulliganSeats = isNetworked ? new[] { BottomSeat } : new[] { "south", "north" };
+        var mulliganSeats = isNetworked ? new[] { BottomSeat }
+            : aiSeat != null ? new[] { GameEngine.OtherSeat(aiSeat) }
+            : new[] { "south", "north" };
         foreach (var cand in mulliganSeats)
             if (!state.Players[cand].MulliganDecided) { seat = cand; break; }
 
@@ -2580,8 +3437,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         if (animateDeal)
         {
-            mulliganAnimShownKey = dealKey;
-            StartCoroutine(AnimateMulliganDeal(seat, dealCards, dealHolders, cardSize, dim));
+            // NOTE: mulliganAnimShownKey is set by the coroutine on COMPLETION, not here —
+            // if a re-render tears the overlay down mid-deal (coin-flip outro, a bot
+            // dispatch), the rebuilt overlay restarts the deal instead of popping the
+            // cards in fully visible.
+            StartCoroutine(AnimateMulliganDeal(seat, dealCards, dealHolders, cardSize, dim, dealKey));
         }
 
         // Decision buttons — condensed, side by side, directly under the cards;
@@ -2606,58 +3466,80 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
     }
 
-    // Post-mulligan reveal overlay: the fresh 5 cards fly from the deck (same deal
-    // animation), with a single CONTINUE button to move on. Read-only — the mulligan
-    // decision is already committed.
-    private void DrawMulliganRedrawOverlay(PlayerState p)
+    // Post-mulligan hand deal: the fresh 5 fly one at a time from the deck pile into
+    // their real positions in the player's on-board hand (face-up for the bottom/local
+    // hand, card backs for the top hand). No overlay — the cards land where they live.
+    private bool handDealAnimating;
+    private int mulliganDealAnimating;    // opening-hand overlay deals in progress (AnimateMulliganDeal; counter — an interrupted deal's teardown must not unblock a restarted one)
+
+    private IEnumerator AnimateHandDeal(string seat)
     {
-        var dim = PanelObject("Mulligan Redraw Dim", canvas.transform, new Color32(5, 7, 10, 225));
-        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        dim.SetAsLastSibling();
-        mulliganOverlay = dim;
-
-        string who = isNetworked ? "Your new hand" : (p.Name + "'s new hand");
-        var title = TextObject("Mulligan Redraw Title", dim, who + " — mulligan used", 22, Ink, TextAnchor.LowerCenter);
-        Stretch(title.rectTransform, new Vector2(0.10f, 0.845f), new Vector2(0.90f, 0.92f), Vector2.zero, Vector2.zero);
-
-        var row = new GameObject("Mulligan Redraw Row").AddComponent<RectTransform>();
-        row.SetParent(dim, false);
-        Stretch(row, new Vector2(0.03f, 0.215f), new Vector2(0.97f, 0.80f), Vector2.zero, Vector2.zero);
-        var cardSize = DeckLookCardSize(p.Hand.Count, true) * 0.92f;
-
-        var handIds = new List<string>();
-        foreach (var hc in p.Hand) handIds.Add(hc.InstanceId);
-        handIds.Sort(System.StringComparer.Ordinal);
-        string dealKey = "redraw:" + p.Seat + ":" + string.Join(",", handIds.ToArray());
-        bool animateDeal = dealKey != mulliganAnimShownKey;
-
-        var dealHolders = new List<RectTransform>();
-        var dealCards = new List<CardInstance>();
-        for (int mi = 0; mi < p.Hand.Count; mi++)
+        // Let the current Render finish laying out the new hand first.
+        yield return null;
+        const float stagger = 0.20f;   // ≥ the draw SFX length: one full sound per card
+        const float duration = 0.45f;
+        var pDeal = state != null && state.Players.ContainsKey(seat) ? state.Players[seat] : null;
+        var deckSource = GetBoardDeckTarget(seat);
+        if (pDeal == null || deckSource == null)
         {
-            var card = p.Hand[mi];
-            var holder = new GameObject("Mulligan Redraw Card").AddComponent<RectTransform>();
-            holder.SetParent(row, false);
-            ApplyDeckLookSlot(holder, row, mi, p.Hand.Count, cardSize);
-            AddCard(holder, card, null, true, Vector2.zero, true);
-            if (animateDeal)
+            handDealAnimating = false;
+            Render();
+            yield break;
+        }
+
+        bool faceUp = !isNetworked || seat == localSeat;   // hotseat: both hands render face-up
+        var targets = new List<RectTransform>();
+        var sprites = new List<Sprite>();
+        if (faceUp)
+        {
+            foreach (var hc in pDeal.Hand)
             {
-                var hideGroup = holder.gameObject.AddComponent<CanvasGroup>();
-                hideGroup.alpha = 0f;
-                hideGroup.blocksRaycasts = false;
-                hideGroup.interactable = false;
-                dealHolders.Add(holder);
-                dealCards.Add(card);
+                if (handCardRects.TryGetValue(hc.InstanceId, out var rt) && rt != null)
+                {
+                    targets.Add(rt);
+                    sprites.Add(GetCardSprite(hc.CardId));
+                }
             }
         }
-        if (animateDeal)
+        else
         {
-            mulliganAnimShownKey = dealKey;
-            StartCoroutine(AnimateMulliganDeal(p.Seat, dealCards, dealHolders, cardSize, dim));
+            for (int i = 0; i < opponentHandSlots.Count; i++)
+            {
+                if (opponentHandSlots[i] != null)
+                {
+                    targets.Add(opponentHandSlots[i]);
+                    sprites.Add(GetBackSprite());
+                }
+            }
         }
 
-        AddOverlayButton(dim, "CONTINUE", new Vector2(0.42f, 0.10f), new Vector2(0.58f, 0.165f),
-            () => { mulliganRedrawSeat = null; Render(); });
+        for (int i = 0; i < targets.Count; i++)
+        {
+            var hideGroup = targets[i].GetComponent<CanvasGroup>();
+            if (hideGroup == null) hideGroup = targets[i].gameObject.AddComponent<CanvasGroup>();
+            hideGroup.alpha = 0f;
+        }
+        for (int i = 0; i < targets.Count; i++)
+        {
+            var ghost = new GameObject("Hand Deal Ghost").AddComponent<RectTransform>();
+            ghost.SetParent(canvas.transform, false);
+            ghost.SetAsLastSibling();
+            ghost.sizeDelta = new Vector2(boardCardSize.x, boardCardSize.y);
+            ghost.position = deckSource.position;
+            ghost.rotation = deckSource.rotation;
+            ghost.localScale = Vector3.one * 0.34f;
+            var art = AddRoundedCardImage(ghost, "Art", GetBackSprite());
+            art.raycastTarget = false;
+            var gGroup = ghost.gameObject.AddComponent<CanvasGroup>();
+            gGroup.blocksRaycasts = false;
+            gGroup.interactable = false;
+            PlayCardDrawSfx();
+            StartCoroutine(AnimateCardFromDeck(ghost, targets[i], sprites[i], 0f, duration));
+            yield return new WaitForSeconds(stagger);
+        }
+        yield return new WaitForSeconds(duration + 0.1f);
+        handDealAnimating = false;
+        Render();
     }
 
     // Drag-to-reorder for the mulligan overlay: same slot mechanics as the deck-look
@@ -2829,6 +3711,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Match the other text-block backgrounds (LogBgDark rgb) but keep full alpha so the seam
         // behind the pill stays masked.
         var crest = PanelObject("Center Crest", boardRoot, (Color)new Color32(14, 30, 46, 255));
+        turnCrestRect = crest;   // rim particles hide while passing behind this block
         crest.anchorMin = crest.anchorMax = new Vector2(0.5f, 0.5f);
         crest.pivot = new Vector2(0.5f, 0.5f);
         crest.sizeDelta = new Vector2(196f, 24f);
@@ -2922,11 +3805,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         var topHalf = PanelObject("North Playmat Half", mat, new Color(0, 0, 0, 0));
         Stretch(topHalf, new Vector2(0, 0.50f), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        northHalfRect = topHalf;
         AddBoardCancel(topHalf);
         var topEventDrop = topHalf.gameObject.AddComponent<EventDrop>();
         topEventDrop.Init(this, TopSeat);
         var bottomHalf = PanelObject("South Playmat Half", mat, new Color(0, 0, 0, 0));
         Stretch(bottomHalf, Vector2.zero, new Vector2(1, 0.50f), Vector2.zero, Vector2.zero);
+        southHalfRect = bottomHalf;
         AddBoardCancel(bottomHalf);
         var bottomEventDrop = bottomHalf.gameObject.AddComponent<EventDrop>();
         bottomEventDrop.Init(this, BottomSeat);
@@ -2974,25 +3859,36 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             top);
         // NOTE: no RectMask2D here. A RectMask2D on this zone disables the stencil-based
         // rounded Mask on the cards inside it, making them show square corners.
+        // (The DON!! card row itself is created AFTER the leader zone below, so leader-attached
+        // DON!! layer between the cost background and the cost-area DON!! cards.)
+
+        var leaderMin = top ? new Vector2(0.445f, 0.36f) : new Vector2(0.445f, 0.34f);
+        var leaderMax = top ? new Vector2(0.555f, 0.66f) : new Vector2(0.555f, 0.64f);
+        var leader = MatZone(half, "LEADER", leaderMin, leaderMax, new Color32(217, 224, 210, 235), top);
+        moveZoneAnchors["cost:" + seat] = cost;
+        // The cost-area DON!! row is created HERE (a sibling drawn after the leader zone) so
+        // DON!! attached to the Leader tuck UNDER the cost-area DON cards — but stay ABOVE the
+        // cost zone's background panel (the leader zone renders after the cost zone).
         var donRow = new GameObject("Cost DON Cards").AddComponent<RectTransform>();
-        donRow.SetParent(cost, false);
-        Stretch(donRow, new Vector2(0.02f, 0.06f), new Vector2(0.98f, 0.94f), Vector2.zero, Vector2.zero);
+        // Parent to playRoot (not the mat half): drawn after the whole mat subtree — so
+        // leader-attached DON tuck UNDER these — but created before the hand fans, so the
+        // hands ALWAYS render above the cost-area DON.
+        donRow.SetParent(playRoot, false);
+        float dyMin = Mathf.Lerp(costMin.y, costMax.y, 0.06f) * 0.5f + (top ? 0.5f : 0f);
+        float dyMax = Mathf.Lerp(costMin.y, costMax.y, 0.94f) * 0.5f + (top ? 0.5f : 0f);
+        Stretch(donRow,
+            new Vector2(Mathf.Lerp(costMin.x, costMax.x, 0.02f), dyMin),
+            new Vector2(Mathf.Lerp(costMin.x, costMax.x, 0.98f), dyMax),
+            Vector2.zero, Vector2.zero);
         bool ownDonGroups = state != null && seat == state.ActiveSeat
             && (!isNetworked || seat == localSeat) && donGroupSizes.Count > 1;
         if (ownDonGroups)
             DrawGroupedDonRow(donRow, p.CostArea, seat, top);
         else if (state != null && isNetworked && seat == state.ActiveSeat && seat != localSeat
                  && opponentPresence != null && opponentPresence.donGroups != null && opponentPresence.donGroups.Length > 1)
-            // The opponent streamed their DON!! grouping — mirror it so both players see
-            // the same planned splits live.
             DrawGroupedDonRow(donRow, p.CostArea, seat, top, opponentPresence.donGroups);
         else
             DrawFittedDonRow(donRow, p.CostArea, seat, top);
-        // ("No DON!!" placeholder text removed per design.)
-
-        var leaderMin = top ? new Vector2(0.445f, 0.36f) : new Vector2(0.445f, 0.34f);
-        var leaderMax = top ? new Vector2(0.555f, 0.66f) : new Vector2(0.555f, 0.64f);
-        var leader = MatZone(half, "LEADER", leaderMin, leaderMax, new Color32(217, 224, 210, 235), top);
         AddCardToZone(leader, p.Leader, seat, true, top);
         var leaderSz = FittedCardSize(leader);
         SnugZone(leader, leaderMin, leaderMax, leaderSz.x * 1.06f, leaderSz.y * 1.06f);
@@ -3020,6 +3916,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var donDeckMin = top ? new Vector2(0.87f, 0.69f) : new Vector2(0.00f, 0.02f);
         var donDeckMax = top ? new Vector2(1.00f, 0.98f) : new Vector2(0.13f, 0.31f);
         var donDeck = MatZone(half, "DON!! DECK", donDeckMin, donDeckMax, new Color32(221, 226, 211, 225), top);
+        moveZoneAnchors["dondeck:" + seat] = donDeck;
         AddDonDeckPileToZone(donDeck, p.DonDeck, top);
         if (isNetworked) { presenceGlowRects["pile:dondeck:" + seat] = donDeck; donDeck.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:dondeck:" + seat); }
         var donSz = FittedCardSize(donDeck);
@@ -3029,6 +3926,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var trashMin = top ? new Vector2(0.00f, 0.69f) : new Vector2(0.87f, 0.02f);
         var trashMax = top ? new Vector2(0.13f, 0.98f) : new Vector2(1.00f, 0.31f);
         var trash = MatZone(half, "TRASH", trashMin, trashMax, new Color32(172, 169, 73, 220), top);
+        moveZoneAnchors["trash:" + seat] = trash;
         AddPileCardToZone(trash, "Trash", p.Trash.Count, false, p.Trash.LastOrDefault(), top);
         if (isNetworked) { presenceGlowRects["pile:trash:" + seat] = trash; trash.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:trash:" + seat); }
         // Clicking a trash pile (yours or the opponent's) opens the trash viewer for that side.
@@ -3052,6 +3950,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var lifeMin = top ? new Vector2(0.85f, 0.03f) : new Vector2(0.02f, 0.40f);
         var lifeMax = top ? new Vector2(0.98f, 0.60f) : new Vector2(0.15f, 0.97f);
         var life = MatZone(half, "LIFE", lifeMin, lifeMax, new Color32(226, 230, 216, 235), top);
+        moveZoneAnchors["life:" + seat] = life;
         AddLifeStackToZone(life, p.Life.Count, top, seat);
     }
 
@@ -3074,6 +3973,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var row = new GameObject(seat + " Hand Fan").AddComponent<RectTransform>();
         row.SetParent(panel, false);
         Stretch(row, new Vector2(0.02f, top ? 0.10f : 0.02f), new Vector2(0.98f, top ? 0.98f : 0.90f), Vector2.zero, Vector2.zero);
+        moveZoneAnchors["hand:" + seat] = row;
         DrawFannedHandRow(row, p.Hand, seat + "-hand", top);
     }
 
@@ -3116,8 +4016,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var nm = TextObject("Preview Name", leftRoot, def != null ? def.Name : "-", 16, Ink, TextAnchor.LowerLeft, titleFont);
         Stretch(nm.rectTransform, new Vector2(0.06f, 0.602f), new Vector2(0.94f, 0.628f), Vector2.zero, Vector2.zero);
 
-        var chips = RowObject("Preview Chips", leftRoot, 5, TextAnchor.MiddleLeft);
+        var chips = RowObject("Preview Chips", leftRoot, 4, TextAnchor.MiddleLeft);
         Stretch(chips, new Vector2(0.06f, 0.566f), new Vector2(0.94f, 0.594f), Vector2.zero, Vector2.zero);
+        chips.gameObject.AddComponent<RectMask2D>();   // never bleed past the panel
         if (def != null)
         {
             AddPreviewChip(chips, def.Type != null ? def.Type.ToUpper() : "CARD", true);
@@ -3180,12 +4081,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (string.IsNullOrEmpty(label)) return;
         var chip = PanelObject(label + " Chip", parent, primary ? Accent : new Color(1f, 1f, 1f, 0.04f));
-        float chipW = 12f + label.Length * 6.6f;
-        chip.sizeDelta = new Vector2(chipW, 18f);   // RowObject's HLG sizes by sizeDelta, not LayoutElement
-        SetPreferred(chip, new Vector2(chipW, 18f));
+        float chipW = 10f + label.Length * 5.6f;
+        chip.sizeDelta = new Vector2(chipW, 16f);   // RowObject's HLG sizes by sizeDelta, not LayoutElement
+        SetPreferred(chip, new Vector2(chipW, 16f));
         Round(chip);
         if (!primary) AddRoundedCardBorder(chip, ZoneBorder, 1f);
-        var t = TextObject("t", chip, label, 9, primary ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
+        var t = TextObject("t", chip, label, 8, primary ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(4, 0), new Vector2(-4, 0));
     }
@@ -3475,28 +4376,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (delta.magnitude < 20f) return;
 
         var dir = delta.normalized;
-        var start = sourceCenter + dir * RectScreenRadius(source, 0.42f);
+        // Origin sits just past the card edge so the ribbon never overlays the source art.
+        var start = sourceCenter + dir * RectScreenRadius(source, 0.56f);
         var end = targetCenter - dir * RectScreenRadius(target, 0.50f);
-        // Arc bows toward whichever side the target sits on, scaled by the horizontal offset - so a
-        // dead-ahead (vertical) shot draws as a straight arrow, while shots to the left or right sweep
-        // out to their respective side.
-        var bow = Mathf.Clamp((end.x - start.x) * 0.42f, -130f, 130f);
-        var control = (start + end) * 0.5f + new Vector2(bow, 0f);
-
-        const int segments = 18;
-        var last = start;
-        for (int i = 1; i <= segments; i++)
-        {
-            var t = i / (float)segments;
-            var next = Bezier(start, control, end, t);
-            var width = Mathf.Lerp(thickness * 1.25f, thickness * 0.72f, t);
-            AddArrowSegment(root, last, next, new Color(color.r, color.g, color.b, 0.20f), width + 11f);
-            AddArrowSegment(root, last, next, color, width);
-            last = next;
-        }
-
-        var tipDir = (end - Bezier(start, control, end, 0.94f)).normalized;
-        AddArrowHead(root, end, tipDir, color, thickness * 3.1f);
+        RenderEnergyArrow(root, start, end, color, thickness, true);
     }
 
     // Same curved arrow, but the tip follows an arbitrary screen point (the cursor) instead of a
@@ -3508,26 +4391,159 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var delta = screenPoint - sourceCenter;
         if (delta.magnitude < 12f) return;
         var dir = delta.normalized;
-        var start = sourceCenter + dir * RectScreenRadius(source, 0.42f);
+        var start = sourceCenter + dir * RectScreenRadius(source, 0.56f);
         var end = screenPoint;
-        // Arc bows toward whichever side the target sits on, scaled by the horizontal offset - so a
-        // dead-ahead (vertical) shot draws as a straight arrow, while shots to the left or right sweep
-        // out to their respective side.
-        var bow = Mathf.Clamp((end.x - start.x) * 0.42f, -130f, 130f);
-        var control = (start + end) * 0.5f + new Vector2(bow, 0f);
-        const int segments = 18;
-        var last = start;
-        for (int i = 1; i <= segments; i++)
+        // Rebuilt every frame while dragging — no travelling sparks (they'd re-spawn per frame).
+        RenderEnergyArrow(root, start, end, color, thickness, false);
+    }
+
+    // ── Solid targeting arrow ───────────────────────────────────────────────
+    // Restored design (the assets outlived the code): a CLEAN, BOLD, OPAQUE arrow —
+    // an opaque tapered body (arrow_core_opaque cross-section) over a soft halo
+    // (arrow_glow_soft), capped by a flat solid triangle head (arrow_head_solid),
+    // all tinted with the arrow color. No prongs, sparks or particles.
+    private void RenderEnergyArrow(RectTransform root, Vector2 start, Vector2 end, Color color, float thickness, bool withFlow)
+    {
+        var delta = end - start;
+        float dist = delta.magnitude;
+        if (dist < 24f) return;
+        var dir = delta / dist;
+        var n = new Vector2(-dir.y, dir.x);
+        // Bow varies continuously with horizontal offset — no side-flip crossing centre.
+        float arc = Mathf.Clamp((end.x - start.x) * 0.22f, -80f, 80f);
+        var p0 = start;
+        var p1 = start + dir * (dist * 0.25f) + n * arc;
+        var p2 = end - dir * (dist * 0.25f) + n * arc;
+        var p3 = end;
+
+        // Head geometry (400x300 art: tip at x≈0.89, blade tail at x≈0.14).
+        float headW = Mathf.Clamp(dist * 0.20f, thickness * 4.0f, thickness * 7.5f);
+        float headH = headW * (300f / 400f);
+        const float tipFrac = 0.89f;
+        float bodySpan = Mathf.Clamp01(1f - (headW * 0.55f) / dist);
+
+        var jointPrev = CubicBezier(p0, p1, p2, p3, bodySpan - 0.02f);
+        var joint = CubicBezier(p0, p1, p2, p3, bodySpan);
+        var hDir = (joint - jointPrev).normalized;
+        float headAng = Mathf.Atan2(hDir.y, hDir.x) * Mathf.Rad2Deg;
+
+        // Body: soft halo + opaque core, both from vertical-profile strips whose columns
+        // are uniform — quads can never show seams through taper or curvature.
+        var coreSprite = LoadFxSprite("arrow_core_opaque");
+        var coreCol = Color.Lerp(color, Color.white, 0.12f);
+        const int SegN = 30;
+        for (int i = 0; i < SegN; i++)
         {
-            var t = i / (float)segments;
-            var next = Bezier(start, control, end, t);
-            var width = Mathf.Lerp(thickness * 1.25f, thickness * 0.72f, t);
-            AddArrowSegment(root, last, next, new Color(color.r, color.g, color.b, 0.20f), width + 11f);
-            AddArrowSegment(root, last, next, color, width);
-            last = next;
+            float t0 = i / (float)SegN * bodySpan;
+            float t1 = (i + 1) / (float)SegN * bodySpan;
+            var a = CubicBezier(p0, p1, p2, p3, t0);
+            var b = CubicBezier(p0, p1, p2, p3, t1);
+            var mid = (a + b) * 0.5f;
+            float segLen = (b - a).magnitude * 1.07f;
+            float segAng = Mathf.Atan2(b.y - a.y, b.x - a.x) * Mathf.Rad2Deg;
+            float taper = 1f - 0.30f * (i / (float)SegN);   // gentle taper toward the head
+            var c = ImageObject("Arrow Body", root, coreSprite);
+            c.color = new Color(coreCol.r, coreCol.g, coreCol.b, 0.97f);
+            c.raycastTarget = false;
+            c.rectTransform.position = mid;
+            c.rectTransform.sizeDelta = new Vector2(segLen, thickness * 1.15f * taper);
+            c.rectTransform.localRotation = Quaternion.Euler(0, 0, segAng);
         }
-        var tipDir = (end - Bezier(start, control, end, 0.94f)).normalized;
-        AddArrowHead(root, end, tipDir, color, thickness * 3.1f);
+
+        // Head: soft tinted glow copy behind, then the solid tinted triangle with its
+        // tip landing exactly on the target point.
+        Vector2 headCenter = p3 - (Vector2)(hDir * (headW * (tipFrac - 0.5f)));
+        var headSolid = LoadFxSprite("arrow_head_solid");
+        var hs = ImageObject("Arrow Head", root, headSolid);
+        hs.color = new Color(coreCol.r, coreCol.g, coreCol.b, 0.97f);
+        hs.raycastTarget = false;
+        hs.rectTransform.position = headCenter;
+        hs.rectTransform.sizeDelta = new Vector2(headW, headH);
+        hs.rectTransform.localRotation = Quaternion.Euler(0, 0, headAng);
+    }
+
+    // Runtime-loaded FX sprites (StreamingAssets/fx/<name>.png). Cached; soft dot fallback.
+    private readonly Dictionary<string, Sprite> _fxSprites = new Dictionary<string, Sprite>();
+    private Sprite LoadFxSprite(string name)
+    {
+        if (_fxSprites.TryGetValue(name, out var cached) && cached != null) return cached;
+        Sprite sprite = null;
+        try
+        {
+            string path = System.IO.Path.Combine(Application.streamingAssetsPath, "fx", name + ".png");
+            if (System.IO.File.Exists(path))
+            {
+                var bytes = System.IO.File.ReadAllBytes(path);
+                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+                if (tex.LoadImage(bytes))
+                    sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+            }
+        }
+        catch (System.Exception) { }
+        if (sprite == null) sprite = GetSoftDotSprite();
+        _fxSprites[name] = sprite;
+        return sprite;
+    }
+
+    private static Vector2 CubicBezier(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
+    {
+        float u = 1f - t;
+        return u * u * u * p0 + 3f * u * u * t * p1 + 3f * u * t * t * p2 + t * t * t * p3;
+    }
+
+    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band — smooth at any size.
+    private Sprite _chevronSprite;
+    private Sprite GetChevronSprite()
+    {
+        if (_chevronSprite != null) return _chevronSprite;
+        const int S = 64;
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[S * S];
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float fx = x / (S - 1f), fy = y / (S - 1f) - 0.5f;   // fy in [-0.5, 0.5]
+                // Chevron band: the "arm line" runs from (0.15,±0.5) to (0.85,0); distance to it.
+                float armX = Mathf.Lerp(0.15f, 0.85f, 1f - Mathf.Abs(fy) * 2f);
+                float d = Mathf.Abs(fx - armX);
+                float aVal = Mathf.Clamp01(1f - d / 0.16f);
+                aVal = aVal * aVal * (3f - 2f * aVal);
+                px[y * S + x] = new Color32(255, 255, 255, (byte)(aVal * 255f));
+            }
+        tex.SetPixels32(px);
+        tex.Apply();
+        _chevronSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f));
+        return _chevronSprite;
+    }
+
+    // Sleek kite arrowhead with a concave base (MTGA-style), soft anti-aliased edges,
+    // pointing +X. Layered twice (color + white core) at render time.
+    private Sprite _energyHeadSprite;
+    private Sprite GetEnergyHeadSprite()
+    {
+        if (_energyHeadSprite != null) return _energyHeadSprite;
+        const int S = 96;
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[S * S];
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float fx = x / (S - 1f), fy = Mathf.Abs(y / (S - 1f) - 0.5f) * 2f;   // fy in [0,1]
+                // Kite: leading edge tip at fx=1; width shrinks toward the tip; concave back edge.
+                float halfWidth = (1f - fx) < 0f ? 0f : Mathf.Pow(1f - fx, 0.62f) * 0.92f;
+                float backCut = 0.22f * (1f - fy * fy);   // concave notch at the back
+                bool inside = fx > backCut && fy < halfWidth;
+                float edge = Mathf.Min(
+                    (halfWidth - fy) * 3.2f,
+                    (fx - backCut) * 6f);
+                float aVal = inside ? Mathf.Clamp01(edge) : 0f;
+                aVal = aVal * aVal * (3f - 2f * aVal);
+                px[y * S + x] = new Color32(255, 255, 255, (byte)(aVal * 255f));
+            }
+        tex.SetPixels32(px);
+        tex.Apply();
+        _energyHeadSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f));
+        return _energyHeadSprite;
     }
 
     private void AddArrowSegment(RectTransform root, Vector2 a, Vector2 b, Color color, float thickness)
@@ -3698,6 +4714,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 string lifeToken = "life:" + seat + ":" + i;
                 presenceGlowRects[lifeToken] = card;
                 card.gameObject.AddComponent<ZoneHoverPresence>().Init(this, lifeToken);
+            }
+            if (seat != null)
+            {
+                if (!lifeMoveRects.TryGetValue(seat, out var lml)) lifeMoveRects[seat] = lml = new List<RectTransform>();
+                while (lml.Count <= i) lml.Add(null);
+                lml[i] = card;
             }
         }
 
@@ -3870,6 +4892,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // Built last so the dropdown overlays everything else in the side panel.
         if (menuOpen) DrawGameMenu();
+        if (soundMenuOpen) DrawSoundMenu();
     }
 
     // Hamburger button in the upper-right corner; toggles the game menu.
@@ -3896,18 +4919,92 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawGameMenu()
     {
         var menu = PanelObject("Game Menu", sideRoot, (Color)new Color32(12, 23, 38, 250));
-        // Taller now that there are three items (New Match / Main Menu / Close).
-        Stretch(menu, new Vector2(0.52f, 0.74f), new Vector2(0.965f, 0.95f), Vector2.zero, Vector2.zero);
+        // Four items: New Match, Main Menu, Sound (opens the sound panel), Close.
+        Stretch(menu, new Vector2(0.52f, 0.64f), new Vector2(0.965f, 0.95f), Vector2.zero, Vector2.zero);
         RoundBig(menu);
         AddRoundedCardBorder(menu, Accent, 1.3f);
         menu.SetAsLastSibling();
 
-        AddMenuItem(menu, "New Match", new Vector2(0.07f, 0.70f), new Vector2(0.93f, 0.95f),
+        AddMenuItem(menu, "New Match", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
             () => { menuOpen = false; NewMatch(); });
-        AddMenuItem(menu, "Main Menu", new Vector2(0.07f, 0.385f), new Vector2(0.93f, 0.635f),
+        AddMenuItem(menu, "Main Menu", new Vector2(0.07f, 0.545f), new Vector2(0.93f, 0.71f),
             () => { menuOpen = false; ReturnToMenu(); });
-        AddMenuItem(menu, "Close", new Vector2(0.07f, 0.05f), new Vector2(0.93f, 0.30f),
+        AddMenuItem(menu, "Sound", new Vector2(0.07f, 0.30f), new Vector2(0.93f, 0.465f),
+            () => { menuOpen = false; soundMenuOpen = true; Render(); });
+        AddMenuItem(menu, "Close", new Vector2(0.07f, 0.045f), new Vector2(0.93f, 0.21f),
             () => { menuOpen = false; Render(); });
+    }
+
+    // Dedicated sound-settings panel (opened from the game menu's "Sound" item):
+    // an SFX volume slider with a live percent readout and a close button.
+    private void DrawSoundMenu()
+    {
+        var panel = PanelObject("Sound Menu", sideRoot, (Color)new Color32(12, 23, 38, 252));
+        Stretch(panel, new Vector2(0.10f, 0.60f), new Vector2(0.965f, 0.86f), Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, Accent, 1.3f);
+        panel.SetAsLastSibling();
+
+        var title = TextObject("Sound Title", panel, "SOUND", 12, Ink, TextAnchor.MiddleLeft, monoFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0.07f, 0.80f), new Vector2(0.6f, 0.96f), Vector2.zero, Vector2.zero);
+
+        var lbl = TextObject("SFX Label", panel, "SFX VOLUME", 9, Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(lbl.rectTransform, new Vector2(0.07f, 0.60f), new Vector2(0.6f, 0.76f), Vector2.zero, Vector2.zero);
+        var pct = TextObject("SFX Percent", panel, Mathf.RoundToInt(SfxVolume * 100f) + "%", 9, Accent2, TextAnchor.MiddleRight, monoFont);
+        Stretch(pct.rectTransform, new Vector2(0.6f, 0.60f), new Vector2(0.93f, 0.76f), Vector2.zero, Vector2.zero);
+
+        BuildSfxSlider(panel, new Vector2(0.07f, 0.40f), new Vector2(0.93f, 0.56f), pct);
+
+        AddMenuItem(panel, "Close", new Vector2(0.07f, 0.06f), new Vector2(0.93f, 0.30f),
+            () => { soundMenuOpen = false; Render(); });
+    }
+
+    // A working uGUI slider built by hand (0–1, persisted via GameManager.SfxVolume).
+    // Every RectTransform gets explicit anchors/sizes — freshly created rects default to
+    // a centred 100×100 block, which is exactly what made the first version explode.
+    private void BuildSfxSlider(RectTransform parent, Vector2 min, Vector2 max, Text percentReadout)
+    {
+        var track = PanelObject("SFX Track", parent, new Color(1f, 1f, 1f, 0.10f));
+        Stretch(track, min, max, Vector2.zero, Vector2.zero);
+        Round(track);
+
+        var fillArea = PanelObject("Fill Area", track, new Color(0f, 0f, 0f, 0f));
+        Stretch(fillArea, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        fillArea.GetComponent<Image>().raycastTarget = false;
+        var fill = PanelObject("Fill", fillArea, Accent);
+        fill.anchorMin = new Vector2(0f, 0f);
+        fill.anchorMax = new Vector2(0f, 1f);   // Slider drives anchorMax.x = value
+        fill.pivot = new Vector2(0f, 0.5f);
+        fill.sizeDelta = Vector2.zero;
+        fill.anchoredPosition = Vector2.zero;
+        Round(fill);
+        fill.GetComponent<Image>().raycastTarget = false;
+
+        var handleArea = PanelObject("Handle Area", track, new Color(0f, 0f, 0f, 0f));
+        Stretch(handleArea, Vector2.zero, Vector2.one, new Vector2(7f, 0f), new Vector2(-7f, 0f));
+        handleArea.GetComponent<Image>().raycastTarget = false;
+        var handle = PanelObject("Handle", handleArea, new Color32(230, 240, 248, 255));
+        handle.anchorMin = new Vector2(0f, 0f);
+        handle.anchorMax = new Vector2(0f, 1f);   // Slider drives anchor x = value
+        handle.pivot = new Vector2(0.5f, 0.5f);
+        handle.sizeDelta = new Vector2(14f, 5f);  // width 14, 5px taller than the track
+        handle.anchoredPosition = Vector2.zero;
+        RoundCircle(handle);
+
+        var slider = track.gameObject.AddComponent<Slider>();
+        slider.transition = Selectable.Transition.None;
+        slider.fillRect = fill;
+        slider.handleRect = handle;
+        slider.minValue = 0f;
+        slider.maxValue = 1f;
+        slider.value = SfxVolume;
+        slider.onValueChanged.AddListener(v =>
+        {
+            SfxVolume = v;
+            if (percentReadout != null) percentReadout.text = Mathf.RoundToInt(v * 100f) + "%";
+            PlayCardDrawSfx();   // instant feedback at the new volume
+        });
     }
 
     // Tears down the board and rebuilds the main menu in this same scene
@@ -3948,13 +5045,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var row = RowObject("Phase Tracker", sideRoot, 3, TextAnchor.MiddleCenter);
         Stretch(row, new Vector2(0.06f, 0.905f), new Vector2(0.94f, 0.93f), Vector2.zero, Vector2.zero);
         string ph = state.Phase ?? "";
+        // Live state mapping: MAIN ↔ ATTACK alternate with each declared/resolved battle;
+        // the turn-start override sequences REFRESH → DRAW → DON while those animations play.
+        string live = state.Battle != null || ph == "battle" ? "ATTACK"
+            : ph == "main" ? "MAIN"
+            : ph == "refresh" ? "REFRESH"
+            : ph == "draw" ? "DRAW"
+            : ph == "don" ? "DON"
+            : "END";
+        string shown = phaseDisplayOverride ?? live;
         var phases = new (string label, bool active)[] {
-            ("REFRESH", ph == "refresh"),
-            ("DRAW",    ph == "draw"),
-            ("DON",     ph == "don"),
-            ("MAIN",    ph == "main"),
-            ("ATTACK",  ph == "battle"),
-            ("END",     ph == "end" || ph == "endTurn"),
+            ("REFRESH", shown == "REFRESH"),
+            ("DRAW",    shown == "DRAW"),
+            ("DON",     shown == "DON"),
+            ("MAIN",    shown == "MAIN"),
+            ("ATTACK",  shown == "ATTACK"),
+            ("END",     shown == "END"),
         };
         foreach (var (label, active) in phases)
         {
@@ -4378,7 +5484,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void AddEndTurnPanel()
     {
-        var enabled = CanEndTurn();
+        var enabled = CanEndTurn() && (aiSeat == null || state.ActiveSeat != aiSeat);
         var root = PanelObject("Large End Turn", sideRoot, enabled ? Accent : (Color)new Color32(40, 60, 72, 190));
         Stretch(root, new Vector2(0.06f, 0.02f), new Vector2(0.94f, 0.085f), Vector2.zero, Vector2.zero);
         RoundBig(root);
@@ -4758,12 +5864,298 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // Only the DEFENDER sees the revealed life card and the activate/pass choice;
             // the attacker's client returned above with a passive note. They get the card
             // preview only AFTER the defender activates it (see OnNetworkCommandReceived).
+            if (aiSeat != null && b.TargetSeat == aiSeat)
+            {
+                AddInfo(body, "Basic Bot is checking its Life card for a Trigger...");
+                return;
+            }
             var revealed = b.RevealedLife != null ? GameEngine.GetCard(b.RevealedLife) : null;
+            // The deciding player sees the actual card glowing (same treatment as pending
+            // effects) with its [Trigger] text — not just bare buttons.
+            if (b.RevealedLife != null) AddEffectCardVisual(body, b.RevealedLife.CardId);
             AddInfo(body, "Revealed: " + (revealed != null ? revealed.Name : "?"));
-            if (revealed != null && !string.IsNullOrWhiteSpace(revealed.Trigger)) AddInfo(body, revealed.Trigger);
+            if (revealed != null && !string.IsNullOrWhiteSpace(revealed.Trigger)) AddInfo(body, "[Trigger] pending: " + revealed.Trigger);
             AddButton(body, "Resolve Trigger", () => Dispatch(new GameCommand { Type = "useTrigger", Seat = b.TargetSeat }));
             AddButton(body, "Pass Trigger", () => Dispatch(new GameCommand { Type = "passTrigger", Seat = b.TargetSeat }));
         }
+    }
+
+    // ── Basic Bot decision core ──────────────────────────────────────────────
+    // Heuristics modelled on Strawtable's greedy AI: mulligan on curveless hands,
+    // play the biggest affordable character, dump spare DON onto the leader, attack
+    // with everything (leader by default, profitable rested trades first), counter
+    // only when it flips a battle worth saving, always use triggers, resolve effect
+    // prompts with the first valid target, take choice option A.
+    private bool AiTick()
+    {
+        var p = state.Players.ContainsKey(aiSeat) ? state.Players[aiSeat] : null;
+        if (p == null) return false;
+        // Never act while card-movement ghosts are still flying — acting mid-animation
+        // forces re-renders that cut every animation short (the "sped up" feel).
+        if (activeMoveGhosts > 0) return false;
+        if (handDealAnimating) return false;
+        if (mulliganDealAnimating > 0) return false;   // don't cut the player's opening-hand deal short
+        if (state.TurnNumber != aiLastTurnSeen)
+        {
+            aiLastTurnSeen = state.TurnNumber;
+            aiTriedThisTurn.Clear();
+            if (state.Status == "active" && state.ActiveSeat == aiSeat)
+            {
+                // Let the "Opponent's Turn" banner play out (+~1s) before the first move.
+                aiNextActionAt = Time.unscaledTime + 2.9f;
+                return false;
+            }
+        }
+
+        // 1. Mulligan: keep only hands with an early play (a character costing ≤3).
+        if (state.Status == "mulligan" && !p.MulliganDecided)
+        {
+            bool hasEarly = p.Hand.Exists(c =>
+            {
+                var d = GameEngine.GetCard(c);
+                return d.Type == "character" && d.Cost <= 3;
+            });
+            Dispatch(new GameCommand { Type = "mulliganDecision", Seat = aiSeat, Mulligan = !hasEarly });
+            return true;
+        }
+        if (state.Status != "active") return false;
+
+        // 2. "Choose one" prompts: take option A.
+        if (state.ActiveChoice != null)
+        {
+            if (state.ActiveChoice.Seat != aiSeat) return false;
+            Dispatch(new GameCommand { Type = "resolveChoice", Seat = aiSeat, Target = "A" });
+            return true;
+        }
+
+        // 3. Deck-look / search: pick the first selectable card(s); confirm order as-is.
+        if (state.DeckLook != null)
+        {
+            if (state.DeckLook.Seat != aiSeat) return false;
+            var dl = state.DeckLook;
+            if (dl.Step == "select")
+            {
+                var pick = dl.Cards.Find(IsDeckLookSelectable);
+                if (pick != null)
+                {
+                    Dispatch(new GameCommand { Type = "deckLookSelect", Seat = aiSeat, Target = pick.InstanceId });
+                    return true;
+                }
+                Dispatch(new GameCommand { Type = "deckLookSelect", Seat = aiSeat, Target = null });
+                return true;
+            }
+            var order = new List<string>();
+            foreach (var c in dl.Cards) order.Add(c.InstanceId);
+            Dispatch(new GameCommand
+            {
+                Type = dl.Step == "scry" ? "deckLookScryConfirm" : "deckLookConfirmOrder",
+                Seat = aiSeat,
+                OrderedInstanceIds = order,
+            });
+            return true;
+        }
+
+        // 4. Pending effects owned by the bot: pay DON!! costs, then first valid target,
+        //    then a bare resolve; skip when nothing is legal.
+        if (state.PendingEffects.Count > 0)
+        {
+            var pe = state.PendingEffects[0];
+            if (pe.Seat != aiSeat) return false;
+            if (pe.DonPaymentRemaining > 0)
+            {
+                if (p.CostArea.Count > 0)
+                {
+                    Dispatch(new GameCommand { Type = "resolveEffect", Seat = aiSeat, EffectId = pe.EffectId, Target = p.CostArea[0].InstanceId });
+                    return true;
+                }
+                Dispatch(new GameCommand { Type = "passEffect", Seat = aiSeat, EffectId = pe.EffectId });
+                return true;
+            }
+            string tgt = AiFindEffectTarget(pe);
+            string attemptKey = "fx:" + pe.EffectId + ":" + (tgt ?? "bare");
+            if (!aiTriedThisTurn.Add(attemptKey))
+            {
+                Dispatch(new GameCommand { Type = "passEffect", Seat = aiSeat, EffectId = pe.EffectId });
+                return true;
+            }
+            Dispatch(tgt != null
+                ? new GameCommand { Type = "resolveEffect", Seat = aiSeat, EffectId = pe.EffectId, Target = tgt }
+                : new GameCommand { Type = "resolveEffect", Seat = aiSeat, EffectId = pe.EffectId });
+            return true;
+        }
+
+        // 5. Battle responses while defending.
+        if (state.Battle != null)
+        {
+            var b = state.Battle;
+            if (b.PrioritySeat != aiSeat) return false;
+            var atkInst = FindAny(b.AttackerSeat, b.AttackerId);
+            int atkPow = atkInst != null ? GameEngine.GetPower(state, atkInst) : b.AttackPower;
+            if (b.Step == "block")
+            {
+                // Block only when the leader is hit at low life and a blocker exists.
+                var target = FindAny(b.TargetSeat, b.TargetId);
+                bool leaderHit = target != null && GameEngine.GetCard(target).Type == "leader";
+                if (leaderHit && p.Life.Count <= 2)
+                {
+                    foreach (var c in p.CharacterArea)
+                    {
+                        if (c == null || c.Rested) continue;
+                        var d = GameEngine.GetCard(c);
+                        if (d.Keywords.Contains("Blocker") && aiTriedThisTurn.Add("blk:" + c.InstanceId))
+                        {
+                            Dispatch(new GameCommand { Type = "blockAttack", Seat = aiSeat, Blocker = c.InstanceId });
+                            return true;
+                        }
+                    }
+                }
+                Dispatch(new GameCommand { Type = "passBlock", Seat = aiSeat });
+                return true;
+            }
+            if (b.Step == "counter")
+            {
+                var target = FindAny(b.TargetSeat, b.TargetId);
+                bool leaderHit = target != null && GameEngine.GetCard(target).Type == "leader";
+                int defPow = (target != null ? GameEngine.GetPower(state, target) : b.DefensePower) + b.CounterPower;
+                int deficit = atkPow - defPow;
+                bool worthSaving = (leaderHit && p.Life.Count <= 3)
+                    || (!leaderHit && target != null && GameEngine.GetPower(state, target) >= 6000);
+                if (deficit >= 0 && worthSaving)
+                {
+                    // Cheapest sufficient counter first; keep expensive cards.
+                    CardInstance best = null;
+                    int bestVal = int.MaxValue;
+                    foreach (var c in p.Hand)
+                    {
+                        var d = GameEngine.GetCard(c);
+                        if (d.Counter <= 0) continue;
+                        if (d.Counter < bestVal) { best = c; bestVal = d.Counter; }
+                    }
+                    if (best != null && aiTriedThisTurn.Add("ctr:" + best.InstanceId + ":" + b.Id))
+                    {
+                        Dispatch(new GameCommand { Type = "counterWithCard", Seat = aiSeat, InstanceId = best.InstanceId });
+                        return true;
+                    }
+                }
+                Dispatch(new GameCommand { Type = "passCounter", Seat = aiSeat });
+                return true;
+            }
+            if (b.Step == "damage")
+            {
+                Dispatch(new GameCommand { Type = "resolveAttack", Seat = aiSeat });
+                return true;
+            }
+            if (b.Step == "trigger")
+            {
+                Dispatch(new GameCommand { Type = "useTrigger", Seat = aiSeat });
+                return true;
+            }
+            return false;
+        }
+
+        // 6. The bot's own turn. The engine already auto-refreshed, auto-drew and
+        //    auto-added DON!! in ApplyStartOfTurn (the manual DRAW/DON buttons are hotseat
+        //    conveniences — dispatching them would ILLEGALLY draw extra resources), so the
+        //    bot only ever acts during its MAIN phase.
+        if (state.ActiveSeat != aiSeat) return false;
+        if (state.Phase == "main")
+        {
+            int activeDon = GameEngine.ActiveDonCount(p);
+
+            // a. Play the biggest affordable character into a free slot (then stage).
+            CardInstance bestPlay = null;
+            int bestCost = -1;
+            bool haveSlot = p.CharacterArea.Exists(c => c == null);
+            foreach (var c in p.Hand)
+            {
+                if (aiTriedThisTurn.Contains("play:" + c.InstanceId)) continue;
+                var d = GameEngine.GetCard(c);
+                int cost = GameEngine.GetCost(state, c);
+                if (cost > activeDon) continue;
+                if (d.Type == "character" && haveSlot && cost > bestCost) { bestPlay = c; bestCost = cost; }
+                else if (d.Type == "stage" && p.Stage == null && cost > bestCost) { bestPlay = c; bestCost = cost; }
+            }
+            if (bestPlay != null)
+            {
+                aiTriedThisTurn.Add("play:" + bestPlay.InstanceId);
+                Dispatch(new GameCommand { Type = "playCard", Seat = aiSeat, InstanceId = bestPlay.InstanceId });
+                return true;
+            }
+
+            // b. Spare DON!! → leader BEFORE attacking (attacks then swing with the buff;
+            //    holding DON back is only correct when saving for counter events, which the
+            //    basic bot never plays). Only once plays are exhausted (the play branch
+            //    above returns first while anything is affordable).
+            if (activeDon > 0 && p.Leader != null && aiTriedThisTurn.Add("dump-don:" + state.TurnNumber + ":" + activeDon))
+            {
+                Dispatch(new GameCommand { Type = "attachDon", Seat = aiSeat, Target = p.Leader.InstanceId, Amount = activeDon });
+                return true;
+            }
+
+            // c. Attacks: every ready attacker swings — a profitable rested trade if one
+            //    exists, otherwise the enemy leader.
+            var opp = state.Players[GameEngine.OtherSeat(aiSeat)];
+            var attackers = new List<CardInstance>();
+            if (p.Leader != null) attackers.Add(p.Leader);
+            foreach (var c in p.CharacterArea) if (c != null) attackers.Add(c);
+            bool aiCanBattle = p.TurnsStarted > 1;
+            foreach (var atk in attackers)
+            {
+                if (!aiCanBattle) break;
+                if (atk.Rested || aiTriedThisTurn.Contains("atk:" + atk.InstanceId)) continue;
+                int myPow = GameEngine.GetPower(state, atk);
+                // A [When Attacking] effect makes even a losing swing worthwhile (the
+                // effect still fires); otherwise only attack targets we can actually beat.
+                var atkDef = GameEngine.GetCard(atk);
+                bool hasWhenAttacking = (atkDef.Effect ?? "").IndexOf("[When Attacking]", System.StringComparison.OrdinalIgnoreCase) >= 0;
+                string targetId = null;
+                foreach (var oc in opp.CharacterArea)
+                {
+                    if (oc == null || !oc.Rested) continue;
+                    if (GameEngine.GetPower(state, oc) <= myPow && GameEngine.GetCard(oc).Cost >= 3) { targetId = oc.InstanceId; break; }
+                }
+                if (targetId == null && opp.Leader != null)
+                {
+                    int leaderPow = GameEngine.GetPower(state, opp.Leader);
+                    if (myPow >= leaderPow || hasWhenAttacking) targetId = opp.Leader.InstanceId;
+                }
+                if (targetId == null) continue;
+                aiTriedThisTurn.Add("atk:" + atk.InstanceId);
+                Dispatch(new GameCommand { Type = "declareAttack", Seat = aiSeat, Attacker = atk.InstanceId, Target = targetId });
+                return true;
+            }
+
+            // d. Nothing left — end the turn.
+            if (aiTriedThisTurn.Add("end:" + state.TurnNumber))
+            {
+                Dispatch(new GameCommand { Type = "endTurn", Seat = aiSeat });
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // First valid target for a pending effect, scanning board (both sides), the bot's
+    // hand + trash, then the opponent's hand (blind picks) — mirrors IsValidEffectTarget.
+    private string AiFindEffectTarget(OnePieceTcg.Engine.PendingEffect pe)
+    {
+        var candidates = new List<CardInstance>();
+        foreach (var seatKey in state.Players.Keys)
+        {
+            var pl = state.Players[seatKey];
+            if (pl.Leader != null) candidates.Add(pl.Leader);
+            foreach (var c in pl.CharacterArea) if (c != null) candidates.Add(c);
+            if (pl.Stage != null) candidates.Add(pl.Stage);
+        }
+        var self = state.Players[aiSeat];
+        candidates.AddRange(self.Hand);
+        candidates.AddRange(self.Trash);
+        var oppP = state.Players[GameEngine.OtherSeat(aiSeat)];
+        candidates.AddRange(oppP.Hand);
+        candidates.AddRange(oppP.Trash);
+        foreach (var c in candidates)
+            if (GameEngine.IsValidEffectTarget(state, pe, c)) return c.InstanceId;
+        return null;
     }
 
     private void OnCardClick(CardInstance card, string seat)
@@ -5074,6 +6466,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (GameEngine.GetCard(card).Type != "character") return;
         if (!CanDragHandCard(card, handSeat) || !CanAcceptCharacterDrop(handSeat, slotIndex)) return;
+        suppressMoveAnim.Add(card.InstanceId);   // the player's own drag WAS the movement
         Dispatch(new GameCommand { Type = "playCard", Seat = handSeat, InstanceId = card.InstanceId, SlotIndex = slotIndex });
     }
 
@@ -5081,6 +6474,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (GameEngine.GetCard(card).Type != "stage") return;
         if (!CanDragHandCard(card, handSeat) || !CanAcceptStageDrop(handSeat)) return;
+        suppressMoveAnim.Add(card.InstanceId);   // the player's own drag WAS the movement
         Dispatch(new GameCommand { Type = "playCard", Seat = handSeat, InstanceId = card.InstanceId });
     }
 
@@ -5655,7 +7049,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // In a networked match the top-rendered hand is always the remote opponent's (see
             // BottomSeat/TopSeat) - hide it as card backs, same as any other face-down pile.
             // Hotseat/Versus Self is unaffected (isNetworked is false there).
-            bool handFaceUp = !(isNetworked && top);
+            bool handFaceUp = !(top && (isNetworked || aiSeat == TopSeat));
             AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top, count - 1 - i);
             holders[i] = holder;
             // Presence IN: remember the opponent's face-down hand holders (by hand index) so
@@ -7592,6 +8986,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 return;
             }
             MoveGhost(eventData);
+            UpdateArrow(eventData);
         }
 
         public void OnEndDrag(PointerEventData eventData)
@@ -7624,6 +9019,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (arrowRoot != null) Destroy(arrowRoot);
             ghost = null;
             arrowRoot = null;
+            // Releasing over a non-playable region dispatches nothing, so nothing re-renders —
+            // any cards slid/lifted during the drag stay stuck mid-air. Always rebuild: if a
+            // play DID happen this render is redundant but harmless; if not, it snaps every
+            // hand card cleanly back to its fan slot.
+            manager.Render();
         }
 
         // Pure geometric check (no raycasting) - relying on Unity's raycast/EventSystem for this
@@ -7807,17 +9207,31 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             image.raycastTarget = false;
             var group = ghost.AddComponent<CanvasGroup>();
             group.blocksRaycasts = false;
-            // Event cards just drag up to play - no targeting arrow at characters/stage. Their effect's
-            // targeting arrows appear later (once the card is in trash and resolving).
-            if (GameEngine.GetCard(card).Type != "event") CreateArrow();
+            // Free drag: the card follows the cursor 1:1; it only snaps into place while
+            // hovering a character slot it can legally drop into. The targeting arrow
+            // appears from the card's hand slot to the drop zone while over one.
+            CreateArrow();
             MoveGhost(eventData);
+            UpdateArrow(eventData);
         }
 
         private void MoveGhost(PointerEventData eventData)
         {
             if (ghost == null) return;
-            ghost.transform.position = eventData.position;
-            UpdateArrow(eventData);
+            var snapRect = manager.GetDragTargetRect(eventData, card, handSeat, out var snapValid);
+            if (snapValid && snapRect != null
+                && GameEngine.GetCard(card).Type == "character"
+                && snapRect.GetComponentInParent<CharacterSlotDrop>() != null)
+            {
+                // Hovering a valid character slot: snap the card onto the slot.
+                ghost.transform.position = snapRect.position;
+                ghost.transform.localScale = Vector3.one;
+            }
+            else
+            {
+                ghost.transform.position = eventData.position;
+                ghost.transform.localScale = Vector3.one;
+            }
         }
 
         private void CreateArrow()
