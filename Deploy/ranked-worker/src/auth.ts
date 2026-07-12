@@ -4,11 +4,15 @@
 // client cannot mint, not from a shared app secret. A cheater therefore cannot
 // submit the opponent's half of a dual-report, so cannot move any rating alone.
 //
-// UGS player-auth tokens are RS256 JWTs. We discover the JWKS from the issuer's
-// OpenID configuration, cache the keys, and verify signature + expiry + issuer.
+// UGS player-auth tokens are RS256 JWTs. We fetch the JWKS directly from the
+// issuer's well-known endpoint, cache the keys, and verify signature + expiry + issuer.
 
 const UNITY_ISSUER = "https://player-auth.services.api.unity.com";
-const DISCOVERY_URL = `${UNITY_ISSUER}/.well-known/openid-configuration`;
+// Unity's player-auth does NOT serve an OpenID discovery document
+// (/.well-known/openid-configuration → 404); it publishes the signing keys
+// directly at this JWKS URL. Fetch it straight — going via discovery 404'd and
+// made verifyUnityToken throw "discovery 404", 401ing every authenticated call.
+const JWKS_URL = `${UNITY_ISSUER}/.well-known/jwks.json`;
 const JWKS_TTL_MS = 60 * 60 * 1000; // 1h
 
 interface Jwk { kid: string; kty: string; n: string; e: string; alg?: string; use?: string; }
@@ -29,10 +33,7 @@ function b64urlToJson(s: string): any {
 
 async function getJwks(): Promise<Jwk[]> {
   if (jwksCache && Date.now() - jwksCache.fetchedAt < JWKS_TTL_MS) return jwksCache.keys;
-  const cfgRes = await fetch(DISCOVERY_URL, { cf: { cacheTtl: 3600 } as any });
-  if (!cfgRes.ok) throw new Error(`discovery ${cfgRes.status}`);
-  const cfg = await cfgRes.json<{ jwks_uri: string }>();
-  const jwksRes = await fetch(cfg.jwks_uri, { cf: { cacheTtl: 3600 } as any });
+  const jwksRes = await fetch(JWKS_URL, { cf: { cacheTtl: 3600 } as any });
   if (!jwksRes.ok) throw new Error(`jwks ${jwksRes.status}`);
   const jwks = await jwksRes.json<{ keys: Jwk[] }>();
   jwksCache = { keys: jwks.keys, fetchedAt: Date.now() };
