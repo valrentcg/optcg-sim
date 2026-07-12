@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.8",
-  "buildNumber": 9,
+  "buildVersion": "1.0.9",
+  "buildNumber": 10,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Ranked & Casual matchmaking (Bug Testing Season, in dev): jump into a queue, get paired by skill with a League-style ready check, and climb the Bounty ladder. Adds a Most Wanted leaderboard, a reworked profile (real bounty/tier, game-type tags on recent matches you can click into, and Deck History split by Casual/Ranked), and Match History decklists now show a card preview on hover with a Save Deck button to copy a list into your decks.",
+  "notes": "Matchmaking fixes (Bug Testing Season): Ranked & Casual queues now actually pair you up and start the match — fixed a server auth issue that silently blocked every queue, and a race that could leave your opponent stuck on \"Connecting…\" while you loaded in. Queue calls that fail now surface an error instead of spinning forever.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

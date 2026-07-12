@@ -4176,12 +4176,23 @@ public partial class MainMenuManager : MonoBehaviour
     private void OnPeerDeckShared(NetworkDeck deck)
     {
         lobbyPeerDeck = deck;
+        MarkRankedGuestReady();               // any inbound guest message = guest can receive ours
         if (showingLobbyHub) RenderMenu();   // live-update the "OPPONENT DECK" line
     }
 
     private void OnPeerNameReceived(string name)
     {
         lobbyPeerName = name;
+        MarkRankedGuestReady();
+    }
+
+    // Host: a message arrived from the guest, so its receive handlers are live — safe to
+    // send the match-start now. (No-op for the guest: TryHostLaunch returns for non-hosts.)
+    private void MarkRankedGuestReady()
+    {
+        if (!rankedQueueActive || rankedGuestReady) return;
+        rankedGuestReady = true;
+        TryHostLaunch();
     }
 
     // Host: generates the shared seed and sends it with BOTH deck picks, then each
@@ -4227,7 +4238,21 @@ public partial class MainMenuManager : MonoBehaviour
     private string rankedSessionId;
     private bool rankedSessionCreated;   // host made the session
     private bool rankedGuestJoined;      // guest joined the session
+    // Host-only gate: true once we've received ANY message from the guest (its name/
+    // deck share). The guest sends those only AFTER its own Netcode receive handlers
+    // are registered, so this proves the guest can receive our match-start. Firing the
+    // match-start the instant IsPeerConnected turns true raced the guest's handler
+    // registration — Netcode drops a named message with no handler, so the guest hung
+    // forever on "Connecting you to your opponent…" while the host launched alone.
+    private bool rankedGuestReady;
     private bool rankedLaunching;        // match is starting — stop polling/acting
+    private int  rankedErrorStreak;      // consecutive failed /queue/* calls (0 = healthy)
+    // A blip is normal (we keep polling); a *persistent* run of errors means the
+    // matchmaking worker is unreachable/misconfigured — surface it instead of
+    // spinning on "FINDING MATCH" forever (which is exactly how a missing worker
+    // deploy hid itself: every /queue/* 404'd and got swallowed as status "error").
+    private const int RankedErrorThreshold = 5;   // ~5s of failures before we warn
+    private bool RankedServerDown => rankedErrorStreak >= RankedErrorThreshold;
 
     // mode = "ranked" (counts toward bounty) or "casual" (own pool, no bounty).
     private async void StartQueue(string mode)
@@ -4242,6 +4267,8 @@ public partial class MainMenuManager : MonoBehaviour
         rankedRange = 0;
         rankedIAccepted = rankedOppAccepted = false;
         rankedSessionCreated = rankedGuestJoined = rankedLaunching = false;
+        rankedGuestReady = false;
+        rankedErrorStreak = 0;
         rankedSessionId = null;
         lobbyRanked = mode == "ranked";   // casual matches don't touch the ladder
         lobbyMode = mode;
@@ -4253,7 +4280,8 @@ public partial class MainMenuManager : MonoBehaviour
         string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername;
         var status = await RankedStore.QueueJoinAsync(mmr, myName, mode);
         if (this == null || menuRoot == null || !rankedQueueActive) return;
-        HandleRankedStatus(status);
+        if (status != null && status.status != "error") HandleRankedStatus(status);
+        else rankedErrorStreak++;
         RankedPollLoop();
     }
 
@@ -4268,7 +4296,8 @@ public partial class MainMenuManager : MonoBehaviour
             var status = await RankedStore.QueuePollAsync();
             if (this == null || menuRoot == null) return;
             if (!rankedQueueActive) return;
-            if (status != null && status.status != "error") HandleRankedStatus(status);
+            if (status != null && status.status != "error") { rankedErrorStreak = 0; HandleRankedStatus(status); }
+            else rankedErrorStreak++;   // transient blips tolerated; a sustained run surfaces (RankedServerDown)
             if (rankedQueueActive) RenderMenu();
         }
     }
@@ -4317,7 +4346,7 @@ public partial class MainMenuManager : MonoBehaviour
                 // Opponent declined or timed out — reset and keep searching.
                 rankedStatus = "waiting";
                 rankedIAccepted = rankedOppAccepted = false;
-                rankedSessionCreated = rankedGuestJoined = false;
+                rankedSessionCreated = rankedGuestJoined = rankedGuestReady = false;
                 break;
 
             case "idle":
@@ -4368,7 +4397,8 @@ public partial class MainMenuManager : MonoBehaviour
         if (rankedLaunching) return;
         var s = LobbyManager.CurrentSession;
         if (s == null || !s.IsHost) return;
-        if (!MatchNetworkSync.IsPeerConnected) return;   // wait for the guest
+        if (!MatchNetworkSync.IsPeerConnected) return;   // wait for the guest's Netcode connection
+        if (!rankedGuestReady) return;                   // …and for proof its receive handlers are up
         rankedLaunching = true;
         rankedQueueActive = false;
         lobbyRanked = true;
@@ -4428,8 +4458,11 @@ public partial class MainMenuManager : MonoBehaviour
 
         bool proposed = rankedStatus == "proposed";
         bool connecting = rankedStatus == "accepted" || rankedStatus == "matched";
+        // A sustained run of failed queue calls (not a mid-match blip) = server trouble.
+        bool serverDown = RankedServerDown && !proposed && !connecting;
         string modeLabel = lobbyRanked ? "RANKED" : "CASUAL";
-        string title = proposed ? "MATCH FOUND" : connecting ? "STARTING MATCH…" : $"FINDING {modeLabel} MATCH";
+        string title = serverDown ? "MATCHMAKING UNAVAILABLE"
+                     : proposed ? "MATCH FOUND" : connecting ? "STARTING MATCH…" : $"FINDING {modeLabel} MATCH";
         var t = TextObject("RM Title", panel, title, 22, Ink, TextAnchor.UpperCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -46f), new Vector2(0f, -16f));
@@ -4470,9 +4503,12 @@ public partial class MainMenuManager : MonoBehaviour
         else
         {
             int elapsed = Mathf.Max(0, Mathf.RoundToInt(Time.realtimeSinceStartup - rankedStartTime));
-            var sub = TextObject("RM Sub", panel, $"Searching near your rank  ·  {elapsed}s", 14, Muted, TextAnchor.MiddleCenter, monoFont);
+            string subText = serverDown
+                ? "Can't reach the matchmaking server. Retrying…"
+                : $"Searching near your rank  ·  {elapsed}s";
+            var sub = TextObject("RM Sub", panel, subText, 14, serverDown ? ProfileAmber : Muted, TextAnchor.MiddleCenter, monoFont);
             Stretch(sub.rectTransform, new Vector2(0f, 0.52f), Vector2.one, new Vector2(0f, 0f), new Vector2(0f, -72f));
-            if (rankedRange > 0)
+            if (!serverDown && rankedRange > 0)
             {
                 var rng = TextObject("RM Range", panel, $"match window  ±{rankedRange} MMR", 11, ProfileAmber, TextAnchor.MiddleCenter, monoFont);
                 Stretch(rng.rectTransform, new Vector2(0f, 0.4f), Vector2.one, Vector2.zero, new Vector2(0f, 0f));
