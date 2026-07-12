@@ -1,0 +1,14 @@
+name = "optcg-ranked"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Created with:  wrangler d1 create optcg-ranked
+# Paste the printed database_id below, then deploy.
+[[d1_databases]]
+binding = "DB"
+database_name = "optcg-ranked"
+database_id = "d752ffa2-72a4-4038-beeb-ed29303db39d"
+
+# APP_SECRET is NOT stored here. Set it as a secret:
+#   wrangler secret put APP_SECRET
+# (reuse the same value the client sends in X-App-Secret)

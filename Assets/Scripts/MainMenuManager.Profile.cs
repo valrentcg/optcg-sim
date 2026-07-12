@@ -36,6 +36,7 @@ public partial class MainMenuManager
     private string profileTab = "overview";      // "overview" | "decks" | "seasonal"
     private string profileSelDeck;               // selected leader id in Deck History
     private string profileSeasonMode = "casual"; // "casual" | "ranked"
+    private string profileDeckMode = "ranked";   // Deck History split: "ranked" | "casual"
     private bool profilePrivacyOpen;
     private string profileViewAs = "me";         // "me" | "friend" | "public" (session only)
 
@@ -44,19 +45,30 @@ public partial class MainMenuManager
     private StatsBucket profileLifetime;
     private StatsBucket profileSeason;
     private ProfilePrivacySettings profilePrivacy;
+    private RankedProfile profileRanked;   // Bounty ladder (RankedStore); null = not loaded yet
     private bool profileLoading;
+
+    // Most Wanted leaderboard screen (nav rail → showingLeaderboard).
+    private bool showingLeaderboard;
+    private List<LeaderboardEntry> leaderboardEntries; // null = not loaded yet
+    private bool leaderboardLoading;
 
     private static readonly Color ProfileAmber = new Color32(226, 190, 102, 255); // privacy/locked
     private static readonly Color ProfileWrLow = new Color32(230, 138, 79, 255);  // <45% win rate
 
+    // One entry per RankedStore.Tiers rung, in the same order (index = tier index),
+    // so the ladder strip and hero badge can colour by tier index directly.
     private static readonly (string name, Color color, int minElo)[] ProfileTiers =
     {
-        ("Rookie",          new Color32(159, 171, 190, 255),    0),
-        ("Supernova",       new Color32( 79, 208, 138, 255), 1100),
-        ("Warlord",         new Color32( 79, 195, 224, 255), 1300),
-        ("Yonko Commander", new Color32( 70, 140, 220, 255), 1500),
-        ("Emperor",         new Color32(160, 110, 210, 255), 1700),
-        ("Pirate King",     new Color32(226, 190, 102, 255), 1900),
+        ("Apprentice",       new Color32(159, 171, 190, 255), 0),
+        ("Rookie",           new Color32(120, 190, 150, 255), 0),
+        ("Notorious",        new Color32( 79, 208, 138, 255), 0),
+        ("Supernova",        new Color32( 90, 200, 210, 255), 0),
+        ("New World Pirate", new Color32( 79, 195, 224, 255), 0),
+        ("Warlord",          new Color32( 70, 140, 220, 255), 0),
+        ("Conqueror",        new Color32(140, 120, 220, 255), 0),
+        ("Yonko",            new Color32(185, 110, 205, 255), 0),
+        ("Pirate King",      new Color32(226, 190, 102, 255), 0),
     };
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -69,6 +81,7 @@ public partial class MainMenuManager
         showingFriends = false;
         showingReplays = false;
         showingLocalReplays = false;
+        showingLeaderboard = false;
         showingProfile = true;
         // Opening resets to Overview / no deck / Casual, per the handoff.
         profileTab = "overview";
@@ -85,6 +98,7 @@ public partial class MainMenuManager
         profileLoading = true;
         StatsBucket lifetime = null, season = null;
         ProfilePrivacySettings privacy = null;
+        RankedProfile ranked = null;
         List<MatchSummary> cloud = null;
         try
         {
@@ -92,6 +106,7 @@ public partial class MainMenuManager
             int sid = StatsStore.CurrentSeasonId;
             season = sid > 0 ? await StatsStore.LoadSeasonAsync(sid) : new StatsBucket();
             privacy = await ProfilePrivacyStore.LoadAsync();
+            ranked = await RankedStore.LoadAsync(forceRefresh: true);
             if (matchHistory == null)
                 cloud = await MatchHistoryStore.LoadAsync();
         }
@@ -102,6 +117,7 @@ public partial class MainMenuManager
         profileLifetime = lifetime ?? new StatsBucket();
         profileSeason = season ?? new StatsBucket();
         profilePrivacy = privacy ?? new ProfilePrivacySettings();
+        profileRanked = ranked ?? new RankedProfile();
         if (matchHistory == null) matchHistory = MergeMatchHistory(cloud);
         if (showingProfile) RenderMenu();
     }
@@ -302,8 +318,15 @@ public partial class MainMenuManager
         Stretch(banner, Vector2.zero, new Vector2(0.42f, 1f), Vector2.zero, Vector2.zero);
         if (mainLeader != null) BuildLeaderBanner(banner, mainLeader, 680f, 186f, darkLeft: false);
 
-        var derived = ProfileDerived.From(b);
-        var tier = ProfileTierFor(derived.elo);
+        // Real ranked standing (server-authoritative, PvP-only). No client-derived
+        // ELO/bounty anymore — the hidden rating is never shown, and the tier comes
+        // straight from the bounty ladder so it can't read "Pirate King" at ฿1M.
+        var rp = profileRanked ?? new RankedProfile();
+        bool placedRanked = RankedStore.IsPlaced(rp);
+        int rTierIdx = placedRanked ? RankedStore.TierIndexForBounty(rp.bounty) : 0;
+        (string name, Color color) tier = placedRanked
+            ? (ProfileTiers[rTierIdx].name, ProfileTiers[rTierIdx].color)
+            : ("Unranked", Muted);
 
         var heroName = TextObject("Hero Name", hero,
             mainLeader != null ? (MenuCard(mainLeader)?.name ?? mainLeader) : "No matches yet",
@@ -330,21 +353,12 @@ public partial class MainMenuManager
         tierText.fontStyle = FontStyle.Bold;
         Stretch(tierText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-        // Tier is derived from provisional ELO — carries the DEV marker too.
-        var tierDev = PanelObject("Tier Dev Anchor", hero, new Color(0f, 0f, 0f, 0f));
-        tierDev.anchorMin = tierDev.anchorMax = new Vector2(0.02f, 0.2f);
-        tierDev.pivot = new Vector2(0f, 0.5f);
-        tierDev.sizeDelta = new Vector2(40f, 22f);
-        tierDev.anchoredPosition = new Vector2(12f + tierChip.sizeDelta.x + 8f, 0f);
-        AddProfileStatusChip(tierDev, "DEV", 0f, -3f);
-
-        // Bounty / ELO cards + win-rate cell
-        // Bounty / ELO / Tier are client-derived until a ranked rating service
-        // exists — marked with the same DEV chip as the Versus A.I. mode tile.
-        BuildHeroStatCard(hero, "BOUNTY", derived.bountyLabel, tier.color, 0.44f, 0.635f, dev: true);
-        BuildHeroStatCard(hero, "ELO", derived.elo.ToString(), Accent, 0.645f, 0.80f, dev: true);
-        BuildHeroStatCard(hero, "WIN RATE", b.games > 0 ? $"{Mathf.RoundToInt(b.WinRate * 100f)}%" : "—",
-            ProfileWrColor(b.WinRate, b.games), 0.81f, 0.985f, wrBar: b.games > 0 ? b.WinRate : (float?)null);
+        // Real Bounty from the ranked ladder + win rate. No ELO card — the hidden
+        // rating is never surfaced.
+        BuildHeroStatCard(hero, "BOUNTY", placedRanked ? RankedStore.FormatBerriesShort(rp.bounty) : "—",
+            tier.color, 0.44f, 0.71f);
+        BuildHeroStatCard(hero, "WIN RATE", b.NonBotGames > 0 ? $"{Mathf.RoundToInt(b.NonBotWinRate * 100f)}%" : "—",
+            ProfileWrColor(b.NonBotWinRate, b.NonBotGames), 0.72f, 0.985f, wrBar: b.NonBotGames > 0 ? b.NonBotWinRate : (float?)null);
 
         y -= 198f;
 
@@ -353,9 +367,9 @@ public partial class MainMenuManager
         Stretch(strip, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, y - 84f), new Vector2(0f, y));
         var cells = new (string label, string val, Color color)[]
         {
-            ("GAMES", b.games.ToString(), Ink),
-            ("RECORD", $"{b.wins}W – {b.losses}L", Ink),
-            ("WIN RATE", b.games > 0 ? $"{Mathf.RoundToInt(b.WinRate * 100f)}%" : "—", ProfileWrColor(b.WinRate, b.games)),
+            ("GAMES", b.NonBotGames.ToString(), Ink),
+            ("RECORD", $"{b.NonBotWins}W – {b.NonBotLosses}L", Ink),
+            ("WIN RATE", b.NonBotGames > 0 ? $"{Mathf.RoundToInt(b.NonBotWinRate * 100f)}%" : "—", ProfileWrColor(b.NonBotWinRate, b.NonBotGames)),
             ("BEST STREAK", b.bestWinStreak > 0 ? $"{b.bestWinStreak}W" : "—", GoodGreen),
             ("GOING FIRST", b.firstGames > 0 ? $"{Mathf.RoundToInt(100f * b.firstWins / b.firstGames)}%" : "—", Ink),
             ("TIER", tier.name.ToUpperInvariant(), tier.color),
@@ -373,7 +387,6 @@ public partial class MainMenuManager
             var val = TextObject("v", cell, cells[i].val, 20, cells[i].color, TextAnchor.LowerLeft, monoFont);
             val.fontStyle = FontStyle.Bold;
             Stretch(val.rectTransform, Vector2.zero, new Vector2(1f, 0.62f), new Vector2(12f, 10f), new Vector2(-8f, 0f));
-            if (cells[i].label == "TIER") AddProfileStatusChip(cell);   // derived stat
         }
         y -= 96f;
 
@@ -511,14 +524,54 @@ public partial class MainMenuManager
             13, Ink, TextAnchor.MiddleLeft);
         Stretch(matchup.rectTransform, new Vector2(0.07f, 0f), new Vector2(0.52f, 1f), Vector2.zero, Vector2.zero);
 
+        // Game-type chip (RANKED / CASUAL / CUSTOM / BOT / SELF).
+        var (mLabel, mColor) = RecentModeTag(m.mode);
+        if (!string.IsNullOrEmpty(mLabel))
+        {
+            var modeChip = PanelObject("Mode", row, new Color(mColor.r, mColor.g, mColor.b, 0.16f));
+            Stretch(modeChip, new Vector2(0.52f, 0.28f), new Vector2(0.6f, 0.72f), Vector2.zero, new Vector2(-6f, 0f));
+            Round(modeChip);
+            AddRoundedCardBorder(modeChip, new Color(mColor.r, mColor.g, mColor.b, 0.5f), 1f);
+            var mt = TextObject("mt", modeChip, mLabel, 8, mColor, TextAnchor.MiddleCenter, monoFont);
+            mt.fontStyle = FontStyle.Bold;
+            Stretch(mt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+
         var oppName = TextObject("Opp", row, (m.oppName ?? "Opponent").ToUpperInvariant(), 10, Muted, TextAnchor.MiddleLeft, monoFont);
-        Stretch(oppName.rectTransform, new Vector2(0.52f, 0f), new Vector2(0.72f, 1f), Vector2.zero, Vector2.zero);
+        Stretch(oppName.rectTransform, new Vector2(0.6f, 0f), new Vector2(0.72f, 1f), Vector2.zero, Vector2.zero);
 
         var life = TextObject("Life", row, $"{m.youFinalLife} – {m.oppFinalLife} LIFE  ·  T{m.turnCount}", 10, Muted, TextAnchor.MiddleLeft, monoFont);
         Stretch(life.rectTransform, new Vector2(0.72f, 0f), new Vector2(0.88f, 1f), Vector2.zero, Vector2.zero);
 
         var ago = TextObject("Ago", row, FormatAgo(m.savedAtIso), 10, new Color32(111, 134, 150, 255), TextAnchor.MiddleRight, monoFont);
         Stretch(ago.rectTransform, new Vector2(0.88f, 0f), Vector2.one, Vector2.zero, new Vector2(-14f, 0f));
+
+        // Click a recent match → open its full detail in the Match History window
+        // (action log / decklists / replay), reusing that view.
+        string capturedId = m.id;
+        var openBtn = row.gameObject.AddComponent<Button>();
+        openBtn.onClick.AddListener(() =>
+        {
+            showingProfile = false;
+            showingReplays = true;
+            selectedMatchId = capturedId;
+            matchDetailTab = "log";
+            RenderMenu();
+        });
+    }
+
+    // Label + color for a match's game-type chip.
+    private (string, Color) RecentModeTag(string mode)
+    {
+        switch (mode)
+        {
+            case "ranked": return ("RANKED", Gold);
+            case "casual": return ("CASUAL", Accent);
+            case "custom": return ("CUSTOM", Muted);
+            case "ai":     return ("BOT", new Color32(140, 152, 168, 255));
+            case "self":   return ("SELF", new Color32(140, 152, 168, 255));
+            default:       return ("", Muted);
+        }
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -535,13 +588,24 @@ public partial class MainMenuManager
             return;
         }
 
+        // Casual / Ranked toggle — deck history is split by game type.
+        var toggleRow = PanelObject("Deck Mode Toggle", body, new Color(0, 0, 0, 0));
+        Stretch(toggleRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, -32f), Vector2.zero);
+        BuildDeckModeTab(toggleRow, "RANKED", "ranked", 0f, 0.16f);
+        BuildDeckModeTab(toggleRow, "CASUAL", "casual", 0.165f, 0.325f);
+
+        var content = PanelObject("Deck Content", body, new Color(0, 0, 0, 0));
+        Stretch(content, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -42f));
+
         var b = profileLifetime;
-        var decks = (b.byOwnLeader ?? new List<LeaderStat>())
-            .Where(l => l != null && l.games > 0)
+        string dm = profileDeckMode;
+        var decks = (b.byOwnLeaderMode ?? new List<ModeLeaderStat>())
+            .Where(l => l != null && l.mode == dm && l.games > 0)
+            .Select(l => new LeaderStat { leaderId = l.leaderId, games = l.games, wins = l.wins })
             .OrderByDescending(l => l.games).ToList();
         if (decks.Count == 0)
         {
-            var none = TextObject("None", body, "No deck history yet — play some matches.", 12, Muted, TextAnchor.UpperLeft, monoFont);
+            var none = TextObject("None", content, $"No {dm} deck history yet — play some {dm} matches.", 12, Muted, TextAnchor.UpperLeft, monoFont);
             Stretch(none.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -34f), Vector2.zero);
             return;
         }
@@ -549,7 +613,7 @@ public partial class MainMenuManager
             profileSelDeck = decks[0].leaderId;
 
         // ── Left: 300px deck list ────────────────────────────────────────────
-        var list = PanelObject("Deck List", body, LogBgDark);
+        var list = PanelObject("Deck List", content, LogBgDark);
         Stretch(list, new Vector2(0f, 0f), new Vector2(0f, 1f), Vector2.zero, new Vector2(300f, 0f));
         RoundBig(list);
         AddRoundedCardBorder(list, MenuB, 1f);
@@ -587,13 +651,28 @@ public partial class MainMenuManager
         }
 
         // ── Right: detail for selected deck ──────────────────────────────────
-        var detail = PanelObject("Deck Detail", body, new Color(0, 0, 0, 0));
+        var detail = PanelObject("Deck Detail", content, new Color(0, 0, 0, 0));
         Stretch(detail, Vector2.zero, Vector2.one, new Vector2(316f, 0f), Vector2.zero);
         var selStat = decks.First(d => d.leaderId == profileSelDeck);
-        BuildDeckDetail(detail, selStat);
+        BuildDeckDetail(detail, selStat, dm);
     }
 
-    private void BuildDeckDetail(RectTransform area, LeaderStat stat)
+    // Small Ranked/Casual toggle for the Deck History tab.
+    private void BuildDeckModeTab(RectTransform group, string label, string value, float x0, float x1)
+    {
+        bool active = profileDeckMode == value;
+        var tab = PanelObject(value + " DeckTab", group, active ? Accent : new Color(0, 0, 0, 0));
+        Stretch(tab, new Vector2(x0, 0f), new Vector2(x1, 1f), new Vector2(0f, 4f), new Vector2(0f, -4f));
+        Round(tab);
+        AddRoundedCardBorder(tab, active ? Accent : MenuB, 1f);
+        var t = TextObject("t", tab, label, 10, active ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = tab.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { profileDeckMode = value; profileSelDeck = null; RenderMenu(); });
+    }
+
+    private void BuildDeckDetail(RectTransform area, LeaderStat stat, string mode)
     {
         var b = profileLifetime;
         var rec = MenuCard(stat.leaderId);
@@ -621,12 +700,13 @@ public partial class MainMenuManager
         Stretch(chart, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -126f - 240f), new Vector2(0f, -126f));
         Round(chart);
         AddRoundedCardBorder(chart, MenuB, 1f);
-        BuildDeckTimelineChart(chart, stat.leaderId);
+        BuildDeckTimelineChart(chart, stat.leaderId, mode);
 
         // ── Matchup grid ─────────────────────────────────────────────────────
         BuildSectionLabel(area, "RECORD VS EACH LEADER", -382f);
-        var mups = (b.matchups ?? new List<MatchupStat>())
-            .Where(m => m != null && m.ownLeaderId == stat.leaderId && m.games > 0)
+        var mups = (b.matchupsMode ?? new List<ModeMatchupStat>())
+            .Where(m => m != null && m.mode == mode && m.ownLeaderId == stat.leaderId && m.games > 0)
+            .Select(m => new MatchupStat { ownLeaderId = m.ownLeaderId, oppLeaderId = m.oppLeaderId, games = m.games, wins = m.wins })
             .OrderByDescending(m => m.games).Take(8).ToList();
         if (mups.Count == 0)
         {
@@ -647,10 +727,10 @@ public partial class MainMenuManager
     // Design adaptation: the handoff's SVG bars+line become UGUI bars (games,
     // leader color @55% alpha) with a small green marker at the month's win-rate
     // height. A dashed 50% reference line is approximated with a 1px hairline.
-    private void BuildDeckTimelineChart(RectTransform chart, string leaderId)
+    private void BuildDeckTimelineChart(RectTransform chart, string leaderId, string mode)
     {
-        var months = (profileLifetime.months ?? new List<MonthStat>())
-            .Where(m => m != null && m.leaderId == leaderId && m.games > 0)
+        var months = (profileLifetime.monthsMode ?? new List<ModeMonthStat>())
+            .Where(m => m != null && m.mode == mode && m.leaderId == leaderId && m.games > 0)
             .OrderBy(m => m.ym, StringComparer.Ordinal).ToList();
         if (months.Count == 0)
         {
@@ -744,7 +824,7 @@ public partial class MainMenuManager
         Round(bannerRow);
         AddRoundedCardBorder(bannerRow, MenuB, 1f);
         var sTitle = TextObject("T", bannerRow,
-            sid > 0 ? $"SEASON {sid}" : "NO ACTIVE SEASON", 16, Ink, TextAnchor.MiddleLeft, monoFont);
+            StatsStore.SeasonName(sid).ToUpperInvariant(), 16, Ink, TextAnchor.MiddleLeft, monoFont);
         sTitle.fontStyle = FontStyle.Bold;
         Stretch(sTitle.rectTransform, Vector2.zero, new Vector2(0.4f, 1f), new Vector2(16f, 0f), Vector2.zero);
 
@@ -757,13 +837,14 @@ public partial class MainMenuManager
         AddRoundedCardBorder(toggle, MenuB, 1f);
         BuildSeasonModeTab(toggle, "CASUAL", "casual", 0f, 0.5f);
         BuildSeasonModeTab(toggle, "RANKED", "ranked", 0.5f, 1f);
-        // Ranked isn't live — same SOON marker as the Ranked Match portal.
-        AddProfileStatusChip(toggle, "SOON", -4f, 8f);   // corner badge
+        // Ranked is live for the Bug Testing Season: every finished PvP match moves
+        // your authoritative bounty (computed server-side).
+        AddProfileStatusChip(toggle, "LIVE", -4f, 8f);   // corner badge
 
         var area = PanelObject("Season Area", body, new Color(0, 0, 0, 0));
         Stretch(area, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -76f));
 
-        if (profileSeasonMode == "ranked") BuildRankedEmptyState(area);
+        if (profileSeasonMode == "ranked") BuildRankedProfile(area);
         else BuildSeasonCasual(area, sid);
     }
 
@@ -883,35 +964,274 @@ public partial class MainMenuManager
         }
     }
 
-    private void BuildRankedEmptyState(RectTransform area)
+    // Live Bounty ladder standing (replaces the old "ranked hasn't set sail" card).
+    // Reads the account's RankedProfile: placement progress until 5 games are in,
+    // then the current bounty, tier/division, progress, Rampage, Vivre Card, and a
+    // ladder strip with the current tier lit.
+    private void BuildRankedProfile(RectTransform area)
     {
-        var card = PanelObject("Ranked Empty", area, RowBg);
-        Stretch(card, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -240f), new Vector2(0f, -40f));
-        RoundBig(card);
-        AddRoundedCardBorder(card, MenuB, 1f);
+        var p = profileRanked ?? new RankedProfile();
 
-        var title = TextObject("T", card, "RANKED HASN'T SET SAIL YET", 18, Ink, TextAnchor.MiddleCenter, monoFont);
-        title.fontStyle = FontStyle.Bold;
-        Stretch(title.rectTransform, new Vector2(0f, 0.55f), Vector2.one, Vector2.zero, Vector2.zero);
-        var sub = TextObject("S", card, "COMPETITIVE LADDERS ARRIVE WITH A FUTURE SEASON.\nUNTIL THEN, EVERY MATCH COUNTS TOWARD YOUR CASUAL LOG.",
-            11, Muted, TextAnchor.UpperCenter, monoFont);
-        Stretch(sub.rectTransform, new Vector2(0.05f, 0.12f), new Vector2(0.95f, 0.55f), Vector2.zero, Vector2.zero);
+        // Placement: bounty is hidden until the 5th game reveals a first poster.
+        if (p.placementGamesLeft > 0)
+        {
+            BuildRankedPlacement(area, p);
+            return;
+        }
 
-        // Tier-ladder strip
+        int tIndex = RankedStore.TierIndexForBounty(p.bounty);
+        var tier = RankedStore.Tiers[tIndex];
+        Color tierColor = ProfileTiers[Mathf.Clamp(tIndex, 0, ProfileTiers.Length - 1)].color;
+        string division = RankedStore.DivisionForBounty(p.bounty);
+        bool isKing = tIndex == RankedStore.Tiers.Length - 1;
+        float y = 0f;
+
+        // ── Hero bounty card ──
+        var hero = PanelObject("Bounty Hero", area, RowBg);
+        Stretch(hero, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 112f), new Vector2(0f, y));
+        RoundBig(hero);
+        AddRoundedCardBorder(hero, tierColor, 1.5f);
+
+        var bLabel = TextObject("BL", hero, "CURRENT BOUNTY", 9, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(bLabel.rectTransform, new Vector2(0f, 0.62f), new Vector2(0.6f, 1f), new Vector2(16f, -12f), new Vector2(0f, -8f));
+        var bVal = TextObject("BV", hero, RankedStore.FormatBerries(p.bounty), 30, Ink, TextAnchor.LowerLeft, monoFont);
+        bVal.fontStyle = FontStyle.Bold;
+        Stretch(bVal.rectTransform, new Vector2(0f, 0.24f), new Vector2(0.64f, 0.66f), new Vector2(16f, 0f), Vector2.zero);
+        var bUnit = TextObject("BU", hero, "BERRIES", 9, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(bUnit.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 0.24f), new Vector2(17f, 8f), Vector2.zero);
+
+        var badge = TextObject("TN", hero,
+            tier.Name.ToUpperInvariant() + (string.IsNullOrEmpty(division) ? "" : "  " + division),
+            17, tierColor, TextAnchor.MiddleRight, monoFont);
+        badge.fontStyle = FontStyle.Bold;
+        Stretch(badge.rectTransform, new Vector2(0.55f, 0.42f), new Vector2(1f, 0.9f), Vector2.zero, new Vector2(-16f, 0f));
+        var badgeSub = TextObject("TS", hero, isKing ? "THE THRONE" : $"TIER {tIndex + 1} OF 9",
+            9, Muted, TextAnchor.MiddleRight, monoFont);
+        Stretch(badgeSub.rectTransform, new Vector2(0.55f, 0.14f), new Vector2(1f, 0.42f), Vector2.zero, new Vector2(-16f, 0f));
+
+        // Last-match feedback chip.
+        if (p.lastVivreSaved || p.lastDeltaBounty != 0)
+        {
+            string txt = p.lastVivreSaved ? "VIVRE CARD SAVED YOU"
+                : (p.lastDeltaBounty > 0 ? "+" + RankedStore.FormatBerriesShort(p.lastDeltaBounty)
+                                         : "-" + RankedStore.FormatBerriesShort(-p.lastDeltaBounty));
+            Color c = p.lastVivreSaved ? ProfileAmber : (p.lastDeltaBounty > 0 ? GoodGreen : RedAccent);
+            var chip = TextObject("LM", hero, "LAST MATCH  " + txt, 9, c, TextAnchor.UpperRight, monoFont);
+            chip.fontStyle = FontStyle.Bold;
+            Stretch(chip.rectTransform, new Vector2(0.5f, 0.86f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-14f, -8f));
+        }
+        y -= 124f;
+
+        // ── Progress to next tier (or the throne banner at the top) ──
+        if (!isKing)
+        {
+            long remaining = RankedStore.Tiers[tIndex + 1].Floor - p.bounty;
+            var prow = PanelObject("Progress", area, RowBg);
+            Stretch(prow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 46f), new Vector2(0f, y));
+            Round(prow);
+            AddRoundedCardBorder(prow, MenuB, 1f);
+            var pl = TextObject("PL", prow, "NEXT: " + RankedStore.Tiers[tIndex + 1].Name.ToUpperInvariant(),
+                9, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(pl.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.7f, 1f), new Vector2(12f, -6f), Vector2.zero);
+            var pr = TextObject("PR", prow, RankedStore.FormatBerriesShort(remaining) + " TO GO",
+                9, tierColor, TextAnchor.UpperRight, monoFont);
+            Stretch(pr.rectTransform, new Vector2(0.5f, 0.5f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-12f, 0f));
+            var barBg = PanelObject("Bar", prow, new Color(1f, 1f, 1f, 0.07f));
+            Stretch(barBg, new Vector2(0f, 0f), new Vector2(1f, 0.42f), new Vector2(12f, 8f), new Vector2(-12f, 0f));
+            Round(barBg);
+            var fill = PanelObject("Fill", barBg, tierColor);
+            Stretch(fill, Vector2.zero, new Vector2(Mathf.Clamp01(RankedStore.ProgressInTier(p.bounty)), 1f), Vector2.zero, Vector2.zero);
+            Round(fill);
+        }
+        else
+        {
+            var prow = PanelObject("Throne", area, new Color(tierColor.r, tierColor.g, tierColor.b, 0.12f));
+            Stretch(prow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 46f), new Vector2(0f, y));
+            Round(prow);
+            AddRoundedCardBorder(prow, tierColor, 1f);
+            var t = TextObject("TT", prow, "THE PIRATE KING'S THRONE — TOP 0.1%", 11, tierColor, TextAnchor.MiddleCenter, monoFont);
+            t.fontStyle = FontStyle.Bold;
+            Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+        y -= 58f;
+
+        // ── Stat cells ──
+        string rampage = p.winStreak >= 3 ? $"ON FIRE · {p.winStreak}W"
+            : (p.winStreak > 0 ? $"{p.winStreak}W" : "—");
+        Color rampageColor = p.winStreak >= 3 ? ProfileAmber : (p.winStreak > 0 ? GoodGreen : Muted);
+        string vivre = tier.VivreActive
+            ? (p.vivreReady ? "CHARGED" : $"{p.vivreCharge}/{tier.VivreLossesToCharge}")
+            : "—";
+        Color vivreColor = tier.VivreActive ? (p.vivreReady ? GoodGreen : Ink) : Muted;
+
+        var cells = new (string label, string val, Color color)[]
+        {
+            ("PEAK BOUNTY", RankedStore.FormatBerriesShort(p.peakBounty), Ink),
+            ("RAMPAGE", rampage, rampageColor),
+            ("VIVRE CARD", vivre, vivreColor),
+            ("RANKED GAMES", p.games.ToString(), Ink),
+        };
+        for (int i = 0; i < cells.Length; i++)
+        {
+            float x0 = i / 4f, x1 = (i + 1) / 4f;
+            var card = PanelObject("RC " + cells[i].label, area, RowBg);
+            Stretch(card, new Vector2(x0, 1f), new Vector2(x1, 1f),
+                new Vector2(i == 0 ? 0f : 6f, y - 68f), new Vector2(i == 3 ? 0f : -6f, y));
+            Round(card);
+            AddRoundedCardBorder(card, MenuB, 1f);
+            var lab = TextObject("l", card, cells[i].label, 8, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(lab.rectTransform, new Vector2(0f, 0.58f), Vector2.one, new Vector2(10f, 0f), new Vector2(-6f, -8f));
+            var val = TextObject("v", card, cells[i].val, 15, cells[i].color, TextAnchor.LowerLeft, monoFont);
+            val.fontStyle = FontStyle.Bold;
+            Stretch(val.rectTransform, Vector2.zero, new Vector2(1f, 0.6f), new Vector2(10f, 8f), new Vector2(-6f, 0f));
+        }
+        y -= 84f;
+
+        // ── Ladder strip, current tier lit ──
+        BuildSectionLabel(area, "BOUNTY LADDER", y); y -= 24f;
         var strip = PanelObject("Tier Strip", area, new Color(0, 0, 0, 0));
-        Stretch(strip, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -320f), new Vector2(0f, -260f));
+        Stretch(strip, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 46f), new Vector2(0f, y));
         for (int i = 0; i < ProfileTiers.Length; i++)
         {
             float x0 = (float)i / ProfileTiers.Length, x1 = (float)(i + 1) / ProfileTiers.Length;
             var (tname, tcolor, _) = ProfileTiers[i];
-            var chip = PanelObject("Tier " + tname, strip, new Color(tcolor.r, tcolor.g, tcolor.b, 0.12f));
+            bool cur = i == tIndex;
+            var chip = PanelObject("Tier " + tname, strip, new Color(tcolor.r, tcolor.g, tcolor.b, cur ? 0.30f : 0.10f));
             Stretch(chip, new Vector2(x0, 0f), new Vector2(x1, 1f),
-                new Vector2(i == 0 ? 0f : 4f, 0f), new Vector2(i == ProfileTiers.Length - 1 ? 0f : -4f, 0f));
+                new Vector2(i == 0 ? 0f : 3f, 0f), new Vector2(i == ProfileTiers.Length - 1 ? 0f : -3f, 0f));
             Round(chip);
-            AddRoundedCardBorder(chip, new Color(tcolor.r, tcolor.g, tcolor.b, 0.45f), 1f);
-            var t = TextObject("t", chip, tname.ToUpperInvariant(), 8, tcolor, TextAnchor.MiddleCenter, monoFont);
+            AddRoundedCardBorder(chip, new Color(tcolor.r, tcolor.g, tcolor.b, cur ? 1f : 0.35f), cur ? 1.6f : 1f);
+            var t = TextObject("t", chip, tname.ToUpperInvariant(), cur ? 8 : 7, tcolor, TextAnchor.MiddleCenter, monoFont);
             t.fontStyle = FontStyle.Bold;
             Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(2f, 0f), new Vector2(-2f, 0f));
+        }
+    }
+
+    // Placement state: bounty hidden while the first 5 games settle the hidden MMR.
+    private void BuildRankedPlacement(RectTransform area, RankedProfile p)
+    {
+        int played = RankedStore.PlacementGames - p.placementGamesLeft;
+
+        var card = PanelObject("Placement", area, RowBg);
+        Stretch(card, new Vector2(0.1f, 1f), new Vector2(0.9f, 1f), new Vector2(0f, -206f), new Vector2(0f, -20f));
+        RoundBig(card);
+        AddRoundedCardBorder(card, Accent, 1.2f);
+
+        var title = TextObject("T", card, "ASSESSING YOUR THREAT", 16, Ink, TextAnchor.UpperCenter, monoFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 0.72f), Vector2.one, new Vector2(0f, -18f), Vector2.zero);
+        var big = TextObject("B", card, $"{played} / {RankedStore.PlacementGames}", 30, Accent, TextAnchor.MiddleCenter, monoFont);
+        big.fontStyle = FontStyle.Bold;
+        Stretch(big.rectTransform, new Vector2(0f, 0.36f), Vector2.one, Vector2.zero, new Vector2(0f, -44f));
+        var sub = TextObject("S", card,
+            "PLACEMENT MATCHES PLAYED\nYOUR BOUNTY STAYS HIDDEN UNTIL THE MARINES ISSUE YOUR FIRST POSTER.",
+            10, Muted, TextAnchor.UpperCenter, monoFont);
+        Stretch(sub.rectTransform, new Vector2(0.06f, 0.08f), new Vector2(0.94f, 0.36f), Vector2.zero, Vector2.zero);
+
+        var dots = PanelObject("Dots", area, new Color(0, 0, 0, 0));
+        Stretch(dots, new Vector2(0.28f, 1f), new Vector2(0.72f, 1f), new Vector2(0f, -246f), new Vector2(0f, -220f));
+        for (int i = 0; i < RankedStore.PlacementGames; i++)
+        {
+            float x0 = (float)i / RankedStore.PlacementGames, x1 = (float)(i + 1) / RankedStore.PlacementGames;
+            var dot = PanelObject("D" + i, dots, i < played ? Accent : new Color(1f, 1f, 1f, 0.08f));
+            Stretch(dot, new Vector2(x0, 0f), new Vector2(x1, 1f), new Vector2(5f, 5f), new Vector2(-5f, -5f));
+            Round(dot);
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Most Wanted — the Bounty leaderboard (nav rail screen)
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private void OpenLeaderboard()
+    {
+        showingAccountSettings = false;
+        showingFriends = false;
+        showingReplays = false;
+        showingLocalReplays = false;
+        showingProfile = false;
+        showingProfileIcon = false;
+        showingLeaderboard = true;
+        leaderboardEntries = null; // force a fresh pull
+        RenderMenu();
+    }
+
+    private async void LoadLeaderboardData()
+    {
+        leaderboardLoading = true;
+        List<LeaderboardEntry> entries = null;
+        try { entries = await RankedStore.LoadLeaderboardAsync(25); }
+        catch (Exception ex) { Debug.LogWarning($"Leaderboard load failed: {ex.Message}"); }
+        if (this == null || menuRoot == null) return;
+        leaderboardLoading = false;
+        leaderboardEntries = entries ?? new List<LeaderboardEntry>();
+        if (showingLeaderboard) RenderMenu();
+    }
+
+    private void BuildLeaderboardStage(RectTransform stage)
+    {
+        EnsureMenuCardLibrary();
+
+        var title = TextObject("MW Title", stage, "MOST WANTED", 26, Ink, TextAnchor.UpperLeft, monoFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(4f, -44f), new Vector2(0f, -4f));
+        string season = StatsStore.SeasonName(StatsStore.CurrentSeasonId).ToUpperInvariant();
+        var sub = TextObject("MW Sub", stage, $"{season} · THE SEA'S MOST NOTORIOUS, RANKED BY BOUNTY", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(sub.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(4f, -66f), new Vector2(0f, -46f));
+
+        var body = PanelObject("MW Body", stage, new Color(0, 0, 0, 0));
+        Stretch(body, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -80f));
+
+        if (leaderboardEntries == null)
+        {
+            if (!leaderboardLoading) LoadLeaderboardData();
+            var loading = TextObject("MW Loading", body, "Reading the bounty board…", 13, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(loading.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -30f), Vector2.zero);
+            return;
+        }
+        if (leaderboardEntries.Count == 0)
+        {
+            var none = TextObject("MW Empty", body,
+                "NO BOUNTIES POSTED YET.\nFinish a ranked PvP match to make the board.",
+                13, Muted, TextAnchor.UpperCenter, monoFont);
+            Stretch(none.rectTransform, new Vector2(0.1f, 1f), new Vector2(0.9f, 1f), new Vector2(0f, -100f), new Vector2(0f, -30f));
+            return;
+        }
+
+        string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername;
+        int shown = Mathf.Min(leaderboardEntries.Count, 10);
+        float y = 0f;
+        for (int i = 0; i < shown; i++)
+        {
+            var e = leaderboardEntries[i];
+            bool isMe = !string.IsNullOrEmpty(myName) && e.username == myName;
+            int tIndex = RankedStore.TierIndexForBounty(e.bounty);
+            Color tierColor = ProfileTiers[Mathf.Clamp(tIndex, 0, ProfileTiers.Length - 1)].color;
+            Color rankColor = e.rank <= 3 ? Gold : Muted;
+
+            var row = PanelObject("MW Row " + i, body, isMe ? new Color(Accent.r, Accent.g, Accent.b, 0.12f) : RowBg);
+            Stretch(row, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 46f), new Vector2(0f, y));
+            Round(row);
+            AddRoundedCardBorder(row, isMe ? Accent : new Color(tierColor.r, tierColor.g, tierColor.b, 0.35f), isMe ? 1.5f : 1f);
+
+            var rank = TextObject("r", row, "#" + e.rank, 16, rankColor, TextAnchor.MiddleLeft, monoFont);
+            rank.fontStyle = FontStyle.Bold;
+            Stretch(rank.rectTransform, new Vector2(0f, 0f), new Vector2(0.12f, 1f), new Vector2(14f, 0f), Vector2.zero);
+
+            var name = TextObject("n", row, string.IsNullOrEmpty(e.username) ? "Unknown Pirate" : e.username,
+                14, Ink, TextAnchor.MiddleLeft, monoFont);
+            name.fontStyle = FontStyle.Bold;
+            Stretch(name.rectTransform, new Vector2(0.12f, 0.42f), new Vector2(0.62f, 1f), Vector2.zero, new Vector2(-6f, -4f));
+            var tierLab = TextObject("t", row, e.tierName?.ToUpperInvariant() ?? "", 9, tierColor, TextAnchor.LowerLeft, monoFont);
+            Stretch(tierLab.rectTransform, new Vector2(0.12f, 0f), new Vector2(0.62f, 0.42f), new Vector2(0f, 4f), new Vector2(-6f, 0f));
+
+            var bounty = TextObject("b", row, RankedStore.FormatBerries(e.bounty), 15, tierColor, TextAnchor.MiddleRight, monoFont);
+            bounty.fontStyle = FontStyle.Bold;
+            Stretch(bounty.rectTransform, new Vector2(0.62f, 0.3f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-14f, -2f));
+            var berryLab = TextObject("bl", row, "BERRIES", 8, Muted, TextAnchor.LowerRight, monoFont);
+            Stretch(berryLab.rectTransform, new Vector2(0.62f, 0f), new Vector2(1f, 0.3f), Vector2.zero, new Vector2(-14f, 2f));
+
+            y -= 50f;
         }
     }
 

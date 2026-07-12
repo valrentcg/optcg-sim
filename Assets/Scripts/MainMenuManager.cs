@@ -51,9 +51,9 @@ public partial class MainMenuManager : MonoBehaviour
     {
         new MenuMode { Id = "soloSelf",    Parent = "SOLO PLAY",   Label = "Versus Self",   Status = ModeStatus.Ready, Launch = "ENTER SANDBOX" },
         new MenuMode { Id = "soloAi",      Parent = "SOLO PLAY",   Label = "Versus A.I.",   Status = ModeStatus.Ready, Launch = "START MATCH"   },
-        new MenuMode { Id = "ranked",      Parent = "MULTIPLAYER", Label = "Ranked Match",  Status = ModeStatus.Soon,  Launch = "FIND MATCH"    },
-        new MenuMode { Id = "casual",      Parent = "MULTIPLAYER", Label = "Casual Match",  Status = ModeStatus.Soon,  Launch = "FIND MATCH"    },
-        new MenuMode { Id = "privateRoom", Parent = "MULTIPLAYER", Label = "Private Room",  Status = ModeStatus.Ready, Launch = "CREATE ROOM"   },
+        new MenuMode { Id = "casual",      Parent = "MULTIPLAYER", Label = "Casual Match",  Status = ModeStatus.Ready, Launch = "QUEUE MATCH"   },
+        new MenuMode { Id = "ranked",      Parent = "MULTIPLAYER", Label = "Ranked Match",  Status = ModeStatus.Ready, Launch = "QUEUE MATCH"   },
+        new MenuMode { Id = "privateRoom", Parent = "MULTIPLAYER", Label = "Custom Room",   Status = ModeStatus.Ready, Launch = "VIEW LOBBIES"  },
     };
 
     // ── Runtime state ──────────────────────────────────────────────────────────
@@ -680,6 +680,8 @@ public partial class MainMenuManager : MonoBehaviour
         // Account gate renders as a modal over the whole menu (top bar included) so the
         // menu stays visible-but-locked behind it instead of the stage being hijacked.
         if (showingAccountGate) BuildAccountGateModal(menuRoot);
+        if (rankedQueueActive) BuildRankedQueueModal(menuRoot);
+        if (showSaveConfirm) BuildSaveConfirmModal(menuRoot);
         Canvas.ForceUpdateCanvases();
     }
 
@@ -954,6 +956,7 @@ public partial class MainMenuManager : MonoBehaviour
         else if (showingReplays) BuildReplayStage(stage);
         else if (showingLocalReplays) BuildLocalReplaysStage(stage);
         else if (showingLobbyHub) BuildLobbyStage(stage);
+        else if (showingLeaderboard) BuildLeaderboardStage(stage);
         else BuildStage(stage);
     }
 
@@ -1640,11 +1643,34 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void BuildDecklistsTab(RectTransform area, MatchSummary m)
     {
-        BuildDeckColumn(area, m, true);
-        BuildDeckColumn(area, m, false);
+        // Left ~70%: the two decklists. Right: a card preview that updates on hover.
+        var left = PanelObject("Decks Left", area, new Color(0, 0, 0, 0));
+        Stretch(left, Vector2.zero, new Vector2(0.7f, 1f), Vector2.zero, new Vector2(-8f, 0f));
+
+        var right = PanelObject("Deck Preview", area, new Color32(14, 28, 43, 255));
+        Stretch(right, new Vector2(0.7f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        RoundBig(right);
+        AddRoundedCardBorder(right, MenuB, 1f);
+        var prevLabel = TextObject("PrevLabel", right, "CARD PREVIEW", 9, Muted, TextAnchor.UpperCenter, monoFont);
+        prevLabel.fontStyle = FontStyle.Bold;
+        Stretch(prevLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -26f), new Vector2(0f, -8f));
+
+        var cardHolder = PanelObject("Card Holder", right, new Color(0, 0, 0, 0));
+        Stretch(cardHolder, new Vector2(0.06f, 0.05f), new Vector2(0.94f, 0.9f), Vector2.zero, Vector2.zero);
+        var prevImg = cardHolder.GetComponent<Image>();
+        prevImg.preserveAspect = true;
+        prevImg.raycastTarget = false;
+        prevImg.enabled = false;
+
+        var prevHint = TextObject("Hint", right, "Hover a card in the lists to preview it", 10, Muted, TextAnchor.MiddleCenter, monoFont);
+        prevHint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(prevHint.rectTransform, new Vector2(0.12f, 0.1f), new Vector2(0.88f, 0.9f), Vector2.zero, Vector2.zero);
+
+        BuildDeckColumn(left, m, true, prevImg, prevHint);
+        BuildDeckColumn(left, m, false, prevImg, prevHint);
     }
 
-    private void BuildDeckColumn(RectTransform area, MatchSummary m, bool youSide)
+    private void BuildDeckColumn(RectTransform area, MatchSummary m, bool youSide, Image previewImg, Text previewHint)
     {
         var deck = youSide ? m.youDeck : m.oppDeck;
         string leaderId = youSide ? m.youLeaderId : m.oppLeaderId;
@@ -1696,7 +1722,22 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(mdT.rectTransform, Vector2.zero, new Vector2(0.5f, 1f), Vector2.zero, Vector2.zero);
         var cntT = TextObject("cnt", subHead,
             $"{totalCards} CARDS · {(deck?.Count ?? 0)} UNIQUE", 10, new Color32(111, 134, 150, 255), TextAnchor.MiddleRight, monoFont);
-        Stretch(cntT.rectTransform, new Vector2(0.5f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        Stretch(cntT.rectTransform, new Vector2(0.38f, 0f), new Vector2(0.72f, 1f), Vector2.zero, Vector2.zero);
+
+        // SAVE DECK → pick one of your deck slots to overwrite with this list (confirmed).
+        if (deck != null && deck.Count > 0)
+        {
+            var saveBtn = PanelObject("Save Deck", subHead, new Color32(34, 58, 78, 235));
+            Stretch(saveBtn, new Vector2(0.74f, 0.1f), new Vector2(1f, 0.9f), Vector2.zero, Vector2.zero);
+            Round(saveBtn);
+            AddRoundedCardBorder(saveBtn, Accent, 1.1f);
+            var sbT = TextObject("t", saveBtn, "SAVE DECK", 9, Ink, TextAnchor.MiddleCenter, monoFont);
+            sbT.fontStyle = FontStyle.Bold;
+            Stretch(sbT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var deckCopy = deck; string leaderCopy = leaderId;
+            var sbBtn = saveBtn.gameObject.AddComponent<Button>();
+            sbBtn.onClick.AddListener(() => StartSaveMatchDeck(deckCopy, leaderCopy));
+        }
 
         // Card rows in their own scroll (each column scrolls independently).
         var rowsArea = PanelObject("Rows", col, new Color(0, 0, 0, 0));
@@ -1732,6 +1773,22 @@ public partial class MainMenuManager : MonoBehaviour
             rowRt.sizeDelta = new Vector2(0f, rowH);
             rowRt.anchoredPosition = new Vector2(0f, -(i * rowH));
 
+            // Hover → show this card in the preview panel (no full re-render).
+            string capturedCardId = e.cardId;
+            var trig = rowRt.gameObject.AddComponent<EventTrigger>();
+            var enter = new EventTrigger.Entry { eventID = EventTriggerType.PointerEnter };
+            enter.callback.AddListener(_ =>
+            {
+                var art = LoadArt(capturedCardId);
+                if (art != null && previewImg != null)
+                {
+                    previewImg.sprite = art;
+                    previewImg.enabled = true;
+                    if (previewHint != null) previewHint.gameObject.SetActive(false);
+                }
+            });
+            trig.triggers.Add(enter);
+
             var count = TextObject("Count", rowRt, e.count + "×", 12, Ink, TextAnchor.MiddleLeft, monoFont);
             count.fontStyle = FontStyle.Bold;
             Stretch(count.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(10f, 0f), new Vector2(42f, 0f));
@@ -1766,6 +1823,95 @@ public partial class MainMenuManager : MonoBehaviour
             var counterT = TextObject("Counter", rowRt, counter, 10, rec != null && rec.counter > 0 ? Gold : Muted, TextAnchor.MiddleRight, monoFont);
             Stretch(counterT.rectTransform, new Vector2(1f, 0f), Vector2.one, new Vector2(-58f, 0f), new Vector2(-10f, 0f));
         }
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Save a match's decklist into one of your deck slots (hex-grid pick + confirm).
+    // Static so the picker's teardown/reopen (OpenPicker → fresh MainMenuManager)
+    // doesn't lose the pending list.
+    // ══════════════════════════════════════════════════════════════════════════
+    private static List<MatchDeckCount> pendingSaveCards;
+    private static string pendingSaveLeaderId;
+    private static string pendingSaveTargetId;
+    private static bool showSaveConfirm;
+
+    private void StartSaveMatchDeck(List<MatchDeckCount> deck, string leaderId)
+    {
+        if (deck == null || deck.Count == 0) return;
+        pendingSaveCards = new List<MatchDeckCount>(deck);
+        pendingSaveLeaderId = leaderId;
+        pendingSaveTargetId = null;
+        showSaveConfirm = false;
+
+        // Go to the deck hex grid; picking a slot returns its deck id → confirm next.
+        // Cancel (BACK) drops the pending save and returns to the menu.
+        CancelInvoke();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        DeckBuilderManager.OpenPicker("SAVE OVER WHICH DECK?",
+            "pick a deck slot to overwrite with this list — you'll confirm next",
+            chosenId => { pendingSaveTargetId = chosenId; showSaveConfirm = true; EnsureMenu(); },
+            () => { pendingSaveCards = null; pendingSaveTargetId = null; EnsureMenu(); });
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    private void BuildSaveConfirmModal(RectTransform root)
+    {
+        var target = DeckStore.Get(pendingSaveTargetId);
+        var scrim = PanelObject("Save Scrim", root, new Color(0f, 0f, 0f, 0.72f));
+        Stretch(scrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var panel = PanelObject("Save Modal", scrim, new Color32(10, 20, 30, 255));
+        panel.anchorMin = panel.anchorMax = new Vector2(0.5f, 0.5f);
+        panel.pivot = new Vector2(0.5f, 0.5f);
+        panel.sizeDelta = new Vector2(460f, 230f);
+        panel.anchoredPosition = Vector2.zero;
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, Accent, 1.5f);
+
+        var t = TextObject("T", panel, "OVERWRITE DECK?", 20, Ink, TextAnchor.UpperCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -42f), new Vector2(0f, -14f));
+
+        string tn = target != null ? target.name : "this slot";
+        int cardN = 0; if (pendingSaveCards != null) foreach (var c in pendingSaveCards) cardN += c?.count ?? 0;
+        var sub = TextObject("S", panel,
+            $"Save this {cardN}-card decklist over “{tn}”?\nThis replaces its cards and can't be undone.",
+            12, Muted, TextAnchor.UpperCenter, monoFont);
+        sub.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(sub.rectTransform, new Vector2(0.06f, 0.32f), new Vector2(0.94f, 0.78f), Vector2.zero, Vector2.zero);
+
+        var btnRow = PanelObject("Btns", panel, new Color(0, 0, 0, 0));
+        Stretch(btnRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(20f, 22f), new Vector2(-20f, 72f));
+        var hlg = btnRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 10f; hlg.childAlignment = TextAnchor.MiddleCenter;
+        hlg.childControlWidth = false; hlg.childControlHeight = false;
+        AddButton(btnRow, "CONFIRM", ConfirmSaveMatchDeck, target != null, false, false);
+        AddButton(btnRow, "Back", CancelSaveMatchDeck, true, false, false);
+    }
+
+    private void ConfirmSaveMatchDeck()
+    {
+        var target = DeckStore.Get(pendingSaveTargetId);
+        if (target != null && pendingSaveCards != null)
+        {
+            if (!string.IsNullOrEmpty(pendingSaveLeaderId)) target.leaderId = pendingSaveLeaderId;
+            target.cards = new List<DeckEntry>();
+            foreach (var c in pendingSaveCards)
+                if (c != null && c.count > 0 && !string.IsNullOrEmpty(c.cardId))
+                    target.cards.Add(new DeckEntry { id = c.cardId, count = c.count });
+            target.updatedTicks = DateTime.UtcNow.Ticks;
+            DeckStore.Save(target);
+        }
+        CancelSaveMatchDeck();
+    }
+
+    private void CancelSaveMatchDeck()
+    {
+        pendingSaveCards = null;
+        pendingSaveTargetId = null;
+        pendingSaveLeaderId = null;
+        showSaveConfirm = false;
+        RenderMenu();
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -2019,7 +2165,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (string.IsNullOrWhiteSpace(username)) return;
         username = username.Trim();
-        showingAccountSettings = false; showingFriends = false; showingProfile = false;
+        showingAccountSettings = false; showingFriends = false; showingProfile = false; showingLeaderboard = false;
         showingReplays = false; importReplayError = null;
         showingLocalReplays = true;
         cloudSearchActiveUsername = username;
@@ -2309,7 +2455,7 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void OpenAccountSettings()
     {
-        showingProfile = false;
+        showingProfile = false; showingLeaderboard = false;
         showingAccountSettings = true;
         accountSettingsResetMode = false;
         accountSettingsRecoveryMode = false;
@@ -3317,7 +3463,7 @@ public partial class MainMenuManager : MonoBehaviour
         showingAccountSettings = false;
         showingReplays = false;
         showingLocalReplays = false;
-        showingProfile = false;
+        showingProfile = false; showingLeaderboard = false;
         showingFriends = true;
         friendsError = null;
         RenderMenu();
@@ -3720,6 +3866,8 @@ public partial class MainMenuManager : MonoBehaviour
     {
         showingLobbyHub = true;
         lobbyError = null;
+        lobbyMode = "custom";   // custom rooms are their own game type
+        lobbyRanked = false;
         RenderMenu();
         if (LobbyManager.CurrentSession == null) RefreshLobbyBrowser();
     }
@@ -4047,6 +4195,8 @@ public partial class MainMenuManager : MonoBehaviour
             seed = Guid.NewGuid().ToString("N"),
             south = NetworkDeck.From(DeckStore.Get(lobbyDeckId)),   // null → engine default ST01
             north = lobbyPeerDeck,                                  // null → engine default ST02
+            ranked = lobbyRanked,                                  // true only from the ranked queue
+            mode = lobbyMode,                                      // ranked | casual | custom
         };
         MatchNetworkSync.SendMatchStart(payload);
         LaunchNetworkedMatch(payload, "south");
@@ -4055,6 +4205,282 @@ public partial class MainMenuManager : MonoBehaviour
     private void OnNetworkMatchStartReceived(MatchStartPayload payload)
     {
         LaunchNetworkedMatch(payload, "north");
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // Ranked matchmaking queue — Auto Quick-Match + League-style ready check.
+    // The worker (Deploy/ranked-worker) does skill-range pairing + ready-check
+    // bookkeeping; this drives the UI and, on match, reuses the private-room
+    // session/deck/start machinery flagged ranked so it counts toward bounty.
+    // No join codes: host makes the session, the worker relays its id, guest auto-joins.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    private bool rankedQueueActive;
+    private bool lobbyRanked;            // makes StartMatchClicked send payload.ranked = true
+    private string lobbyMode = "custom"; // "ranked"|"casual"|"custom" for the next networked match
+    private string rankedStatus = "idle";
+    private float rankedStartTime;
+    private int rankedRange;
+    private long rankedDeadline;         // epoch ms the ready check expires
+    private bool rankedIAccepted;
+    private bool rankedOppAccepted;
+    private string rankedSessionId;
+    private bool rankedSessionCreated;   // host made the session
+    private bool rankedGuestJoined;      // guest joined the session
+    private bool rankedLaunching;        // match is starting — stop polling/acting
+
+    // mode = "ranked" (counts toward bounty) or "casual" (own pool, no bounty).
+    private async void StartQueue(string mode)
+    {
+        if (rankedQueueActive) return;
+        if (!RankedStore.IsConfigured) { lobbyError = "Matchmaking isn't available yet."; RenderMenu(); return; }
+        if (AccountManager.IsGuest) { showingAccountGate = true; RenderMenu(); return; }
+
+        rankedQueueActive = true;
+        rankedStatus = "connecting";
+        rankedStartTime = Time.realtimeSinceStartup;
+        rankedRange = 0;
+        rankedIAccepted = rankedOppAccepted = false;
+        rankedSessionCreated = rankedGuestJoined = rankedLaunching = false;
+        rankedSessionId = null;
+        lobbyRanked = mode == "ranked";   // casual matches don't touch the ladder
+        lobbyMode = mode;
+        RenderMenu();
+
+        var profile = await RankedStore.LoadAsync();
+        if (this == null || menuRoot == null || !rankedQueueActive) return;
+        int mmr = Mathf.RoundToInt((float)profile.rating);
+        string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername;
+        var status = await RankedStore.QueueJoinAsync(mmr, myName, mode);
+        if (this == null || menuRoot == null || !rankedQueueActive) return;
+        HandleRankedStatus(status);
+        RankedPollLoop();
+    }
+
+    private async void RankedPollLoop()
+    {
+        while (rankedQueueActive)
+        {
+            await Task.Delay(1000);
+            if (this == null || menuRoot == null) return;
+            if (!rankedQueueActive) return;
+            if (rankedLaunching) continue;
+            var status = await RankedStore.QueuePollAsync();
+            if (this == null || menuRoot == null) return;
+            if (!rankedQueueActive) return;
+            if (status != null && status.status != "error") HandleRankedStatus(status);
+            if (rankedQueueActive) RenderMenu();
+        }
+    }
+
+    private async void HandleRankedStatus(QueueStatus s)
+    {
+        if (s == null || !rankedQueueActive) return;
+        rankedStatus = s.status;
+        rankedRange = s.range;
+
+        switch (s.status)
+        {
+            case "waiting":
+                rankedIAccepted = rankedOppAccepted = false;
+                break;
+
+            case "proposed":
+                rankedDeadline = s.deadline;
+                rankedIAccepted = s.iAccepted;
+                rankedOppAccepted = s.oppAccepted;
+                break;
+
+            case "accepted":
+                // Both accepted. Host makes the session once; guest waits for its id.
+                if (s.role == "host" && !rankedSessionCreated)
+                {
+                    rankedSessionCreated = true;
+                    await CreateRankedSessionAndReport();
+                }
+                break;
+
+            case "matched":
+                rankedSessionId = s.matchId;
+                if (s.role == "guest" && !rankedGuestJoined)
+                {
+                    rankedGuestJoined = true;
+                    await JoinRankedSessionAsGuest(s.matchId);
+                }
+                else if (s.role == "host")
+                {
+                    TryHostLaunch();
+                }
+                break;
+
+            case "requeued":
+                // Opponent declined or timed out — reset and keep searching.
+                rankedStatus = "waiting";
+                rankedIAccepted = rankedOppAccepted = false;
+                rankedSessionCreated = rankedGuestJoined = false;
+                break;
+
+            case "idle":
+                EndRankedQueue(false);
+                break;
+        }
+    }
+
+    private async Task CreateRankedSessionAndReport()
+    {
+        try
+        {
+            string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? DefaultPlayerName;
+            var session = await LobbyManager.CreateLobbyAsync("Ranked Match", true, myName);
+            if (this == null || menuRoot == null || !rankedQueueActive) return;
+            SubscribeToSessionEvents(session);
+            rankedSessionId = session.Id;
+            await RankedStore.QueueHostReadyAsync(session.Id);
+            // Guest joins by id → peer connects → TryHostLaunch (poll loop / connect callback).
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Ranked host session failed: {ex.Message}");
+            EndRankedQueue(true);
+        }
+    }
+
+    private async Task JoinRankedSessionAsGuest(string sessionId)
+    {
+        try
+        {
+            var session = await LobbyManager.JoinByIdAsync(sessionId);
+            if (this == null || menuRoot == null || !rankedQueueActive) return;
+            SubscribeToSessionEvents(session);
+            ShareLobbyDeck();   // send our deck to the host
+            // Guest now waits for the host's match-start (OnNetworkMatchStartReceived).
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Ranked join failed: {ex.Message}");
+            EndRankedQueue(true);
+        }
+    }
+
+    // Host: launch the ranked match once the guest's Relay connection is live.
+    private void TryHostLaunch()
+    {
+        if (rankedLaunching) return;
+        var s = LobbyManager.CurrentSession;
+        if (s == null || !s.IsHost) return;
+        if (!MatchNetworkSync.IsPeerConnected) return;   // wait for the guest
+        rankedLaunching = true;
+        rankedQueueActive = false;
+        lobbyRanked = true;
+        StartMatchClicked();   // builds payload with ranked = lobbyRanked, sends + launches
+    }
+
+    private void AcceptRankedMatch()
+    {
+        rankedIAccepted = true;
+        RenderMenu();
+        AcceptRankedMatchAsync();
+    }
+
+    private async void AcceptRankedMatchAsync()
+    {
+        var s = await RankedStore.QueueReadyAsync(true);
+        if (this == null || menuRoot == null || !rankedQueueActive) return;
+        HandleRankedStatus(s);
+        if (rankedQueueActive) RenderMenu();
+    }
+
+    private void DeclineRankedMatch() => EndRankedQueue(true, decline: true);
+    private void CancelRankedQueue() => EndRankedQueue(true);
+
+    private async void EndRankedQueue(bool leaveSession, bool decline = false)
+    {
+        rankedQueueActive = false;
+        rankedStatus = "idle";
+        lobbyRanked = false;
+        try
+        {
+            if (decline) await RankedStore.QueueReadyAsync(false);
+            else await RankedStore.QueueCancelAsync();
+        }
+        catch { /* best effort */ }
+        if (leaveSession)
+        {
+            try { await LobbyManager.LeaveCurrentAsync(); } catch { /* best effort */ }
+        }
+        if (this == null || menuRoot == null) return;
+        RenderMenu();
+    }
+
+    // Searching / ready-check modal (drawn over the whole menu while queuing).
+    private void BuildRankedQueueModal(RectTransform root)
+    {
+        var scrim = PanelObject("Ranked Scrim", root, new Color(0f, 0f, 0f, 0.72f));
+        Stretch(scrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        var panel = PanelObject("Ranked Modal", scrim, new Color32(10, 20, 30, 255));
+        panel.anchorMin = panel.anchorMax = new Vector2(0.5f, 0.5f);
+        panel.pivot = new Vector2(0.5f, 0.5f);
+        panel.sizeDelta = new Vector2(470f, 300f);
+        panel.anchoredPosition = Vector2.zero;
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, Accent, 1.5f);
+
+        bool proposed = rankedStatus == "proposed";
+        bool connecting = rankedStatus == "accepted" || rankedStatus == "matched";
+        string modeLabel = lobbyRanked ? "RANKED" : "CASUAL";
+        string title = proposed ? "MATCH FOUND" : connecting ? "STARTING MATCH…" : $"FINDING {modeLabel} MATCH";
+        var t = TextObject("RM Title", panel, title, 22, Ink, TextAnchor.UpperCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -46f), new Vector2(0f, -16f));
+
+        if (proposed)
+        {
+            long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            int secs = Mathf.Max(0, Mathf.CeilToInt((rankedDeadline - nowMs) / 1000f));
+            var cd = TextObject("RM Countdown", panel, secs + "s", 42, Accent, TextAnchor.MiddleCenter, monoFont);
+            cd.fontStyle = FontStyle.Bold;
+            Stretch(cd.rectTransform, new Vector2(0f, 0.44f), Vector2.one, new Vector2(0f, 0f), new Vector2(0f, -64f));
+
+            var opp = TextObject("RM Opp", panel, rankedOppAccepted ? "Opponent: READY" : "Opponent: deciding…",
+                12, rankedOppAccepted ? GoodGreen : Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(opp.rectTransform, new Vector2(0f, 0.32f), Vector2.one, Vector2.zero, new Vector2(0f, 0f));
+
+            var btnRow = PanelObject("RM Buttons", panel, new Color(0, 0, 0, 0));
+            Stretch(btnRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(20f, 22f), new Vector2(-20f, 70f));
+            var hlg = btnRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 10f; hlg.childAlignment = TextAnchor.MiddleCenter;
+            hlg.childControlWidth = false; hlg.childControlHeight = false;
+            if (rankedIAccepted)
+            {
+                var w = TextObject("RM Ready", btnRow, "READY — waiting for opponent", 13, GoodGreen, TextAnchor.MiddleCenter, monoFont);
+                var le = w.gameObject.AddComponent<LayoutElement>(); le.preferredWidth = 340f; le.preferredHeight = 40f;
+            }
+            else
+            {
+                AddButton(btnRow, "ACCEPT", AcceptRankedMatch, true, false, false);
+                AddButton(btnRow, "Decline", DeclineRankedMatch, true, false, false);
+            }
+        }
+        else if (connecting)
+        {
+            var sub = TextObject("RM Sub", panel, "Connecting you to your opponent…", 13, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(sub.rectTransform, new Vector2(0f, 0.34f), Vector2.one, Vector2.zero, new Vector2(0f, -70f));
+        }
+        else
+        {
+            int elapsed = Mathf.Max(0, Mathf.RoundToInt(Time.realtimeSinceStartup - rankedStartTime));
+            var sub = TextObject("RM Sub", panel, $"Searching near your rank  ·  {elapsed}s", 14, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(sub.rectTransform, new Vector2(0f, 0.52f), Vector2.one, new Vector2(0f, 0f), new Vector2(0f, -72f));
+            if (rankedRange > 0)
+            {
+                var rng = TextObject("RM Range", panel, $"match window  ±{rankedRange} MMR", 11, ProfileAmber, TextAnchor.MiddleCenter, monoFont);
+                Stretch(rng.rectTransform, new Vector2(0f, 0.4f), Vector2.one, Vector2.zero, new Vector2(0f, 0f));
+            }
+            var cancelRow = PanelObject("RM Cancel", panel, new Color(0, 0, 0, 0));
+            Stretch(cancelRow, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(-60f, 24f), new Vector2(60f, 60f));
+            AddButton(cancelRow, "Cancel", CancelRankedQueue, true, false, false);
+        }
     }
 
     private void LaunchNetworkedMatch(MatchStartPayload payload, string localSeat)
@@ -4083,6 +4509,8 @@ public partial class MainMenuManager : MonoBehaviour
         if (canvas != null) canvas.gameObject.SetActive(false);
         GameManager.PendingNetworkedSeed = payload.seed;
         GameManager.PendingNetworkedSeat = localSeat;
+        GameManager.PendingNetworkedRanked = payload.ranked;
+        GameManager.PendingNetworkedMode = payload.mode;
         GameManager.PendingNetworkedSouthDeck = payload.south;
         GameManager.PendingNetworkedNorthDeck = payload.north;
         GameManager.EnsureBoard();
@@ -4133,6 +4561,7 @@ public partial class MainMenuManager : MonoBehaviour
         ShareLobbyDeck();
         MatchNetworkSync.SendPeerName(
             AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName);
+        if (rankedQueueActive) TryHostLaunch();
         RenderMenu();
     }
 
@@ -4336,26 +4765,28 @@ public partial class MainMenuManager : MonoBehaviour
         // Six nav rows
         var rows = new (string title, string subtitle, string tag, bool active)[]
         {
-            ("Play",     "Game modes",          null,       !showingReplays && !showingLocalReplays && !showingFriends && !showingProfile),
+            ("Play",     "Game modes",          null,       !showingReplays && !showingLocalReplays && !showingFriends && !showingProfile && !showingLeaderboard),
             ("Decks",    "Build & edit",        null,       false),
             ("Match History", "Watch past matches", null,   showingReplays),
             ("Replays",  "Local files & import", null,      showingLocalReplays),
             ("Friends",  "Crew & invites",      FriendsOnlineSubtitle(), showingFriends),
+            ("Most Wanted", "Bounty leaderboard", null,     showingLeaderboard),
             ("Settings", "Preferences & audio", null,       false),
         };
 
         UnityEngine.Events.UnityAction[] actions =
         {
             () => { showingAccountSettings = false; showingFriends = false; showingReplays = false;
-                    showingLocalReplays = false; showingProfile = false; RenderMenu(); },
+                    showingLocalReplays = false; showingProfile = false; showingLeaderboard = false; RenderMenu(); },
             () => OpenDeckBuilder(),
-            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false;
+            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false; showingLeaderboard = false;
                     showingLocalReplays = false;
                     showingReplays = true; selectedMatchId = null; matchHistory = null; RenderMenu(); },
-            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false;
+            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false; showingLeaderboard = false;
                     showingReplays = false; importReplayError = null; cloudSearchActiveUsername = null;
                     showingLocalReplays = true; RenderMenu(); },
             OpenFriends,
+            OpenLeaderboard,
             OpenAccountSettings,
         };
 
@@ -4581,31 +5012,45 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(cap.rectTransform, new Vector2(0f, 0.185f), new Vector2(1f, 0.222f),
             new Vector2(12f, 0f), new Vector2(-12f, 0f));
 
-        // Primary CTA: VIEW LOBBIES (the Custom/Private flow — the only live mode).
+        // Primary CTA reflects the selected duel tab: QUEUE MATCH for Casual/Ranked
+        // (the independent auto-queue — never touches the Custom lobby screen), or
+        // VIEW LOBBIES for Custom (the create/join-a-room flow). Casual and Ranked are
+        // separate queues from each other and from Custom.
         bool deckReady = deck != null;
-        BuildPortalCta(portal, "VIEW LOBBIES  ▸", deckReady,
+        string duelMode = (selectedId == "casual" || selectedId == "ranked" || selectedId == "privateRoom")
+            ? selectedId : "casual";
+        bool isCustom = duelMode == "privateRoom";
+        BuildPortalCta(portal, (isCustom ? "VIEW LOBBIES" : "QUEUE MATCH") + "  ▸", deckReady,
             new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.178f), () =>
             {
                 if (ResolveMenuDeck(duelDeckId) == null) { enterAlert = true; RenderMenu(); return; }
-                lobbyDeckId = duelDeckId;
-                OpenLobbyHub();
+                lobbyDeckId = duelDeckId;   // queue/lobby with the chosen deck
+                if (isCustom) OpenLobbyHub();
+                else StartQueue(duelMode);
             });
 
-        // Mode tabs (Ranked / Casual / Custom) — selected tab gets the accent border.
+        // Mode tabs (Casual / Ranked / Custom) — selected tab gets the accent border.
         var subRow = PanelObject("Sub Row", portal, new Color(0f, 0f, 0f, 0f));
         Stretch(subRow, new Vector2(0f, 0f), new Vector2(1f, 0.09f),
             new Vector2(12f, 10f), new Vector2(-12f, 0f));
 
         var duelSubs = new (string label, string modeId)[]
         {
-            ("Ranked",  "ranked"),
             ("Casual",  "casual"),
+            ("Ranked",  "ranked"),
             ("Custom",  "privateRoom"),
         };
 
         for (int i = 0; i < duelSubs.Length; i++)
+        {
+            // Casual/Ranked are playable but still being proofed out — show a DEV chip
+            // so players know. Their MenuMode.Status stays Ready so QUEUE MATCH works;
+            // this only changes the badge shown on the tab.
+            var chipStatus = (duelSubs[i].modeId == "casual" || duelSubs[i].modeId == "ranked")
+                ? ModeStatus.Dev : FindMode(duelSubs[i].modeId).Status;
             BuildMultiSubTile(subRow, duelSubs[i].label, duelSubs[i].modeId,
-                FindMode(duelSubs[i].modeId).Status, i, duelSubs.Length, 9f);
+                chipStatus, i, duelSubs.Length, 9f);
+        }
     }
 
     // Resolve a menu deck id to a DeckStore deck (falling back to the active deck
@@ -5109,7 +5554,11 @@ public partial class MainMenuManager : MonoBehaviour
                     EnterVersusSelf();
                 else if (mode.Id == "privateRoom")
                     OpenLobbyHub();
-                // TODO: soloAi, ranked, casual when implemented
+                else if (mode.Id == "ranked")
+                    StartQueue("ranked");
+                else if (mode.Id == "casual")
+                    StartQueue("casual");
+                // TODO: soloAi when implemented
             });
         }
     }

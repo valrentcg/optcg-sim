@@ -108,6 +108,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // interaction to the seat this client actually controls (see Dispatch()).
     public static string PendingNetworkedSeed;
     public static string PendingNetworkedSeat;
+    public static bool PendingNetworkedRanked;   // set by the Ranked queue launch path only
+    public static string PendingNetworkedMode;   // "ranked"|"casual"|"custom" for a networked match
     // Deck picks for a networked match (from the lobby's SELECT DECK flow). Sent
     // inside the match-start payload so both clients hold both decks; either may
     // be null, in which case CreateMatch falls back to the ST01/ST02 defaults.
@@ -121,6 +123,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private string northDisplayName = "Player 2";
     private string DisplayName(string seat) => seat == "north" ? northDisplayName : southDisplayName;
     private bool isNetworked;
+    private bool isRankedMatch;   // networked match launched from the Ranked queue → reports to RankedStore
+    private string networkedMode; // "ranked"|"casual"|"custom" for a networked match (else null)
     private string localSeat;
     // Set when the networked peer disconnects mid-match; Render() shows the
     // "OPPONENT LEFT — YOU WIN!" modal until the player returns to the menu.
@@ -955,6 +959,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         matchStartRealtime = Time.realtimeSinceStartup;
         commandElapsedSeconds.Clear();
         isNetworked = true;
+        isRankedMatch = PendingNetworkedRanked;   // only true for Ranked-queue matches
+        PendingNetworkedRanked = false;
+        networkedMode = PendingNetworkedMode;
+        PendingNetworkedMode = null;
         localSeat = seat;
 
         var config = new MatchConfig { Seed = seed };
@@ -1086,10 +1094,26 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // skips guests entirely), so match end can never be blocked by network.
         if (summary != null)
         {
+            // Game type for history/stats: networked ranked/casual/custom, or solo ai/self.
+            summary.mode = isNetworked
+                ? (isRankedMatch ? "ranked" : (string.IsNullOrEmpty(networkedMode) ? "custom" : networkedMode))
+                : (aiSeat != null ? "ai" : "self");
             _ = MatchHistoryStore.SaveMatchAsync(summary);
             // Lifetime + seasonal aggregates (StatsStore.cs). Also fire-and-forget:
             // stats failures log and skip, they never block or break match end.
             _ = StatsStore.RecordMatchAsync(summary);
+            // Bounty ranked (RankedStore.cs): the authoritative rating lives on the
+            // server (Deploy/ranked-worker). Report our half of a finished PvP match
+            // — the server moves ratings only when both players' reports agree, so a
+            // lone client can't forge a result. Solo/bot games don't count. Same
+            // fire-and-forget contract; never blocks match end.
+            if (isNetworked && isRankedMatch && !opponentLeft)
+            {
+                string rankedMatchId = LobbyManager.CurrentSession?.Id;
+                string rankedOppId = LobbyManager.OpponentPlayerId();
+                if (!string.IsNullOrEmpty(rankedMatchId) && !string.IsNullOrEmpty(rankedOppId))
+                    _ = RankedStore.ReportMatchAsync(rankedMatchId, rankedOppId, summary.result == "win");
+            }
         }
     }
 

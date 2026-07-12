@@ -42,7 +42,8 @@ public static class GameLogStore
     // would need real per-player auth (tied into AccountManager's login) to be
     // attacker-resistant.
     private const string UploadUrl = "https://optcg-gamelogs-upload.valrentcg.workers.dev/upload";
-    private const string AppSecret = "36d3612bf3cdeb4531b655ddc08d161768ca9715f94993dbcde6efe5de92b2b0";
+    // The real value lives in the gitignored AppConfig.Local.cs — never in source.
+    private static string AppSecret => AppConfig.AppSecret;
 
     [Serializable]
     private sealed class UploadPayload

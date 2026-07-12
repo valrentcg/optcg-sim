@@ -58,6 +58,7 @@ public sealed class MatchSummary
     public string id;              // == ReplayRecord.Id, so local replays can be matched up
     public string savedAtIso;
     public string result;          // "win" | "loss"
+    public string mode;            // "ranked"|"casual"|"custom"|"ai"|"self" — game type (older records: null)
     public string youLeaderId;
     public string oppLeaderId;
     public string oppName;

@@ -56,3 +56,10 @@ sysinfo.txt
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Cloudflare wrangler local cache/account (never commit)
+.wrangler/
+
+# App secret — real value lives here on build machines only, never committed
+Assets/Scripts/AppConfig.Local.cs
+Assets/Scripts/AppConfig.Local.cs.meta

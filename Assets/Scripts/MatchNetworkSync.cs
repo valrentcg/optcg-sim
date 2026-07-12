@@ -67,6 +67,8 @@ public class MatchStartPayload
     public string seed;
     public NetworkDeck south;   // host's deck
     public NetworkDeck north;   // guest's deck
+    public bool ranked;         // true = a Ranked-queue match that counts toward the bounty ladder
+    public string mode;         // "ranked" | "casual" | "custom" — the game type for stats/history
 }
 
 // Lightweight "what am I looking at" state each client streams to its opponent while

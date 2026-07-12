@@ -116,6 +116,23 @@ public static class LobbyManager
     public static string GetOwnerName(ISession session) =>
         session?.Properties != null && session.Properties.TryGetValue(OwnerNameKey, out var prop) ? prop.Value : "Unknown";
 
+    /// <summary>The opponent's UGS player id in the current 1v1 session (the player
+    /// that isn't us), or null if unavailable. Used to bind a ranked match report to
+    /// both sides so the server can cross-check the two halves.</summary>
+    public static string OpponentPlayerId()
+    {
+        try
+        {
+            var s = CurrentSession;
+            if (s?.Players == null) return null;
+            string me = AuthenticationService.Instance.PlayerId;
+            foreach (var pl in s.Players)
+                if (pl != null && !string.IsNullOrEmpty(pl.Id) && pl.Id != me) return pl.Id;
+        }
+        catch (Exception ex) { Debug.LogWarning($"OpponentPlayerId failed: {ex.Message}"); }
+        return null;
+    }
+
     public static async Task LeaveCurrentAsync()
     {
         if (CurrentSession == null) return;
