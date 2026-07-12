@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.7",
-  "buildNumber": 8,
+  "buildVersion": "1.0.8",
+  "buildNumber": 9,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Full Replay Viewer (match timeline, 3 camera views, Real-Time/Action-by-Action/Turn-by-Turn playback modes, adjustable speed, hand visibility toggle), a new local Replays screen, cloud match sharing (auto-uploaded replays, searchable by username, downloadable from Friends or search), a Windowed/Fullscreen display toggle in Settings, and early ST-31 card data. Plus a Settings screen layout fix.",
+  "notes": "Ranked & Casual matchmaking (Bug Testing Season, in dev): jump into a queue, get paired by skill with a League-style ready check, and climb the Bounty ladder. Adds a Most Wanted leaderboard, a reworked profile (real bounty/tier, game-type tags on recent matches you can click into, and Deck History split by Casual/Ranked), and Match History decklists now show a card preview on hover with a Save Deck button to copy a list into your decks.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
