@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.6",
-  "buildNumber": 7,
+  "buildVersion": "1.0.7",
+  "buildNumber": 8,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Versus A.I. (Basic Bot) is live, card draw/DON!! sound effects with a volume slider, animated card movement between zones, turn-start banner and ambient VFX, and a targeting arrow for character/event drags. Plus rules fixes: auto-skip block with no legal Blocker, Life-trigger-to-hand fix, custom deck pick no longer gets cleared before the store loads, and mandatory/optional effect auto-resolve fixes.",
+  "notes": "Full Replay Viewer (match timeline, 3 camera views, Real-Time/Action-by-Action/Turn-by-Turn playback modes, adjustable speed, hand visibility toggle), a new local Replays screen, cloud match sharing (auto-uploaded replays, searchable by username, downloadable from Friends or search), a Windowed/Fullscreen display toggle in Settings, and early ST-31 card data. Plus a Settings screen layout fix.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

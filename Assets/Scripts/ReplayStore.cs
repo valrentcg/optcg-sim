@@ -97,6 +97,15 @@ public sealed class ReplayRecord
     public string FirstPlayer;          // seat ("south" | "north") that took turn 1
     public int DurationSeconds;         // wall-clock match length; 0 = unknown (old record)
     public List<SerializableCommand> CommandHistory = new List<SerializableCommand>();
+    // ── Replay-viewer addition ────────────────────────────────────────────────
+    // CommandElapsedSeconds[i] = real wall-clock seconds since match start when
+    // CommandHistory[i] was dispatched live (captured in GameManager.Dispatch /
+    // OnNetworkCommandReceived). Powers "Real-Time Replay" mode. Same length as
+    // CommandHistory for anything recorded going forward; empty/short for older
+    // replays or an imported file that never had it — ReplayIndex.cs treats a
+    // missing entry as 0f, which just means Real-Time mode degrades to "no delay"
+    // for that command rather than erroring.
+    public List<float> CommandElapsedSeconds = new List<float>();
 }
 
 public static class ReplayStore
@@ -141,8 +150,11 @@ public static class ReplayStore
 
     /// <summary>Call once a match's GameState.Status has flipped to "finished".
     /// `durationSeconds` is the wall-clock match length (optional — old callers
-    /// compile unchanged and just record 0 = unknown).</summary>
-    public static ReplayRecord Save(GameState state, MatchConfig config, int durationSeconds = 0)
+    /// compile unchanged and just record 0 = unknown). `commandElapsedSeconds`
+    /// (optional, same convention) feeds ReplayRecord.CommandElapsedSeconds for
+    /// Real-Time replay mode — omit it and old callers still compile unchanged.</summary>
+    public static ReplayRecord Save(GameState state, MatchConfig config, int durationSeconds = 0,
+        List<float> commandElapsedSeconds = null)
     {
         if (state == null || config == null) return null;
 
@@ -168,6 +180,7 @@ public static class ReplayStore
             NorthLeaderId = northP?.Leader?.CardId,
             FirstPlayer = state.FirstPlayer,
             DurationSeconds = durationSeconds,
+            CommandElapsedSeconds = commandElapsedSeconds != null ? new List<float>(commandElapsedSeconds) : new List<float>(),
         };
         foreach (var cmd in state.CommandHistory)
             record.CommandHistory.Add(SerializableCommand.From(cmd));
@@ -231,5 +244,33 @@ public static class ReplayStore
         if (string.IsNullOrEmpty(id)) return;
         string path = Path.Combine(Dir, id + ".json");
         if (File.Exists(path)) File.Delete(path);
+    }
+
+    /// <summary>Imports a replay JSON someone else exported (e.g. from Replays/{id}.json on
+    /// their machine) into this account's local replay folder, so it shows up in ListAll()
+    /// and can be watched like any other replay. Returns the imported record, or null if the
+    /// JSON doesn't parse into a plausible replay. Mints a fresh Id on collision (or if the
+    /// source file lacked one) rather than overwriting an existing local replay.</summary>
+    public static ReplayRecord Import(string json)
+    {
+        ReplayRecord record;
+        try { record = JsonUtility.FromJson<ReplayRecord>(json); }
+        catch { return null; }
+        if (record == null || string.IsNullOrEmpty(record.Seed) || record.CommandHistory == null || record.CommandHistory.Count == 0)
+            return null;
+
+        try
+        {
+            Directory.CreateDirectory(Dir);
+            if (string.IsNullOrEmpty(record.Id) || File.Exists(Path.Combine(Dir, record.Id + ".json")))
+                record.Id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff");
+            File.WriteAllText(Path.Combine(Dir, record.Id + ".json"), JsonUtility.ToJson(record, true));
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Failed to import replay: {ex.Message}");
+            return null;
+        }
+        return record;
     }
 }

@@ -68,6 +68,7 @@ public partial class MainMenuManager
         showingAccountSettings = false;
         showingFriends = false;
         showingReplays = false;
+        showingLocalReplays = false;
         showingProfile = true;
         // Opening resets to Overview / no deck / Casual, per the handoff.
         profileTab = "overview";

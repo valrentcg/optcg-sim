@@ -12,6 +12,7 @@ using UnityEngine.InputSystem.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using OnePieceTcg.Engine;
+using OnePieceTcg.Engine.Bot;
 
 public class GameManager : MonoBehaviour
 {
@@ -56,9 +57,49 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // NewMatch/EnterNetworkedMatch so the finished replay + match-history summary
     // can record a real duration instead of deriving a proxy from TurnCount.
     private float matchStartRealtime;
+    // commandElapsedSeconds[i] = matchStartRealtime-relative timestamp when CommandHistory[i]
+    // was dispatched live — parallel array to state.CommandHistory, captured in Dispatch()/
+    // OnNetworkCommandReceived(), persisted via ReplayStore.Save, and consumed by
+    // ReplayIndex/the replay player's Real-Time mode. Cleared in NewMatch/EnterNetworkedMatch.
+    private readonly List<float> commandElapsedSeconds = new List<float>();
     private bool isReplayMode;
     private ReplayRecord loadedReplay;
     private int replayCursor;
+
+    // "neutral" (tournament/broadcast left-right split, both seats upright, no seat is "you")
+    // | "south" | "north" (classic single-perspective layout — the same board normal live play
+    // uses — with that seat rendered at the bottom, as if you were seated there). Only "neutral"
+    // rotates/repositions anything; "south"/"north" just reuse the classic (non-replay) layout
+    // code as-is via BottomSeat/TopSeat and this flag, so the same hand-tuned zone math services
+    // all three views. See DrawReplayControlBar's view-mode pill for the UI.
+    private string replayViewMode = "neutral";
+    private bool IsReplayRotated => isReplayMode && replayViewMode == "neutral";
+    // "both" | "south" | "north" | "none" — which seat's hand renders face-up during replay.
+    // Independent of replayViewMode; see DrawFannedHandRow.
+    private string replayHandVisibility = "both";
+
+    // ── Replay player (Phase 2) ─────────────────────────────────────────────
+    // replayActions/replayTurnStartCursors/replayTurnBoundaries are built ONCE per replay
+    // session (EnterReplayMode -> ReplayIndex.Build) by a single full resimulation pass —
+    // see ReplayIndex.cs for why that's cheap. Everything below just indexes into them.
+    private List<ReplayAction> replayActions;
+    private Dictionary<int, int> replayTurnStartCursors;
+    private List<int> replayTurnBoundaries;
+    private bool replayHasTimingData;   // false for older replays with no CommandElapsedSeconds
+
+    private bool replayPlaying;
+    // "realtime" | "actionByAction" | "turnByTurn". "condensed" and "custom" were merged into
+    // "actionByAction" (which now owns the user-selectable delay-between-steps setting) — the
+    // three-way split felt redundant in practice.
+    private string replayMode = "actionByAction";
+    private float replayCustomDelaySeconds = 1f;   // used when replayMode == "actionByAction"
+    private float replaySpeedMultiplier = 1f;      // 0.25x .. 4x, scales every mode's base delay
+    private float replayNextAdvanceAt;             // Time.unscaledTime threshold for the next auto-step
+    private int? replayStopAtCursor;               // auto-play halts once replayCursor reaches this (turn-jump target)
+    // Categories the spec calls out as worth fast-forwarding straight to via the timeline's
+    // prev/next-attack, prev/next-card-played, prev/next-major-change controls.
+    private static readonly HashSet<string> MajorReplayCategories = new HashSet<string> { "attack", "play", "effect", "don", "endTurn" };
+
     // Set by MainMenuManager's replay browser before EnsureBoard(); when populated,
     // Start() enters read-only replay playback instead of starting a new match.
     public static ReplayRecord PendingReplayLoad;
@@ -111,7 +152,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // regardless of whether that's "south" or "north" in the shared GameState, since the
     // underlying seat identity must stay the same on both clients for the deterministic
     // command-replay sync to work (see MatchNetworkSync.cs) - only the rendering flips.
-    private string BottomSeat => isNetworked ? localSeat : "south";
+    // "north" replay view mode swaps which seat renders at the bottom, so the classic
+    // (non-rotated) single-perspective layout shows the match as if seated as North instead
+    // of South — see replayViewMode/IsReplayRotated.
+    private string BottomSeat => (isReplayMode && replayViewMode == "north") ? "north" : (isNetworked ? localSeat : "south");
     private string TopSeat => BottomSeat == "south" ? "north" : "south";
     private string selectedId;
     private string selectedSeat;
@@ -155,11 +199,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private RectTransform mulliganOverlay;    // opening-hand overlay (deck-look style)
     private bool trashSortLowestFirst = true; // next SORT click: lowest cost at the top (toggles)
     private RectTransform trashOverlayCatcher; // full-screen click-outside-to-close catcher (browse mode)
-    // ── Basic Bot (Versus A.I.) ──────────────────────────────────────────────
-    // Strawtable-style greedy heuristics: no search, deterministic choices, one
-    // command per "think" tick so moves are watchable. aiTriedThisTurn prevents
-    // re-attempting actions the engine rejected (state unchanged → infinite loop).
+    // ── Bot (Versus A.I.) ─────────────────────────────────────────────────────
+    // Two difficulty tiers share one tick loop and one per-turn blacklist:
+    //   "beginner"     — AiTick(): Strawtable-style greedy heuristics, no search.
+    //   "intermediate" — IntermediateAiTick(): delegates to Engine/Bot/IntermediateBot.cs,
+    //                    which was validated against real high-ranked-ladder replay data.
+    // Both drive one command per "think" tick so moves are watchable, and both rely on
+    // aiTriedThisTurn to avoid re-attempting an action the engine rejected (state
+    // unchanged → would otherwise infinite-loop); IntermediateBot keys it with its own
+    // Signature() so the same set works for either tier without collisions in practice.
     private string aiSeat;
+    private string aiDifficulty = "beginner"; // "beginner" | "intermediate" — set from PendingAiDifficulty in NewMatch()
     private float aiNextActionAt;
     private readonly HashSet<string> aiTriedThisTurn = new HashSet<string>();
     private int aiLastTurnSeen = -1;
@@ -336,13 +386,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             coinFlipWaitingText.text = coinFlipWaitingBaseMessage + new string('.', dots);
         }
 
-        // Basic Bot: one heuristic action per think-tick whenever any decision belongs
-        // to the AI seat (turn actions, effect targets, choices, battle responses).
+        if (isReplayMode) ReplayAutoAdvanceTick();
+
+        // Bot: one action per think-tick whenever any decision belongs to the AI seat
+        // (turn actions, effect targets, choices, battle responses). Difficulty picks
+        // which decision core drives that single action. Mapping is intentionally inverted
+        // from the class names: a 435-game all-starter-decks benchmark (Beginner's greedy
+        // AiTick vs Intermediate's pickier IntermediateBot) showed AiTick winning ~65% of
+        // the time — Intermediate's selectivity about "only take favorable trades" loses to
+        // straightforward constant aggression on these decks. So "beginner" (the easier
+        // difficulty a new player picks) routes to the actually-weaker IntermediateBot, and
+        // "intermediate" routes to the actually-stronger AiTick.
         if (aiSeat != null && !isReplayMode && state != null && state.Status != "finished"
             && Time.unscaledTime >= aiNextActionAt)
         {
-            if (AiTick()) aiNextActionAt = Time.unscaledTime + 2.0f;                       // thinking pause
-            else aiNextActionAt = Mathf.Max(aiNextActionAt, Time.unscaledTime + 0.25f);    // respect delays AiTick set
+            bool acted = aiDifficulty == "beginner" ? IntermediateAiTick() : AiTick();
+            if (acted) aiNextActionAt = Time.unscaledTime + 2.0f;                          // thinking pause
+            else aiNextActionAt = Mathf.Max(aiNextActionAt, Time.unscaledTime + 0.25f);    // respect delays the tick set
         }
 
         // Presence OUT: stream our current hover/raised-hand state to the opponent every frame;
@@ -488,13 +548,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         EnsureBoard();
     }
 
-    /// <summary>Human (south) vs Basic Bot piloting `aiDeckId` (north).</summary>
+    /// <summary>Human (south) vs Bot piloting `aiDeckId` (north). `difficulty` is
+    /// "beginner" (default, the original greedy heuristic bot) or "intermediate"
+    /// (Engine/Bot/IntermediateBot.cs).</summary>
     public static bool PendingAiNorth;
-    public static void LaunchVersusAi(string southDeckId, string aiDeckId)
+    public static string PendingAiDifficulty = "beginner";
+    public static void LaunchVersusAi(string southDeckId, string aiDeckId, string difficulty = "beginner")
     {
         PendingSouthDeckId = southDeckId;
         PendingNorthDeckId = aiDeckId;
         PendingAiNorth = true;
+        PendingAiDifficulty = string.IsNullOrEmpty(difficulty) ? "beginner" : difficulty;
         EnsureBoard();
     }
 
@@ -522,6 +586,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         loadedReplay = null;
         replaySaved = false;
         matchStartRealtime = Time.realtimeSinceStartup;
+        commandElapsedSeconds.Clear();
         var config = new MatchConfig { Seed = System.Guid.NewGuid().ToString("N") };
         if (!string.IsNullOrEmpty(PendingSouthDeckId) && !string.IsNullOrEmpty(PendingNorthDeckId))
         {
@@ -535,6 +600,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         currentMatchConfig = config;
         aiSeat = PendingAiNorth ? "north" : null;
+        aiDifficulty = string.IsNullOrEmpty(PendingAiDifficulty) ? "beginner" : PendingAiDifficulty;
         aiTriedThisTurn.Clear();
         aiLastTurnSeen = -1;
         // Fresh match: stale animation bookkeeping from the previous game must not
@@ -547,7 +613,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         suppressMoveAnim.Clear();
         // Hotseat/versus-self: both seats are this player; generic names.
         southDisplayName = "Player 1";
-        northDisplayName = aiSeat != null ? "Basic Bot" : "Player 2";
+        northDisplayName = aiSeat == null ? "Player 2" : (aiDifficulty == "beginner" ? "Beginner Bot" : "Intermediate Bot");
         state = GameEngine.CreateMatch(config);
         selectedId = null;
         selectedSeat = null;
@@ -563,6 +629,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // handler before UI catches up) rather than auditing every call site individually.
         if (isNetworked && !string.IsNullOrEmpty(command.Seat) && command.Seat != localSeat) return;
         state = GameEngine.ApplyCommand(state, command);
+        commandElapsedSeconds.Add(Time.realtimeSinceStartup - matchStartRealtime);
         NormalizeSelection();
         if (state.Status == "finished" && !replaySaved)
         {
@@ -597,7 +664,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         currentMatchConfig = config;
         previewLockCard = null;
         ClearDonSelection(false);
-        ResimulateReplayTo(record.CommandHistory.Count);
+
+        // One-time enrichment pass (turn/seat/phase/category/log-lines per command) — see
+        // ReplayIndex.cs. Cheap: GameEngine.ApplyCommand is pure, I/O-free data mutation.
+        replayActions = ReplayIndex.Build(record, config);
+        replayTurnStartCursors = ReplayIndex.TurnStartCursors(replayActions);
+        replayTurnBoundaries = ReplayIndex.TurnBoundaryCursors(replayActions);
+        // Older replays (recorded before CommandElapsedSeconds existed) have no per-step timing
+        // at all — every ElapsedSeconds reads 0, which made Real-Time mode play back instantly
+        // (and, as a side effect, rebuilt the whole UI every single frame, eating clicks meant
+        // for the transport buttons). See ReplayStepDelay's "realtime" case for the fallback.
+        replayHasTimingData = replayActions.Exists(a => a.ElapsedSeconds > 0.01f);
+        LoadReplaySettings();
+        // Every replay opens paused, in Real-Time mode, at the very start — the user explicitly
+        // asked for this over auto-play (a replay that starts moving before you've even oriented
+        // yourself is disorienting). This overrides whatever mode was persisted from a previous
+        // session; the persisted mode still applies once the user picks Play and starts cycling
+        // modes themselves.
+        replayMode = "realtime";
+        replayStopAtCursor = null;
+
+        ResimulateReplayTo(0);
+        replayPlaying = false;
     }
 
     private void ResimulateReplayTo(int index)
@@ -612,10 +700,241 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Render();
     }
 
+    // ── Replay player driver (Phase 2) ──────────────────────────────────────
+    // Everything below decides WHEN to call ResimulateReplayTo(replayCursor +/- 1) and never
+    // bulk-jumps during auto-play — per the Phase 0 audit, the generic ghost-animation system
+    // (CaptureAndAnimateCardMoves, unconditional in Render()) already animates a clean
+    // single-step diff correctly; bulk jumps (e.g. straight to a turn boundary) produce a
+    // chaotic simultaneous flock capped at 24 moves. Turn/attack/etc. "jumps" during active
+    // playback are therefore implemented as fast single-stepping toward a stop-at cursor, not
+    // an instant ResimulateReplayTo(target) — see ReplayNextTurn/ReplayJumpToNextCategory.
+    // Pure seeking (drag the timeline, click Start/End) still bulk-jumps and snaps instantly,
+    // which is the expected/normal feel for scrubbing in any video player.
+
+    private void ReplayAutoAdvanceTick()
+    {
+        if (!replayPlaying || loadedReplay == null) return;
+        int total = loadedReplay.CommandHistory.Count;
+        if (replayCursor >= total) { replayPlaying = false; replayStopAtCursor = null; return; }
+        if (replayStopAtCursor.HasValue && replayCursor >= replayStopAtCursor.Value)
+        {
+            replayPlaying = false;
+            replayStopAtCursor = null;
+            return;
+        }
+        if (Time.unscaledTime < replayNextAdvanceAt) return;
+
+        float delay = ReplayStepDelay(replayCursor + 1);
+        // "allow important animations to finish before advancing, unless instant/highly
+        // accelerated" — gate on activeMoveGhosts only when the step delay itself is
+        // meaningful; instant/4x+ modes never wait on animation.
+        bool waitForAnim = delay > 0.05f && replaySpeedMultiplier < 4f;
+        if (waitForAnim && activeMoveGhosts > 0) return;
+
+        ReplayStepForward();
+        replayNextAdvanceAt = Time.unscaledTime + delay;
+    }
+
+    private float ReplayStepDelay(int cursor)
+    {
+        float baseDelay;
+        switch (replayMode)
+        {
+            case "realtime":
+                if (replayHasTimingData)
+                {
+                    // No upper clamp — "Real-Time" means faithful to how long the actual match
+                    // took, thinking time included. An artificial cap here was quietly speeding
+                    // up every long pause, which defeated the mode's whole point.
+                    baseDelay = Mathf.Max(0f, ReplayElapsedDelta(cursor));
+                }
+                else
+                {
+                    // No per-step timing recorded (older replay) — spread the match's actual
+                    // recorded DurationSeconds evenly across its steps rather than playing
+                    // instantly, which is both inaccurate and (by rebuilding the UI every
+                    // frame) makes the transport buttons unresponsive.
+                    int totalCmds = loadedReplay?.CommandHistory.Count ?? 0;
+                    baseDelay = (loadedReplay != null && totalCmds > 0 && loadedReplay.DurationSeconds > 0)
+                        ? (float)loadedReplay.DurationSeconds / totalCmds
+                        : 1f;
+                }
+                break;
+            case "turnByTurn":
+                // Fast fixed pace used only while a turn-jump/manual multi-step play is in
+                // flight — this mode doesn't auto-play on its own otherwise.
+                baseDelay = 0.15f;
+                break;
+            default: // "actionByAction" — user-selectable delay between steps (absorbed "custom")
+                baseDelay = replayCustomDelaySeconds;
+                break;
+        }
+        return replaySpeedMultiplier > 0f ? baseDelay / replaySpeedMultiplier : 0f;
+    }
+
+    private float ReplayElapsedDelta(int cursor)
+    {
+        if (replayActions == null || cursor <= 0 || cursor > replayActions.Count) return 0.5f;
+        float curT = replayActions[cursor - 1].ElapsedSeconds;
+        float prevT = cursor >= 2 ? replayActions[cursor - 2].ElapsedSeconds : 0f;
+        return Mathf.Max(0f, curT - prevT);
+    }
+
+    private void ReplayStepForward()
+    {
+        if (loadedReplay == null || replayCursor >= loadedReplay.CommandHistory.Count) { replayPlaying = false; return; }
+        ResimulateReplayTo(replayCursor + 1);
+    }
+
+    private void ReplayStepBackward()
+    {
+        if (replayCursor <= 0) return;
+        replayPlaying = false;
+        ResimulateReplayTo(replayCursor - 1);
+    }
+
+    private void ReplayPlay()
+    {
+        if (loadedReplay == null) return;
+        if (replayCursor >= loadedReplay.CommandHistory.Count) { ResimulateReplayTo(0); return; } // already re-renders
+        replayPlaying = true;
+        replayNextAdvanceAt = Time.unscaledTime;
+        Render();
+    }
+
+    // Explicit Render() here (unlike the step/jump methods, which already re-render via
+    // ResimulateReplayTo) — flipping replayPlaying alone doesn't touch the board, so without
+    // this the Play/Pause button's own label and the status text wouldn't update until
+    // something else happened to trigger a redraw, reading as "the button didn't do anything."
+    private void ReplayPause() { replayPlaying = false; Render(); }
+
+    private void ReplayTogglePlayPause()
+    {
+        if (replayPlaying) ReplayPause(); else ReplayPlay();
+    }
+
+    private void ReplayJumpToTurnStart(int turn)
+    {
+        if (replayTurnStartCursors != null && replayTurnStartCursors.TryGetValue(turn, out int c)) ResimulateReplayTo(c);
+    }
+
+    // "Next Turn"/"Prev Turn" PLAY through the intervening actions (fast, animated) rather
+    // than snapping instantly, per spec ("Selecting Next Turn should play all actions from
+    // the current turn and stop when the following player's turn begins").
+    private void ReplayNextTurn()
+    {
+        if (replayTurnBoundaries == null || loadedReplay == null) return;
+        int target = loadedReplay.CommandHistory.Count;
+        foreach (var b in replayTurnBoundaries)
+        {
+            if (b > replayCursor) { target = b; break; }
+        }
+        replayMode = "turnByTurn";
+        replayStopAtCursor = target;
+        replayPlaying = true;
+        replayNextAdvanceAt = Time.unscaledTime;
+    }
+
+    private void ReplayPrevTurn()
+    {
+        if (replayTurnBoundaries == null) return;
+        int target = 0;
+        for (int i = replayTurnBoundaries.Count - 1; i >= 0; i--)
+        {
+            if (replayTurnBoundaries[i] < replayCursor) { target = replayTurnBoundaries[i]; break; }
+        }
+        replayPlaying = false;
+        replayStopAtCursor = null;
+        ResimulateReplayTo(target);
+    }
+
+    // ── Turn-by-Turn mode's own controls ─────────────────────────────────────
+    // Distinct from the standard action-oriented transport row (spec: turn-by-turn should let
+    // you play a single turn, play through every remaining turn, and jump backward/forward
+    // either one turn or five at a time) — see DrawReplayControlBar's turnByTurn branch.
+
+    // Snap-jump by a fixed number of turns (used for the ±5 buttons — a "big" turn jump you
+    // don't want to sit and watch animate, unlike the single-turn Prev/Next which play through).
+    private void ReplayJumpTurnsRelative(int deltaTurns)
+    {
+        if (replayTurnStartCursors == null || replayTurnStartCursors.Count == 0 || state == null) return;
+        var turns = new List<int>(replayTurnStartCursors.Keys);
+        turns.Sort();
+        int idx = turns.IndexOf(state.TurnNumber);
+        if (idx < 0) idx = 0;
+        int targetIdx = Mathf.Clamp(idx + deltaTurns, 0, turns.Count - 1);
+        replayPlaying = false;
+        replayStopAtCursor = null;
+        ResimulateReplayTo(replayTurnStartCursors[turns[targetIdx]]);
+    }
+
+    // "Play out a single turn": jumps to the CURRENT turn's start (if not already there) and
+    // plays through to the next turn boundary, then stops — the whole turn, not just whatever's
+    // left of it.
+    private void ReplayPlayCurrentTurn()
+    {
+        if (replayTurnStartCursors == null || loadedReplay == null || state == null) return;
+        int turnStart = replayTurnStartCursors.TryGetValue(state.TurnNumber, out int c) ? c : replayCursor;
+        if (replayCursor != turnStart) ResimulateReplayTo(turnStart);
+        int target = loadedReplay.CommandHistory.Count;
+        if (replayTurnBoundaries != null)
+            foreach (var b in replayTurnBoundaries) { if (b > turnStart) { target = b; break; } }
+        replayStopAtCursor = target;
+        replayPlaying = true;
+        replayNextAdvanceAt = Time.unscaledTime;
+        Render();
+    }
+
+    // "Play through all turns": the main Play/Pause toggle in turn-by-turn mode — plays
+    // continuously to the end rather than stopping at the next boundary (unlike Play-current-turn).
+    private void ReplayPlayAll()
+    {
+        replayStopAtCursor = null;
+        ReplayPlay();
+    }
+
+    // Instant jumps (used by the timeline's prev/next-attack, prev/next-card-played,
+    // prev/next-major-change controls) — these snap rather than play-through, matching how a
+    // scrub action feels in any video player.
+    private void ReplayJumpToNextCategory(string category, bool majorOnly = false)
+    {
+        if (replayActions == null) return;
+        for (int i = replayCursor; i < replayActions.Count; i++)
+        {
+            var a = replayActions[i];
+            if (majorOnly ? MajorReplayCategories.Contains(a.Category) : a.Category == category)
+            {
+                replayPlaying = false;
+                ResimulateReplayTo(a.Cursor);
+                return;
+            }
+        }
+    }
+
+    private void ReplayJumpToPrevCategory(string category, bool majorOnly = false)
+    {
+        if (replayActions == null) return;
+        for (int i = replayCursor - 2; i >= 0; i--)
+        {
+            var a = replayActions[i];
+            if (majorOnly ? MajorReplayCategories.Contains(a.Category) : a.Category == category)
+            {
+                replayPlaying = false;
+                ResimulateReplayTo(a.Cursor);
+                return;
+            }
+        }
+    }
+
     private void ExitReplayToMenu()
     {
         isReplayMode = false;
         loadedReplay = null;
+        replayActions = null;
+        replayTurnStartCursors = null;
+        replayTurnBoundaries = null;
+        replayPlaying = false;
+        replayStopAtCursor = null;
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
         MainMenuManager.EnsureMenu();
@@ -634,6 +953,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         loadedReplay = null;
         replaySaved = false;
         matchStartRealtime = Time.realtimeSinceStartup;
+        commandElapsedSeconds.Clear();
         isNetworked = true;
         localSeat = seat;
 
@@ -706,6 +1026,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             && state.Battle != null && state.Battle.RevealedLife != null)
             activatedTriggerCardId = state.Battle.RevealedLife.CardId;
         state = GameEngine.ApplyCommand(state, command);
+        commandElapsedSeconds.Add(Time.realtimeSinceStartup - matchStartRealtime);
         NormalizeSelection();
         if (state.Status == "finished" && !replaySaved)
         {
@@ -726,8 +1047,38 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void SaveFinishedMatchRecords()
     {
         int durationSeconds = Mathf.Max(0, Mathf.RoundToInt(Time.realtimeSinceStartup - matchStartRealtime));
-        var record = ReplayStore.Save(state, currentMatchConfig, durationSeconds);
+        var record = ReplayStore.Save(state, currentMatchConfig, durationSeconds, commandElapsedSeconds);
         if (record == null) return;
+
+        // Full per-turn state log (GameLogStore.cs) for ML training / puzzle extraction —
+        // re-simulates the just-saved record's CommandHistory once, off the live game loop,
+        // so this never adds per-turn overhead during play. Same id as the replay JSON so the
+        // two can be cross-referenced. Category mirrors the Solo-portal difficulty toggle;
+        // "networked" is a placeholder bucket until Ranked/Casual matchmaking actually ships
+        // (both are still ModeStatus.Soon in MainMenuManager today).
+        string aiLogCategory = aiSeat != null ? "soloAi-" + aiDifficulty
+            : isNetworked ? "networked"
+            : "soloSelf";
+        // BottomSeat mirrors the property of the same logic elsewhere in this file: "south"
+        // for hotseat/solo/versus-AI, localSeat for a networked match. myUsername is the
+        // signed-in account (or guest label) actually playing on this client.
+        string myUsername = AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName;
+        string mySeat = isNetworked ? localSeat : "south";
+        string southLogUsername, northLogUsername;
+        if (mySeat == "south")
+        {
+            southLogUsername = myUsername;
+            // Versus-self: the same local person plays both seats. Versus-AI: the other
+            // seat is a bot, tag it with the bot's display name instead of a real username.
+            // Networked: best-effort — no confirmed opponent-identity channel wired here yet.
+            northLogUsername = aiSeat != null ? northDisplayName : (isNetworked ? northDisplayName : myUsername);
+        }
+        else
+        {
+            northLogUsername = myUsername;
+            southLogUsername = isNetworked ? southDisplayName : myUsername;
+        }
+        GameLogStore.Export(state, currentMatchConfig, record, aiLogCategory, southLogUsername, northLogUsername);
 
         var summary = MatchHistoryStore.BuildSummary(state, record,
             isNetworked && !string.IsNullOrEmpty(localSeat) ? localSeat : "south");
@@ -1300,22 +1651,56 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // boardRoot), while the playmat + hands + zones live here, centred, leaving side margins for
         // menus/action UI later. Same internal layout, just shifted to centre.
         playRoot = PanelObject("Play Area", boardRoot, new Color(0, 0, 0, 0));
-        Stretch(playRoot, new Vector2(0.17f, 0f), new Vector2(0.83f, 1f), Vector2.zero, Vector2.zero);
+        // Replay mode reclaims the leftRoot/sideRoot columns (below: hidden and left un-drawn
+        // during replay — their live-play content, action buttons/opponent chat/event log,
+        // doesn't apply to read-only playback) for "more horizontal space" per the replay
+        // spec's landscape-layout ask. First pass: same board geometry, just wider — a true
+        // side-by-side player layout is a much larger, separately-scoped re-geometry of
+        // DrawMatHalf's ~15 hand-tuned zone rectangles that needs visual iteration to get
+        // right, not a blind rewrite (see the Phase 0 audit notes). Phase 4/5's new replay
+        // chrome (control bar, action panel) will overlay this wider area as floating panels.
+        var playBounds = isReplayMode ? new Vector2(0.02f, 0f) : new Vector2(0.17f, 0f);
+        var playBoundsMax = isReplayMode ? new Vector2(0.98f, 1f) : new Vector2(0.83f, 1f);
+        Stretch(playRoot, playBounds, playBoundsMax, Vector2.zero, Vector2.zero);
         var _praw = playRoot.GetComponent<Image>();
         if (_praw != null) _praw.raycastTarget = false;
+        // RotateHalfForReplay/RotateFullForReplay/DrawExternalHand's replay branch all read
+        // mat.rect/playRoot.rect/boardRoot.rect synchronously to size a rotated element. On the
+        // very first Render() after the canvas is freshly created (entering a replay), those
+        // rects can still reflect a stale/default layout for one frame — sizing everything
+        // wrong until the next Render() self-corrects, which read as "the board is zoomed in,
+        // then snaps to the right size." Forcing the layout to settle right here, before any of
+        // that math runs, makes it correct from the first frame instead.
+        if (IsReplayRotated) Canvas.ForceUpdateCanvases();
         DrawReferencePlaymat();
         DrawExternalHand(state.Players[TopSeat], TopSeat, true);
         DrawExternalHand(state.Players[BottomSeat], BottomSeat, false);
         // Battle status banner removed - the live power badges on the cards convey the same info now.
-        DrawCoinFlipOverlay();
-        DrawMulliganOverlay();
-        DrawDeckLookOverlay();
+        // These are all "make a live decision" overlays (go first/second, keep/mulligan, pick a
+        // searched card) — replay is observation-only, and the action banner + timeline already
+        // narrate what was chosen at each step, so they're skipped entirely rather than shown
+        // as inert (but still clickable-looking) modal dialogs. A likely source of the earlier
+        // "pause button doesn't work" report too: these draw full-screen backdrops that can eat
+        // clicks meant for whatever's underneath, including the control bar.
+        if (!isReplayMode)
+        {
+            DrawCoinFlipOverlay();
+            DrawMulliganOverlay();
+            DrawDeckLookOverlay();
+        }
         DrawTrashOverlay();
         DrawResolvedTargetingArrows();
-        DrawSidePanel();
-        DrawLeftPanel();
+        if (isReplayMode) DrawReplayActionOverlay();
+        if (!isReplayMode)
+        {
+            DrawSidePanel();
+            DrawLeftPanel();
+        }
+        leftRoot.gameObject.SetActive(!isReplayMode);
+        sideRoot.gameObject.SetActive(!isReplayMode);
         if (isNetworked && !isReplayMode) DrawMatchChatPanel();
-        if (isReplayMode) DrawReplayBar();
+        if (isReplayMode) DrawReplayControlBar();
+        if (isReplayMode) DrawReplayActionPanel();
         if (opponentLeft) DrawOpponentLeftOverlay();
         // Re-apply the opponent's hover/raised-hand presence to the freshly built board.
         ApplyOpponentPresence();
@@ -2059,40 +2444,528 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
     // Thin control strip across the top of the board, only shown during replay playback.
-    private void DrawReplayBar()
+    // Speed multiplier presets (spec: "Suggested playback speeds").
+    private static readonly float[] ReplaySpeedPresets = { 0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 4f };
+    // Custom-delay presets (spec: "Instant, 0.25s, 0.5s, 1s, 2s, 3s, 5s"). "Original match
+    // timing" (the spec's 8th option) isn't a delay value — picking it switches replayMode to
+    // "realtime" instead; see the control bar's mode/delay buttons below.
+    private static readonly float[] ReplayDelayPresets = { 0f, 0.25f, 0.5f, 1f, 2f, 3f, 5f };
+    private static readonly string[] ReplayModeOrder = { "actionByAction", "realtime", "turnByTurn" };
+    private bool replayControlsCollapsed;
+    // Side action-log panel (Phase 5) — starts collapsed so entering a replay isn't
+    // immediately half-obscured; the control bar (always visible) is enough to start playing.
+    private bool replayActionPanelCollapsed = true;
+    private readonly HashSet<int> replayCollapsedTurns = new HashSet<int>();
+    // Info-display toggle (Phase 8): the current-action banner + active-card glow from
+    // DrawReplayActionOverlay. Persisted like the rest of the replay layout prefs below.
+    private bool replayShowDescriptions = true;
+
+    // ── Persisted replay layout/settings (Phase 8) ───────────────────────────
+    // Spec: "the interface should remember the user's preferred layout and settings between
+    // uses." Mirrors the "optcg.xxx" PlayerPrefs convention used for SFX volume elsewhere in
+    // this file. Loaded once when entering a replay; saved on every user-driven change rather
+    // than on exit, so a crash/force-quit mid-replay doesn't lose the preference.
+    private void LoadReplaySettings()
     {
-        var bar = PanelObject("Replay Bar", boardRoot, new Color32(8, 14, 21, 220));
-        bar.anchorMin = new Vector2(0f, 1f);
-        bar.anchorMax = new Vector2(1f, 1f);
-        bar.pivot = new Vector2(0.5f, 1f);
-        bar.sizeDelta = new Vector2(0f, 40f);
-        bar.anchoredPosition = Vector2.zero;
+        replayMode = PlayerPrefs.GetString("optcg.replay.mode", "actionByAction");
+        if (System.Array.IndexOf(ReplayModeOrder, replayMode) < 0) replayMode = "actionByAction";
+        replayCustomDelaySeconds = PlayerPrefs.GetFloat("optcg.replay.delay", 1f);
+        replaySpeedMultiplier = PlayerPrefs.GetFloat("optcg.replay.speed", 1f);
+        replayControlsCollapsed = PlayerPrefs.GetInt("optcg.replay.controlsCollapsed", 0) != 0;
+        replayActionPanelCollapsed = PlayerPrefs.GetInt("optcg.replay.actionPanelCollapsed", 1) != 0;
+        replayShowDescriptions = PlayerPrefs.GetInt("optcg.replay.showDescriptions", 1) != 0;
+        replayViewMode = PlayerPrefs.GetString("optcg.replay.viewMode", "neutral");
+        if (System.Array.IndexOf(ReplayViewModeOrder, replayViewMode) < 0) replayViewMode = "neutral";
+        replayHandVisibility = PlayerPrefs.GetString("optcg.replay.handVisibility", "both");
+        if (System.Array.IndexOf(ReplayHandVisibilityOrder, replayHandVisibility) < 0) replayHandVisibility = "both";
+    }
+
+    private void SaveReplaySettings()
+    {
+        PlayerPrefs.SetString("optcg.replay.mode", replayMode);
+        PlayerPrefs.SetFloat("optcg.replay.delay", replayCustomDelaySeconds);
+        PlayerPrefs.SetFloat("optcg.replay.speed", replaySpeedMultiplier);
+        PlayerPrefs.SetInt("optcg.replay.controlsCollapsed", replayControlsCollapsed ? 1 : 0);
+        PlayerPrefs.SetInt("optcg.replay.actionPanelCollapsed", replayActionPanelCollapsed ? 1 : 0);
+        PlayerPrefs.SetInt("optcg.replay.showDescriptions", replayShowDescriptions ? 1 : 0);
+        PlayerPrefs.SetString("optcg.replay.viewMode", replayViewMode);
+        PlayerPrefs.SetString("optcg.replay.handVisibility", replayHandVisibility);
+        PlayerPrefs.Save();
+    }
+
+    private void DrawReplayControlBar()
+    {
+        if (replayControlsCollapsed)
+        {
+            var tab = PanelObject("Replay Reopen Tab", boardRoot, new Color32(8, 14, 21, 230));
+            tab.anchorMin = new Vector2(1f, 0f); tab.anchorMax = new Vector2(1f, 0f);
+            tab.pivot = new Vector2(1f, 0f);
+            tab.sizeDelta = new Vector2(120f, 32f);
+            tab.anchoredPosition = new Vector2(-12f, 12f);
+            Round(tab);
+            AddRoundedCardBorder(tab, MenuB, 1f);
+            var tabText = TextObject("t", tab, "▲ REPLAY", 11, Ink, TextAnchor.MiddleCenter, monoFont);
+            tabText.fontStyle = FontStyle.Bold;
+            Stretch(tabText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var tabBtn = tab.gameObject.AddComponent<Button>();
+            tabBtn.onClick.AddListener(() => { replayControlsCollapsed = false; SaveReplaySettings(); Render(); });
+            return;
+        }
 
         int total = loadedReplay?.CommandHistory.Count ?? 0;
-        var label = TextObject("Replay Label", bar,
-            $"MATCH HISTORY  ·  step {replayCursor}/{total}  ·  turn {state.TurnNumber}",
-            12, Ink, TextAnchor.MiddleLeft, monoFont);
-        Stretch(label.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 1f), new Vector2(16f, 0f), Vector2.zero);
+        // Condensed, League-of-Legends-replay-bar-style layout: one thin strip of small
+        // mode/speed pills + status text on top, one thin strip of icon transport buttons +
+        // timeline scrubber (sharing a row) below — instead of the old two big rows of
+        // fixed-118px labeled buttons.
+        // Centered, ~44% of the window width — not a full-width bar. A full-width bar reads as
+        // a heavy strip across the whole screen; a shorter, centered one (like most video/League
+        // replay bars) sits over the seam without competing with the board on either side.
+        const float barH = 64f;
+        var bar = PanelObject("Replay Control Bar", boardRoot, new Color32(8, 14, 21, 235));
+        bar.anchorMin = new Vector2(0.28f, 0f);
+        bar.anchorMax = new Vector2(0.72f, 0f);
+        bar.pivot = new Vector2(0.5f, 0f);
+        bar.sizeDelta = new Vector2(0f, barH);
+        bar.anchoredPosition = Vector2.zero;
+        AddRoundedCardBorder(bar, MenuB, 1f);
 
-        var controls = PanelObject("Replay Controls", bar, new Color(0, 0, 0, 0));
-        controls.anchorMin = new Vector2(1f, 0f);
-        controls.anchorMax = new Vector2(1f, 1f);
-        controls.pivot = new Vector2(1f, 0.5f);
-        controls.sizeDelta = new Vector2(420f, 0f);
-        controls.anchoredPosition = new Vector2(-12f, 0f);
-        var hlg = controls.gameObject.AddComponent<HorizontalLayoutGroup>();
-        hlg.spacing = 8f;
-        hlg.childAlignment = TextAnchor.MiddleRight;
-        hlg.childControlWidth = false;
-        hlg.childControlHeight = false;
+        var topRow = PanelObject("Replay Top Row", bar, new Color(0, 0, 0, 0));
+        Stretch(topRow, new Vector2(0f, 1f), Vector2.one, new Vector2(10f, -26f), new Vector2(-40f, -4f));
+
+        var statusLabel = TextObject("Replay Status", topRow,
+            $"{(replayPlaying ? "▶" : "❚❚")} step {replayCursor}/{total} · turn {state.TurnNumber}",
+            9, Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(statusLabel.rectTransform, Vector2.zero, new Vector2(0.32f, 1f), Vector2.zero, Vector2.zero);
+
+        var pillRow = PanelObject("Pills", topRow, new Color(0, 0, 0, 0));
+        Stretch(pillRow, new Vector2(0.32f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var pillHlg = pillRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        pillHlg.spacing = 5f;
+        pillHlg.childAlignment = TextAnchor.MiddleRight;
+        pillHlg.childControlWidth = false;
+        pillHlg.childControlHeight = false;
+        pillHlg.childForceExpandWidth = false;
+        pillHlg.childForceExpandHeight = false;
+
+        string modeLabel = replayMode switch
+        {
+            "realtime" => "REAL-TIME",
+            "turnByTurn" => "TURN-BY-TURN",
+            _ => "ACTION-BY-ACTION",
+        };
+        AddCompactPill(pillRow, modeLabel, CycleReplayMode);
+        if (replayMode == "actionByAction")
+        {
+            string delayLabel = replayCustomDelaySeconds <= 0f ? "INSTANT" : $"{replayCustomDelaySeconds:0.##}s";
+            AddCompactPill(pillRow, delayLabel, CycleReplayDelay);
+        }
+        AddCompactPill(pillRow, $"{replaySpeedMultiplier:0.##}x", CycleReplaySpeed);
+        AddCompactPill(pillRow, replayShowDescriptions ? "DESC ON" : "DESC OFF",
+            () => { replayShowDescriptions = !replayShowDescriptions; SaveReplaySettings(); Render(); });
+        string viewLabel = replayViewMode switch
+        {
+            "south" => "VIEW: PLAYER 1",
+            "north" => "VIEW: PLAYER 2",
+            _ => "VIEW: NEUTRAL",
+        };
+        AddCompactPill(pillRow, viewLabel, CycleReplayViewMode);
+        string handsLabel = replayHandVisibility switch
+        {
+            "south" => "HANDS: P1",
+            "north" => "HANDS: P2",
+            "none" => "HANDS: NONE",
+            _ => "HANDS: BOTH",
+        };
+        AddCompactPill(pillRow, handsLabel, CycleReplayHandVisibility);
+
+        var bottomRow = PanelObject("Replay Transport", bar, new Color(0, 0, 0, 0));
+        Stretch(bottomRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(10f, 4f), new Vector2(-40f, 34f));
+        var hlg = bottomRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 5f;
+        hlg.childAlignment = TextAnchor.MiddleLeft;
+        // Controlled width+height so the timeline's LayoutElement.flexibleWidth can absorb all
+        // remaining space after the fixed-width icon buttons — see AddIconButton/DrawReplayTimeline.
+        hlg.childControlWidth = true;
+        hlg.childControlHeight = true;
         hlg.childForceExpandWidth = false;
-        hlg.childForceExpandHeight = false;
+        hlg.childForceExpandHeight = true;
 
-        AddButton(controls, "|< Start", () => ResimulateReplayTo(0), replayCursor > 0, false);
-        AddButton(controls, "< Prev", () => ResimulateReplayTo(replayCursor - 1), replayCursor > 0, false);
-        AddButton(controls, "Next >", () => ResimulateReplayTo(replayCursor + 1), replayCursor < total, false);
-        AddButton(controls, "End >|", () => ResimulateReplayTo(total), replayCursor < total, false);
-        AddButton(controls, "Exit", () => ExitReplayToMenu(), true, false);
+        // Plain ASCII arrows, not multi-glyph Unicode combos — guaranteed to render at any size
+        // and to actually fit inside a small icon button (the Unicode combo glyphs didn't).
+        if (replayMode == "turnByTurn")
+        {
+            // Turn-by-Turn gets its own button set (spec: play a single turn, play through every
+            // remaining turn, jump back/forward one turn or five) — the standard action-stepping
+            // row (Prev/Next action) doesn't apply here.
+            AddIconButton(bottomRow, "|<<", () => { replayPlaying = false; replayStopAtCursor = null; ResimulateReplayTo(0); }, replayCursor > 0, 34f);
+            AddIconButton(bottomRow, "<<5", () => ReplayJumpTurnsRelative(-5), replayCursor > 0, 34f);
+            AddIconButton(bottomRow, "<", ReplayPrevTurn, replayCursor > 0, 30f);
+            AddIconButton(bottomRow, "▶1", ReplayPlayCurrentTurn, replayCursor < total, 34f);
+            AddIconButton(bottomRow, replayPlaying ? "❚❚" : "▶", replayPlaying ? ReplayPause : (UnityEngine.Events.UnityAction)ReplayPlayAll, true, 34f);
+            AddIconButton(bottomRow, ">", ReplayNextTurn, replayCursor < total, 30f);
+            AddIconButton(bottomRow, ">>5", () => ReplayJumpTurnsRelative(5), replayCursor < total, 34f);
+            AddIconButton(bottomRow, "|>>", () => { replayPlaying = false; replayStopAtCursor = null; ResimulateReplayTo(total); }, replayCursor < total, 34f);
+        }
+        else
+        {
+            AddIconButton(bottomRow, "|<<", () => { replayPlaying = false; replayStopAtCursor = null; ResimulateReplayTo(0); }, replayCursor > 0, 34f);
+            AddIconButton(bottomRow, "|<", ReplayPrevTurn, replayCursor > 0, 34f);
+            AddIconButton(bottomRow, "<", ReplayStepBackward, replayCursor > 0, 30f);
+            AddIconButton(bottomRow, replayPlaying ? "❚❚" : "▶", ReplayTogglePlayPause, true, 34f);
+            AddIconButton(bottomRow, ">", ReplayStepForward, replayCursor < total, 30f);
+            AddIconButton(bottomRow, ">|", ReplayNextTurn, replayCursor < total, 34f);
+            AddIconButton(bottomRow, ">>|", () => { replayPlaying = false; replayStopAtCursor = null; ResimulateReplayTo(total); }, replayCursor < total, 34f);
+        }
+
+        var timelineArea = new GameObject("Timeline Area").AddComponent<RectTransform>();
+        timelineArea.SetParent(bottomRow, false);
+        var timelineLe = timelineArea.gameObject.AddComponent<LayoutElement>();
+        timelineLe.flexibleWidth = 1f;
+        timelineLe.minWidth = 80f;
+        DrawReplayTimeline(timelineArea, total);
+
+        var collapseBtn = PanelObject("Collapse", bar, new Color(0, 0, 0, 0));
+        collapseBtn.anchorMin = new Vector2(1f, 0.5f); collapseBtn.anchorMax = new Vector2(1f, 0.5f);
+        collapseBtn.pivot = new Vector2(1f, 0.5f);
+        collapseBtn.sizeDelta = new Vector2(28f, 28f);
+        collapseBtn.anchoredPosition = new Vector2(-8f, 0f);
+        Round(collapseBtn);
+        AddRoundedCardBorder(collapseBtn, MenuB, 1f);
+        var collapseText = TextObject("t", collapseBtn, "▼", 12, Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(collapseText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var collapseButton = collapseBtn.gameObject.AddComponent<Button>();
+        collapseButton.onClick.AddListener(() => { replayControlsCollapsed = true; SaveReplaySettings(); Render(); });
+    }
+
+    // Timeline scrubber: an SFX-slider-style Track/Fill/Handle (see BuildSfxSlider) driving
+    // ResimulateReplayTo directly, with small clickable markers overlaid at a curated subset
+    // of cursors (spec: turn changes, attacks, card plays, effects, life changes — not EVERY
+    // action, which would be unreadable at this scale on a long match).
+    private void DrawReplayTimeline(RectTransform parent, int total)
+    {
+        var track = PanelObject("Timeline Track", parent, new Color(1f, 1f, 1f, 0.10f));
+        Stretch(track, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        Round(track);
+
+        var fillArea = PanelObject("Fill Area", track, new Color(0, 0, 0, 0));
+        Stretch(fillArea, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        fillArea.GetComponent<Image>().raycastTarget = false;
+        var fill = PanelObject("Fill", fillArea, Accent);
+        fill.anchorMin = new Vector2(0f, 0f); fill.anchorMax = new Vector2(0f, 1f);
+        fill.pivot = new Vector2(0f, 0.5f);
+        fill.sizeDelta = Vector2.zero;
+        fill.anchoredPosition = Vector2.zero;
+        Round(fill);
+        fill.GetComponent<Image>().raycastTarget = false;
+
+        var handleArea = PanelObject("Handle Area", track, new Color(0, 0, 0, 0));
+        Stretch(handleArea, Vector2.zero, Vector2.one, new Vector2(7f, 0f), new Vector2(-7f, 0f));
+        handleArea.GetComponent<Image>().raycastTarget = false;
+        var handle = PanelObject("Handle", handleArea, new Color32(230, 240, 248, 255));
+        handle.anchorMin = new Vector2(0f, 0f); handle.anchorMax = new Vector2(0f, 1f);
+        handle.pivot = new Vector2(0.5f, 0.5f);
+        handle.sizeDelta = new Vector2(10f, 18f);
+        handle.anchoredPosition = Vector2.zero;
+        Round(handle);
+
+        // Markers drawn UNDER the fill/handle (added to the track before the Slider component,
+        // so they sit visually behind the drag surface but are still individually clickable —
+        // Slider itself only raycasts its handle, not the whole track, in this build's setup).
+        if (replayActions != null && total > 0)
+        {
+            foreach (var a in replayActions)
+            {
+                bool isTurnStart = replayTurnStartCursors != null
+                    && replayTurnStartCursors.TryGetValue(a.Turn, out int sc) && sc == a.Cursor;
+                bool isMarker = isTurnStart || a.Category == "attack" || a.Category == "play"
+                    || a.Category == "life" || a.Category == "effect";
+                if (!isMarker) continue;
+
+                float t = (float)a.Cursor / total;
+                var marker = PanelObject(isTurnStart ? "Turn Marker" : "Marker", track, MarkerColor(a.Category, isTurnStart));
+                marker.anchorMin = new Vector2(t, 0f);
+                marker.anchorMax = new Vector2(t, 1f);
+                marker.pivot = new Vector2(0.5f, 0.5f);
+                marker.sizeDelta = new Vector2(isTurnStart ? 3f : 2f, isTurnStart ? 0f : -6f);
+                marker.anchoredPosition = Vector2.zero;
+
+                var capturedCursor = a.Cursor;
+                var markerBtn = marker.gameObject.AddComponent<Button>();
+                markerBtn.transition = Selectable.Transition.None;
+                markerBtn.onClick.AddListener(() => { replayPlaying = false; ResimulateReplayTo(capturedCursor); });
+            }
+        }
+
+        var slider = track.gameObject.AddComponent<Slider>();
+        slider.transition = Selectable.Transition.None;
+        slider.fillRect = fill;
+        slider.handleRect = handle;
+        slider.minValue = 0f;
+        slider.maxValue = Mathf.Max(1, total);
+        slider.wholeNumbers = true;
+        slider.value = replayCursor;
+        slider.onValueChanged.AddListener(v =>
+        {
+            replayPlaying = false;
+            replayStopAtCursor = null;
+            int target = Mathf.RoundToInt(v);
+            if (target != replayCursor) ResimulateReplayTo(target);
+        });
+    }
+
+    private static Color MarkerColor(string category, bool isTurnStart)
+    {
+        if (isTurnStart) return new Color(1f, 1f, 1f, 0.55f);
+        switch (category)
+        {
+            case "attack": return new Color(1f, 0.36f, 0.12f, 0.85f);
+            case "play": return new Color(0.42f, 0.82f, 0.52f, 0.75f);
+            case "life": return new Color(0.95f, 0.3f, 0.3f, 0.85f);
+            case "effect": return new Color(0.55f, 0.7f, 1f, 0.75f);
+            default: return new Color(1f, 1f, 1f, 0.3f);
+        }
+    }
+
+    private void CycleReplayMode()
+    {
+        int idx = System.Array.IndexOf(ReplayModeOrder, replayMode);
+        replayMode = ReplayModeOrder[(idx + 1 + ReplayModeOrder.Length) % ReplayModeOrder.Length];
+        replayStopAtCursor = null;
+        SaveReplaySettings();
+        Render();
+    }
+
+    private void CycleReplayDelay()
+    {
+        int idx = System.Array.IndexOf(ReplayDelayPresets, replayCustomDelaySeconds);
+        if (idx < 0) idx = 3; // default fallback (1s) if the value somehow drifted off-preset
+        replayCustomDelaySeconds = ReplayDelayPresets[(idx + 1) % ReplayDelayPresets.Length];
+        SaveReplaySettings();
+        Render();
+    }
+
+    private void CycleReplaySpeed()
+    {
+        int idx = System.Array.IndexOf(ReplaySpeedPresets, replaySpeedMultiplier);
+        if (idx < 0) idx = 3; // default fallback (1x)
+        replaySpeedMultiplier = ReplaySpeedPresets[(idx + 1) % ReplaySpeedPresets.Length];
+        SaveReplaySettings();
+        Render();
+    }
+
+    private static readonly string[] ReplayViewModeOrder = { "neutral", "south", "north" };
+    private void CycleReplayViewMode()
+    {
+        int idx = System.Array.IndexOf(ReplayViewModeOrder, replayViewMode);
+        replayViewMode = ReplayViewModeOrder[(idx + 1 + ReplayViewModeOrder.Length) % ReplayViewModeOrder.Length];
+        SaveReplaySettings();
+        Render();
+    }
+
+    private static readonly string[] ReplayHandVisibilityOrder = { "both", "south", "north", "none" };
+    private void CycleReplayHandVisibility()
+    {
+        int idx = System.Array.IndexOf(ReplayHandVisibilityOrder, replayHandVisibility);
+        replayHandVisibility = ReplayHandVisibilityOrder[(idx + 1 + ReplayHandVisibilityOrder.Length) % ReplayHandVisibilityOrder.Length];
+        SaveReplaySettings();
+        Render();
+    }
+
+    // ── Side action-log panel (Phase 5) ─────────────────────────────────────
+    // Turn-grouped, collapsible breakdown of the whole match, built straight off
+    // replayActions (see ReplayIndex.cs) — no separate data model needed. Uses this file's
+    // own VerticalLayoutGroup+ContentSizeFitter scroll pattern (see the combat-log/chat-panel
+    // scroll views elsewhere in this file) rather than MainMenuManager's MakeMenuScroll, since
+    // that helper lives on a different class.
+    private void DrawReplayActionPanel()
+    {
+        if (replayActionPanelCollapsed)
+        {
+            var tab = PanelObject("Action Panel Reopen Tab", boardRoot, new Color32(8, 14, 21, 230));
+            tab.anchorMin = new Vector2(1f, 1f); tab.anchorMax = new Vector2(1f, 1f);
+            tab.pivot = new Vector2(1f, 1f);
+            tab.sizeDelta = new Vector2(34f, 130f);
+            tab.anchoredPosition = new Vector2(-8f, -90f);
+            Round(tab);
+            AddRoundedCardBorder(tab, MenuB, 1f);
+            var tabText = TextObject("t", tab, "◂ LOG", 11, Ink, TextAnchor.MiddleCenter, monoFont);
+            tabText.fontStyle = FontStyle.Bold;
+            Stretch(tabText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var tabBtn = tab.gameObject.AddComponent<Button>();
+            tabBtn.onClick.AddListener(() => { replayActionPanelCollapsed = false; SaveReplaySettings(); Render(); });
+            return;
+        }
+
+        const float panelW = 320f;
+        const float bottomReserve = 108f; // clears the control bar
+        var panel = PanelObject("Replay Action Panel", boardRoot, new Color32(10, 16, 24, 235));
+        panel.anchorMin = new Vector2(1f, 0f); panel.anchorMax = new Vector2(1f, 1f);
+        panel.pivot = new Vector2(1f, 1f);
+        panel.sizeDelta = new Vector2(panelW, -bottomReserve);
+        panel.anchoredPosition = new Vector2(0f, 0f);
+        AddRoundedCardBorder(panel, MenuB, 1f);
+
+        var header = PanelObject("Header", panel, new Color(0, 0, 0, 0));
+        Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(12f, -64f), new Vector2(-40f, -8f));
+        var title = TextObject("Title", header, "MATCH TIMELINE", 12, Ink, TextAnchor.UpperLeft, monoFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 0.55f), Vector2.one, Vector2.zero, Vector2.zero);
+
+        // Compact pills (not AddButton's fixed 118px) so all three fit across this 320px-wide
+        // panel's usable width — "Close" is a small corner icon button (mirroring the control
+        // bar's collapse arrow) instead of competing for row space. "Main Menu" lives here
+        // (rather than as an EXIT pill on the control bar) since leaving a replay is a
+        // navigation action, and this is the panel already showing the match overview.
+        var toolsRow = PanelObject("Tools", header, new Color(0, 0, 0, 0));
+        Stretch(toolsRow, new Vector2(0f, 0f), new Vector2(1f, 0.55f), Vector2.zero, Vector2.zero);
+        var trHlg = toolsRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        trHlg.spacing = 5f; trHlg.childAlignment = TextAnchor.MiddleLeft;
+        trHlg.childControlWidth = false; trHlg.childControlHeight = false;
+        trHlg.childForceExpandWidth = false; trHlg.childForceExpandHeight = false;
+        AddCompactPill(toolsRow, "Expand All", () => { replayCollapsedTurns.Clear(); Render(); });
+        AddCompactPill(toolsRow, "Collapse All", () =>
+        {
+            replayCollapsedTurns.Clear();
+            if (replayActions != null) foreach (var a in replayActions) replayCollapsedTurns.Add(a.Turn);
+            Render();
+        });
+        AddCompactPill(toolsRow, "Main Menu", () => ExitReplayToMenu());
+
+        var closeBtn = PanelObject("Close", panel, new Color(0, 0, 0, 0));
+        closeBtn.anchorMin = new Vector2(1f, 1f); closeBtn.anchorMax = new Vector2(1f, 1f);
+        closeBtn.pivot = new Vector2(1f, 1f);
+        closeBtn.sizeDelta = new Vector2(28f, 28f);
+        closeBtn.anchoredPosition = new Vector2(-8f, -8f);
+        Round(closeBtn);
+        AddRoundedCardBorder(closeBtn, MenuB, 1f);
+        var closeText = TextObject("t", closeBtn, "✕", 12, Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(closeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var closeButton = closeBtn.gameObject.AddComponent<Button>();
+        closeButton.onClick.AddListener(() => { replayActionPanelCollapsed = true; SaveReplaySettings(); Render(); });
+
+        var listArea = PanelObject("List Area", panel, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(8f, 8f), new Vector2(-8f, -72f));
+
+        if (replayActions == null || replayActions.Count == 0)
+        {
+            var empty = TextObject("Empty", listArea, "No actions recorded.", 11, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -24f), Vector2.zero);
+            return;
+        }
+
+        // Group into turns, in order (replayActions is already turn-ordered by construction).
+        var turns = new List<(int turn, string seat, List<ReplayAction> actions)>();
+        foreach (var a in replayActions)
+        {
+            if (turns.Count == 0 || turns[turns.Count - 1].turn != a.Turn)
+                turns.Add((a.Turn, a.ActiveSeat, new List<ReplayAction>()));
+            turns[turns.Count - 1].actions.Add(a);
+        }
+
+        var viewport = PanelObject("Viewport", listArea, new Color(0f, 0f, 0f, 0.001f));
+        Stretch(viewport, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        viewport.gameObject.AddComponent<RectMask2D>();
+
+        var content = new GameObject("Timeline Content").AddComponent<RectTransform>();
+        content.SetParent(viewport, false);
+        content.anchorMin = new Vector2(0f, 1f);
+        content.anchorMax = new Vector2(1f, 1f);
+        content.pivot = new Vector2(0.5f, 1f);
+        content.sizeDelta = Vector2.zero;
+        content.anchoredPosition = Vector2.zero;
+        var vlg = content.gameObject.AddComponent<VerticalLayoutGroup>();
+        vlg.spacing = 3f;
+        vlg.padding = new RectOffset(2, 2, 2, 2);
+        vlg.childAlignment = TextAnchor.UpperLeft;
+        vlg.childControlWidth = true;
+        vlg.childControlHeight = true;
+        vlg.childForceExpandWidth = true;
+        vlg.childForceExpandHeight = false;
+        var fitter = content.gameObject.AddComponent<ContentSizeFitter>();
+        fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        var scroll = viewport.gameObject.AddComponent<ScrollRect>();
+        scroll.content = content;
+        scroll.viewport = viewport;
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.movementType = ScrollRect.MovementType.Clamped;
+        scroll.scrollSensitivity = 22f;
+        AttachScrollbar(scroll);
+
+        const float turnHeaderH = 28f, actionRowH = 24f;
+        RectTransform currentActionRect = null;
+        foreach (var t in turns)
+        {
+            bool collapsed = replayCollapsedTurns.Contains(t.turn);
+            var headerRow = PanelObject($"Turn {t.turn} Header", content, new Color32(24, 38, 54, 230));
+            var headerLE = headerRow.gameObject.AddComponent<LayoutElement>();
+            headerLE.preferredHeight = turnHeaderH; headerLE.minHeight = turnHeaderH;
+            Round(headerRow);
+
+            var chevron = TextObject("Chevron", headerRow, collapsed ? "▸" : "▾", 11, Muted, TextAnchor.MiddleCenter, monoFont);
+            chevron.rectTransform.anchorMin = new Vector2(0f, 0f);
+            chevron.rectTransform.anchorMax = new Vector2(0f, 1f);
+            chevron.rectTransform.pivot = new Vector2(0f, 0.5f);
+            chevron.rectTransform.sizeDelta = new Vector2(22f, 0f);
+            chevron.rectTransform.anchoredPosition = new Vector2(6f, 0f);
+            var capturedTurnToggle = t.turn;
+            var chevronBtn = chevron.gameObject.AddComponent<Button>();
+            chevronBtn.onClick.AddListener(() =>
+            {
+                if (!replayCollapsedTurns.Add(capturedTurnToggle)) replayCollapsedTurns.Remove(capturedTurnToggle);
+                Render();
+            });
+
+            var headerLabel = TextObject("Label", headerRow, $"Turn {t.turn} — {DisplayName(t.seat)}", 11, Ink, TextAnchor.MiddleLeft, monoFont);
+            headerLabel.fontStyle = FontStyle.Bold;
+            Stretch(headerLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(30f, 0f), new Vector2(-8f, 0f));
+            var headerBtn = headerRow.gameObject.AddComponent<Button>();
+            headerBtn.transition = Selectable.Transition.None;
+            var capturedTurnJump = t.turn;
+            headerBtn.onClick.AddListener(() => { replayPlaying = false; ReplayJumpToTurnStart(capturedTurnJump); });
+
+            if (collapsed) continue;
+            foreach (var a in t.actions)
+            {
+                bool isCurrent = a.Cursor == replayCursor;
+                var actionRow = PanelObject("Action Row", content,
+                    isCurrent ? new Color(Accent.r, Accent.g, Accent.b, 0.30f) : new Color(1f, 1f, 1f, 0.02f));
+                var rowLE = actionRow.gameObject.AddComponent<LayoutElement>();
+                rowLE.preferredHeight = actionRowH; rowLE.minHeight = actionRowH;
+                if (isCurrent) { Round(actionRow); currentActionRect = actionRow; }
+
+                string seatTag = a.Command?.Seat == "south" ? "S" : a.Command?.Seat == "north" ? "N" : "·";
+                var actionLabel = TextObject("Label", actionRow, $"{a.Cursor}. [{seatTag}] {TrimForReplayLog(a.Summary)}",
+                    10, isCurrent ? Ink : Muted, TextAnchor.MiddleLeft, monoFont);
+                Stretch(actionLabel.rectTransform, Vector2.zero, Vector2.one, new Vector2(30f, 0f), new Vector2(-8f, 0f));
+                var actionBtn = actionRow.gameObject.AddComponent<Button>();
+                actionBtn.transition = Selectable.Transition.None;
+                var capturedCursor = a.Cursor;
+                actionBtn.onClick.AddListener(() => { replayPlaying = false; ResimulateReplayTo(capturedCursor); });
+            }
+        }
+
+        // Auto-scroll so the current action stays roughly centred in view — same
+        // ForceUpdateCanvases-then-set-normalized-position idiom the combat log/chat panels
+        // already use elsewhere in this file, just computed from the real settled layout
+        // rather than scrolling all the way to one end.
+        if (currentActionRect != null)
+        {
+            Canvas.ForceUpdateCanvases();
+            float rowY = -currentActionRect.anchoredPosition.y;
+            float contentH = content.rect.height;
+            float viewportH = viewport.rect.height;
+            float scrollable = Mathf.Max(1f, contentH - viewportH);
+            float norm = 1f - Mathf.Clamp01((rowY - viewportH * 0.5f) / scrollable);
+            scroll.verticalNormalizedPosition = Mathf.Clamp01(norm);
+        }
+    }
+
+    private static string TrimForReplayLog(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        return s.Length > 64 ? s.Substring(0, 61) + "..." : s;
     }
 
     // Human-readable description of a DeckLookState's eligibility filter, with a trailing space
@@ -2758,6 +3631,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (dl.RequireTrigger && string.IsNullOrEmpty(def.Trigger)) return false;
         if (dl.MaxCost >= 0 && def.Cost > dl.MaxCost) return false;
         if (dl.MaxPower >= 0 && def.Power > dl.MaxPower) return false;
+        // "Play mode" search effects reject a Character pick outright when the board is full
+        // (ResolveDeckLookSelect re-inserts it and logs "No open character slot to play into."
+        // without advancing state) — so it was never really selectable to begin with. Excluding
+        // it here stops both a false "you can pick this" glow for a human and Basic Bot picking
+        // the same unplayable card forever (found via an all-starter-decks batch test).
+        if (dl.PlayMode && def.Type == "character" && state.Players.TryGetValue(dl.Seat, out var dlP)
+            && !dlP.CharacterArea.Exists(c => c == null))
+            return false;
         return true;
     }
 
@@ -3672,12 +4553,24 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // half, south (green) the bottom half, with a thin centre divide. The play space (zones, cards)
         // is drawn at full size on top of this in playRoot; the colour bleeds out to every edge.
         // Cobalt felt: dark navy (north) over dark teal (south), full-bleed behind the opaque menus.
+        // Tournament/replay layout: players sit left/right instead of top/bottom, so the wash
+        // split follows suit, and the seam + turn-crest pill get wrapped in a rotated container
+        // below (RotateFullForReplay) so they read as a vertical line down the middle instead
+        // of a horizontal one crossing both halves.
         var north = PanelObject("North Table Wash", boardRoot, MatTop);
-        Stretch(north, new Vector2(0f, 0.5f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
-        AddBoardCancel(north);
-
         var south = PanelObject("South Table Wash", boardRoot, MatBottom);
-        Stretch(south, Vector2.zero, new Vector2(1f, 0.5f), Vector2.zero, Vector2.zero);
+        if (IsReplayRotated)
+        {
+            // South (bottom seat) -> left, North (top seat) -> right, per the tournament pivot.
+            Stretch(north, new Vector2(0.5f, 0f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
+            Stretch(south, Vector2.zero, new Vector2(0.5f, 1f), Vector2.zero, Vector2.zero);
+        }
+        else
+        {
+            Stretch(north, new Vector2(0f, 0.5f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero);
+            Stretch(south, Vector2.zero, new Vector2(1f, 0.5f), Vector2.zero, Vector2.zero);
+        }
+        AddBoardCancel(north);
         AddBoardCancel(south);
 
         // Everything below is confined to the centered play column (x 0.17-0.83 of the window).
@@ -3695,9 +4588,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // (Active-side glow removed - the active player's empty-slot placement indicators are the
         // whose-turn cue now.)
 
+        // Center seam + turn-crest pill all live under this parent — boardRoot normally, or a
+        // wrapper rotated -90° (same swapped-size-then-rotate trick as RotateHalfForReplay) in
+        // replay mode, so the whole assembly (line + pill + text) reads as a vertical seam
+        // matching the rotated board instead of the normal-mode horizontal one.
+        RectTransform crestParent = boardRoot;
+        if (IsReplayRotated)
+        {
+            crestParent = PanelObject("Center Seam Assembly", boardRoot, new Color(0, 0, 0, 0));
+            RotateFullForReplay(crestParent, boardRoot);
+        }
+
         // Soft cyan glow behind the centre pill (the mock's box-shadow halo).
         var crestGlow = new GameObject("Crest Glow").AddComponent<RectTransform>();
-        crestGlow.SetParent(boardRoot, false);
+        crestGlow.SetParent(crestParent, false);
         crestGlow.anchorMin = crestGlow.anchorMax = new Vector2(0.5f, 0.5f);
         crestGlow.pivot = new Vector2(0.5f, 0.5f);
         crestGlow.sizeDelta = new Vector2(250f, 64f);
@@ -3710,7 +4614,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Center crest pill: dark, rounded, cyan-bordered (not a filled cyan bar).
         // Match the other text-block backgrounds (LogBgDark rgb) but keep full alpha so the seam
         // behind the pill stays masked.
-        var crest = PanelObject("Center Crest", boardRoot, (Color)new Color32(14, 30, 46, 255));
+        var crest = PanelObject("Center Crest", crestParent, (Color)new Color32(14, 30, 46, 255));
         turnCrestRect = crest;   // rim particles hide while passing behind this block
         crest.anchorMin = crest.anchorMax = new Vector2(0.5f, 0.5f);
         crest.pivot = new Vector2(0.5f, 0.5f);
@@ -3738,7 +4642,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var seamCol = new Color(Accent.r, Accent.g, Accent.b, 0.55f);
 
         var seamL = new GameObject("Center Seam L").AddComponent<RectTransform>();
-        seamL.SetParent(boardRoot, false);
+        seamL.SetParent(crestParent, false);
         seamL.anchorMin = new Vector2(0.208f, 0.4988f);
         seamL.anchorMax = new Vector2(0.5f, 0.5012f);
         seamL.offsetMin = Vector2.zero; seamL.offsetMax = Vector2.zero;
@@ -3748,7 +4652,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         seamLImg.raycastTarget = false;
 
         var seamR = new GameObject("Center Seam R").AddComponent<RectTransform>();
-        seamR.SetParent(boardRoot, false);
+        seamR.SetParent(crestParent, false);
         seamR.anchorMin = new Vector2(0.5f, 0.4988f);
         seamR.anchorMax = new Vector2(0.792f, 0.5012f);
         seamR.offsetMin = Vector2.zero; seamR.offsetMax = Vector2.zero;
@@ -3804,13 +4708,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddBoardCancel(mat);
 
         var topHalf = PanelObject("North Playmat Half", mat, new Color(0, 0, 0, 0));
-        Stretch(topHalf, new Vector2(0, 0.50f), new Vector2(1, 1), Vector2.zero, Vector2.zero);
+        if (IsReplayRotated)
+            RotateHalfForReplay(topHalf, mat, true);
+        else
+            Stretch(topHalf, new Vector2(0, 0.50f), new Vector2(1, 1), Vector2.zero, Vector2.zero);
         northHalfRect = topHalf;
         AddBoardCancel(topHalf);
         var topEventDrop = topHalf.gameObject.AddComponent<EventDrop>();
         topEventDrop.Init(this, TopSeat);
         var bottomHalf = PanelObject("South Playmat Half", mat, new Color(0, 0, 0, 0));
-        Stretch(bottomHalf, Vector2.zero, new Vector2(1, 0.50f), Vector2.zero, Vector2.zero);
+        if (IsReplayRotated)
+            RotateHalfForReplay(bottomHalf, mat, false);
+        else
+            Stretch(bottomHalf, Vector2.zero, new Vector2(1, 0.50f), Vector2.zero, Vector2.zero);
         southHalfRect = bottomHalf;
         AddBoardCancel(bottomHalf);
         var bottomEventDrop = bottomHalf.gameObject.AddComponent<EventDrop>();
@@ -3820,9 +4730,51 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         DrawMatHalf(bottomHalf, state.Players[BottomSeat], BottomSeat, false);
     }
 
+    // Tournament/broadcast pivot: south -> left, north -> right, cards facing each other across
+    // the seam ("it's really just rotating the board 90 degrees" — see the reference photo
+    // discussion). A literal -90° rotation of the whole half, rather than redesigning its
+    // contents: DrawMatHalf's zone rects and card rotations are authored once, for a normal
+    // top/bottom board, and this reorients the whole rigid subtree (zone positions AND card
+    // art) together. Both halves get the SAME -90° rotation, not mirrored +/-90 — north's
+    // "toward the seam" direction was already the opposite of south's in the un-rotated
+    // layout (top=0 vs top=1 conventions), so an identical rotation keeps them opposite,
+    // landing correctly on the left/right side of the seam respectively. `half`'s local size
+    // is pre-swapped (W<->H of the target on-screen box) so the POST-rotation bounding box
+    // lands exactly on its half of the screen.
+    private void RotateHalfForReplay(RectTransform half, RectTransform mat, bool topSeatHalf)
+    {
+        float fullW = mat.rect.width > 1f ? mat.rect.width : 1600f;
+        float fullH = mat.rect.height > 1f ? mat.rect.height : 900f;
+        half.anchorMin = half.anchorMax = new Vector2(topSeatHalf ? 0.75f : 0.25f, 0.5f);
+        half.pivot = new Vector2(0.5f, 0.5f);
+        half.sizeDelta = new Vector2(fullH, fullW * 0.5f);
+        half.anchoredPosition = Vector2.zero;
+        half.localRotation = Quaternion.Euler(0f, 0f, -90f);
+    }
+
+    // Same trick as RotateHalfForReplay, but for an element that should span (and rotate
+    // around) the FULL board rather than one half — the center seam + turn-crest assembly.
+    private void RotateFullForReplay(RectTransform rt, RectTransform sizeRef)
+    {
+        float fullW = sizeRef.rect.width > 1f ? sizeRef.rect.width : 1600f;
+        float fullH = sizeRef.rect.height > 1f ? sizeRef.rect.height : 900f;
+        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = new Vector2(fullH, fullW); // swapped
+        rt.anchoredPosition = Vector2.zero;
+        rt.localRotation = Quaternion.Euler(0f, 0f, -90f);
+    }
+
     private void DrawMatHalf(RectTransform half, PlayerState p, string seat, bool top)
     {
         // (Removed the gold active-side highlight per design — both halves stay the same felt.)
+
+        // The tournament/replay pivot (south -> left, north -> right, "cards facing each other")
+        // is implemented as a literal 90° ROTATION of the whole `half` transform in
+        // DrawReferencePlaymat, not a redesign of this method — every zone rect, the DON row,
+        // and every card's rotation below is authored exactly as it always was for the normal
+        // top/bottom board; rotating the container reorients all of it (position AND card art)
+        // together as one rigid transform, so it stays correct here unconditionally.
 
         // Far edge (toward the deck/trash) extends over them to line up with their outer edge; the near
         // edge clears the life column. Point-mirrored for north.
@@ -3870,12 +4822,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // DON!! attached to the Leader tuck UNDER the cost-area DON cards — but stay ABOVE the
         // cost zone's background panel (the leader zone renders after the cost zone).
         var donRow = new GameObject("Cost DON Cards").AddComponent<RectTransform>();
-        // Parent to playRoot (not the mat half): drawn after the whole mat subtree — so
-        // leader-attached DON tuck UNDER these — but created before the hand fans, so the
-        // hands ALWAYS render above the cost-area DON.
-        donRow.SetParent(playRoot, false);
-        float dyMin = Mathf.Lerp(costMin.y, costMax.y, 0.06f) * 0.5f + (top ? 0.5f : 0f);
-        float dyMax = Mathf.Lerp(costMin.y, costMax.y, 0.94f) * 0.5f + (top ? 0.5f : 0f);
+        // Parented to `half` (not playRoot) and positioned in half-LOCAL coordinates: leader is
+        // created just before this (a sibling under `half`), so DON!! attached to the Leader
+        // still tucks under these cost-area DON cards by creation order. Hand fans are created
+        // later in Render(), directly under playRoot, so they still always render above this.
+        donRow.SetParent(half, false);
+        float dyMin = Mathf.Lerp(costMin.y, costMax.y, 0.06f);
+        float dyMax = Mathf.Lerp(costMin.y, costMax.y, 0.94f);
         Stretch(donRow,
             new Vector2(Mathf.Lerp(costMin.x, costMax.x, 0.02f), dyMin),
             new Vector2(Mathf.Lerp(costMin.x, costMax.x, 0.98f), dyMax),
@@ -3957,7 +4910,29 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawExternalHand(PlayerState p, string seat, bool top)
     {
         var panel = PanelObject(seat + " External Hand", playRoot, new Color(0, 0, 0, 0));
-        Stretch(panel, top ? new Vector2(0.10f, 0.885f) : new Vector2(0.10f, -0.080f), top ? new Vector2(0.90f, 1.080f) : new Vector2(0.90f, 0.115f), Vector2.zero, Vector2.zero);
+        if (IsReplayRotated)
+        {
+            // Each hand sits along its player's OUTER edge (south -> left edge of screen,
+            // north -> right edge), roughly where that player's DON!! deck lands — not at the
+            // screen's top/bottom, which is the normal-mode convention that no longer applies
+            // once players sit side by side. Rotated -90° like the rest of the board (same
+            // swapped-size-then-rotate trick as RotateHalfForReplay) so the fan visually
+            // matches instead of standing out as the only upright element on screen.
+            float fullW = playRoot.rect.width > 1f ? playRoot.rect.width : 1600f;
+            float fullH = playRoot.rect.height > 1f ? playRoot.rect.height : 900f;
+            const float boxWFrac = 0.19f, boxHFrac = 0.40f;
+            panel.anchorMin = panel.anchorMax = new Vector2(top ? 0.98f : 0.02f, 0.5f);
+            panel.pivot = new Vector2(0.5f, 0.5f);
+            panel.sizeDelta = new Vector2(boxHFrac * fullH, boxWFrac * fullW); // swapped
+            panel.anchoredPosition = Vector2.zero;
+            // North's hand needs the extra 180° on top of the shared -90° (its fan reads
+            // upside-down otherwise) — south's doesn't.
+            panel.localRotation = Quaternion.Euler(0f, 0f, top ? 90f : -90f);
+        }
+        else
+        {
+            Stretch(panel, top ? new Vector2(0.10f, 0.885f) : new Vector2(0.10f, -0.080f), top ? new Vector2(0.90f, 1.080f) : new Vector2(0.90f, 0.115f), Vector2.zero, Vector2.zero);
+        }
         var panelImage = panel.GetComponent<Image>();
         // This invisible panel's bounds overlap the Cost Area zone underneath it (it extends
         // toward the screen edge for the hand-fan layout). Leaving it raycastable at all times
@@ -3972,9 +4947,25 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // (Hand title/count text removed per design.)
         var row = new GameObject(seat + " Hand Fan").AddComponent<RectTransform>();
         row.SetParent(panel, false);
-        Stretch(row, new Vector2(0.02f, top ? 0.10f : 0.02f), new Vector2(0.98f, top ? 0.98f : 0.90f), Vector2.zero, Vector2.zero);
+        if (IsReplayRotated)
+        {
+            // Symmetric margin for both seats — the normal-mode near/far-edge asymmetry (bigger
+            // margin on the "near" side, per `top`) doesn't translate cleanly once the panel
+            // itself is rotated ±90° in opposite directions per seat; it was making north's fan
+            // content sit shifted toward the centre relative to south's.
+            Stretch(row, new Vector2(0.04f, 0.06f), new Vector2(0.96f, 0.94f), Vector2.zero, Vector2.zero);
+        }
+        else
+        {
+            Stretch(row, new Vector2(0.02f, top ? 0.10f : 0.02f), new Vector2(0.98f, top ? 0.98f : 0.90f), Vector2.zero, Vector2.zero);
+        }
         moveZoneAnchors["hand:" + seat] = row;
-        DrawFannedHandRow(row, p.Hand, seat + "-hand", top);
+        // During replay, the fan's own curve/tilt math always uses the "south" (top=false) sign
+        // convention for BOTH seats — the panel's own rotation (RotateHalfForReplay-style,
+        // ±90° depending on seat) already handles which way each hand faces. Passing the real
+        // `top` here as well double-mirrors north's curve (it and the panel rotation cancel
+        // out), which is what made its fan bow the wrong way.
+        DrawFannedHandRow(row, p.Hand, seat + "-hand", IsReplayRotated ? false : top);
     }
 
     private void DrawLeftPanel()
@@ -4320,6 +5311,48 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         t.resizeTextMinSize = 8;
         t.resizeTextMaxSize = 72;
         Stretch(t.rectTransform, new Vector2(0.08f, 0.06f), new Vector2(0.92f, 0.94f), Vector2.zero, Vector2.zero);
+    }
+
+    // ── Replay visual sync (Phase 7) ─────────────────────────────────────────
+    // Most of "visual sync" already happens for free: CaptureAndAnimateCardMoves diffs zone
+    // positions every Render() regardless of isReplayMode (Phase 0 audit), and
+    // DrawResolvedTargetingArrows already draws the battle arrow off the live state.Battle,
+    // which is a real, correctly-reconstructed field after ResimulateReplayTo. What's missing
+    // is a spotlight on which card(s) the CURRENT command touched and a plain-text description
+    // of it — the "brief text description" + "active-card highlight" + "target indicators"
+    // requirements — since nothing upstream tracks "the card this specific step was about."
+    private void DrawReplayActionOverlay()
+    {
+        if (!replayShowDescriptions) return;
+        if (replayActions == null || replayCursor <= 0 || replayCursor > replayActions.Count) return;
+        var action = replayActions[replayCursor - 1];
+        var cmd = action.Command;
+        if (cmd == null) return;
+
+        // Active-card + target highlight: glow every card this command actually named.
+        void Glow(string instanceId)
+        {
+            if (string.IsNullOrEmpty(instanceId)) return;
+            if (cardTargetRects.TryGetValue(instanceId, out var rect) && rect != null)
+                AddEffectGlow(rect);
+        }
+        Glow(cmd.InstanceId);
+        Glow(cmd.Attacker);
+        Glow(cmd.Blocker);
+        Glow(cmd.Target);
+
+        // Brief text description, top-center of the board, synced to the current step.
+        string text = TrimForReplayLog(action.Summary);
+        if (string.IsNullOrEmpty(text)) return;
+        var banner = PanelObject("Replay Action Banner", boardRoot, new Color32(10, 14, 20, 210));
+        banner.anchorMin = new Vector2(0.5f, 1f); banner.anchorMax = new Vector2(0.5f, 1f);
+        banner.pivot = new Vector2(0.5f, 1f);
+        banner.sizeDelta = new Vector2(Mathf.Clamp(text.Length * 7.5f + 40f, 220f, 720f), 34f);
+        banner.anchoredPosition = new Vector2(0f, -8f);
+        Round(banner);
+        AddRoundedCardBorder(banner, Accent, 1f);
+        var bannerText = TextObject("t", banner, text, 13, Ink, TextAnchor.MiddleCenter, monoFont);
+        Stretch(bannerText.rectTransform, Vector2.zero, Vector2.one, new Vector2(10f, 0f), new Vector2(-10f, 0f));
     }
 
     private void ShowContextTargetArrow(CardInstance targetCard)
@@ -5880,6 +6913,42 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
     }
 
+    // ── Intermediate Bot decision core ───────────────────────────────────────
+    // Thin adapter around Engine/Bot/IntermediateBot.cs: one decision per tick,
+    // applied through this class's own Dispatch() so UI/animation/network sync
+    // behave identically to a human or the Basic Bot. Shares the same early-exit
+    // guards and aiTriedThisTurn blacklist as AiTick() below — IntermediateBot
+    // exposes SnapshotFor/Succeeded/Signature specifically so this method doesn't
+    // need to reimplement its "did that actually work" check (see the robustness
+    // note at the top of IntermediateBot.cs: rejections still Log(), so a naive
+    // EventLog-changed check isn't a reliable success signal).
+    private bool IntermediateAiTick()
+    {
+        var p = state.Players.ContainsKey(aiSeat) ? state.Players[aiSeat] : null;
+        if (p == null) return false;
+        if (activeMoveGhosts > 0) return false;
+        if (handDealAnimating) return false;
+        if (mulliganDealAnimating > 0) return false;
+        if (state.TurnNumber != aiLastTurnSeen)
+        {
+            aiLastTurnSeen = state.TurnNumber;
+            aiTriedThisTurn.Clear();
+            if (state.Status == "active" && state.ActiveSeat == aiSeat)
+            {
+                aiNextActionAt = Time.unscaledTime + 2.9f;
+                return false;
+            }
+        }
+
+        var cmd = IntermediateBot.DecideOneCommand(state, aiSeat, aiTriedThisTurn);
+        if (cmd == null) return false;
+        object before = IntermediateBot.SnapshotFor(state, cmd);
+        Dispatch(cmd);
+        if (!IntermediateBot.Succeeded(state, cmd, before))
+            aiTriedThisTurn.Add(IntermediateBot.Signature(cmd));
+        return true;
+    }
+
     // ── Basic Bot decision core ──────────────────────────────────────────────
     // Heuristics modelled on Strawtable's greedy AI: mulligan on curveless hands,
     // play the biggest affordable character, dump spare DON onto the leader, attack
@@ -6882,19 +7951,25 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // The green "usable" glow appears only when the mouse hovers a valid card (handled by
         // CardHover), not persistently on every legal pick.
 
-        var button = cardBody.gameObject.AddComponent<Button>();
-        button.transition = Selectable.Transition.ColorTint;
-        button.onClick.AddListener(() => OnCardClick(card, seat));
+        // Replay is observation-only (spec: "just watching, no interaction") — no clicking to
+        // select/target, no drag-to-attack, no hand reordering. Hover/preview still works
+        // (CardHover below is unconditional) so you can still inspect any card at rest.
+        if (!isReplayMode)
+        {
+            var button = cardBody.gameObject.AddComponent<Button>();
+            button.transition = Selectable.Transition.ColorTint;
+            button.onClick.AddListener(() => OnCardClick(card, seat));
+        }
 
         var hover = cardBody.gameObject.AddComponent<CardHover>();
         hover.Init(this, card, faceUp, seat != null && seat.EndsWith("-hand"), handHomeSiblingIndex, suppressPreview);
 
         // Drag-to-attack: drag from your own leader/character to an opponent card; the arrow
         // follows the cursor and the attack is declared on release. (Click-to-attack still works.)
-        if (faceUp && IsAttackableBoardCard(card, seat))
+        if (!isReplayMode && faceUp && IsAttackableBoardCard(card, seat))
             cardBody.gameObject.AddComponent<AttackDrag>().Init(this, canvas, card, seat);
 
-        if (faceUp && seat != null && seat.EndsWith("-hand"))
+        if (!isReplayMode && faceUp && seat != null && seat.EndsWith("-hand"))
         {
             var drag = cardBody.gameObject.AddComponent<CardDrag>();
             drag.Init(this, canvas, card, seat.Replace("-hand", ""), inverted);
@@ -7046,11 +8121,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             holder.sizeDelta = new Vector2(geo.CardWidth, geo.CardHeight);
 
             ApplyFanSlot(holder, geo, i, count, top);
-            // In a networked match the top-rendered hand is always the remote opponent's (see
-            // BottomSeat/TopSeat) - hide it as card backs, same as any other face-down pile.
-            // Hotseat/Versus Self is unaffected (isNetworked is false there).
-            bool handFaceUp = !(top && (isNetworked || aiSeat == TopSeat));
-            AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top, count - 1 - i);
+            bool handFaceUp;
+            if (isReplayMode)
+            {
+                // Independent per-seat toggle (replayHandVisibility) rather than the live-match
+                // "hide the opponent's hand" rule below — a replay has no real "opponent" to hide
+                // information from, just a spectator choosing what to look at.
+                string realSeat = seat.EndsWith("-hand") ? seat.Substring(0, seat.Length - 5) : seat;
+                handFaceUp = replayHandVisibility == "both" || replayHandVisibility == realSeat;
+            }
+            else
+            {
+                // In a networked match the top-rendered hand is always the remote opponent's (see
+                // BottomSeat/TopSeat) - hide it as card backs, same as any other face-down pile.
+                // Hotseat/Versus Self is unaffected (isNetworked is false there).
+                handFaceUp = !(top && (isNetworked || aiSeat == TopSeat));
+            }
+            AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top && !IsReplayRotated, count - 1 - i);
             holders[i] = holder;
             // Presence IN: remember the opponent's face-down hand holders (by hand index) so
             // PresenceReceived can lift the cards they're currently inspecting.
@@ -7263,6 +8350,47 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             var text = TextObject("Text", root, label, 11, textColor, TextAnchor.MiddleCenter);
             Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(6, 0), new Vector2(-6, 0));
         }
+        var button = root.gameObject.AddComponent<Button>();
+        button.interactable = enabled;
+        button.onClick.AddListener(action);
+    }
+
+    // Small square glyph-only button (rewind/play/pause/etc.) for compact transport rows —
+    // a League-of-Legends-style condensed playback bar, rather than AddButton's fixed
+    // 118px-wide labeled buttons. Sized via LayoutElement only (no explicit sizeDelta), so a
+    // parent HorizontalLayoutGroup with childControlWidth/Height=true can still stretch its
+    // height to fill a thin row while keeping width fixed (see DrawReplayControlBar).
+    private void AddIconButton(RectTransform parent, string glyph, UnityEngine.Events.UnityAction action, bool enabled = true, float width = 28f)
+    {
+        var root = PanelObject(glyph + " Icon Button", parent, enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
+        var le = root.gameObject.AddComponent<LayoutElement>();
+        le.preferredWidth = width; le.minWidth = width;
+        Round(root);
+        AddRoundedCardBorder(root, enabled ? MenuB : (Color)new Color32(50, 58, 74, 80), 1f);
+        var text = TextObject("Glyph", root, glyph, 13, enabled ? Ink : (Color)new Color32(120, 130, 146, 160), TextAnchor.MiddleCenter, monoFont);
+        text.fontStyle = FontStyle.Bold;
+        text.resizeTextForBestFit = true;
+        text.resizeTextMinSize = 8;
+        text.resizeTextMaxSize = 13;
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(2f, 0f), new Vector2(-2f, 0f));
+        var button = root.gameObject.AddComponent<Button>();
+        button.interactable = enabled;
+        button.onClick.AddListener(action);
+    }
+
+    // Small text pill (mode/speed/desc toggles) — same idea as AddIconButton but for short
+    // text instead of a single glyph, sized to fit the label rather than AddButton's fixed
+    // 118px. Used by the condensed replay control bar's top strip.
+    private void AddCompactPill(RectTransform parent, string label, UnityEngine.Events.UnityAction action, bool enabled = true)
+    {
+        float w = Mathf.Clamp(label.Length * 6.2f + 16f, 40f, 220f);
+        var root = PanelObject(label + " Pill", parent, enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
+        SetPreferred(root, new Vector2(w, 22f));
+        root.sizeDelta = new Vector2(w, 22f);
+        Round(root);
+        AddRoundedCardBorder(root, enabled ? MenuB : (Color)new Color32(50, 58, 74, 80), 1f);
+        var text = TextObject("Text", root, label, 9, enabled ? Ink : (Color)new Color32(120, 130, 146, 160), TextAnchor.MiddleCenter, monoFont);
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var button = root.gameObject.AddComponent<Button>();
         button.interactable = enabled;
         button.onClick.AddListener(action);

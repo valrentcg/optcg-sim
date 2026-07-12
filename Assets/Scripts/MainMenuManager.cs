@@ -124,6 +124,37 @@ public partial class MainMenuManager : MonoBehaviour
         // wiped the persisted slot before the store was ready. Unresolvable picks simply
         // render as empty until the store catches up (or the player picks anew).
     }
+
+    // ── Versus A.I. bot difficulty ───────────────────────────────────────────
+    // "beginner" (GameManager.AiTick — the original greedy heuristic bot) or
+    // "intermediate" (Engine/Bot/IntermediateBot.cs). Persisted per account the
+    // same way deck picks are, right down to the key/save/load shape above.
+    private static string aiDifficulty;
+    private static bool aiDifficultyLoaded;
+    private static string aiDifficultyLoadedFor;
+
+    private static string AiDifficultyPrefKey() => "optcg.aidifficulty." + DeckPickAccountKey();
+
+    private void EnsureAiDifficultyLoaded()
+    {
+        string acct = DeckPickAccountKey();
+        if (aiDifficultyLoaded && aiDifficultyLoadedFor == acct) return;
+        aiDifficultyLoaded = true;
+        aiDifficultyLoadedFor = acct;
+        aiDifficulty = PlayerPrefs.GetString(AiDifficultyPrefKey(), "beginner") == "intermediate"
+            ? "intermediate" : "beginner";
+    }
+
+    private void SetAiDifficulty(string value)
+    {
+        aiDifficulty = value == "intermediate" ? "intermediate" : "beginner";
+        PlayerPrefs.SetString(AiDifficultyPrefKey(), aiDifficulty);
+        PlayerPrefs.Save();
+        RenderMenu();
+    }
+
+    private static string AiDifficultyLabel(string d) => d == "intermediate" ? "INTERMEDIATE" : "BEGINNER";
+
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
     private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
     private static bool reopenLobbyAfterPicker;   // restore the waiting room after the picker closes
@@ -134,6 +165,26 @@ public partial class MainMenuManager : MonoBehaviour
 
     // When true, the stage shows the replay browser instead of the game-mode portals.
     private bool showingReplays;
+
+    // When true, the stage shows the dedicated local-file Replays screen (distinct from the
+    // cloud-merged Match History above — this is a straight, un-merged listing of whatever's
+    // in ReplayStore.ListAll() for this account, plus an Import button for a replay someone
+    // else sent you). Deliberately kept separate rather than folded into Match History so it
+    // stays simple to iterate on while the replay viewer itself gets built out further.
+    private bool showingLocalReplays;
+    private string importReplayError; // set by ImportReplay() on a failed parse, shown once
+
+    // ── Cloud match search/download (only meaningful while showingLocalReplays) ─────
+    // null username = showing the normal local-file list; non-null = showing that player's
+    // public cloud match list instead (see ReplayCloudStore). Reached either by typing a
+    // username in the Replays screen's search box, or via "Matches" on a Friends row.
+    private string cloudSearchUsernameInput = "";
+    private string cloudSearchActiveUsername;
+    private List<CloudMatchSummary> cloudSearchResults;
+    private bool cloudSearchBusy;
+    private string cloudSearchError;
+    private readonly HashSet<string> cloudDownloadingMatchIds = new HashSet<string>();
+    private readonly HashSet<string> cloudDownloadedMatchIds = new HashSet<string>();
 
     // ── Match History sub-state (only meaningful while showingReplays) ────────
     // selectedMatchId: null = the scannable 20-row list, set = the turn-by-turn
@@ -435,6 +486,11 @@ public partial class MainMenuManager : MonoBehaviour
         // Update clock every 30 seconds (no need for every-second polling)
         InvokeRepeating(nameof(UpdateClock), 30f, 30f);
         BootUpdateAndAssetsOnce();
+        // Restore the saved display mode (see SetDisplayMode) — applying the same mode
+        // repeatedly (e.g. every time the menu is rebuilt after leaving a match) is a no-op,
+        // so this is safe to call unconditionally rather than tracking "already applied".
+        bool fullscreen = PlayerPrefs.GetInt("optcg.display.fullscreen", Screen.fullScreenMode != FullScreenMode.Windowed ? 1 : 0) != 0;
+        Screen.fullScreenMode = fullscreen ? FullScreenMode.FullScreenWindow : FullScreenMode.Windowed;
     }
 
     // Launch-time update check + CDN asset index, once per app run. On WebGL a
@@ -896,6 +952,7 @@ public partial class MainMenuManager : MonoBehaviour
         else if (showingProfileIcon) BuildProfileIconStage(stage);
         else if (showingProfile) BuildProfileStage(stage);
         else if (showingReplays) BuildReplayStage(stage);
+        else if (showingLocalReplays) BuildLocalReplaysStage(stage);
         else if (showingLobbyHub) BuildLobbyStage(stage);
         else BuildStage(stage);
     }
@@ -1949,6 +2006,301 @@ public partial class MainMenuManager : MonoBehaviour
     }
 
     // ══════════════════════════════════════════════════════════════════════════
+    // Local Replays browser ("Replays" nav row). A plain, un-merged listing of
+    // ReplayStore.ListAll() for this account, plus Import — deliberately separate from the
+    // cloud-merged Match History screen above (see the showingLocalReplays field comment).
+    // Reuses WatchReplay() for the same viewer entry point Match History uses.
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // Navigates to the Replays screen's cloud-search view for `username` and kicks off the
+    // search — shared by the search box below and Friends' "Matches" button, so both land in
+    // the exact same place.
+    private void OpenCloudMatches(string username)
+    {
+        if (string.IsNullOrWhiteSpace(username)) return;
+        username = username.Trim();
+        showingAccountSettings = false; showingFriends = false; showingProfile = false;
+        showingReplays = false; importReplayError = null;
+        showingLocalReplays = true;
+        cloudSearchActiveUsername = username;
+        cloudSearchUsernameInput = username;
+        cloudSearchResults = null;
+        cloudSearchError = null;
+        cloudSearchBusy = true;
+        RenderMenu();
+        ReplayCloudStore.SearchByUsername(username, results =>
+        {
+            if (this == null || menuRoot == null) return;
+            cloudSearchBusy = false;
+            cloudSearchResults = results;
+            if (results.Count == 0) cloudSearchError = $"No public matches found for '{username}'.";
+            RenderMenu();
+        });
+    }
+
+    private void BuildLocalReplaysStage(RectTransform stage)
+    {
+        const float headerH = 78f;
+
+        var header = PanelObject("Replays Header", stage, new Color(0, 0, 0, 0));
+        Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -headerH), Vector2.zero);
+
+        var title = TextObject("Title", header, "Replays", 27, Ink, TextAnchor.UpperLeft);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 0f), new Vector2(0.32f, 1f), new Vector2(4f, 22f), Vector2.zero);
+
+        var sub = TextObject("Sub", header, cloudSearchActiveUsername != null ? "CLOUD MATCH SEARCH" : "LOCAL REPLAY FILES",
+            11, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(sub.rectTransform, Vector2.zero, new Vector2(0.32f, 0f), new Vector2(4f, 4f), new Vector2(0f, 26f));
+
+        // Username search box — always visible, regardless of which list is currently showing.
+        var searchField = MakeInput(header, "Search player's matches...", cloudSearchUsernameInput, s => cloudSearchUsernameInput = s,
+            OpenCloudMatches);
+        Stretch(searchField, new Vector2(0.34f, 1f), new Vector2(0.66f, 1f), Vector2.zero, new Vector2(0f, -20f));
+        var searchBtn = PanelObject("Search Btn", header, new Color(0, 0, 0, 0));
+        Stretch(searchBtn, new Vector2(0.34f, 0f), new Vector2(0.66f, 0f), Vector2.zero, new Vector2(0f, 20f));
+        AddButton(searchBtn, "SEARCH", () => OpenCloudMatches(cloudSearchUsernameInput), true, false);
+
+        var importBtn = PanelObject("Import Btn", header, Accent);
+        importBtn.anchorMin = new Vector2(1f, 1f); importBtn.anchorMax = new Vector2(1f, 1f);
+        importBtn.pivot = new Vector2(1f, 1f);
+        importBtn.sizeDelta = new Vector2(168f, 40f);
+        importBtn.anchoredPosition = new Vector2(0f, -14f);
+        Round(importBtn);
+        var importText = TextObject("t", importBtn, "IMPORT REPLAY", 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        importText.fontStyle = FontStyle.Bold;
+        Stretch(importText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var importClickBtn = importBtn.gameObject.AddComponent<Button>();
+        importClickBtn.onClick.AddListener(ImportReplay);
+
+        var listArea = PanelObject("Replays List", stage, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -headerH - 8f));
+
+        if (cloudSearchActiveUsername != null) { BuildCloudMatchesList(listArea); return; }
+
+        float errOffset = 0f;
+        if (!string.IsNullOrEmpty(importReplayError))
+        {
+            var err = TextObject("ImportErr", listArea, importReplayError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -20f), Vector2.zero);
+            errOffset = 26f;
+        }
+
+        var replays = ReplayStore.ListAll();
+        if (replays.Count == 0)
+        {
+            var empty = TextObject("Empty", listArea,
+                "No local replays yet — finish a match, or import one someone sent you.",
+                13, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -34f - errOffset), Vector2.zero);
+            return;
+        }
+
+        const float rowH = 74f, gap = 9f;
+        var scrollAnchor = PanelObject("Replays Scroll Anchor", listArea, new Color(0, 0, 0, 0));
+        Stretch(scrollAnchor, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -errOffset));
+        var content = MakeMenuScroll(scrollAnchor, replays.Count * (rowH + gap) - gap);
+        for (int i = 0; i < replays.Count; i++)
+        {
+            var row = PanelObject("Replay Row " + i, content, RowBg);
+            row.anchorMin = new Vector2(0f, 1f);
+            row.anchorMax = new Vector2(1f, 1f);
+            row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(0f, rowH);
+            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
+            BuildLocalReplayRow(row, replays[i]);
+        }
+    }
+
+    private void BuildCloudMatchesList(RectTransform listArea)
+    {
+        var backBtnHolder = PanelObject("Back Holder", listArea, new Color(0, 0, 0, 0));
+        Stretch(backBtnHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(4f, -32f), new Vector2(0f, -2f));
+        AddButton(backBtnHolder, "< Back to Local Replays", () =>
+        {
+            cloudSearchActiveUsername = null;
+            cloudSearchResults = null;
+            cloudSearchError = null;
+            RenderMenu();
+        }, true, false);
+
+        if (cloudSearchBusy)
+        {
+            var loading = TextObject("Loading", listArea, $"Searching {cloudSearchActiveUsername}'s public matches...",
+                13, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(loading.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -70f), Vector2.zero);
+            return;
+        }
+        if (!string.IsNullOrEmpty(cloudSearchError))
+        {
+            var err = TextObject("Err", listArea, cloudSearchError, 13, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -70f), Vector2.zero);
+            return;
+        }
+        var matches = cloudSearchResults;
+        if (matches == null || matches.Count == 0) return;
+
+        const float rowH = 74f, gap = 9f;
+        var scrollAnchor = PanelObject("Cloud Matches Scroll Anchor", listArea, new Color(0, 0, 0, 0));
+        Stretch(scrollAnchor, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -38f));
+        var content = MakeMenuScroll(scrollAnchor, matches.Count * (rowH + gap) - gap);
+        for (int i = 0; i < matches.Count; i++)
+        {
+            var row = PanelObject("Cloud Match Row " + i, content, RowBg);
+            row.anchorMin = new Vector2(0f, 1f);
+            row.anchorMax = new Vector2(1f, 1f);
+            row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(0f, rowH);
+            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
+            BuildCloudMatchRow(row, matches[i]);
+        }
+    }
+
+    private void BuildCloudMatchRow(RectTransform row, CloudMatchSummary m)
+    {
+        Round(row);
+        AddRoundedCardBorder(row, MenuB, 1f);
+
+        string matchup = $"{m.southUsername ?? "South"} ({m.southDeckName ?? "?"}) vs {m.northUsername ?? "North"} ({m.northDeckName ?? "?"})";
+        var matchupText = TextObject("Matchup", row, matchup, 13, Ink, TextAnchor.MiddleLeft);
+        matchupText.fontStyle = FontStyle.Bold;
+        matchupText.rectTransform.anchorMin = new Vector2(0f, 0.5f);
+        matchupText.rectTransform.anchorMax = new Vector2(0.62f, 0.5f);
+        matchupText.rectTransform.pivot = new Vector2(0f, 0.5f);
+        matchupText.rectTransform.sizeDelta = new Vector2(0f, 20f);
+        matchupText.rectTransform.anchoredPosition = new Vector2(14f, 10f);
+
+        string sub = $"Winner: {m.winnerUsername ?? "?"}  ·  {m.turnCount} turns  ·  {FormatReplayDate(m.uploadedAt)}";
+        var subText = TextObject("Sub", row, sub, 10, Muted, TextAnchor.MiddleLeft, monoFont);
+        subText.rectTransform.anchorMin = new Vector2(0f, 0.5f);
+        subText.rectTransform.anchorMax = new Vector2(0.62f, 0.5f);
+        subText.rectTransform.pivot = new Vector2(0f, 0.5f);
+        subText.rectTransform.sizeDelta = new Vector2(0f, 16f);
+        subText.rectTransform.anchoredPosition = new Vector2(14f, -10f);
+
+        var actionHolder = PanelObject("Action", row, new Color(0, 0, 0, 0));
+        actionHolder.anchorMin = new Vector2(1f, 0.5f); actionHolder.anchorMax = new Vector2(1f, 0.5f);
+        actionHolder.pivot = new Vector2(1f, 0.5f);
+        actionHolder.sizeDelta = new Vector2(120f, 36f);
+        actionHolder.anchoredPosition = new Vector2(-14f, 0f);
+        Round(actionHolder);
+
+        bool downloaded = cloudDownloadedMatchIds.Contains(m.matchId);
+        bool downloading = cloudDownloadingMatchIds.Contains(m.matchId);
+        if (!m.hasReplay)
+        {
+            actionHolder.GetComponent<Image>().color = new Color(1f, 1f, 1f, 0.03f);
+            var noneText = TextObject("t", actionHolder, "NO REPLAY", 10, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(noneText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            return;
+        }
+
+        actionHolder.GetComponent<Image>().color = downloaded ? new Color(GoodGreen.r, GoodGreen.g, GoodGreen.b, 0.18f) : Accent;
+        var actionLabel = downloaded ? "DOWNLOADED" : downloading ? "..." : "DOWNLOAD";
+        var actionText = TextObject("t", actionHolder, actionLabel, 10, downloaded ? GoodGreen : BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        actionText.fontStyle = FontStyle.Bold;
+        Stretch(actionText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var actionBtn = actionHolder.gameObject.AddComponent<Button>();
+        actionBtn.interactable = !downloading;
+        var capturedId = m.matchId;
+        actionBtn.onClick.AddListener(() =>
+        {
+            if (cloudDownloadedMatchIds.Contains(capturedId)) return;
+            cloudDownloadingMatchIds.Add(capturedId);
+            RenderMenu();
+            ReplayCloudStore.DownloadReplay(capturedId, imported =>
+            {
+                if (this == null || menuRoot == null) return;
+                cloudDownloadingMatchIds.Remove(capturedId);
+                if (imported != null) cloudDownloadedMatchIds.Add(capturedId);
+                RenderMenu();
+            });
+        });
+    }
+
+    private void BuildLocalReplayRow(RectTransform row, ReplayRecord r)
+    {
+        Round(row);
+        AddRoundedCardBorder(row, MenuB, 1f);
+
+        // A tight, vertically-centered 2-line block, not split across the row's top/bottom
+        // halves — anchoring each line to its own half (as this used to) pushes them apart
+        // toward the row's extreme top/bottom edges whenever the row is taller than the text
+        // actually needs, reading as loosely/badly aligned rather than a clean compact label.
+        string matchup = $"{r.SouthDeckName ?? "South"} vs {r.NorthDeckName ?? "North"}";
+        var matchupText = TextObject("Matchup", row, matchup, 14, Ink, TextAnchor.MiddleLeft);
+        matchupText.fontStyle = FontStyle.Bold;
+        matchupText.rectTransform.anchorMin = new Vector2(0f, 0.5f);
+        matchupText.rectTransform.anchorMax = new Vector2(0.6f, 0.5f);
+        matchupText.rectTransform.pivot = new Vector2(0f, 0.5f);
+        matchupText.rectTransform.sizeDelta = new Vector2(0f, 20f);
+        matchupText.rectTransform.anchoredPosition = new Vector2(14f, 10f);
+
+        string sub = $"Winner: {r.WinnerName ?? "?"}  ·  {r.TurnCount} turns  ·  {FormatReplayDate(r.SavedAtIso)}";
+        var subText = TextObject("Sub", row, sub, 10, Muted, TextAnchor.MiddleLeft, monoFont);
+        subText.rectTransform.anchorMin = new Vector2(0f, 0.5f);
+        subText.rectTransform.anchorMax = new Vector2(0.6f, 0.5f);
+        subText.rectTransform.pivot = new Vector2(0f, 0.5f);
+        subText.rectTransform.sizeDelta = new Vector2(0f, 16f);
+        subText.rectTransform.anchoredPosition = new Vector2(14f, -10f);
+
+        var watchBtn = PanelObject("Watch", row, Accent);
+        watchBtn.anchorMin = new Vector2(0.62f, 0.5f); watchBtn.anchorMax = new Vector2(0.62f, 0.5f);
+        watchBtn.pivot = new Vector2(0f, 0.5f);
+        watchBtn.sizeDelta = new Vector2(90f, 36f);
+        watchBtn.anchoredPosition = Vector2.zero;
+        Round(watchBtn);
+        var watchText = TextObject("t", watchBtn, "WATCH", 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        watchText.fontStyle = FontStyle.Bold;
+        Stretch(watchText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var capturedRecord = r;
+        var watchClick = watchBtn.gameObject.AddComponent<Button>();
+        watchClick.onClick.AddListener(() => WatchReplay(capturedRecord));
+
+        var deleteBtn = PanelObject("Delete", row, new Color(RedAccent.r, RedAccent.g, RedAccent.b, 0.16f));
+        deleteBtn.anchorMin = new Vector2(1f, 0.5f); deleteBtn.anchorMax = new Vector2(1f, 0.5f);
+        deleteBtn.pivot = new Vector2(1f, 0.5f);
+        deleteBtn.sizeDelta = new Vector2(80f, 36f);
+        deleteBtn.anchoredPosition = new Vector2(-14f, 0f);
+        Round(deleteBtn);
+        AddRoundedCardBorder(deleteBtn, RedAccent, 1f);
+        var deleteText = TextObject("t", deleteBtn, "DELETE", 11, RedAccent, TextAnchor.MiddleCenter, monoFont);
+        deleteText.fontStyle = FontStyle.Bold;
+        Stretch(deleteText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var capturedId = r.Id;
+        var deleteClick = deleteBtn.gameObject.AddComponent<Button>();
+        deleteClick.onClick.AddListener(() => { ReplayStore.Delete(capturedId); RenderMenu(); });
+    }
+
+    private static string FormatReplayDate(string savedAtIso)
+    {
+        if (DateTime.TryParse(savedAtIso, null, System.Globalization.DateTimeStyles.RoundtripKind, out var dt))
+            return dt.ToLocalTime().ToString("MMM d, h:mm tt");
+        return "unknown date";
+    }
+
+    // Native "Open File" dialog (NativeFileDialog.cs — direct Win32 P/Invoke, this project
+    // ships Windows-only today) filtered to .json, so you can import a replay someone else
+    // exported from their own Replays folder and sent you (Discord, email, etc.).
+    private void ImportReplay()
+    {
+        string path = NativeFileDialog.OpenFile("Import Replay", "Replay JSON", "json");
+        if (string.IsNullOrEmpty(path)) return; // canceled
+        string json;
+        try { json = File.ReadAllText(path); }
+        catch (Exception ex)
+        {
+            importReplayError = $"Couldn't read that file: {ex.Message}";
+            RenderMenu();
+            return;
+        }
+
+        var imported = ReplayStore.Import(json);
+        importReplayError = imported != null ? null : "That file doesn't look like a valid replay export.";
+        RenderMenu();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
     // Account gate (required-to-play) + Account & Recovery settings (optional).
     // Identity/uniqueness/profanity logic lives in AccountManager.cs + Cloud Code;
     // this is just the uGUI wiring, following the same panel/busy/error idiom as
@@ -2243,10 +2595,14 @@ public partial class MainMenuManager : MonoBehaviour
         else BuildLinkEmailFields(panel);
 
         // ── Audio ── SFX volume (shared with the in-game slider via PlayerPrefs).
+        // Bottom-anchored with a fixed pixel offset — shifted +50px up from where this used to
+        // sit (y 34-84) so it clears the Sign Out button below (AddSignOutRow, y 24-64), which
+        // it was quietly overlapping (34-54 fully inside 24-64) even before the Display section
+        // was added above it.
         var audioLbl = TextObject("Audio Label", panel, "AUDIO — SFX VOLUME", 10, Muted, TextAnchor.LowerLeft, monoFont);
-        Stretch(audioLbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 64f), new Vector2(-24f, 84f));
+        Stretch(audioLbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 114f), new Vector2(-24f, 134f));
         var track = PanelObject("SFX Track", panel, new Color(1f, 1f, 1f, 0.08f));
-        Stretch(track, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 34f), new Vector2(-24f, 54f));
+        Stretch(track, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 84f), new Vector2(-24f, 104f));
         Round(track);
         var fillArea = PanelObject("Fill Area", track, new Color(0f, 0f, 0f, 0f));
         Stretch(fillArea, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -2278,6 +2634,54 @@ public partial class MainMenuManager : MonoBehaviour
         slider.maxValue = 1f;
         slider.value = GameManager.SfxVolume;
         slider.onValueChanged.AddListener(v => GameManager.SfxVolume = v);
+
+        // ── Display — Fullscreen / Windowed ── stacked just above the audio block, same
+        // bottom-anchored-with-fixed-pixel-offset convention.
+        var displayLbl = TextObject("Display Label", panel, "DISPLAY", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(displayLbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 174f), new Vector2(-24f, 194f));
+
+        var displayRow = PanelObject("Display Row", panel, new Color(0, 0, 0, 0));
+        Stretch(displayRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 144f), new Vector2(-24f, 170f));
+        var displayHlg = displayRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        displayHlg.spacing = 8f;
+        displayHlg.childAlignment = TextAnchor.MiddleLeft;
+        displayHlg.childControlWidth = false;
+        displayHlg.childControlHeight = false;
+
+        bool isFullscreen = Screen.fullScreenMode != FullScreenMode.Windowed;
+        AddDisplayModePill(displayRow, "FULLSCREEN", isFullscreen, () => SetDisplayMode(true));
+        AddDisplayModePill(displayRow, "WINDOWED", !isFullscreen, () => SetDisplayMode(false));
+    }
+
+    // Applies immediately and persists across launches (PlayerPrefs, same "optcg.xxx"
+    // convention as SFX volume) — FullScreenWindow (borderless) rather than ExclusiveFullScreen
+    // for the "fullscreen" option, since that's the modern default most players expect and
+    // avoids a jarring display-mode switch flicker on entry.
+    private void SetDisplayMode(bool fullscreen)
+    {
+        Screen.fullScreenMode = fullscreen ? FullScreenMode.FullScreenWindow : FullScreenMode.Windowed;
+        PlayerPrefs.SetInt("optcg.display.fullscreen", fullscreen ? 1 : 0);
+        PlayerPrefs.Save();
+        RenderMenu();
+    }
+
+    private void AddDisplayModePill(RectTransform parent, string label, bool active, UnityEngine.Events.UnityAction action)
+    {
+        float w = label.Length * 7f + 24f;
+        var root = PanelObject(label + " Pill", parent, active ? Accent : new Color32(34, 58, 78, 235));
+        // childControlWidth/Height are OFF on the parent HorizontalLayoutGroup, so it never
+        // reads LayoutElement to size children — sizeDelta has to be set directly too, or the
+        // pill keeps a fresh RectTransform's default 100x100 size (see SetPreferred, which
+        // AddButton/AddCompactPill already lean on for exactly this reason).
+        SetPreferred(root, new Vector2(w, 26f));
+        root.sizeDelta = new Vector2(w, 26f);
+        Round(root);
+        AddRoundedCardBorder(root, active ? Accent : MenuB, 1f);
+        var text = TextObject("t", root, label, 10, active ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
+        text.fontStyle = FontStyle.Bold;
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = root.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(action);
     }
 
     private void BuildGuestSettingsFields(RectTransform panel)
@@ -2912,6 +3316,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         showingAccountSettings = false;
         showingReplays = false;
+        showingLocalReplays = false;
         showingProfile = false;
         showingFriends = true;
         friendsError = null;
@@ -3140,6 +3545,7 @@ public partial class MainMenuManager : MonoBehaviour
         hlg.childAlignment = TextAnchor.MiddleRight;
         hlg.childControlWidth = false;
         hlg.childControlHeight = false;
+        AddButton(btnHolder, "Matches", () => OpenCloudMatches(entry.Username), true, false);
         AddButton(btnHolder, "Remove", () => RemoveFriendClicked(entry.PlayerId), !friendsBusy, false);
         AddButton(btnHolder, "Block", () => BlockFriendClicked(entry.PlayerId), !friendsBusy, false);
     }
@@ -3927,12 +4333,13 @@ public partial class MainMenuManager : MonoBehaviour
         hLE.preferredHeight = 22f;
         hLE.minHeight = 22f;
 
-        // Five nav rows
+        // Six nav rows
         var rows = new (string title, string subtitle, string tag, bool active)[]
         {
-            ("Play",     "Game modes",          null,       !showingReplays && !showingFriends && !showingProfile),
+            ("Play",     "Game modes",          null,       !showingReplays && !showingLocalReplays && !showingFriends && !showingProfile),
             ("Decks",    "Build & edit",        null,       false),
             ("Match History", "Watch past matches", null,   showingReplays),
+            ("Replays",  "Local files & import", null,      showingLocalReplays),
             ("Friends",  "Crew & invites",      FriendsOnlineSubtitle(), showingFriends),
             ("Settings", "Preferences & audio", null,       false),
         };
@@ -3940,10 +4347,14 @@ public partial class MainMenuManager : MonoBehaviour
         UnityEngine.Events.UnityAction[] actions =
         {
             () => { showingAccountSettings = false; showingFriends = false; showingReplays = false;
-                    showingProfile = false; RenderMenu(); },
+                    showingLocalReplays = false; showingProfile = false; RenderMenu(); },
             () => OpenDeckBuilder(),
             () => { showingAccountSettings = false; showingFriends = false; showingProfile = false;
+                    showingLocalReplays = false;
                     showingReplays = true; selectedMatchId = null; matchHistory = null; RenderMenu(); },
+            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false;
+                    showingReplays = false; importReplayError = null; cloudSearchActiveUsername = null;
+                    showingLocalReplays = true; RenderMenu(); },
             OpenFriends,
             OpenAccountSettings,
         };
@@ -4327,6 +4738,7 @@ public partial class MainMenuManager : MonoBehaviour
     private void BuildSoloPortal(RectTransform portal)
     {
         EnsureDeckPicksLoaded();
+        EnsureAiDifficultyLoaded();
         AddTopHighlight(portal);
 
         // Header: portal title + description
@@ -4350,8 +4762,11 @@ public partial class MainMenuManager : MonoBehaviour
         var southDeck = DeckStore.Get(p1DeckId);
         if (aiMode)
         {
-            BuildDeckPanel(portal, new Vector2(0.028f, 0.575f), new Vector2(0.972f, 0.90f),
-                "BASIC BOT", aiDeckId, PickAiDeck, enterAlert && northDeck == null);
+            // Shrink the bot's deck panel slightly (0.610 vs 0.575) to free a thin band for
+            // the difficulty toggle, sandwiched between it and YOUR DECK below.
+            BuildDeckPanel(portal, new Vector2(0.028f, 0.610f), new Vector2(0.972f, 0.90f),
+                AiDifficultyLabel(aiDifficulty) + " BOT", aiDeckId, PickAiDeck, enterAlert && northDeck == null);
+            BuildAiDifficultyToggle(portal, new Vector2(0.028f, 0.560f), new Vector2(0.972f, 0.605f));
             BuildDeckPanel(portal, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.560f),
                 "YOUR DECK", p1DeckId, () => PickPlayerDeck(1), enterAlert && southDeck == null);
         }
@@ -4365,7 +4780,8 @@ public partial class MainMenuManager : MonoBehaviour
 
         // Status caption
         bool bothReady = northDeck != null && southDeck != null;
-        string capText = bothReady ? (aiMode ? "Ready — Basic Bot pilots the top deck" : "Both seats ready")
+        string capText = bothReady
+            ? (aiMode ? $"Ready — {AiDifficultyLabel(aiDifficulty)} Bot pilots the top deck" : "Both seats ready")
             : (northDeck == null && southDeck == null) ? "Select 2 decks to begin"
             : "Select 1 more deck to begin";
         var cap = TextObject("Deck Caption", portal, capText, 10,
@@ -4475,6 +4891,41 @@ public partial class MainMenuManager : MonoBehaviour
         var idCap = modeId;
         var btn = tile.gameObject.AddComponent<Button>();
         btn.onClick.AddListener(() => SelectMode(idCap));
+    }
+
+    // ── Bot difficulty toggle (Versus A.I. only) ──────────────────────────────
+    // Same selected/unselected visual language as BuildSeasonModeTab (Profile stage):
+    // Accent fill + BadgeInk text when selected, transparent + MenuB border otherwise.
+
+    private void BuildAiDifficultyToggle(RectTransform portal, Vector2 aMin, Vector2 aMax)
+    {
+        var row = PanelObject("AI Difficulty Row", portal, new Color(0f, 0f, 0f, 0f));
+        Stretch(row, aMin, aMax, new Vector2(12f, 1f), new Vector2(-12f, -1f));
+
+        BuildDifficultyPill(row, "BEGINNER", "beginner", 0f, 0.5f, 3f, true);
+        BuildDifficultyPill(row, "INTERMEDIATE", "intermediate", 0.5f, 1f, 3f, false);
+    }
+
+    private void BuildDifficultyPill(RectTransform parent, string label, string value,
+        float xMin, float xMax, float halfGap, bool isLeft)
+    {
+        float offLeft = isLeft ? 0f : halfGap;
+        float offRight = isLeft ? halfGap : 0f;
+        bool selected = aiDifficulty == value;
+
+        var pill = PanelObject(label + " Pill", parent, selected ? Accent : new Color(0f, 0f, 0f, 0f));
+        Stretch(pill, new Vector2(xMin, 0f), new Vector2(xMax, 1f),
+            new Vector2(offLeft, 0f), new Vector2(-offRight, 0f));
+        Round(pill);
+        if (!selected) AddRoundedCardBorder(pill, MenuB, 1f);
+
+        var t = TextObject("t", pill, label, 9, selected ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+        var valueCap = value;
+        var btn = pill.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => SetAiDifficulty(valueCap));
     }
 
     // Small chip helper for multi-tiles (centered inside chipAnchor)
@@ -4714,7 +5165,7 @@ public partial class MainMenuManager : MonoBehaviour
         }
         CancelInvoke();
         if (canvas != null) canvas.gameObject.SetActive(false);
-        GameManager.LaunchVersusAi(p1DeckId, aiDeckId);
+        GameManager.LaunchVersusAi(p1DeckId, aiDeckId, aiDifficulty);
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
     }
