@@ -2883,13 +2883,28 @@ namespace OnePieceTcg.Engine
             if (instance == null) return false;
             var text = GetCard(instance)?.Effect ?? "";
             if (!ContainsAll(text, "cannot be K.O.'d in battle")) return false;
-            bool attackerIsLeader = attacker != null && GetCard(attacker)?.Type == "leader";
+            var atkDef = attacker != null ? GetCard(attacker) : null;
+            bool attackerIsLeader = atkDef?.Type == "leader";
+            bool attackerIsChar = atkDef?.Type == "character";
+            // The ＜X＞ attribute icon is stripped from the effect TEXT to the bare word "attribute";
+            // X is the immunity-holder's OWN attribute (verified across every such card), so match the
+            // attacker's attribute against the holder's.
+            string holderAttr = GetCard(instance)?.Attribute ?? "";
+            bool sameAttr = !string.IsNullOrEmpty(holderAttr)
+                && string.Equals(holderAttr, atkDef?.Attribute ?? "", StringComparison.OrdinalIgnoreCase);
             foreach (var line in text.Split('\n'))
             {
                 if (!ContainsAll(line, "cannot be K.O.'d in battle")) continue;
                 // "…cannot be K.O.'d in battle by Leaders." (ST08-002 Uta) only grants immunity
                 // against a Leader attacker — a Character attack K.O.s it normally.
                 if (ContainsAll(line, "by leaders") && !attackerIsLeader) continue;
+                // Attribute qualifiers (symbol stripped → "attribute"; X = holder's own attribute):
+                //   "by ＜X＞ attribute Characters" — only vs a same-attribute Character.
+                //   "by ＜X＞ attribute cards"      — only vs a same-attribute card (any type).
+                //   "by Characters without the ＜X＞ attribute" — only vs a different-attribute Character.
+                if (ContainsAll(line, "by attribute character") && !(attackerIsChar && sameAttr)) continue;
+                if (ContainsAll(line, "by attribute card") && !sameAttr) continue;
+                if (ContainsAll(line, "without the attribute") && !(attackerIsChar && !sameAttr)) continue;
                 int donReq = ParseDonThreshold(line);
                 if (donReq > 0 && instance.AttachedDonIds.Count < donReq) continue;
                 var fieldReq = System.Text.RegularExpressions.Regex.Match(line,

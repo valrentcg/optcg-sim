@@ -32,6 +32,12 @@ namespace OnePieceTcg.Engine
         /// <summary>Card rarity from the official library: "SR","SEC","L","R","C","UC","SP CARD","TR","P".</summary>
         public string Rarity = "";
 
+        /// <summary>The ＜attribute＞ icon: "Slash","Strike","Ranged","Special","Wisdom" (leaders +
+        /// characters; empty for events/stages). Used by battle-K.O.-immunity clauses like
+        /// "cannot be K.O.'d in battle by ＜X＞ attribute Characters" (the symbol is stripped from
+        /// the effect TEXT during extraction, so those clauses resolve against this field instead).</summary>
+        public string Attribute = "";
+
         public CardDef(string id, string name, string type, string color, int cost,
                        int power = 0, int? life = null, int counter = 0, List<string> keywords = null,
                        string effect = "", string trigger = "", List<string> features = null)
@@ -91,11 +97,12 @@ namespace OnePieceTcg.Engine
         public static void UpsertCard(string id, string name, string type, string color, int cost,
                                       int power = 0, int? life = null, int counter = 0,
                                       string[] keywords = null, string effect = "", string trigger = "",
-                                      string[] features = null, string rarity = null)
+                                      string[] features = null, string rarity = null, string attribute = null)
         {
             if (string.IsNullOrEmpty(id)) return;
             var def = Card(id, name, type, color, cost, power, life, counter, keywords, effect, trigger, features);
             def.Rarity = rarity ?? "";
+            def.Attribute = attribute ?? "";
             Library[id] = def;
         }
 

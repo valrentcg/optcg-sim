@@ -12,6 +12,7 @@ static class Scenarios
     public static int Run()
     {
         UtaKoByCharacterVsLeader();
+        AttributeKoImmunity();
         GumGumBellTrigger();
         ImInvincibleNotACounter();
         BlackLuffyLeaderKoEffect();
@@ -24,6 +25,25 @@ static class Scenarios
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
+    }
+
+    // Bug (full-library sweep): "cannot be K.O.'d in battle by ＜X＞ attribute cards/Characters" was
+    // over-immune (immune to everything) because only "by Leaders" was handled. OP03-008 Buggy
+    // (Slash) is immune only to SLASH attackers.
+    static void AttributeKoImmunity()
+    {
+        {   // same-attribute (Slash) attacker → Buggy survives
+            var st = FreshBattleBoard("EB01-012" /*Cavendish, Slash 6000*/, null, "OP03-008" /*Buggy, Slash*/);
+            DriveAttackToResolve(st);
+            bool survived = st.Players["north"].CharacterArea.Any(c => c?.CardId == "OP03-008");
+            Check("Buggy OP03-008 survives a SAME-attribute (Slash) attacker", survived, $"survived={survived}  {Tail(st)}");
+        }
+        {   // different-attribute (Strike) attacker → Buggy K.O.'d
+            var st = FreshBattleBoard("EB01-008" /*LittleOars Jr., Strike 7000*/, null, "OP03-008");
+            DriveAttackToResolve(st);
+            bool trashed = st.Players["north"].Trash.Any(c => c.CardId == "OP03-008");
+            Check("Buggy OP03-008 is K.O.'d by a DIFFERENT-attribute (Strike) attacker", trashed, $"trashed={trashed}  {Tail(st)}");
+        }
     }
 
     // Bug: ST08-014 Gum-Gum Bell [Trigger] "Add up to 1 black Character card with a cost of 2 or
