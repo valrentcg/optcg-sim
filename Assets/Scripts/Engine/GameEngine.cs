@@ -984,6 +984,32 @@ namespace OnePieceTcg.Engine
             return (m.Groups[1].Value.Trim(), m.Groups[2].Value.ToLowerInvariant());
         }
 
+        // Enforce a "[Type] card" qualifier in an add/search clause (e.g. "black Character card
+        // from your trash"). Only constrains when the text actually names a card type — clauses
+        // that just say "1 card" impose no type restriction.
+        private static bool AddClauseTypeMatches(string text, CardDef def)
+        {
+            if (def == null) return false;
+            if (ContainsAll(text, "Character card") && def.Type != "character") return false;
+            if (ContainsAll(text, "Event card") && def.Type != "event") return false;
+            if (ContainsAll(text, "Stage card") && def.Type != "stage") return false;
+            return true;
+        }
+
+        // Enforce a colour qualifier on the target of an add/search clause ("red Character card…").
+        // Matches the colour immediately qualifying the Character/Event/Stage card phrase, so a
+        // colour used elsewhere (a condition on the Leader, say) doesn't falsely constrain.
+        private static bool AddClauseColorMatches(string text, CardDef def)
+        {
+            if (string.IsNullOrEmpty(text)) return true;
+            var m = System.Text.RegularExpressions.Regex.Match(text,
+                @"\b(red|green|blue|purple|black|yellow)\b[^.\n]*?\b(?:Character|Event|Stage) card",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!m.Success) return true;
+            string col = m.Groups[1].Value;
+            return (def?.Color ?? "").IndexOf(col, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
         // Parse the count after "Draw " — handles "Draw 1 card", "Draw 2 cards", "Draw a card".
         private static int ParseDrawCount(string text)
         {
@@ -1017,7 +1043,9 @@ namespace OnePieceTcg.Engine
             var def = GetCard(instance);
             if (def == null) return false;
             if (ActiveDonCount(p) < GetCost(state, instance)) return false;
-            if (def.Type == "character" && !p.CharacterArea.Any(slot => slot == null)) return false;
+            // A full board does NOT block a Character: the "6th character" rule lets you play it
+            // and trash one of your own to make room (PlayCard handles the replaced slot via
+            // SlotIndex). The UI must prompt for which Character to replace and send that slot.
             if (def.Type == "event" && !HasTiming(def.Effect, "Main")) return false;
             if (def.Type != "character" && def.Type != "stage" && def.Type != "event") return false;
             return true;
@@ -2428,7 +2456,7 @@ namespace OnePieceTcg.Engine
                 else
                 {
                     string koedBattleId = state.Battle.Id;
-                    if (HasModifier(state, target, "cannotBeKod") || IsBattleKoImmune(state, target))
+                    if (HasModifier(state, target, "cannotBeKod") || IsBattleKoImmune(state, target, liveAttacker))
                     {
                         Log(state, "system", $"{NameId(targetDef)} cannot be K.O.'d and survives the battle.");
                         state.Battle = null;
@@ -2789,14 +2817,18 @@ namespace OnePieceTcg.Engine
         // Printed battle K.O. immunity: "[DON!! x1] This Character cannot be K.O.'d in battle."
         // (OP03-079 Vergo) or "If you have 8 or more DON!! cards on your field, this Character
         // cannot be K.O.'d in battle." (ST05-008 Shiki). Evaluated live at battle resolution.
-        private static bool IsBattleKoImmune(GameState state, CardInstance instance)
+        private static bool IsBattleKoImmune(GameState state, CardInstance instance, CardInstance attacker = null)
         {
             if (instance == null) return false;
             var text = GetCard(instance)?.Effect ?? "";
             if (!ContainsAll(text, "cannot be K.O.'d in battle")) return false;
+            bool attackerIsLeader = attacker != null && GetCard(attacker)?.Type == "leader";
             foreach (var line in text.Split('\n'))
             {
                 if (!ContainsAll(line, "cannot be K.O.'d in battle")) continue;
+                // "…cannot be K.O.'d in battle by Leaders." (ST08-002 Uta) only grants immunity
+                // against a Leader attacker — a Character attack K.O.s it normally.
+                if (ContainsAll(line, "by leaders") && !attackerIsLeader) continue;
                 int donReq = ParseDonThreshold(line);
                 if (donReq > 0 && instance.AttachedDonIds.Count < donReq) continue;
                 var fieldReq = System.Text.RegularExpressions.Regex.Match(line,
@@ -8048,6 +8080,19 @@ namespace OnePieceTcg.Engine
                     Log(state, effect.Seat, $"{NameId(addDef)} does not match the required type for {sourceName}.");
                     return EffectResolution.WaitingForTarget;
                 }
+                // Enforce the card-TYPE and COLOR the text specifies ("black Character card…").
+                // Previously only feature+cost were checked, so ST08-014 Gum-Gum Bell's trigger
+                // ("add 1 black Character…") wrongly let an Event be picked from the trash.
+                if (!AddClauseTypeMatches(text, addDef))
+                {
+                    Log(state, effect.Seat, $"{NameId(addDef)} is not the required card type for {sourceName}.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (!AddClauseColorMatches(text, addDef))
+                {
+                    Log(state, effect.Seat, $"{NameId(addDef)} is not the required color for {sourceName}.");
+                    return EffectResolution.WaitingForTarget;
+                }
                 int costCapAdd = ParseCostFilter(text);
                 if (costCapAdd >= 0 && addDef.Cost > costCapAdd)
                 {
@@ -8545,6 +8590,45 @@ namespace OnePieceTcg.Engine
                     QueueAndAutoResolve(state, seat, card, "onKo", wkBody, true, EffectScope.Instant, InferTargetZone(wkBody));
                 else
                     Log(state, seat, $"{NameId(def)}: K.O. reaction needs manual resolution: {wkBody}");
+            }
+            // A Character was K.O.'d — fire any board watchers that react to that (distinct from
+            // the K.O.'d card's OWN On-K.O. text handled above).
+            FireCharacterKoWatchers(state);
+        }
+
+        // Board watchers that react to ANY Character being K.O.'d, on EITHER player's field —
+        // e.g. ST08-001 "Black" Luffy leader: "[Your Turn] When a Character is K.O.'d, give up to
+        // 1 rested DON!! card to this Leader." Previously unimplemented (FireOnKoEffects only fired
+        // the K.O.'d card's own effects), so the leader effect never triggered.
+        private static void FireCharacterKoWatchers(GameState state)
+        {
+            foreach (var watchSeat in Seats())
+            {
+                var wp = Player(state, watchSeat);
+                var sources = new List<CardInstance>();
+                if (wp.Leader != null) sources.Add(wp.Leader);
+                foreach (var c in wp.CharacterArea) if (c != null) sources.Add(c);
+                foreach (var src in sources)
+                {
+                    if (IsEffectNegated(state, src)) continue;
+                    var sdef = GetCard(src);
+                    foreach (var line in (sdef?.Effect ?? "").Split('\n'))
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(line,
+                            @"When a Character is K\.O\.'d[^,]*, (.+)$",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (!m.Success) continue;
+                        // "[Your Turn]" / "[Opponent's Turn]" gate on the watcher's owner.
+                        bool yourTurn = HasTiming(line, "Your Turn") && !HasTiming(line, "Opponent's Turn");
+                        bool oppTurn = HasTiming(line, "Opponent's Turn");
+                        if (yourTurn && state.ActiveSeat != watchSeat) continue;
+                        if (oppTurn && state.ActiveSeat == watchSeat) continue;
+                        string body = NormalizeClause(m.Groups[1].Value.Trim());
+                        QueueAndAutoResolve(state, watchSeat, src, "koWatch", body,
+                            IsOptionalEffectText(body), EffectScope.Instant, InferTargetZone(body));
+                        Log(state, watchSeat, $"{NameId(sdef)}: a Character was K.O.'d.");
+                    }
+                }
             }
         }
 
