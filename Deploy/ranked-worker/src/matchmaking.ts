@@ -19,6 +19,11 @@ const BASE_RANGE = 100;                // starting ± MMR match window
 const RANGE_STEP = 50;                 // widen by this…
 const RANGE_INTERVAL_MS = 5000;        // …every this long waiting
 const MAX_RANGE = 800;                 // cap (past this, essentially "anyone")
+// An accepted/matched proposal older than this is a finished or abandoned match, not a
+// live connect handshake (which completes in seconds). Past it we drop the proposal so a
+// re-queue isn't trapped on a dead session — the never-expiring-matched-proposal bug that
+// stranded players pinned to a match that already ended, unable to queue again.
+const STALE_MATCH_MS = 120_000;        // 2 min — generous vs. real UGS session setup
 
 // ── Pure, testable matchmaking math ──────────────────────────────────────────
 
@@ -71,6 +76,15 @@ async function getProposal(env: Env, id: string): Promise<Proposal | null> {
   return await env.DB.prepare("SELECT * FROM proposals WHERE id = ?").bind(id).first<Proposal>();
 }
 
+// Drop a dead proposal and remove BOTH players' queue rows, so neither is left pinned to
+// a session that no longer exists. Used when a re-queue (or a still-polling stuck client)
+// finds an accepted/matched proposal too old to be a live handshake. The re-joining
+// player is re-enqueued fresh by the caller right after.
+async function clearProposal(env: Env, p: Proposal): Promise<void> {
+  await env.DB.prepare("DELETE FROM queue WHERE proposal_id = ?").bind(p.id).run();
+  await env.DB.prepare("DELETE FROM proposals WHERE id = ?").bind(p.id).run();
+}
+
 // Requeue accepters (reset their wait), remove non-accepters; mark proposal done.
 async function endProposal(env: Env, p: Proposal, finalState: string, now: number): Promise<void> {
   for (const [pid, acc] of [[p.player_a, p.a_accepted], [p.player_b, p.b_accepted]] as [string, number][]) {
@@ -92,6 +106,13 @@ async function proposalView(env: Env, me: string, proposalId: string, now: numbe
     return { status: iAccepted ? "requeued" : "idle" };
   }
   if (p.state === "declined" || p.state === "expired") {
+    return { status: "idle" };
+  }
+  // Stuck-client recovery: an accepted/matched proposal this old means the connect never
+  // completed (the "Connecting to your opponent…" screen has no Cancel). Clear it so the
+  // client falls back to idle on its next poll instead of hanging forever.
+  if ((p.state === "accepted" || p.state === "matched") && now - p.created_at > STALE_MATCH_MS) {
+    await clearProposal(env, p);
     return { status: "idle" };
   }
 
@@ -153,9 +174,16 @@ export async function handleQueueJoin(env: Env, playerId: string, body: any): Pr
   if (myRow?.proposal_id) {
     const p = await getProposal(env, myRow.proposal_id);
     if (p && (p.state === "pending" || p.state === "accepted" || p.state === "matched")) {
-      return await proposalView(env, playerId, p.id, now); // mid ready-check/match — don't re-enqueue
+      // A live ready-check (pending) or a genuine re-join during the connect handshake
+      // (recently accepted/matched) — return the current view, don't re-enqueue.
+      if (p.state === "pending" || now - p.created_at < STALE_MATCH_MS) {
+        return await proposalView(env, playerId, p.id, now);
+      }
+      // Older accepted/matched = a match the player has already finished/abandoned. Drop
+      // it so this deliberate re-queue starts a fresh search instead of a dead session.
+      await clearProposal(env, p);
     }
-    // declined/expired/missing → fall through and re-enqueue fresh
+    // declined/expired/missing/stale → fall through and re-enqueue fresh
   }
 
   const enqueuedAt = myRow && !myRow.proposal_id ? myRow.enqueued_at : now;
