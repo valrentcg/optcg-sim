@@ -11,24 +11,14 @@ using OnePieceTcg.Engine.Bot;
 
 class Program
 {
-    // Locate Assets/StreamingAssets/Cards/official-card-library.json by walking up from the
-    // running binary until the repo's Assets folder is found — works regardless of run dir.
-    static string FindCardJson()
-    {
-        var dir = new System.IO.DirectoryInfo(System.AppContext.BaseDirectory);
-        for (; dir != null; dir = dir.Parent)
-        {
-            var p = System.IO.Path.Combine(dir.FullName, "Assets", "StreamingAssets", "Cards", "official-card-library.json");
-            if (System.IO.File.Exists(p)) return p;
-        }
-        throw new System.IO.FileNotFoundException("Could not locate Assets/StreamingAssets/Cards/official-card-library.json above the harness binary.");
-    }
+    const string CardJsonPath = @"C:\Users\Nperr\One Piece TCG Simulator\Assets\StreamingAssets\Cards\official-card-library.json";
 
     static int Main(string[] args)
     {
-        int loaded = CardLibraryLoader.Load(FindCardJson());
+        int loaded = CardLibraryLoader.Load(CardJsonPath);
         Console.WriteLine($"Loaded {loaded} card definitions from JSON.\n");
         if (args.Length > 0 && args[0] == "scenario") return Scenarios.Run();
+        if (args.Length > 0 && args[0] == "diag") { Diag(args[1], args[2], int.Parse(args[3])); return 0; }
         if (args.Length > 0 && args[0] == "trace") { Trace(args.Length > 1 ? args[1] : "st01", args.Length > 2 ? args[2] : "st02"); return 0; }
         int seedsPer = args.Length > 0 && int.TryParse(args[0], out var s) ? s : 3;
         var decks = CardData.StarterDecks.Keys.OrderBy(k => k).ToList();
@@ -111,6 +101,20 @@ class Program
         Print("INVARIANT VIOLATIONS", invDetail);
 
         return (crashes + stalls + invariantFails) > 0 ? 1 : 0;
+    }
+
+    static void Diag(string sd, string nd, int seed)
+    {
+        var cfg = new MatchConfig { SouthDeck = sd, NorthDeck = nd, Seed = $"{sd}:{nd}:{seed}" };
+        var st = GameEngine.CreateMatch(cfg);
+        IntermediateBot.PlayFullMatch(st, 20000);
+        Console.WriteLine($"{sd} vs {nd} #{seed}: status={st.Status} phase={st.Phase} turn={st.TurnNumber} active={st.ActiveSeat}");
+        Console.WriteLine($"battle: {(st.Battle == null ? "null" : $"step={st.Battle.Step} attacker={st.Battle.AttackerId} target={st.Battle.TargetId} pendingDmg={st.Battle.PendingLifeDamage}")}");
+        Console.WriteLine($"pending effects: {st.PendingEffects.Count}");
+        foreach (var e in st.PendingEffects)
+            Console.WriteLine($"  [{e.EffectId}] seat={e.Seat} timing={e.Timing} optional={e.Optional} sel={e.SelectionsRemaining} zone={e.TargetZone}\n     text='{(e.Text ?? "").Replace("\n", " / ")}'");
+        Console.WriteLine("--- last 18 log lines ---");
+        foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 18))) Console.WriteLine("  " + l.Message);
     }
 
     static void Trace(string sd, string nd)

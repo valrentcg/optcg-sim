@@ -20,6 +20,7 @@ static class Scenarios
         BlazeSliceCounter();
         ShanksDefensiveLeaderEffect();
         DoubleAttackTriggerOrder();
+        AttackTargetRemovedNoHang();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -191,6 +192,25 @@ static class Scenarios
         bool offered = st.PendingEffects.Any(e => e.Seat == "south" && e.Timing == "onOpponentsAttack");
         Check("Shanks OP09-001 defensive effect is offered when attacked", offered,
               $"pendingForSouth={st.PendingEffects.Count(e => e.Seat == "south")}  {Tail(st)}");
+    }
+
+    // Bug (all 11 harness deadlocks): when an attack's target leaves play mid-battle (bounced by a
+    // [When Attacking] effect etc.), the battle fizzled but the phase stayed "battle" — the turn
+    // player was stranded with no battle → hang. It must return to the main phase.
+    static void AttackTargetRemovedNoHang()
+    {
+        var st = FreshBattleBoard("ST01-005", null, "ST08-002"); // south Jinbe attacks north's Uta
+        var N = st.Players["north"];
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = st.Players["south"].CharacterArea[0].InstanceId, Target = N.CharacterArea[0].InstanceId });
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        Apply(st, new GameCommand { Type = "passCounter", Seat = "north" });
+        // Simulate the target being bounced out of play during the battle.
+        var target = N.CharacterArea[0];
+        N.CharacterArea[0] = null; target.Zone = "hand"; N.Hand.Add(target);
+        Apply(st, new GameCommand { Type = "resolveAttack", Seat = "north" });
+        Check("Attack whose target left play fizzles back to main phase (no hang)",
+              st.Battle == null && st.Phase == "main" && st.Status == "active",
+              $"battle={(st.Battle == null ? "null" : "set")} phase={st.Phase} status={st.Status}");
     }
 
     // Rulebook: on 2 damage from [Double Attack], the FIRST life card's [Trigger] resolves BEFORE

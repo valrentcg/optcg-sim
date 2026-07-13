@@ -2476,10 +2476,13 @@ namespace OnePieceTcg.Engine
             var target = FindInPlay(Player(state, targetSeat), state.Battle.TargetId);
             if (target == null)
             {
-                // Battle fizzles (target already left play) — still expire this
-                // battle's modifiers so "-N until end of battle" chips don't linger.
+                // Battle fizzles (target already left play, e.g. bounced by a [When Attacking]
+                // effect) — end the battle AND return to the main phase, else the turn player is
+                // stranded in a battle phase with no battle (a hang). Expire this battle's
+                // modifiers so "-N until end of battle" chips don't linger.
                 var fizzledBattleId = state.Battle.Id;
                 state.Battle = null;
+                state.Phase = "main";
                 CleanupBattleModifiers(state, fizzledBattleId);
                 return;
             }
