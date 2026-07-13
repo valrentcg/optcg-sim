@@ -100,6 +100,7 @@ namespace OnePieceTcg.Engine
         public int AttackPower;
         public int DefensePower;
         public CardInstance RevealedLife;   // populated during the trigger step
+        public int PendingLifeDamage;       // extra life damage still to deal this hit (Double Attack = 1 more)
         public bool NoBlocker;              // opponent cannot activate any Blocker this battle
         public int? BlockerPowerBan;        // opponent cannot Blocker with power >= this value this battle
 

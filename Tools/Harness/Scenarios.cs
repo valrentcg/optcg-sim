@@ -16,6 +16,7 @@ static class Scenarios
         ImInvincibleNotACounter();
         BlackLuffyLeaderKoEffect();
         SixthCharacterReplace();
+        DoubleAttackDamage();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -118,6 +119,61 @@ static class Scenarios
         Check("Full board: play 6th Character over slot 2 trashes the occupant",
               canPlay && victimTrashed && newInSlot,
               $"canPlay={canPlay} victimTrashed={victimTrashed} newInSlot={newInSlot}  {Tail(st)}");
+    }
+
+    // Bug: [Double Attack] (Yamato OP06-022 "This card deals 2 damage") was modeled as a 2nd
+    // attack, so it wouldn't kill at 1 Life. It should deal 2 Life damage in one hit.
+    static void DoubleAttackDamage()
+    {
+        // (a) 3 Life → double attack takes 2 → 1 Life left, game continues.
+        {
+            var st = DoubleAtkState(3);
+            DriveLeaderAttack(st);
+            int life = st.Players["north"].Life.Count;
+            Check("Double Attack deals 2 damage (3 Life -> 1)", st.Status != "finished" && life == 1,
+                  $"status={st.Status} northLife={life}  {Tail(st)}");
+        }
+        // (b) 1 Life → double attack finishes the game (the reported bug).
+        {
+            var st = DoubleAtkState(1);
+            DriveLeaderAttack(st);
+            Check("Double Attack at 1 Life finishes the game", st.Status == "finished",
+                  $"status={st.Status} northLife={st.Players["north"].Life.Count}  {Tail(st)}");
+        }
+        // (c) sanity: a NORMAL attack at 1 Life takes the last card but does NOT kill.
+        {
+            var st = DoubleAtkState(1);
+            st.Players["south"].Leader.CardId = "ST01-001"; // plain Luffy, no Double Attack
+            DriveLeaderAttack(st);
+            Check("Normal attack at 1 Life does NOT finish the game", st.Status != "finished",
+                  $"status={st.Status} northLife={st.Players["north"].Life.Count}  {Tail(st)}");
+        }
+    }
+
+    static GameState DoubleAtkState(int northLife)
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "dbl" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        S.Leader.CardId = "OP06-022";  // Yamato, [Double Attack]
+        S.Leader.Rested = false; S.Leader.PlayedOnTurn = 0;
+        N.Life.Clear();
+        for (int i = 0; i < northLife; i++)
+            N.Life.Add(new CardInstance { InstanceId = $"nlife{i}", CardId = "ST01-006", Owner = "north", Zone = "life" });
+        return st;
+    }
+
+    static void DriveLeaderAttack(GameState st)
+    {
+        var S = st.Players["south"]; var N = st.Players["north"];
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = S.Leader.InstanceId, Target = N.Leader.InstanceId });
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        Apply(st, new GameCommand { Type = "passCounter", Seat = "north" });
+        Apply(st, new GameCommand { Type = "resolveAttack", Seat = "north" });
+        for (int i = 0; i < 6 && st.Battle != null && st.Battle.Step == "trigger"; i++)
+            Apply(st, new GameCommand { Type = "passTrigger", Seat = "north" });
     }
 
     static GameState TrashPickState(string effectText, params string[] trashCardIds)

@@ -1887,17 +1887,9 @@ namespace OnePieceTcg.Engine
             }
             if (attacker == null || defender == null) return;
 
-            // Rested check: Double Attack cards may attack a second time while rested.
-            if (attacker.Rested)
-            {
-                bool dblAtk = HasDoubleAttack(state, attacker);
-                int atkCount = state.AttackCountThisTurn.TryGetValue(attacker.InstanceId, out int ac) ? ac : 0;
-                if (!dblAtk || atkCount >= 2)
-                {
-                    if (dblAtk) Log(state, seat, $"{NameId(GetCard(attacker))} has already made 2 attacks this turn.");
-                    return;
-                }
-            }
+            // A rested card cannot attack. ([Double Attack] does NOT grant a second attack — it
+            // deals 2 Life damage in a single hit; see ResolveAttack's leader-damage branch.)
+            if (attacker.Rested) return;
 
             if (HasModifier(state, attacker, "cannotAttack"))
             {
@@ -2370,11 +2362,46 @@ namespace OnePieceTcg.Engine
         {
             var p = Player(state, defenderSeat);
             var cardFromLife = state.Battle?.RevealedLife;
-            string endedBattleId = state.Battle?.Id;
             if (cardFromLife != null)
             {
                 cardFromLife.Zone = "hand";
                 p.Hand.Add(cardFromLife);
+            }
+            // More life damage to deal this hit ([Double Attack])? Reveal the next card (which
+            // finishes the game if there's no Life left) instead of ending the battle.
+            if (state.Battle != null && state.Battle.PendingLifeDamage > 0)
+            {
+                state.Battle.PendingLifeDamage--;
+                state.Battle.RevealedLife = null;
+                RevealLifeAndStartTrigger(state, defenderSeat);
+                return;
+            }
+            string endedBattleId = state.Battle?.Id;
+            state.Battle = null;
+            state.Phase = "main";
+            CleanupBattleModifiers(state, endedBattleId);
+        }
+
+        // Banish N Life cards in one hit (no Trigger step); finishes the game if Life runs out.
+        private static void BanishLifeCards(GameState state, string defenderSeat, int count)
+        {
+            var p = Player(state, defenderSeat);
+            string endedBattleId = state.Battle?.Id;
+            for (int i = 0; i < count; i++)
+            {
+                var lifeCard = Pop(p.Life);
+                if (lifeCard == null)
+                {
+                    state.Status = "finished";
+                    state.Phase = "finished";
+                    Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
+                    state.Battle = null;
+                    CleanupBattleModifiers(state, endedBattleId);
+                    return;
+                }
+                lifeCard.Zone = "trash";
+                p.Trash.Add(lifeCard);
+                Log(state, defenderSeat, $"[Banish] {NameId(GetCard(lifeCard))} is trashed (no Trigger).");
             }
             state.Battle = null;
             state.Phase = "main";
@@ -2450,8 +2477,19 @@ namespace OnePieceTcg.Engine
                 if (targetDef.Type == "leader")
                 {
                     var atkCard = FindInPlay(Player(state, state.Battle.AttackerSeat), state.Battle.AttackerId);
-                    if (atkCard != null && HasBanish(state, atkCard)) BanishLifeCard(state, targetSeat);
-                    else RevealLifeAndStartTrigger(state, targetSeat);
+                    // [Double Attack] deals 2 damage to the Leader's Life in this ONE hit (the
+                    // real rule) — NOT a second attack. At <2 Life the 2nd point still lands at 0
+                    // Life and finishes the game.
+                    int dmg = 1 + (atkCard != null && HasDoubleAttack(state, atkCard) ? 1 : 0);
+                    if (atkCard != null && HasBanish(state, atkCard))
+                    {
+                        BanishLifeCards(state, targetSeat, dmg);
+                    }
+                    else
+                    {
+                        state.Battle.PendingLifeDamage = dmg - 1;   // the first is dealt now; rest chain via FinalizeTrigger
+                        RevealLifeAndStartTrigger(state, targetSeat);
+                    }
                 }
                 else
                 {
