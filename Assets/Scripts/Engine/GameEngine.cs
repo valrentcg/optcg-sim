@@ -2905,6 +2905,16 @@ namespace OnePieceTcg.Engine
                 if (ContainsAll(line, "by attribute character") && !(attackerIsChar && sameAttr)) continue;
                 if (ContainsAll(line, "by attribute card") && !sameAttr) continue;
                 if (ContainsAll(line, "without the attribute") && !(attackerIsChar && !sameAttr)) continue;
+                // "If <condition>, this Character cannot be K.O.'d in battle" (OP02-100 Jango
+                // "If you have [Fullbody]", OP07-098 Atlas "less Life than opponent", etc.). Gate on
+                // the condition — EvaluateCondition returns false (and logs) for ones it can't
+                // evaluate, so we never grant an immunity whose condition we can't verify.
+                var ifm = System.Text.RegularExpressions.Regex.Match(line,
+                    @"\bIf (.+?), this Character cannot be K\.O\.'d",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (ifm.Success && instance.Owner != null
+                    && !EvaluateCondition(state, instance.Owner, ifm.Groups[1].Value.Trim(), instance.InstanceId))
+                    continue;
                 int donReq = ParseDonThreshold(line);
                 if (donReq > 0 && instance.AttachedDonIds.Count < donReq) continue;
                 var fieldReq = System.Text.RegularExpressions.Regex.Match(line,

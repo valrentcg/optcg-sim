@@ -13,6 +13,7 @@ static class Scenarios
     {
         UtaKoByCharacterVsLeader();
         AttributeKoImmunity();
+        ConditionalKoImmunity();
         GumGumBellTrigger();
         ImInvincibleNotACounter();
         BlackLuffyLeaderKoEffect();
@@ -43,6 +44,25 @@ static class Scenarios
             DriveAttackToResolve(st);
             bool trashed = st.Players["north"].Trash.Any(c => c.CardId == "OP03-008");
             Check("Buggy OP03-008 is K.O.'d by a DIFFERENT-attribute (Strike) attacker", trashed, $"trashed={trashed}  {Tail(st)}");
+        }
+    }
+
+    // Condition-gated immunity now evaluates its condition (was over-immune). OP02-100 Jango:
+    // "If you have [Fullbody], this Character cannot be K.O.'d in battle." Fullbody = OP02-111.
+    static void ConditionalKoImmunity()
+    {
+        {   // with [Fullbody] on board → immune
+            var st = FreshBattleBoard("ST01-005" /*Jinbe 5000*/, null, "OP02-100" /*Jango 3000*/);
+            st.Players["north"].CharacterArea[1] = MakeInPlay("OP02-111", "north"); // Fullbody
+            DriveAttackToResolve(st);
+            bool survived = st.Players["north"].CharacterArea.Any(c => c?.CardId == "OP02-100");
+            Check("Jango OP02-100 survives while [Fullbody] is on board", survived, $"survived={survived}  {Tail(st)}");
+        }
+        {   // no [Fullbody] → K.O.'d (condition not met)
+            var st = FreshBattleBoard("ST01-005", null, "OP02-100");
+            DriveAttackToResolve(st);
+            bool trashed = st.Players["north"].Trash.Any(c => c.CardId == "OP02-100");
+            Check("Jango OP02-100 is K.O.'d with no [Fullbody]", trashed, $"trashed={trashed}  {Tail(st)}");
         }
     }
 
