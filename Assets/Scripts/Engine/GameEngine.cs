@@ -2010,9 +2010,27 @@ namespace OnePieceTcg.Engine
                 foreach (var rc in reactors)
                 {
                     var rDef = GetCard(rc);
-                    if (!HasTiming(rDef.Effect, "On Your Opponent's Attack")) continue;
                     if (IsEffectNegated(state, rc)) continue;
-                    string oaClause = ExtractTimedClause(rDef.Effect, "On Your Opponent's Attack");
+                    string oaClause = null;
+                    if (HasTiming(rDef.Effect, "On Your Opponent's Attack"))
+                        oaClause = ExtractTimedClause(rDef.Effect, "On Your Opponent's Attack");
+                    else
+                    {
+                        // Older wording with no tag: "[Once Per Turn] This effect can be activated
+                        // when your opponent attacks. <body>" (OP09-001 Shanks leader). Treat the
+                        // <body> as the activatable effect.
+                        foreach (var line in (rDef.Effect ?? "").Split('\n'))
+                            if (line.IndexOf("can be activated when your opponent attacks", StringComparison.OrdinalIgnoreCase) >= 0)
+                            {
+                                oaClause = System.Text.RegularExpressions.Regex.Replace(line,
+                                    @"^.*?can be activated when your opponent attacks\.?\s*", "",
+                                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                // Keep a [Once Per Turn]/[DON!! xN] prefix (stripped by the regex) for the gates below.
+                                if (line.IndexOf("[Once Per Turn]", StringComparison.OrdinalIgnoreCase) >= 0) oaClause = "[Once Per Turn] " + oaClause;
+                                break;
+                            }
+                    }
+                    if (string.IsNullOrWhiteSpace(oaClause)) continue;
                     int oaDon = ParseDonThreshold(oaClause);
                     if (oaDon > 0 && rc.AttachedDonIds.Count < oaDon) continue;
                     bool oaOnce = oaClause.IndexOf("[Once Per Turn]", StringComparison.OrdinalIgnoreCase) >= 0;

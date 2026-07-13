@@ -18,6 +18,7 @@ static class Scenarios
         SixthCharacterReplace();
         DoubleAttackDamage();
         BlazeSliceCounter();
+        ShanksDefensiveLeaderEffect();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -171,6 +172,24 @@ static class Scenarios
         bool leftHand = !N.Hand.Any(c => c.CardId == "OP07-116");
         Check("Blaze Slice (OP07-116) is usable as a counter (+1000)", after == before + 1000 && leftHand,
               $"counterBefore={before} counterAfter={after} leftHand={leftHand}  {Tail(st)}");
+    }
+
+    // Bug: OP09-001 Shanks leader "[Once Per Turn] This effect can be activated when your opponent
+    // attacks. Give up to 1 of your opponent's Leader or Character cards -1000 power…" was never
+    // offered — the engine only recognized the [On Your Opponent's Attack] tag, not this wording.
+    static void ShanksDefensiveLeaderEffect()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "shanksdef" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 4;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        S.Leader.CardId = "OP09-001";   // Shanks defensive leader
+        var atk = MakeInPlay("ST01-005", "north"); atk.Rested = false; atk.PlayedOnTurn = 0; N.CharacterArea[0] = atk;
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "north", Attacker = atk.InstanceId, Target = S.Leader.InstanceId });
+        bool offered = st.PendingEffects.Any(e => e.Seat == "south" && e.Timing == "onOpponentsAttack");
+        Check("Shanks OP09-001 defensive effect is offered when attacked", offered,
+              $"pendingForSouth={st.PendingEffects.Count(e => e.Seat == "south")}  {Tail(st)}");
     }
 
     static GameState DoubleAtkState(int northLife)
