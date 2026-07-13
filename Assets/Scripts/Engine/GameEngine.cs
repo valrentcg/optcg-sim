@@ -2259,12 +2259,14 @@ namespace OnePieceTcg.Engine
             var def = GetCard(instance);
             // Characters/stages with a printed Counter value
             if (def.Counter > 0) return def.Counter;
-            if (def.Type != "event" || !def.Keywords.Contains("Counter")) return 0;
-            // Events: parse the counter power from text (e.g. "gives your Leader or Character +2000 power")
-            // or from the card's Counter field if populated; otherwise parse "+NNNN" from effect/counter text.
-            string counterText = def.Counter > 0 ? def.Counter.ToString() : (def.Effect ?? "");
+            // A [Counter] ability lives in the effect TEXT — the JSON keywords array is usually
+            // empty even for real counter events (e.g. OP07-116 Blaze Slice "[Main]/[Counter] …
+            // gains +1000 power…"), which previously made them un-counterable. Detect the tag,
+            // then read the boost from the [Counter] clause specifically.
+            if (def.Type != "event" || !HasTiming(def.Effect, "Counter")) return 0;
+            string counterClause = ExtractTimedClause(def.Effect ?? "", "Counter") ?? def.Effect ?? "";
             var m = System.Text.RegularExpressions.Regex.Match(
-                counterText, @"\+(\d{3,5})\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                counterClause, @"\+(\d{3,5})\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (m.Success && int.TryParse(m.Groups[1].Value, out int parsed)) return parsed;
             return 0;
         }

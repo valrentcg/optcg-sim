@@ -17,6 +17,7 @@ static class Scenarios
         BlackLuffyLeaderKoEffect();
         SixthCharacterReplace();
         DoubleAttackDamage();
+        BlazeSliceCounter();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -148,6 +149,28 @@ static class Scenarios
             Check("Normal attack at 1 Life does NOT finish the game", st.Status != "finished",
                   $"status={st.Status} northLife={st.Players["north"].Life.Count}  {Tail(st)}");
         }
+    }
+
+    // Bug: OP07-116 Blaze Slice ("[Main]/[Counter] …gains +1000…") couldn't be used as a counter
+    // even with 1 DON — AutomatedCounterPower gated on the (empty) keywords array, not the text.
+    static void BlazeSliceCounter()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st02", Seed = "blaze" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        var atk = MakeInPlay("ST01-005", "south"); atk.Rested = false; atk.PlayedOnTurn = 0; S.CharacterArea[0] = atk;
+        var blaze = MakeInPlay("OP07-116", "north"); blaze.Zone = "hand"; N.Hand.Add(blaze);
+        N.CostArea.Add(new DonInstance { InstanceId = "n-don-active", Rested = false }); // 1 active DON
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = atk.InstanceId, Target = N.Leader.InstanceId });
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        int before = st.Battle?.CounterPower ?? -1;
+        Apply(st, new GameCommand { Type = "counterWithCard", Seat = "north", InstanceId = blaze.InstanceId });
+        int after = st.Battle?.CounterPower ?? -1;
+        bool leftHand = !N.Hand.Any(c => c.CardId == "OP07-116");
+        Check("Blaze Slice (OP07-116) is usable as a counter (+1000)", after == before + 1000 && leftHand,
+              $"counterBefore={before} counterAfter={after} leftHand={leftHand}  {Tail(st)}");
     }
 
     static GameState DoubleAtkState(int northLife)
