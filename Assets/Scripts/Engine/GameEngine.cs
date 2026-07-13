@@ -8684,6 +8684,12 @@ namespace OnePieceTcg.Engine
                         bool oppTurn = HasTiming(line, "Opponent's Turn");
                         if (yourTurn && state.ActiveSeat != watchSeat) continue;
                         if (oppTurn && state.ActiveSeat == watchSeat) continue;
+                        // "[Once Per Turn]" gate (e.g. EB01-047 Laboon: "…draw 1 card…") — without
+                        // this it would fire on every Character K.O. in the turn.
+                        bool once = line.IndexOf("[Once Per Turn]", StringComparison.OrdinalIgnoreCase) >= 0;
+                        string onceKey = src.InstanceId + ":koWatch";
+                        if (once && wp.AbilityUsedThisTurn.Contains(onceKey)) continue;
+                        if (once) wp.AbilityUsedThisTurn.Add(onceKey);
                         string body = NormalizeClause(m.Groups[1].Value.Trim());
                         QueueAndAutoResolve(state, watchSeat, src, "koWatch", body,
                             IsOptionalEffectText(body), EffectScope.Instant, InferTargetZone(body));
