@@ -129,6 +129,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Set when the networked peer disconnects mid-match; Render() shows the
     // "OPPONENT LEFT — YOU WIN!" modal until the player returns to the menu.
     private bool opponentLeft;
+    // Result screen for a finished ranked/casual match: a "YOU WIN!/YOU LOSE." modal
+    // whose only exit is Main Menu (→ ReturnToMenu, which tears down Netcode). Funnelling
+    // every match through it guarantees a clean teardown and stops the player lingering in
+    // a finished match. "View Board" hides it (matchResultHidden) to inspect the final
+    // state; a "Show Result" chip brings it back. The in-match menu is locked out meanwhile.
+    private string finishedResultText;   // "YOU WIN!" / "YOU LOSE." / "MATCH OVER" — set on finish
+    private bool matchResultHidden;      // View Board pressed — result popup temporarily hidden
+    // Custom-online rematch handshake (both players must ask; host then publishes a shared
+    // seed and both restart in place over the still-open session — no teardown, no re-queue).
+    private bool rematchLocalRequested;  // I clicked Rematch
+    private bool rematchPeerRequested;   // opponent clicked Rematch
+    private bool rematchStarting;        // seed agreed, restart under way (guards double-fire)
     // ---- In-match chat (networked only; see DrawMatchChatPanel) ----
     private bool chatOpen;
     private bool chatUnread;
@@ -328,6 +340,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Affiliation/attribute tags, e.g. ["Straw Hat Crew"], ["Supernovas"]. Optional in JSON.
         public string[] features = new string[0];
         public string feature = "";
+        public string attribute = "";   // ＜Slash＞/＜Strike＞/… icon; drives battle-K.O.-immunity clauses
     }
     private void Awake()
     {
@@ -369,6 +382,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         MatchNetworkSync.CommandReceived -= OnNetworkCommandReceived;
         MatchNetworkSync.ChatReceived -= OnNetworkChatReceived;
         MatchNetworkSync.PresenceReceived -= OnNetworkPresenceReceived;
+        MatchNetworkSync.RematchRequested -= OnRematchRequested;
+        MatchNetworkSync.RematchStartReceived -= OnRematchStartReceived;
         var nm = Unity.Netcode.NetworkManager.Singleton;
         if (nm != null) nm.OnClientDisconnectCallback -= OnPeerDisconnected;
     }
@@ -479,7 +494,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     card.keywords,
                     NormalizeEffectText(card.effect),
                     NormalizeEffectText(card.trigger),
-                    NormalizeFeatures(card));
+                    NormalizeFeatures(card),
+                    null,
+                    card.attribute);
             }
             Debug.Log($"Loaded {seen.Count} official One Piece card definitions.");
         }
@@ -623,6 +640,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         selectedSeat = null;
         previewLockCard = null;
         ClearDonSelection(false);
+        finishedResultText = null;
+        matchResultHidden = false;
         Render();
     }
 
@@ -989,6 +1008,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         PendingSouthName = null;
         PendingNorthName = null;
         opponentLeft = false;
+        finishedResultText = null;
+        matchResultHidden = false;
         chatOpen = false;
         chatUnread = false;
         chatMessages.Clear();
@@ -1002,6 +1023,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         MatchNetworkSync.ChatReceived += OnNetworkChatReceived;
         MatchNetworkSync.PresenceReceived -= OnNetworkPresenceReceived;
         MatchNetworkSync.PresenceReceived += OnNetworkPresenceReceived;
+        MatchNetworkSync.RematchRequested -= OnRematchRequested;
+        MatchNetworkSync.RematchRequested += OnRematchRequested;
+        MatchNetworkSync.RematchStartReceived -= OnRematchStartReceived;
+        MatchNetworkSync.RematchStartReceived += OnRematchStartReceived;
+        rematchLocalRequested = rematchPeerRequested = rematchStarting = false;
         var nm = Unity.Netcode.NetworkManager.Singleton;
         if (nm != null)
         {
@@ -1090,6 +1116,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         var summary = MatchHistoryStore.BuildSummary(state, record,
             isNetworked && !string.IsNullOrEmpty(localSeat) ? localSeat : "south");
+        // Result-screen text from the local player's perspective (win/loss only; an
+        // ambiguous/simultaneous end falls back to a neutral "MATCH OVER").
+        finishedResultText = summary?.result == "win" ? "YOU WIN!"
+            : summary?.result == "loss" ? "YOU LOSE." : "MATCH OVER";
         // Fire-and-forget: SaveMatchAsync catches + logs its own failures (and
         // skips guests entirely), so match end can never be blocked by network.
         if (summary != null)
@@ -1726,6 +1756,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (isReplayMode) DrawReplayControlBar();
         if (isReplayMode) DrawReplayActionPanel();
         if (opponentLeft) DrawOpponentLeftOverlay();
+        else if (ResultScreenActive())
+        {
+            if (matchResultHidden) DrawMatchResultPeekChip();
+            else DrawMatchResultOverlay();
+        }
         // Re-apply the opponent's hover/raised-hand presence to the freshly built board.
         ApplyOpponentPresence();
         // Snapshot positions and fly ghosts for any card whose zone changed this render.
@@ -2467,6 +2502,87 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddButton(buttons, "MAIN MENU", ReturnToMenu);
     }
 
+    // The finished-match result screen (all modes; replays keep their own controls). Buttons
+    // vary by mode — ranked/casual: Main Menu only; custom: +Rematch/Change Deck; solo:
+    // +Rematch. Its Main Menu is the only exit, so the match always tears down cleanly.
+    private bool ResultScreenActive() =>
+        state != null && state.Status == "finished" && !isReplayMode && !opponentLeft;
+
+    // When the local player has LOST a finished match, reveal the opponent's hidden info
+    // (hand + life). Both clients simulate the full deterministic state, so the opponent's
+    // real cards are already in local state — this is a pure rendering flip, only after the
+    // match is decided, and it applies in every game mode. Not shown during replays (which
+    // have their own visibility controls).
+    private bool RevealOnLoss() =>
+        state != null && state.Status == "finished" && !isReplayMode
+        && finishedResultText == "YOU LOSE.";
+
+    // "YOU WIN!/YOU LOSE." modal for a finished ranked/casual match. Its Main Menu button
+    // routes through ReturnToMenu, which tears down Netcode — the only intended exit.
+    private void DrawMatchResultOverlay()
+    {
+        var dim = PanelObject("Match Result Dim", boardRoot, new Color32(8, 10, 14, 210));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+
+        bool won = finishedResultText == "YOU WIN!";
+        Color accentCol = won ? new Color(0.42f, 0.85f, 0.55f) : new Color(0.93f, 0.48f, 0.48f);
+
+        bool solo = !isNetworked;
+        bool custom = isNetworked && networkedMode == "custom";
+        bool extraButtons = solo || custom;   // wider panel for the 3–4-button layouts
+
+        var panel = PanelObject("Match Result Panel", boardRoot, (Color)new Color32(14, 30, 46, 250));
+        Stretch(panel, new Vector2(extraButtons ? 0.26f : 0.33f, 0.36f), new Vector2(extraButtons ? 0.74f : 0.67f, 0.64f), Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, accentCol, 2f);
+        panel.SetAsLastSibling();
+
+        var label = TextObject("Match Result Text", panel, finishedResultText ?? "MATCH OVER", 28, accentCol, TextAnchor.MiddleCenter, titleFont);
+        label.fontStyle = FontStyle.Bold;
+        Stretch(label.rectTransform, new Vector2(0.04f, 0.54f), new Vector2(0.96f, 0.94f), Vector2.zero, Vector2.zero);
+
+        string subText = solo ? "Match complete"
+            : custom ? "Custom match complete"
+            : (networkedMode == "ranked" ? "Ranked" : "Casual") + " match complete";
+        var sub = TextObject("Match Result Sub", panel, subText, 12, Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(sub.rectTransform, new Vector2(0.06f, 0.44f), new Vector2(0.94f, 0.54f), Vector2.zero, Vector2.zero);
+
+        var buttons = RowObject("Match Result Buttons", panel, 10, TextAnchor.MiddleCenter);
+        Stretch(buttons, new Vector2(0.06f, 0.12f), new Vector2(0.94f, 0.40f), Vector2.zero, Vector2.zero);
+        if (solo)
+        {
+            // Solo rematch = replay the same matchup (fresh seed) — the proven NewMatch path.
+            AddButton(buttons, "REMATCH", NewMatch);
+        }
+        else if (custom)
+        {
+            if (rematchLocalRequested)
+                AddButton(buttons, rematchPeerRequested ? "STARTING…" : "WAITING…", RequestRematch, false);
+            else
+                AddButton(buttons, "REMATCH", RequestRematch);
+        }
+        AddButton(buttons, "MAIN MENU", ReturnToMenu);
+        if (custom) AddButton(buttons, "CHANGE DECK", ReturnToLobby);   // back to lobby (swap deck + restart)
+        AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); });
+    }
+
+    // Shown instead of the modal after "View Board": a small chip to bring the result back
+    // (still the only route to Main Menu — the in-match menu stays locked out).
+    private void DrawMatchResultPeekChip()
+    {
+        var chip = PanelObject("Result Peek Chip", boardRoot, (Color)new Color32(14, 30, 46, 240));
+        Stretch(chip, new Vector2(0.42f, 0.93f), new Vector2(0.58f, 0.985f), Vector2.zero, Vector2.zero);
+        Round(chip);
+        AddRoundedCardBorder(chip, Accent, 1f);
+        chip.SetAsLastSibling();
+        var t = TextObject("Result Peek Text", chip, "SHOW RESULT", 12, Ink, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = chip.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { matchResultHidden = false; Render(); });
+    }
+
     // Thin control strip across the top of the board, only shown during replay playback.
     // Speed multiplier presets (spec: "Suggested playback speeds").
     private static readonly float[] ReplaySpeedPresets = { 0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f, 4f };
@@ -3033,6 +3149,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             return;
         }
         var dl = state.DeckLook;
+        // INFO PRIVACY (networked): the looked-at cards are private to the searching player. Both
+        // clients simulate the same deterministic state, so the opponent's client also holds these
+        // cards — we must NOT render them face-up here. The non-owner sees only a generic overlay.
+        // (The side action panel already shows a "waiting on opponent" note.)
+        if (isNetworked && dl.Seat != localSeat)
+        {
+            var oScrim = PanelObject("Opp Search Scrim", canvas.transform, new Color(0f, 0f, 0f, 0.5f));
+            Stretch(oScrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            oScrim.SetAsLastSibling();
+            var msg = TextObject("Opp Search Msg", oScrim,
+                $"{dl.SourceName}: your opponent is looking at their deck…", 18, Ink, TextAnchor.MiddleCenter, titleFont);
+            msg.fontStyle = FontStyle.Bold;
+            Stretch(msg.rectTransform, new Vector2(0.1f, 0.44f), new Vector2(0.9f, 0.56f), Vector2.zero, Vector2.zero);
+            deckLookOverlay = oScrim;
+            return;
+        }
         bool selecting = dl.Step == "select";
         bool scrying = dl.Step == "scry";
         if (scrying && deckLookScryTopIds == null) deckLookScryTopIds = new List<string>();
@@ -4928,7 +5060,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var lifeMax = top ? new Vector2(0.98f, 0.60f) : new Vector2(0.15f, 0.97f);
         var life = MatZone(half, "LIFE", lifeMin, lifeMax, new Color32(226, 230, 216, 235), top);
         moveZoneAnchors["life:" + seat] = life;
-        AddLifeStackToZone(life, p.Life.Count, top, seat);
+        // On a loss, reveal the opponent's (top) life cards face-up.
+        AddLifeStackToZone(life, p.Life.Count, top, seat, RevealOnLoss() && top ? p.Life : null);
     }
 
     private void DrawExternalHand(PlayerState p, string seat, bool top)
@@ -5748,7 +5881,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddCountBadge(zone, count);
     }
 
-    private void AddLifeStackToZone(RectTransform zone, int count, bool top, string seat = null)
+    private void AddLifeStackToZone(RectTransform zone, int count, bool top, string seat = null,
+        IList<CardInstance> revealCards = null)
     {
         int visible = Mathf.Min(count, 5);
         // Sideways cards stacked vertically. No per-card border or divider - hovering a card shows the
@@ -5761,7 +5895,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             FitCardAspect(zone, card);
             card.localRotation = Quaternion.Euler(0, 0, top ? 270f : 90f);
             card.anchoredPosition += new Vector2(0f, (i - (visible - 1) * 0.5f) * gap);
-            RoundedCardVisual("Life Back", card, GetBackSprite(), out var img);
+            // Face-down normally; on a loss the opponent's life is revealed (revealCards),
+            // falling back to the back sprite if the face isn't loaded yet.
+            Sprite lifeFace = revealCards != null && i < revealCards.Count ? GetCardSprite(revealCards[i].CardId) : null;
+            RoundedCardVisual(lifeFace != null ? "Life Face" : "Life Back", card, lifeFace ?? GetBackSprite(), out var img);
             img.raycastTarget = false;
             card.gameObject.AddComponent<BackHover>().Init(this);
             // Per-CARD presence: the opponent's glow lands on this exact Life card,
@@ -5919,7 +6056,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var clock = TextObject("Clock", sideRoot, System.DateTime.Now.ToString("HH:mm"), 14, Accent, TextAnchor.MiddleRight, monoFont);
         Stretch(clock.rectTransform, new Vector2(0.58f, 0.96f), new Vector2(0.83f, 0.985f), Vector2.zero, Vector2.zero);
 
-        DrawMenuButton();
+        // Locked out while the ranked/casual result screen is up — the only exit is its
+        // Main Menu button (guarantees the match tears down cleanly).
+        if (!ResultScreenActive()) DrawMenuButton();
 
         var sub = TextObject("Subtitle", sideRoot, $"TURN {state.TurnNumber}  ·  ROOM LOCAL", 10, Muted, TextAnchor.MiddleLeft, monoFont);
         Stretch(sub.rectTransform, new Vector2(0.06f, 0.938f), new Vector2(0.62f, 0.956f), Vector2.zero, Vector2.zero);
@@ -5948,7 +6087,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddEndTurnPanel();
 
         // Built last so the dropdown overlays everything else in the side panel.
-        if (menuOpen) DrawGameMenu();
+        if (menuOpen && !ResultScreenActive()) DrawGameMenu();
         if (soundMenuOpen) DrawSoundMenu();
     }
 
@@ -6072,10 +6211,106 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // leaving the board falls back to the ST01-vs-ST02 default next time.
         PendingSouthDeckId = null;
         PendingNorthDeckId = null;
+        // Tear down the networked match so the NEXT one can start a fresh Relay. Netcode's
+        // NetworkManager stays connected after a match otherwise, and the Sessions SDK
+        // refuses to start a new session on an already-connected NetworkManager, leaving
+        // every 2nd match per app run stuck on "Connecting to your opponent…".
+        LobbyManager.ShutdownNetwork();       // immediate, synchronous
+        _ = LobbyManager.LeaveCurrentAsync(); // remove us from the UGS session (fire-and-forget)
         if (canvas != null) canvas.gameObject.SetActive(false);
         MainMenuManager.EnsureMenu();
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
+    }
+
+    // ── End-of-match rematch / deck-swap (result screen; see DrawMatchResultOverlay) ──
+
+    // Custom online "Change Deck": return to the lobby waiting room WITHOUT tearing down —
+    // the session/Netcode connection stays open so the host's next Start Match reuses it,
+    // and each player can re-pick their deck there (the existing lobby flow handles both).
+    // EnsureMenu shows the waiting room while LobbyManager.CurrentSession is non-null.
+    // NOTE: networked path — needs live 2-client testing.
+    public void ReturnToLobby()
+    {
+        PendingSouthDeckId = null;
+        PendingNorthDeckId = null;
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        MainMenuManager.EnsureMenu();
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    // Custom online one-click rematch. Both players must ask; the host (south) then picks a
+    // shared seed and both restart in place. Mirrors the initial launch (host owns the seed),
+    // but reuses the open session — no re-queue, no teardown.
+    private void RequestRematch()
+    {
+        if (rematchLocalRequested || rematchStarting) return;
+        rematchLocalRequested = true;
+        MatchNetworkSync.SendRematchRequest();
+        MaybeStartHostRematch();
+        Render();
+    }
+
+    private void OnRematchRequested()
+    {
+        if (this == null) return;
+        rematchPeerRequested = true;
+        MaybeStartHostRematch();
+        if (this != null && state != null) Render();
+    }
+
+    // Only the host (south) generates + broadcasts the seed, so both sides agree on one deal.
+    private void MaybeStartHostRematch()
+    {
+        if (rematchStarting || localSeat != "south") return;
+        if (!(rematchLocalRequested && rematchPeerRequested)) return;
+        rematchStarting = true;
+        string seed = System.Guid.NewGuid().ToString("N");
+        MatchNetworkSync.SendRematchStart(seed);
+        RestartNetworkedMatch(seed);
+    }
+
+    private void OnRematchStartReceived(string seed)
+    {
+        if (this == null || rematchStarting || string.IsNullOrEmpty(seed)) return;
+        rematchStarting = true;
+        RestartNetworkedMatch(seed);
+    }
+
+    // Rebuild a fresh networked match from the same decks (currentMatchConfig) + a new seed,
+    // keeping the live session/connection. Mirrors the match-scoped resets in NewMatch /
+    // EnterNetworkedMatch but does NOT touch isNetworked/localSeat/names/subscriptions.
+    private void RestartNetworkedMatch(string seed)
+    {
+        var config = new MatchConfig { Seed = seed };
+        if (currentMatchConfig?.SouthDeckDef != null) config.SouthDeckDef = currentMatchConfig.SouthDeckDef;
+        if (currentMatchConfig?.NorthDeckDef != null) config.NorthDeckDef = currentMatchConfig.NorthDeckDef;
+        currentMatchConfig = config;
+
+        replaySaved = false;
+        matchStartRealtime = Time.realtimeSinceStartup;
+        commandElapsedSeconds.Clear();
+        mulliganAnimShownKey = null;
+        mulliganRedrawSeat = null;
+        handDealAnimating = false;
+        mulliganDealAnimating = 0;
+        lastCardPoses.Clear();
+        suppressMoveAnim.Clear();
+
+        state = GameEngine.CreateMatch(config);
+        selectedId = null;
+        selectedSeat = null;
+        previewLockCard = null;
+        ClearDonSelection(false);
+
+        finishedResultText = null;
+        matchResultHidden = false;
+        opponentLeft = false;
+        rematchLocalRequested = false;
+        rematchPeerRequested = false;
+        rematchStarting = false;
+        Render();
     }
 
     private void AddMenuItem(RectTransform parent, string label, Vector2 min, Vector2 max, UnityEngine.Events.UnityAction action)
@@ -7515,7 +7750,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (GameEngine.ActiveDonCount(player) < GameEngine.GetCost(state, card)) return false;
         if (def.Type == "event") return HasMainEffect(def);
         if (def.Type == "stage") return true;
-        return player.CharacterArea.Any(slot => slot == null);
+        // A full board is still draggable: drop onto an occupied slot to replace it (the
+        // 6th-character rule; CanAcceptCharacterDrop only permits the drop when the board is full).
+        return true;
     }
 
     private bool CanAcceptCharacterDrop(string seat, int slotIndex)
@@ -8159,7 +8396,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // In a networked match the top-rendered hand is always the remote opponent's (see
                 // BottomSeat/TopSeat) - hide it as card backs, same as any other face-down pile.
                 // Hotseat/Versus Self is unaffected (isNetworked is false there).
-                handFaceUp = !(top && (isNetworked || aiSeat == TopSeat));
+                // On a loss we reveal the opponent's hand (RevealOnLoss) — the local hand is
+                // already face-up, so this only flips the top one.
+                handFaceUp = RevealOnLoss() || !(top && (isNetworked || aiSeat == TopSeat));
             }
             AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top && !IsReplayRotated, count - 1 - i);
             holders[i] = holder;
@@ -8533,7 +8772,37 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         if (card != null)
+        {
             AddCard(holder, card, seat, true, Vector2.zero, true, inverted);
+
+            // QoL: dim a summoning-sick Character (played this turn, no [Rush]) on the turn
+            // player's board — a clear cue that it can't attack yet.
+            if (!isReplayMode && seat == state.ActiveSeat && !card.Rested
+                && GameEngine.IsSummoningSick(state, card))
+            {
+                var dim = PanelObject("Summoning Sick Dim", holder, new Color(0f, 0f, 0f, 0.5f));
+                Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+                Round(dim);
+                dim.GetComponent<Image>().raycastTarget = false;
+                dim.SetAsLastSibling();
+            }
+
+            // QoL: a small shield on an active [Blocker] that can currently redirect an attack.
+            if (!card.Rested && GameEngine.HasBlocker(state, card))
+            {
+                var shield = PanelObject("Blocker Shield", holder, new Color(0.16f, 0.52f, 0.85f, 0.95f));
+                shield.anchorMin = new Vector2(0.03f, 0.79f);
+                shield.anchorMax = new Vector2(0.27f, 0.99f);
+                shield.offsetMin = Vector2.zero; shield.offsetMax = Vector2.zero;
+                Round(shield);
+                AddOutline(shield.gameObject, new Color(1f, 1f, 1f, 0.9f), 1f);
+                shield.GetComponent<Image>().raycastTarget = false;
+                var sg = TextObject("Shield Glyph", shield, "⛨", 13, Color.white, TextAnchor.MiddleCenter, titleFont);
+                Stretch(sg.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+                sg.raycastTarget = false;
+                shield.SetAsLastSibling();
+            }
+        }
     }
 
     private void AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color bg)

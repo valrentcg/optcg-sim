@@ -4350,7 +4350,10 @@ public partial class MainMenuManager : MonoBehaviour
                 break;
 
             case "idle":
-                EndRankedQueue(false);
+                // If we'd already created/joined a session this attempt (e.g. a stuck
+                // connect the worker auto-cleared), leave it so Netcode is torn down and
+                // the next match can start a fresh Relay.
+                EndRankedQueue(rankedSessionCreated || rankedGuestJoined);
                 break;
         }
     }

@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.9",
-  "buildNumber": 10,
+  "buildVersion": "1.0.10",
+  "buildNumber": 11,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Matchmaking fixes (Bug Testing Season): Ranked & Casual queues now actually pair you up and start the match — fixed a server auth issue that silently blocked every queue, and a race that could leave your opponent stuck on \"Connecting…\" while you loaded in. Queue calls that fail now surface an error instead of spinning forever.",
+  "notes": "Gameplay fixes + match flow (Bug Testing Season). Matches now end with a Win/Lose screen; Netcode tears down cleanly so back-to-back matches connect; on a loss you see the opponent's hand & Life. Card fixes: [Double Attack] deals 2 Life damage (and can close at 1 Life); counter events like Blaze Slice work; Black Uta is K.O.'d by Characters; Gum-Gum Bell adds the right card; Black Luffy's leader effect and Shanks' defensive effect fire; many battle-effect hangs fixed. QoL: summoning-sick characters greyed out, a shield on active Blockers, play a 6th character over one to trash it, and your deck searches are now hidden from your opponent.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

@@ -92,6 +92,8 @@ public static class MatchNetworkSync
     private const string ChatMessage = "OptcgChat";
     private const string NameShareMessage = "OptcgNameShare";
     private const string PresenceMessage = "OptcgPresence";
+    private const string RematchReqMessage = "OptcgRematchReq";   // "I want a rematch"
+    private const string RematchGoMessage = "OptcgRematchGo";     // host: "rematch on, here's the seed"
 
     // Chat messages longer than this are truncated before sending (UI should enforce the
     // same cap on its input field; this is the transport-level backstop).
@@ -110,6 +112,8 @@ public static class MatchNetworkSync
     public static event Action<string> ChatReceived;             // peer sent an in-match chat line
     public static event Action<string> PeerNameReceived;         // peer told us their display name
     public static event Action<PresencePayload> PresenceReceived; // peer's hover/raised-hand state
+    public static event Action RematchRequested;                 // peer clicked "Rematch" (custom match)
+    public static event Action<string> RematchStartReceived;     // host published the rematch seed
 
     /// <summary>Call once, right after the NetworkManager singleton is created.</summary>
     public static void EnsureHandlersRegistered()
@@ -135,6 +139,8 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(ChatMessage, OnChatMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(NameShareMessage, OnNameShareMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(PresenceMessage, OnPresenceMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(RematchReqMessage, OnRematchReqMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(RematchGoMessage, OnRematchGoMessage);
         handlersRegistered = true;
     }
 
@@ -255,6 +261,32 @@ public static class MatchNetworkSync
     /// <summary>Convenience overload using UnityEngine.Time.unscaledTime as the clock.</summary>
     public static void SendPresence(PresencePayload p) => SendPresence(p, Time.unscaledTime);
 
+    /// <summary>Tell the peer we want a rematch (custom match). When both sides have asked,
+    /// the host publishes a shared seed via SendRematchStart and both restart in place.</summary>
+    public static void SendRematchRequest()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null) return;
+        var target = GetPeerClientId();
+        if (target == null) { Debug.LogWarning("MatchNetworkSync.SendRematchRequest: no peer - not sent."); return; }
+        using var writer = new FastBufferWriter(8, Allocator.Temp);
+        writer.WriteValueSafe((byte)1);
+        nm.CustomMessagingManager.SendNamedMessage(RematchReqMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
+    /// <summary>Host only: publish the agreed rematch seed so both clients rebuild an
+    /// identical new match (same decks, new deal) over the still-open session.</summary>
+    public static void SendRematchStart(string seed)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null || string.IsNullOrEmpty(seed)) return;
+        var target = GetPeerClientId();
+        if (target == null) { Debug.LogWarning("MatchNetworkSync.SendRematchStart: no peer - not sent."); return; }
+        using var writer = new FastBufferWriter(seed.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(seed);
+        nm.CustomMessagingManager.SendNamedMessage(RematchGoMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
     // ---- Receiving ----
 
     private static void OnMatchStartMessage(ulong senderClientId, FastBufferReader reader)
@@ -301,6 +333,18 @@ public static class MatchNetworkSync
         PresencePayload payload = null;
         try { payload = JsonUtility.FromJson<PresencePayload>(json); } catch { /* ignore malformed */ }
         if (payload != null) PresenceReceived?.Invoke(payload);
+    }
+
+    private static void OnRematchReqMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out byte _);
+        RematchRequested?.Invoke();
+    }
+
+    private static void OnRematchGoMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string seed);
+        if (!string.IsNullOrEmpty(seed)) RematchStartReceived?.Invoke(seed);
     }
 
     private static void OnGameCommandMessage(ulong senderClientId, FastBufferReader reader)

@@ -9,6 +9,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using Unity.Netcode;
 using Unity.Services.Authentication;
 using Unity.Services.Core;
 using Unity.Services.Multiplayer;
@@ -135,9 +136,33 @@ public static class LobbyManager
 
     public static async Task LeaveCurrentAsync()
     {
-        if (CurrentSession == null) return;
-        try { await CurrentSession.LeaveAsync(); }
-        catch (Exception ex) { Debug.LogWarning($"Leave lobby failed: {ex.Message}"); }
-        CurrentSession = null;
+        try
+        {
+            if (CurrentSession != null)
+            {
+                try { await CurrentSession.LeaveAsync(); }
+                catch (Exception ex) { Debug.LogWarning($"Leave lobby failed: {ex.Message}"); }
+                CurrentSession = null;
+            }
+        }
+        finally
+        {
+            ShutdownNetwork();
+        }
+    }
+
+    /// <summary>Tear down the Netcode connection left over from a match. Leaving the UGS
+    /// session does NOT shut down NetworkManager — it stays connected to the finished
+    /// match's Relay, and the Sessions SDK then refuses to start a new one
+    /// ("NetworkManager is already connected"), so the 2nd networked match of any app run
+    /// silently hangs on "Connecting to your opponent…". Shut it down here so the next
+    /// Create/Join starts from a clean transport. Runs on match-end and queue-cancel.</summary>
+    public static void ShutdownNetwork()
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null) return;
+        if (!nm.IsListening && !nm.IsConnectedClient && !nm.IsServer) return;
+        try { nm.Shutdown(); }
+        catch (Exception ex) { Debug.LogWarning($"Netcode shutdown failed: {ex.Message}"); }
     }
 }
