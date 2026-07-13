@@ -19,6 +19,7 @@ static class Scenarios
         DoubleAttackDamage();
         BlazeSliceCounter();
         ShanksDefensiveLeaderEffect();
+        DoubleAttackTriggerOrder();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -190,6 +191,29 @@ static class Scenarios
         bool offered = st.PendingEffects.Any(e => e.Seat == "south" && e.Timing == "onOpponentsAttack");
         Check("Shanks OP09-001 defensive effect is offered when attacked", offered,
               $"pendingForSouth={st.PendingEffects.Count(e => e.Seat == "south")}  {Tail(st)}");
+    }
+
+    // Rulebook: on 2 damage from [Double Attack], the FIRST life card's [Trigger] resolves BEFORE
+    // the second damage is dealt (damage repeats once per point). Verify the ordering.
+    static void DoubleAttackTriggerOrder()
+    {
+        var st = DoubleAtkState(0);   // OP06-022 Yamato leader for south; empty north life
+        var N = st.Players["north"];
+        N.Life.Clear();
+        N.Life.Add(new CardInstance { InstanceId = "nlife-bottom", CardId = "ST01-006", Owner = "north", Zone = "life" }); // no trigger
+        N.Life.Add(new CardInstance { InstanceId = "nlife-top", CardId = "ST01-014", Owner = "north", Zone = "life" });    // TOP (Pop takes last), has a [Trigger]
+        var S = st.Players["south"];
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = S.Leader.InstanceId, Target = N.Leader.InstanceId });
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        Apply(st, new GameCommand { Type = "passCounter", Seat = "north" });
+        Apply(st, new GameCommand { Type = "resolveAttack", Seat = "north" });
+        // After the FIRST damage: in the trigger step for the top card, second card NOT yet taken,
+        // and 1 more damage pending.
+        bool midOk = st.Battle != null && st.Battle.Step == "trigger" && N.Life.Count == 1 && st.Battle.PendingLifeDamage == 1;
+        Apply(st, new GameCommand { Type = "passTrigger", Seat = "north" });   // resolve first trigger → second damage lands
+        bool finalOk = N.Life.Count == 0;
+        Check("Double Attack: first Life trigger resolves BEFORE the second damage", midOk && finalOk,
+              $"midOk={midOk} (step={st.Battle?.Step} lifeAfter1st={(midOk ? 1 : -1)}) finalLife={N.Life.Count}");
     }
 
     static GameState DoubleAtkState(int northLife)
