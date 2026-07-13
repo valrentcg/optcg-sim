@@ -805,12 +805,22 @@ namespace OnePieceTcg.Engine
         public static bool HasRush(CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Rush") || (instance.CardId == "ST01-004" && instance.AttachedDonIds.Count >= 2));
 
-        // Double Attack: can this card attack a second time this turn (while rested)?
+        // Double Attack: deals 2 damage to Life in a single leader hit (see ResolveAttack).
         public static bool HasDoubleAttack(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Double Attack")
                 || HasPrintedKeywordGrant(state, instance, "Double Attack")
                 || HasKeywordModifier(state, instance, "Double Attack")
                 || HasModifier(state, instance, "doubleAttack"));
+
+        // [Blocker]: can be activated to redirect an attack to itself (printed, granted, or modifier).
+        public static bool HasBlocker(GameState state, CardInstance instance) =>
+            instance != null && (HasKeyword(instance, "Blocker")
+                || HasKeywordModifier(state, instance, "Blocker")
+                || HasPrintedKeywordGrant(state, instance, "Blocker"));
+
+        // Summoning sickness: a Character played this turn can't attack unless it has [Rush].
+        public static bool IsSummoningSick(GameState state, CardInstance instance) =>
+            instance != null && instance.PlayedOnTurn == state.TurnNumber && !HasRush(state, instance);
 
         // Banish: when this card deals damage to a leader, the life card is trashed instead of
         // going to hand and no Trigger step occurs.
