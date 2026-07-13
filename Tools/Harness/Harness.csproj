@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>OptcgHarness</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <!-- Compiles the REAL, pure-C# engine (no UnityEngine deps) straight from Assets/, so the
+       harness always tests the shipping engine. See README.md for run commands. -->
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="CardLibraryLoader.cs" />
+    <Compile Include="Scenarios.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\GameEngine.cs" Link="Engine\GameEngine.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\GameState.cs" Link="Engine\GameState.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\CardData.cs" Link="Engine\CardData.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\IntermediateBot.cs" Link="Engine\Bot\IntermediateBot.cs" />
+  </ItemGroup>
+</Project>

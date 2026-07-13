@@ -1,0 +1,245 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using OnePieceTcg.Engine;
+
+// Constructed-scenario tests: build a specific board state, drive real GameEngine commands,
+// and assert the outcome. Used to reproduce + verify fixes for the reported card bugs.
+static class Scenarios
+{
+    static int pass = 0, fail = 0;
+
+    public static int Run()
+    {
+        UtaKoByCharacterVsLeader();
+        GumGumBellTrigger();
+        ImInvincibleNotACounter();
+        BlackLuffyLeaderKoEffect();
+        SixthCharacterReplace();
+
+        Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
+        return fail > 0 ? 1 : 0;
+    }
+
+    // Bug: ST08-014 Gum-Gum Bell [Trigger] "Add up to 1 black Character card with a cost of 2 or
+    // less from your trash" let an EVENT be chosen — type/colour filter wasn't enforced.
+    static void GumGumBellTrigger()
+    {
+        const string text = "Add up to 1 black Character card with a cost of 2 or less from your trash to your hand.";
+        string blackEvent = "EB03-049";     // black event, cost 1  → must be REJECTED (wrong type)
+        string blackChar = "EB01-044";      // black character (Funkfreed), cost 1 → allowed
+
+        // Try to add the EVENT → rejected: stays in trash, not in hand.
+        {
+            var st = TrashPickState(text, blackEvent, blackChar);
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = "ggbell", Target = InstId(st, "south", blackEvent) });
+            bool eventInHand = st.Players["south"].Hand.Any(c => c.CardId == blackEvent);
+            Check("Gum-Gum Bell trigger REJECTS a black Event from trash", !eventInHand, $"eventInHand={eventInHand}  {Tail(st)}");
+        }
+        // Add the black CHARACTER → allowed: moves to hand.
+        {
+            var st = TrashPickState(text, blackEvent, blackChar);
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = "ggbell", Target = InstId(st, "south", blackChar) });
+            bool charInHand = st.Players["south"].Hand.Any(c => c.CardId == blackChar);
+            Check("Gum-Gum Bell trigger ADDS a black Character from trash", charInHand, $"charInHand={charInHand}  {Tail(st)}");
+        }
+    }
+
+    // Bug: ST11-005 "I'm Invincible!" (event, Counter=0, no [Counter] ability) was usable as a
+    // hand counter for +1000 (its [Trigger] value) lasting the whole turn. It should NOT be a
+    // valid counter at all.
+    static void ImInvincibleNotACounter()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st11", Seed = "counter" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        var atk = MakeInPlay("ST01-005", "south"); atk.Rested = false; atk.PlayedOnTurn = 0;
+        S.CharacterArea[0] = atk;
+        // north holds I'm Invincible; give north active DON in case an event cost is checked.
+        var inv = MakeInPlay("ST11-005", "north"); inv.Zone = "hand"; N.Hand.Add(inv);
+        // attack north's LEADER, advance to the counter step.
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = atk.InstanceId, Target = N.Leader.InstanceId });
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        int before = st.Battle?.CounterPower ?? -1;
+        Apply(st, new GameCommand { Type = "counterWithCard", Seat = "north", InstanceId = inv.InstanceId });
+        int after = st.Battle?.CounterPower ?? -1;
+        bool stillInHand = N.Hand.Any(c => c.CardId == "ST11-005");
+        Check("I'm Invincible! (ST11-005) is NOT usable as a counter", after == before && stillInHand,
+              $"counterBefore={before} counterAfter={after} stillInHand={stillInHand}  {Tail(st)}");
+    }
+
+    // Bug: "Black" Luffy leader (ST08-001) "[Your Turn] When a Character is K.O.'d, give up to 1
+    // rested DON!! card to this Leader" never fired — no board-watcher dispatch on Character K.O.
+    static void BlackLuffyLeaderKoEffect()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st08", NorthDeck = "st01", Seed = "koeffect" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        var atk = MakeInPlay("ST08-005", "south"); atk.Rested = false; atk.PlayedOnTurn = 0; S.CharacterArea[0] = atk; // Shanks 10000
+        var vic = MakeInPlay("ST01-006", "north"); vic.Rested = true; N.CharacterArea[0] = vic;                        // Chopper 1000
+        S.CostArea.Add(new DonInstance { InstanceId = "south-don-rested", Rested = true });
+        int before = S.Leader.AttachedDonIds.Count;
+
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = atk.InstanceId, Target = vic.InstanceId });
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        Apply(st, new GameCommand { Type = "passCounter", Seat = "north" });
+        Apply(st, new GameCommand { Type = "resolveAttack", Seat = "north" });
+
+        var pend = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        bool fired = pend != null;
+        if (pend != null)
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pend.EffectId, Target = S.Leader.InstanceId });
+        int after = S.Leader.AttachedDonIds.Count;
+        Check("Black Luffy leader ST08-001 K.O. effect fires (rested DON!! to leader)",
+              fired && after == before + 1, $"fired={fired} donBefore={before} donAfter={after}  {Tail(st)}");
+    }
+
+    // Bug: with a full board (5 chars) you should be able to play a Character "over" one, trashing
+    // it. Engine supports it via SlotIndex; verify the replace works and CanPlayFromHand allows it.
+    static void SixthCharacterReplace()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st02", Seed = "sixth" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"];
+        S.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { var c = MakeInPlay("ST01-006", "south"); c.Rested = false; S.CharacterArea[i] = c; } // full board
+        string victimId = S.CharacterArea[2].InstanceId;
+        var hc = MakeInPlay("ST01-005", "south"); hc.Zone = "hand"; S.Hand.Add(hc);   // Jinbe in hand
+        for (int i = 0; i < 8; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sd{i}", Rested = false }); // plenty DON
+
+        bool canPlay = GameEngine.CanPlayFromHand(st, "south", hc);
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = hc.InstanceId, SlotIndex = 2 });
+        bool victimTrashed = S.Trash.Any(c => c.InstanceId == victimId);
+        bool newInSlot = S.CharacterArea[2]?.InstanceId == hc.InstanceId;
+        Check("Full board: play 6th Character over slot 2 trashes the occupant",
+              canPlay && victimTrashed && newInSlot,
+              $"canPlay={canPlay} victimTrashed={victimTrashed} newInSlot={newInSlot}  {Tail(st)}");
+    }
+
+    static GameState TrashPickState(string effectText, params string[] trashCardIds)
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st08", NorthDeck = "st01", Seed = "trashpick" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"];
+        foreach (var cid in trashCardIds)
+        {
+            var c = MakeInPlay(cid, "south"); c.Zone = "trash";
+            S.Trash.Add(c);
+        }
+        st.PendingEffects.Add(new PendingEffect
+        {
+            EffectId = "ggbell", Seat = "south", Text = effectText, Timing = "trigger",
+            Optional = true, TargetZone = EffectTargetZone.Trash, SelectionsRemaining = 1,
+        });
+        return st;
+    }
+
+    static string InstId(GameState st, string seat, string cardId) =>
+        st.Players[seat].Trash.First(c => c.CardId == cardId).InstanceId;
+
+    // Bug: ST08-002 Uta "cannot be K.O.'d in battle by Leaders" was blocking Character K.O.s too.
+    static void UtaKoByCharacterVsLeader()
+    {
+        // Character attacker (7000) K.O.s Uta (4000) → Uta should go to trash.
+        {
+            var st = FreshBattleBoard(attackerCardId: "ST01-005" /*Jinbe 5000*/, attackerPower: null,
+                                      defenderCardId: "ST08-002" /*Uta*/);
+            DriveAttackToResolve(st);
+            bool utaTrashed = st.Players["north"].Trash.Any(c => c.CardId == "ST08-002");
+            bool utaStillBoard = st.Players["north"].CharacterArea.Any(c => c?.CardId == "ST08-002");
+            Check("Uta ST08-002 K.O.'d by a CHARACTER attack", utaTrashed && !utaStillBoard,
+                  $"trashed={utaTrashed} stillOnBoard={utaStillBoard} battle={(st.Battle==null?"null":st.Battle.Step)} phase={st.Phase}  {Tail(st)}");
+        }
+        // Leader attacker vs Uta → Uta survives (immune to Leaders).
+        {
+            var st = FreshBattleBoard(attackerCardId: null, attackerPower: null, defenderCardId: "ST08-002", attackerIsLeader: true);
+            DriveAttackToResolve(st);
+            bool utaStillBoard = st.Players["north"].CharacterArea.Any(c => c?.CardId == "ST08-002");
+            Check("Uta ST08-002 survives a LEADER attack (immune by Leaders)", utaStillBoard,
+                  $"stillOnBoard={utaStillBoard}  {Tail(st)}");
+        }
+    }
+
+    // ---- scenario construction helpers ----
+
+    // South attacks north. South gets one attacker (a Character, or its Leader if attackerIsLeader),
+    // north gets one defender Character. All other board cleared. It's south's turn, main phase,
+    // past turn 1 so attacks are legal.
+    static GameState FreshBattleBoard(string attackerCardId, int? attackerPower, string defenderCardId, bool attackerIsLeader = false)
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st08", Seed = "scenario" });
+        st.Status = "active";
+        st.Phase = "main";
+        st.ActiveSeat = "south";
+        st.TurnNumber = 3;
+        st.Battle = null;
+        var S = st.Players["south"];
+        var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        // clear boards
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+
+        // Defender character on north.
+        var def = MakeInPlay(defenderCardId, "north");
+        def.Rested = true; // resting so it's an eligible attack target and can't counter-attack
+        N.CharacterArea[0] = def;
+
+        // Attacker.
+        if (attackerIsLeader)
+        {
+            S.Leader.Rested = false;
+            S.Leader.PlayedOnTurn = 0;
+        }
+        else
+        {
+            var atk = MakeInPlay(attackerCardId, "south");
+            atk.Rested = false;
+            atk.PlayedOnTurn = 0; // not summoning sick
+            S.CharacterArea[0] = atk;
+        }
+        return st;
+    }
+
+    static CardInstance MakeInPlay(string cardId, string owner) => new CardInstance
+    {
+        InstanceId = $"{owner}-{cardId}-{Guid.NewGuid():N}".Substring(0, 24),
+        CardId = cardId,
+        Owner = owner,
+        Zone = "character",
+        Rested = false,
+    };
+
+    static void DriveAttackToResolve(GameState st)
+    {
+        var S = st.Players["south"];
+        string attackerId = S.CharacterArea[0]?.InstanceId ?? S.Leader.InstanceId;
+        string targetId = st.Players["north"].CharacterArea[0].InstanceId;
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = attackerId, Target = targetId });
+        // Defender resolves block/counter steps by passing.
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        Apply(st, new GameCommand { Type = "passCounter", Seat = "north" });
+        // The DEFENDER owns the final resolve (see GameEngine.ResolveAttack seat guard).
+        Apply(st, new GameCommand { Type = "resolveAttack", Seat = "north" });
+    }
+
+    static void Apply(GameState st, GameCommand cmd)
+    {
+        try { GameEngine.ApplyCommand(st, cmd); } catch (Exception ex) { Console.WriteLine($"   apply {cmd.Type} threw {ex.GetType().Name}: {ex.Message}"); }
+    }
+
+    static string Tail(GameState st)
+    {
+        if (st.EventLog == null || st.EventLog.Count == 0) return "";
+        return "log: " + string.Join(" · ", st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 5)).Select(e => e.Message));
+    }
+
+    static void Check(string name, bool ok, string detail)
+    {
+        if (ok) { pass++; Console.WriteLine($"  PASS  {name}"); }
+        else { fail++; Console.WriteLine($"  FAIL  {name}  [{detail}]"); }
+    }
+}
