@@ -23,6 +23,25 @@ static class Scenarios
         ShanksDefensiveLeaderEffect();
         DoubleAttackTriggerOrder();
         AttackTargetRemovedNoHang();
+        LawSecondClausePlaysFromHand();
+        HeatCountsDonMinusAsOneEvent();
+        HeatDonReturnedOncePerTurn();
+        RayleighThenKoFires();
+        ByrnndiSixDigitPowerGain();
+        CabajiSelfBuffScope();
+        PbLuffyDonReturnThreshold();
+        BuggyCannotAttackAura();
+        CrocodileMihawkDrawTrashThenPlay();
+        SaboImmunityThenDrawTrash();
+        PlayedOverIsNotAKo();
+        DonAddActiveAndRested();
+        PassiveKeywordGrants();
+        DonX2ThresholdGating();
+        PowerCostDurationScoping();
+        PeronaSlashAttributeCondition();
+        IpponmatsuSlashAttributeFilter();
+        KingKoReplacementReturnDon();
+        RemovalImmunityBlocksBounce();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -141,6 +160,510 @@ static class Scenarios
         int after = S.Leader.AttachedDonIds.Count;
         Check("Black Luffy leader ST08-001 K.O. effect fires (rested DON!! to leader)",
               fired && after == before + 1, $"fired={fired} donBefore={before} donAfter={after}  {Tail(st)}");
+    }
+
+    // Coverage lead (compound-suspect linter): OP08-118 Silvers Rayleigh —
+    // "[On Play] Select up to 2 of your opponent's Characters, and give 1 −3000 and the other
+    // −2000 …. Then, K.O. up to 1 of your opponent's Characters with 3000 power or less." Verify
+    // the trailing "Then, K.O." clause actually fires after the power-reduction clause.
+    static void RayleighThenKoFires()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st08", NorthDeck = "st01", Seed = "rayleigh" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 5;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 3; N.TurnsStarted = 3;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        var n1 = MakeInPlay("ST01-006", "north"); N.CharacterArea[0] = n1;   // 1000 power
+        var n2 = MakeInPlay("ST01-006", "north"); N.CharacterArea[1] = n2;   // 1000 power
+        var hc = MakeInPlay("OP08-118", "south"); hc.Zone = "hand"; S.Hand.Add(hc);
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"rd{i}", Rested = false });
+
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = hc.InstanceId, SlotIndex = 0 });
+        // Resolve the whole On Play: pick the two power-reduction targets, then the K.O. target.
+        Drive(st, "south", n1.InstanceId, n2.InstanceId, n1.InstanceId, n2.InstanceId);
+        int koed = N.Trash.Count(c => c.CardId == "ST01-006");
+        Check("OP08-118 Rayleigh: trailing 'Then, K.O.' fires (a Character is K.O.'d)",
+              koed >= 1, $"northTrash(ST01-006)={koed}  {Tail(st)}");
+    }
+
+    // Playtest bug: OP02-082 Byrnndi World "[Activate: Main] DON!! −8: This Character gains
+    // +792000 power" (real card text) resolved as manual — the self-buff gate capped at \d{3,5}.
+    static void ByrnndiSixDigitPowerGain()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "byrnndi" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        var by = MakeInPlay("OP02-082", "south"); by.PlayedOnTurn = 0; S.CharacterArea[0] = by;
+        S.CostArea.Clear();
+        for (int i = 0; i < 8; i++) S.CostArea.Add(new DonInstance { InstanceId = $"byd{i}", Rested = false });
+        int basePow = GameEngine.GetCard(by).Power;
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = by.InstanceId });
+        Drive(st, "south", by.InstanceId);
+        int pow = GameEngine.GetPower(st, by);
+        Check("OP02-082 Byrnndi: +792000 power self-buff applies (6-digit gain)",
+              pow == basePow + 792000, $"power={pow} base={basePow} expected={basePow + 792000}  {Tail(st)}");
+    }
+
+    // Playtest bug: ST25-002 Cabaji "[Opponent's Turn] This Character gains +5000 power" was
+    // leaking onto EVERY Character instead of only Cabaji.
+    static void CabajiSelfBuffScope()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "cabaji" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 6; // opponent's turn (south is defender)
+        var S = st.Players["south"]; S.TurnsStarted = 3;
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        var cab = MakeInPlay("ST25-002", "south"); S.CharacterArea[0] = cab;
+        var other = MakeInPlay("ST01-006", "south"); S.CharacterArea[1] = other;   // 1000 power bystander
+        int cabBase = GameEngine.GetCard(cab).Power;
+        int otherBase = GameEngine.GetCard(other).Power;
+
+        int cabPow = GameEngine.GetPower(st, cab);
+        int otherPow = GameEngine.GetPower(st, other);
+        Check("ST25-002 Cabaji: +5000 self-buff hits ONLY Cabaji, not the whole board",
+              cabPow == cabBase + 5000 && otherPow == otherBase,
+              $"cabaji={cabPow}(base {cabBase}) other={otherPow}(base {otherBase})  {Tail(st)}");
+    }
+
+    // Playtest bug: OP09-061 P/B Luffy "[Your Turn][Once Per Turn] When 2 or more DON!! cards …
+    // are returned …, add a DON!! active + add another rested" never fired — NotifyDonReturned
+    // only matched the singular "When a DON!! card … is returned" wording and passed no count.
+    static void PbLuffyDonReturnThreshold()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "pbluffy" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        S.Leader.CardId = "OP09-061";                       // P/B Luffy leader
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        var kaido = MakeInPlay("P-005", "south"); kaido.PlayedOnTurn = 0; S.CharacterArea[0] = kaido; // has [Activate: Main] DON!! −2
+        S.CostArea.Clear();
+        for (int i = 0; i < 4; i++) S.CostArea.Add(new DonInstance { InstanceId = $"pld{i}", Rested = false });
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = kaido.InstanceId });
+        Drive(st, "south", kaido.InstanceId, S.Leader.InstanceId);
+        bool fired = S.AbilityUsedThisTurn.Contains(S.Leader.InstanceId + ":donReturned");
+        Check("OP09-061 P/B Luffy: 'When 2 or more DON!! returned' fires on a DON!! −2 return",
+              fired, $"leaderTriggerFired={fired}  {Tail(st)}");
+    }
+
+    // Playtest bug: P-084 Buggy "If your Leader is [Buggy], all Characters with a cost of 3 or 4
+    // cannot attack." "all Characters" = BOTH players' Characters. The real scenario: the OPPONENT
+    // (bot) has a Buggy leader + P-084 down, and MY 4-cost Usopp must not be able to attack.
+    // Also verify it does NOT block when the opponent's leader isn't Buggy.
+    static void BuggyCannotAttackAura()
+    {
+        // st = my (south) 4-cost attacker vs a north board that has P-084 Buggy + `northLeader`.
+        GameState Build(string northLeaderId)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "buggy:" + northLeaderId });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.TurnsStarted = 4; N.TurnsStarted = 4;
+            N.Leader.CardId = northLeaderId;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            var buggy = MakeInPlay("P-084", "north"); N.CharacterArea[0] = buggy;                       // opponent's aura source
+            var atk = MakeInPlay("EB01-003", "south"); atk.PlayedOnTurn = 0; atk.Rested = false; S.CharacterArea[0] = atk; // MY cost-4 attacker
+            return st;
+        }
+
+        var stBuggy = Build("OP09-042");   // opponent's leader IS Buggy → aura active for BOTH sides
+        var atkB = stBuggy.Players["south"].CharacterArea[0];
+        Apply(stBuggy, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = atkB.InstanceId, Target = stBuggy.Players["north"].Leader.InstanceId });
+        bool blocked = stBuggy.Battle == null;
+
+        var stLuffy = Build("ST01-001");   // opponent's leader is Luffy → aura inactive
+        var atkL = stLuffy.Players["south"].CharacterArea[0];
+        Apply(stLuffy, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = atkL.InstanceId, Target = stLuffy.Players["north"].Leader.InstanceId });
+        bool allowed = stLuffy.Battle != null;
+
+        Check("P-084 Buggy: opponent's Buggy aura blocks MY cost-4 attacker (both sides); inactive under non-Buggy leader",
+              blocked && allowed, $"blockedByOppBuggy={blocked} allowedUnderLuffy={allowed}");
+    }
+
+    // Playtest bug (reported): ST25-003 Crocodile & Mihawk "[On Play] Draw 2 cards and trash 1
+    // card from your hand. Then, play up to 1 {Cross Guild} type Character card with a cost of 4 or
+    // less from your hand." The greedy Draw handler drew 2 and DROPPED the "trash 1" clause, so the
+    // first prompt the player saw was the "play a card" step — clicking it played the card they
+    // meant to trash. Verify the ORDERED button sequence: draw (silent) → a TRASH prompt (which
+    // consumes a hand card to trash) → the play prompt.
+    static void CrocodileMihawkDrawTrashThenPlay()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "crocmihawk" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"];
+        S.TurnsStarted = 4;
+        S.Hand.Clear();
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        S.CostArea.Clear();
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"cmd{i}", Rested = false });
+        S.DonDeck = 0;
+        // Three plain non-Cross-Guild cards in hand so the trash step has a real target and the
+        // play step correctly finds nothing eligible (so it skips, not mis-fires).
+        for (int i = 0; i < 3; i++) { var h = MakeInPlay("ST01-006", "south"); h.Zone = "hand"; S.Hand.Add(h); }
+        var croc = MakeInPlay("ST25-003", "south"); croc.Zone = "hand"; S.Hand.Add(croc);
+        int handBefore = S.Hand.Count;              // 4 (3 filler + Crocodile)
+        int trashBefore = S.Trash.Count;
+
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = croc.InstanceId, SlotIndex = 0 });
+        // First prompt after the (silent) draw MUST be the trash step, in the hand zone.
+        var firstPrompt = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        bool firstIsTrash = firstPrompt != null
+            && firstPrompt.TargetZone == EffectTargetZone.Hand
+            && (firstPrompt.Text ?? "").TrimStart().StartsWith("trash", StringComparison.OrdinalIgnoreCase);
+        // Drive it: pick a filler card for the trash, then let the play step skip (no Cross Guild).
+        var fillerId = S.Hand.First(c => c.CardId == "ST01-006").InstanceId;
+        Drive(st, "south", fillerId);
+
+        int drew = S.Hand.Count + S.Trash.Count - handBefore - trashBefore;   // net cards entering hand+trash = draws
+        bool trashed = S.Trash.Count == trashBefore + 1;
+        // hand: 4 start, +2 draw, −1 played(Crocodile to board), −1 trashed = 4
+        bool handOk = S.Hand.Count == handBefore + 2 - 1 - 1;
+        Check("ST25-003 Crocodile & Mihawk: On Play prompts TRASH before play (draw 2 → trash 1 → play)",
+              firstIsTrash && trashed && handOk,
+              $"firstIsTrash={firstIsTrash} trashed={trashed} hand={S.Hand.Count}(exp {handBefore} ) trash={S.Trash.Count}  {Tail(st)}");
+    }
+
+    // Bug (surfaced by the draw+trash fix): OP04-083 Sabo "[On Play] None of your Characters can be
+    // K.O.'d by effects until the start of your next turn. Then, draw 2 cards and trash 2 cards from
+    // your hand." The unrecognized board-wide immunity clause meant the ". Then," split never fired,
+    // so the greedy Draw handler drew 2 and DROPPED the trash. Verify all three: immunity applied
+    // (Sabo survives an effect K.O.), drew 2, trashed 2. Rulebook §10-2-1 (K.O. / immunity).
+    static void SaboImmunityThenDrawTrash()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "sabo" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"];
+        S.TurnsStarted = 4;
+        S.Hand.Clear();
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        S.CostArea.Clear();
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sbd{i}", Rested = false });
+        S.DonDeck = 0;
+        for (int i = 0; i < 4; i++) { var h = MakeInPlay("ST01-006", "south"); h.Zone = "hand"; S.Hand.Add(h); }
+        var sabo = MakeInPlay("OP04-083", "south"); sabo.Zone = "hand"; S.Hand.Add(sabo);
+        var fillerIds = S.Hand.Where(c => c.CardId == "ST01-006").Select(c => c.InstanceId).ToArray();
+
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = sabo.InstanceId, SlotIndex = 0 });
+        Drive(st, "south", fillerIds);   // enough distinct hand cards for the 2-card trash step
+
+        var saboInPlay = S.CharacterArea.FirstOrDefault(c => c?.CardId == "OP04-083");
+        bool onBoard = saboInPlay != null;
+        bool trashed2 = S.Trash.Count(c => c.CardId == "ST01-006") == 2;
+        // Immunity: an opponent effect that K.O.s a low-cost Character must NOT trash Sabo.
+        bool immune = false;
+        if (onBoard)
+        {
+            var koEff = new PendingEffect { EffectId = "koTest", Seat = "north", SourceInstanceId = st.Players["north"].Leader.InstanceId,
+                SourceCardId = st.Players["north"].Leader.CardId, Timing = "main",
+                Text = "K.O. up to 1 of your opponent's Characters with a cost of 10 or less.", TargetZone = EffectTargetZone.Play };
+            st.PendingEffects.Add(koEff);
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "north", EffectId = "koTest", Target = saboInPlay.InstanceId });
+            immune = S.CharacterArea.Any(c => c?.CardId == "OP04-083"); // still there = immune
+        }
+        Check("OP04-083 Sabo: board immunity + draw 2 + trash 2 all resolve (dropped-clause + §10-2-1)",
+              onBoard && trashed2 && immune,
+              $"onBoard={onBoard} trashed2={trashed2} immune={immune} trash={S.Trash.Count}  {Tail(st)}");
+    }
+
+    // Rulebook §10-1-1 [Rush] and §10-2-9 [DON!! x1]: passive keyword grants must apply live.
+    // Rush: a [Rush] Character played this turn is NOT summoning-sick (can attack); a non-Rush one
+    // is. [DON!! x1] gains [Blocker]: Blocker is granted only while ≥1 DON!! is attached.
+    static void PassiveKeywordGrants()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "passive" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"];
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        // [Rush]: OP01-025 Zoro played THIS turn can attack; ST01-006 (no Rush) cannot.
+        var zoro = MakeInPlay("OP01-025", "south"); zoro.PlayedOnTurn = st.TurnNumber; zoro.Rested = false; S.CharacterArea[0] = zoro;
+        var plain = MakeInPlay("ST01-006", "south"); plain.PlayedOnTurn = st.TurnNumber; plain.Rested = false; S.CharacterArea[1] = plain;
+        bool rushOk = !GameEngine.IsSummoningSick(st, zoro) && GameEngine.IsSummoningSick(st, plain);
+
+        // [DON!! x1] This Character gains [Blocker]: P-004 Crocodile — Blocker only with DON attached.
+        var croc = MakeInPlay("P-004", "south"); croc.PlayedOnTurn = 0; S.CharacterArea[2] = croc;
+        bool noBlockerNoDon = !GameEngine.HasBlocker(st, croc);
+        croc.AttachedDonIds.Add("don-on-croc");
+        bool blockerWithDon = GameEngine.HasBlocker(st, croc);
+
+        Check("§10-1-1/§10-2-9: [Rush] beats summoning sickness; [DON!! x1] grants [Blocker] only with DON attached",
+              rushOk && noBlockerNoDon && blockerWithDon,
+              $"rushOk={rushOk} blockerNoDon(want F)={!noBlockerNoDon} blockerWithDon={blockerWithDon}  {Tail(st)}");
+    }
+
+    // Official Q&A (OP02-027 Inuarashi): "cannot be removed from the field by your opponent's
+    // effects" also blocks being RETURNED TO HAND / placed on deck / trashed — not only K.O. The
+    // bounce/deck handlers weren't checking removal immunity. Gate: "if all of your DON!! cards are
+    // rested". Verify Inuarashi resists a return-to-hand while a normal Character is bounced.
+    static void RemovalImmunityBlocksBounce()
+    {
+        GameState st(bool donRested)
+        {
+            var s = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "removeimm" + donRested });
+            s.Status = "active"; s.Phase = "main"; s.ActiveSeat = "north"; s.TurnNumber = 6;
+            var S = s.Players["south"]; S.TurnsStarted = 4;
+            for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+            S.CostArea.Clear();
+            for (int i = 0; i < 4; i++) S.CostArea.Add(new DonInstance { InstanceId = $"rid{i}", Rested = donRested });
+            var inu = MakeInPlay("OP02-027", "south"); S.CharacterArea[0] = inu;
+            var eff = new PendingEffect { EffectId = "bounce", Seat = "north", SourceInstanceId = s.Players["north"].Leader.InstanceId,
+                SourceCardId = s.Players["north"].Leader.CardId, Timing = "main",
+                Text = "Return up to 1 Character with a cost of 10 or less to the owner's hand.", TargetZone = EffectTargetZone.Play };
+            s.PendingEffects.Add(eff);
+            Apply(s, new GameCommand { Type = "resolveEffect", Seat = "north", EffectId = "bounce", Target = inu.InstanceId });
+            return s;
+        }
+        var rested = st(true);    // all DON rested → immune → stays on board
+        bool resisted = rested.Players["south"].CharacterArea.Any(c => c?.CardId == "OP02-027");
+        var active = st(false);   // DON active → condition unmet → bounced to hand
+        bool bounced = active.Players["south"].Hand.Any(c => c.CardId == "OP02-027");
+        Check("Q&A OP02-027: 'cannot be removed' blocks a bounce when its condition holds (not when it doesn't)",
+              resisted && bounced, $"resistedWhenRested={resisted} bouncedWhenActive={bounced}  {Tail(rested)}");
+    }
+
+    // Rulebook §8-1-3-4 replacement effects: EB04-031 King "If this Character would be K.O.'d, you
+    // may return 1 DON!! card from your field to your DON!! deck instead." The "would be K.O.'d"
+    // trigger + the "return DON!! instead" action were unimplemented — King should SURVIVE an effect
+    // K.O. by returning a DON!! (and be K.O.'d normally when it can't pay).
+    static void KingKoReplacementReturnDon()
+    {
+        GameState Build(int donInCost)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "king" + donInCost });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; S.TurnsStarted = 4;
+            for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+            S.CostArea.Clear();
+            for (int i = 0; i < donInCost; i++) S.CostArea.Add(new DonInstance { InstanceId = $"kdon{i}", Rested = false });
+            S.DonDeck = 10 - donInCost;
+            var king = MakeInPlay("EB04-031", "south"); S.CharacterArea[0] = king;
+            var koEff = new PendingEffect { EffectId = "koKing", Seat = "north", SourceInstanceId = st.Players["north"].Leader.InstanceId,
+                SourceCardId = st.Players["north"].Leader.CardId, Timing = "main",
+                Text = "K.O. up to 1 of your opponent's Characters with a cost of 10 or less.", TargetZone = EffectTargetZone.Play };
+            st.PendingEffects.Add(koEff);
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "north", EffectId = "koKing", Target = king.InstanceId });
+            return st;
+        }
+        var withDon = Build(3);      // has DON → survives by returning 1
+        bool survived = withDon.Players["south"].CharacterArea.Any(c => c?.CardId == "EB04-031");
+        bool donReturned = withDon.Players["south"].DonDeck == 8 && withDon.Players["south"].CostArea.Count == 2;
+        var noDon = Build(0);        // no DON → cannot pay → K.O.'d normally
+        bool koed = noDon.Players["south"].Trash.Any(c => c.CardId == "EB04-031");
+        Check("§8-1-3-4 EB04-031 King: 'would be K.O.'d → return 1 DON!! instead' (survives w/ DON, K.O.'d without)",
+              survived && donReturned && koed,
+              $"survived={survived} donReturned={donReturned}(deck={withDon.Players["south"].DonDeck}) koedNoDon={koed}  {Tail(withDon)}");
+    }
+
+    // Attribute-icon data restoration + ＜X＞ target filter: OP04-042 Ipponmatsu (own attribute
+    // Wisdom!) "[On Play] Up to 1 of your ＜Slash＞ attribute Characters gains +3000 power…". The
+    // ＜Slash＞ icon was stripped from the JSON; restored + made the target filter attribute-aware.
+    // The buff must apply ONLY to a Slash Character (Zoro), not a Strike one (Chopper).
+    static void IpponmatsuSlashAttributeFilter()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "ippon" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"ipd{i}", Rested = false });
+        var zoro = MakeInPlay("OP01-025", "south"); zoro.PlayedOnTurn = 0; S.CharacterArea[0] = zoro;   // Slash 5000
+        var chopper = MakeInPlay("ST01-006", "south"); chopper.PlayedOnTurn = 0; S.CharacterArea[1] = chopper; // Strike 1000
+        int zoroBase = GameEngine.GetPower(st, zoro), chopBase = GameEngine.GetPower(st, chopper);
+        var ippon = MakeInPlay("OP04-042", "south"); ippon.Zone = "hand"; S.Hand.Add(ippon);
+
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = ippon.InstanceId, SlotIndex = 2 });
+        var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        // Try to buff the Strike Character (Chopper) → must be rejected (not a ＜Slash＞ attribute Character).
+        if (pe != null) Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = chopper.InstanceId });
+        bool chopperUnbuffed = GameEngine.GetPower(st, chopper) == chopBase;
+        // Buff the Slash Character (Zoro) → +3000.
+        var pe2 = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        if (pe2 != null) Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe2.EffectId, Target = zoro.InstanceId });
+        bool zoroBuffed = GameEngine.GetPower(st, zoro) == zoroBase + 3000;
+
+        Check("OP04-042 Ipponmatsu ＜Slash＞ filter: buffs the Slash Character, rejects the Strike one",
+              chopperUnbuffed && zoroBuffed,
+              $"chopperUnbuffed={chopperUnbuffed}({GameEngine.GetPower(st, chopper)}) zoroBuffed={zoroBuffed}({GameEngine.GetPower(st, zoro)} exp {zoroBase + 3000})  {Tail(st)}");
+    }
+
+    // Card-data fix (reported): OP12-034 Perona "[On Play] If your Leader has the ＜Slash＞ attribute,
+    // look at 5 cards …" — the ＜Slash＞ attribute icon had been STRIPPED from the JSON to a bare
+    // "the attribute", so the condition never matched (and couldn't, since Perona's own attribute is
+    // Special ≠ Slash). With the data restored + the attribute-condition parser: it fires under a
+    // Slash Leader (OP01-001 Zoro) and is gated under a non-Slash Leader.
+    static void PeronaSlashAttributeCondition()
+    {
+        GameState Build(string leaderId)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "perona:" + leaderId });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; S.TurnsStarted = 4;
+            S.Leader.CardId = leaderId;
+            for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+            for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"prn{i}", Rested = false });
+            var perona = MakeInPlay("OP12-034", "south"); perona.Zone = "hand"; S.Hand.Add(perona);
+            Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = perona.InstanceId, SlotIndex = 0 });
+            return st;
+        }
+        var slash = Build("OP01-001");     // Zoro — Slash attribute → condition MET → deck-look opens
+        bool firedUnderSlash = slash.DeckLook != null && slash.DeckLook.Seat == "south";
+        var nonSlash = Build("ST01-001");  // Luffy — Strike attribute → condition NOT met → skipped
+        bool gatedUnderStrike = nonSlash.DeckLook == null;
+        Check("OP12-034 Perona ＜Slash＞ attribute condition: fires under a Slash Leader, gated otherwise",
+              firedUnderSlash && gatedUnderStrike,
+              $"firedUnderSlash={firedUnderSlash} gatedUnderStrike={gatedUnderStrike}  {Tail(slash)}");
+    }
+
+    // Rulebook §7-1-5-3/4 (power durations) + base-vs-current power/cost. A battle-scoped bonus
+    // ("during this battle") is cleared when the battle ends; a turn-scoped bonus ("during this
+    // turn") persists through the turn. Base power/cost (GetCard) never changes; GetPower/GetCost
+    // reflect the live modifiers.
+    static void PowerCostDurationScoping()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "durscope" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"];
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        var ch = MakeInPlay("ST01-006", "south"); S.CharacterArea[0] = ch;   // base power 1000
+        int basePow = GameEngine.GetCard(ch).Power;
+
+        // Turn-scoped +2000 (cleared at the owner's refresh).
+        st.TemporaryPowerBonus[ch.InstanceId] = 2000;
+        int powTurn = GameEngine.GetPower(st, ch);                            // base + 2000
+        // Battle-scoped +3000 stacks while a battle is live.
+        st.Battle = new BattleState { Id = "b1", Step = "counter" };
+        st.Battle.BattlePowerBonus[ch.InstanceId] = 3000;
+        int powInBattle = GameEngine.GetPower(st, ch);                        // base + 2000 + 3000
+        // Battle ends → battle bonus gone, turn bonus remains.
+        st.Battle = null;
+        int powAfterBattle = GameEngine.GetPower(st, ch);                     // base + 2000
+
+        // Cost: base never changes; per-instance CostDelta raises/lowers current cost (clamped ≥0).
+        int baseCost = GameEngine.GetCard(ch).Cost;                           // 2
+        ch.Modifiers.Add(new ActiveModifier { CostDelta = 3, ExpiresAt = "endOfTurn" });
+        int costUp = GameEngine.GetCost(st, ch);                             // base + 3
+        ch.Modifiers.Add(new ActiveModifier { CostDelta = -99, ExpiresAt = "endOfTurn" });
+        int costFloor = GameEngine.GetCost(st, ch);                          // clamped to 0
+
+        bool ok = powTurn == basePow + 2000 && powInBattle == basePow + 5000 && powAfterBattle == basePow + 2000
+                  && GameEngine.GetCard(ch).Power == basePow
+                  && costUp == baseCost + 3 && costFloor == 0 && GameEngine.GetCard(ch).Cost == baseCost;
+        Check("§7-1-5 power durations (battle clears at battle-end, turn persists) + base-vs-current power/cost",
+              ok, $"turn={powTurn} inBattle={powInBattle} afterBattle={powAfterBattle} base={basePow} | costUp={costUp} floor={costFloor} baseCost={baseCost}");
+    }
+
+    // Rulebook §10-2-9 [DON!! xX]: the threshold is generic (x1/x2/x3), not just x1. EB02-003
+    // Chopper "[DON!! x2] [Opponent's Turn] This Character gains +2000 power" (base 3000): the buff
+    // applies ONLY with ≥2 DON attached, and only on the opponent's turn.
+    static void DonX2ThresholdGating()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "donx2" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 6; // opponent's (north's) turn
+        var S = st.Players["south"];
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        var chopper = MakeInPlay("EB02-003", "south"); S.CharacterArea[0] = chopper;
+        int basePow = GameEngine.GetCard(chopper).Power;   // 3000
+        // Measured on the OPPONENT's turn, where attached DON give NO raw power (they only add
+        // +1000 each on the OWNER's turn) — this isolates the [DON!! x2][Opponent's Turn] buff.
+        int pow0 = GameEngine.GetPower(st, chopper);       // 0 DON, opp turn → base
+        chopper.AttachedDonIds.Add("d1");
+        int pow1 = GameEngine.GetPower(st, chopper);       // 1 DON, opp turn → base (< x2)
+        chopper.AttachedDonIds.Add("d2");
+        int pow2 = GameEngine.GetPower(st, chopper);       // 2 DON, opp turn → +2000 buff
+        // On the OWNER's turn with 2 DON: raw DON give +2000, and the [Opponent's Turn] buff must
+        // NOT also apply (would be base+4000 if it wrongly stacked).
+        st.ActiveSeat = "south";
+        int powOwnTurn = GameEngine.GetPower(st, chopper);
+
+        bool ok = pow0 == basePow && pow1 == basePow && pow2 == basePow + 2000 && powOwnTurn == basePow + 2000;
+        Check("§10-2-9 [DON!! x2]: +2000 buff needs ≥2 DON & opponent's turn (not stacked with raw DON on own turn)",
+              ok, $"base={basePow} oppTurn[don0={pow0} don1={pow1} don2={pow2}] ownTurn2don={powOwnTurn}(exp {basePow+2000})  {Tail(st)}");
+    }
+
+    // Bug: "add up to 1 DON!! card from your DON!! deck and set it as active, and add up to 1
+    // additional DON!! card and rest it" (EB04-031 King, OP09-061 P/B Luffy) must add ONE ACTIVE +
+    // ONE RESTED (2 DON). The single rested-flag handler saw "rest it" and added only 1 rested.
+    static void DonAddActiveAndRested()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "donaddar" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"];
+        S.TurnsStarted = 4;
+        S.CostArea.Clear();
+        for (int i = 0; i < 5; i++) S.CostArea.Add(new DonInstance { InstanceId = $"dad{i}", Rested = false });
+        S.DonDeck = 5;   // 5 cost + 5 deck = 10 total (conservation)
+        int costBefore = S.CostArea.Count;      // 5
+        int deckBefore = S.DonDeck;             // 5
+
+        var eff = new PendingEffect { EffectId = "donAdd", Seat = "south", SourceInstanceId = S.Leader.InstanceId,
+            SourceCardId = S.Leader.CardId, Timing = "main",
+            Text = "add up to 1 DON!! card from your DON!! deck and set it as active, and add up to 1 additional DON!! card and rest it." };
+        st.PendingEffects.Add(eff);
+        Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = "donAdd", Target = null });
+
+        int added = S.CostArea.Count - costBefore;
+        int nowActive = S.CostArea.Count(d => !d.Rested);
+        int nowRested = S.CostArea.Count(d => d.Rested);
+        bool ok = added == 2 && S.DonDeck == deckBefore - 2 && nowActive == 6 && nowRested == 1;
+        Check("DON!! deck→cost: 'set active, and add 1 additional and rest it' adds 1 ACTIVE + 1 RESTED",
+              ok, $"added={added} deck={S.DonDeck}(exp {deckBefore-2}) active={nowActive}(exp 6) rested={nowRested}(exp 1)  {Tail(st)}");
+    }
+
+    // Rulebook §10-2-1-3: a Character trashed by "some other method" (played over on a full board)
+    // is NOT K.O.'d, so its [On K.O.] must NOT fire. Play a 6th Character over P-071 Marco ("[On
+    // K.O.] You may add this Character card to your hand."): Marco must go to TRASH (not hand) and
+    // no On-K.O. effect should be pending.
+    static void PlayedOverIsNotAKo()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "playover" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"];
+        S.TurnsStarted = 4;
+        S.Hand.Clear();
+        S.CostArea.Clear();
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"pod{i}", Rested = false });
+        S.DonDeck = 0;
+        // Full board; slot 0 = Marco P-071 (has [On K.O.]).
+        var marco = MakeInPlay("P-071", "south"); S.CharacterArea[0] = marco;
+        for (int i = 1; i < 5; i++) S.CharacterArea[i] = MakeInPlay("ST01-006", "south");
+        var newChar = MakeInPlay("ST01-006", "south"); newChar.Zone = "hand"; S.Hand.Add(newChar);
+
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = newChar.InstanceId, SlotIndex = 0 });
+
+        bool marcoInTrash = S.Trash.Any(c => c.CardId == "P-071");
+        bool marcoInHand = S.Hand.Any(c => c.CardId == "P-071");
+        bool noOnKoPending = !st.PendingEffects.Any(e => e.Seat == "south" && e.Timing == "onKo");
+        Check("§10-2-1-3: playing over a Character is NOT a K.O. (P-071 Marco's [On K.O.] does not fire)",
+              marcoInTrash && !marcoInHand && noOnKoPending,
+              $"inTrash={marcoInTrash} inHand={marcoInHand} noOnKoPending={noOnKoPending}  {Tail(st)}");
+    }
+
+    // Resolve pending effects for `seat`, trying the given target ids in order across steps
+    // (and skipping when none apply), until nothing is pending. Mirrors the coverage driver.
+    static void Drive(GameState st, string seat, params string[] targets)
+    {
+        for (int step = 0; step < 60; step++)
+        {
+            if (st.ActiveChoice != null && st.ActiveChoice.Seat == seat)
+            { Apply(st, new GameCommand { Type = "resolveChoice", Seat = seat, Target = "A" }); continue; }
+            var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == seat);
+            if (pe == null) break;
+            string id = pe.EffectId;
+            int before = st.PendingEffects.Count; int sel = pe.SelectionsRemaining;
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = seat, EffectId = id, Target = null });
+            bool progressed = !st.PendingEffects.Any(e => e.EffectId == id) || st.PendingEffects.Count != before
+                              || (st.PendingEffects.FirstOrDefault(e => e.EffectId == id)?.SelectionsRemaining ?? -1) != sel;
+            if (!progressed)
+            {
+                foreach (var t in targets)
+                {
+                    int b2 = st.PendingEffects.Count; var pe2 = st.PendingEffects.FirstOrDefault(e => e.EffectId == id); int s2 = pe2?.SelectionsRemaining ?? -1;
+                    Apply(st, new GameCommand { Type = "resolveEffect", Seat = seat, EffectId = id, Target = t });
+                    var pe3 = st.PendingEffects.FirstOrDefault(e => e.EffectId == id);
+                    if (pe3 == null || st.PendingEffects.Count != b2 || (pe3.SelectionsRemaining) != s2) { progressed = true; break; }
+                }
+            }
+            if (!progressed) Apply(st, new GameCommand { Type = "passEffect", Seat = seat, EffectId = id });
+        }
     }
 
     // Bug: with a full board (5 chars) you should be able to play a Character "over" one, trashing
@@ -383,6 +906,85 @@ static class Scenarios
             atk.PlayedOnTurn = 0; // not summoning sick
             S.CharacterArea[0] = atk;
         }
+        return st;
+    }
+
+    // Bug: ST10-001 Trafalgar Law's [Activate: Main] DON!! -3 is a COMPOUND effect —
+    // "Place up to 1 … at the bottom of the owner's deck, AND play up to 1 Character card
+    // (cost <= 4) from your hand." Only the first clause fired; the play-from-hand clause
+    // was silently dropped. Verify BOTH clauses resolve.
+    static void LawSecondClausePlaysFromHand()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st10", NorthDeck = "st01", Seed = "lawcompound" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+
+        var sink = MakeInPlay("ST01-006", "north"); sink.Rested = true; N.CharacterArea[0] = sink;   // Chopper 1000 (<=3000)
+        var handChar = MakeInPlay("ST01-006", "south"); handChar.Zone = "hand"; S.Hand.Add(handChar); // cost-1 Character to play
+        for (int i = 0; i < 4; i++) S.CostArea.Add(new DonInstance { InstanceId = $"lawdon{i}", Rested = false });
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = S.Leader.InstanceId });
+        var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        // One resolve with the sink target both auto-pays DON!! -3 and resolves the place clause.
+        if (pe != null) Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = sink.InstanceId });
+        // The queued rider ("play up to 1 Character … from your hand") now waits for a hand pick.
+        var rider = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        if (rider != null) Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = rider.EffectId, Target = handChar.InstanceId });
+
+        bool sunkToDeck = N.Deck.Any(c => c.InstanceId == sink.InstanceId) && !N.CharacterArea.Any(c => c?.InstanceId == sink.InstanceId);
+        bool played = S.CharacterArea.Any(c => c?.InstanceId == handChar.InstanceId) && !S.Hand.Any(c => c.InstanceId == handChar.InstanceId);
+        int donLeft = S.CostArea.Count;
+        Check("Law ST10-001 DON!! -3: BOTH place-at-bottom AND play-from-hand resolve",
+              sunkToDeck && played && donLeft == 1,
+              $"sunkToDeck={sunkToDeck} played={played} donLeft={donLeft}  {Tail(st)}");
+    }
+
+    // Bug: ST10-011 Heat gains +2000 "When a DON!! card … is returned to your DON!! deck".
+    // Paying a DON!! -3 cost by clicking 3 individual DON!! was firing the trigger 3 times
+    // (+6000). A single DON!! -N return is ONE event → Heat should gain +2000 exactly once.
+    static void HeatCountsDonMinusAsOneEvent()
+    {
+        var st = HeatBoardWithLaw(out var S, out var heat);
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = S.Leader.InstanceId });
+        var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        // Pay the -3 by clicking three individual cost-area DON!! (the per-click path).
+        for (int i = 0; i < 3 && pe != null; i++)
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = $"heatdon{i}" });
+
+        int power = GameEngine.GetPower(st, heat);
+        Check("Heat ST10-011: DON!! -3 counts as ONE return event (+2000, not +6000)",
+              power == 6000, $"heatPower={power} (base 4000, expected 6000)  {Tail(st)}");
+    }
+
+    // Bug companion: Heat is [Once Per Turn]. Even across separate DON!!-return events in the
+    // same turn, it may only gain +2000 once.
+    static void HeatDonReturnedOncePerTurn()
+    {
+        var st = HeatBoardWithLaw(out var S, out var heat);
+        // First return event: click one DON!! for the -3 cost… then finish the other two.
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = S.Leader.InstanceId });
+        var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+        for (int i = 0; i < 3 && pe != null; i++)
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = $"heatdon{i}" });
+        bool onceMarked = S.AbilityUsedThisTurn.Contains(heat.InstanceId + ":donReturned");
+        int power = GameEngine.GetPower(st, heat);
+        Check("Heat ST10-011: [Once Per Turn] gate is consumed after a DON!! return",
+              onceMarked && power == 6000, $"onceMarked={onceMarked} heatPower={power}  {Tail(st)}");
+    }
+
+    // South = ST10 Law leader with a Heat (ST10-011) on board and exactly 3 active DON!! whose
+    // instance ids are heatdon0..2 (so tests can click them individually).
+    static GameState HeatBoardWithLaw(out PlayerState S, out CardInstance heat)
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st10", NorthDeck = "st01", Seed = "heat" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        heat = MakeInPlay("ST10-011", "south"); heat.Rested = false; heat.PlayedOnTurn = 0; S.CharacterArea[0] = heat;
+        for (int i = 0; i < 3; i++) S.CostArea.Add(new DonInstance { InstanceId = $"heatdon{i}", Rested = false });
         return st;
     }
 

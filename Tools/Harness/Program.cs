@@ -18,7 +18,11 @@ class Program
         int loaded = CardLibraryLoader.Load(CardJsonPath);
         Console.WriteLine($"Loaded {loaded} card definitions from JSON.\n");
         if (args.Length > 0 && args[0] == "scenario") return Scenarios.Run();
+        if (args.Length > 0 && args[0] == "coverage") return EffectCoverage.Run();
+        if (args.Length > 0 && args[0] == "golden") return EffectCoverage.Golden(args.Length > 1 && args[1] == "write");
+        if (args.Length > 0 && args[0] == "invariants") return InvariantSweep(args.Length > 1 && int.TryParse(args[1], out var q) ? q : 2);
         if (args.Length > 0 && args[0] == "diag") { Diag(args[1], args[2], int.Parse(args[3])); return 0; }
+        if (args.Length > 0 && args[0] == "probe") { Probe(args[1]); return 0; }
         if (args.Length > 0 && args[0] == "trace") { Trace(args.Length > 1 ? args[1] : "st01", args.Length > 2 ? args[2] : "st02"); return 0; }
         int seedsPer = args.Length > 0 && int.TryParse(args[0], out var s) ? s : 3;
         var decks = CardData.StarterDecks.Keys.OrderBy(k => k).ToList();
@@ -101,6 +105,161 @@ class Program
         Print("INVARIANT VIOLATIONS", invDetail);
 
         return (crashes + stalls + invariantFails) > 0 ? 1 : 0;
+    }
+
+    // LAYER 1 driver: replay every deck pairing one command at a time and assert the rules
+    // invariants after EVERY command, reporting the first violation per game (with the command
+    // that broke it). Catches transient rule breaks a bot-vs-bot end-state check would miss.
+    static int InvariantSweep(int seedsPer)
+    {
+        var decks = CardData.StarterDecks.Keys.OrderBy(k => k).ToList();
+        Console.WriteLine($"Invariant sweep: {decks.Count}x{decks.Count}x{seedsPer} = {decks.Count * decks.Count * seedsPer} games, checked per-command.\n");
+        int games = 0, violGames = 0;
+        var details = new List<string>();
+        var byKind = new Dictionary<string, int>();
+        foreach (var sd in decks)
+        foreach (var nd in decks)
+        for (int seed = 0; seed < seedsPer; seed++)
+        {
+            games++;
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = sd, NorthDeck = nd, Seed = $"{sd}:{nd}:{seed}" });
+            string viol;
+            try { viol = PlayWithInvariantChecks(st, 20000); }
+            catch (Exception ex) { viol = $"CRASH {ex.GetType().Name}: {ex.Message}"; }
+            if (viol != null)
+            {
+                violGames++;
+                string kind = viol.Contains("::") ? viol.Substring(viol.IndexOf("::") + 2).Split(new[] { '=', '(', ':' }, 2)[0].Trim() : viol.Split(' ')[0];
+                byKind[kind] = byKind.GetValueOrDefault(kind) + 1;
+                if (details.Count < 40) details.Add($"{sd} vs {nd} #{seed}: {viol}");
+            }
+        }
+
+        Console.WriteLine($"===== INVARIANTS =====");
+        Console.WriteLine($"games={games}  gamesWithViolation={violGames}");
+        foreach (var kv in byKind.OrderByDescending(k => k.Value)) Console.WriteLine($"  {kv.Value,5}x  {kv.Key}");
+        Print("VIOLATIONS (first per game)", details);
+
+        try
+        {
+            string dir = @"C:\Users\Nperr\One Piece TCG Simulator\Tools\Harness\findings";
+            System.IO.Directory.CreateDirectory(dir);
+            using var w = new System.IO.StreamWriter(System.IO.Path.Combine(dir, "invariant-violations.md"), false);
+            w.WriteLine("# Invariant Violations (per-command)\n");
+            w.WriteLine($"Generated {DateTime.Now:yyyy-MM-dd HH:mm}. `Tools/Harness invariants {seedsPer}` — NOT shipped.\n");
+            w.WriteLine($"- games: {games}\n- games with a violation: {violGames}\n");
+            foreach (var kv in byKind.OrderByDescending(k => k.Value)) w.WriteLine($"- {kv.Value}x `{kv.Key}`");
+            w.WriteLine("\n## First violation per affected game\n");
+            foreach (var d in details) w.WriteLine($"- {d}");
+        }
+        catch { }
+
+        return violGames > 0 ? 1 : 0;
+    }
+
+    static string PlayWithInvariantChecks(GameState state, int maxTotal)
+    {
+        int total = 0;
+        while (state.Status != "finished" && total < maxTotal)
+        {
+            var (aS, vS) = StepSeat(state, "south", maxTotal - total); total += aS; if (vS != null) return vS;
+            var (aN, vN) = StepSeat(state, "north", maxTotal - total); total += aN; if (vN != null) return vN;
+            if (aS == 0 && aN == 0) break;
+        }
+        return null;
+    }
+
+    // Mirrors IntermediateBot.TakeAllAvailableActions but checks invariants after every command.
+    static (int applied, string violation) StepSeat(GameState state, string seat, int maxCommands)
+    {
+        int applied = 0;
+        var blacklist = new HashSet<string>();
+        for (int i = 0; i < maxCommands; i++)
+        {
+            var cmd = IntermediateBot.DecideOneCommand(state, seat, blacklist);
+            if (cmd == null) break;
+            object before = IntermediateBot.SnapshotFor(state, cmd);
+            GameEngine.ApplyCommand(state, cmd);
+            applied++;
+
+            var problems = Invariants.Structural(state);
+            problems.AddRange(Invariants.Conservation(state));
+            if (problems.Count > 0)
+                return (applied, $"turn {state.TurnNumber} after [{IntermediateBot.Signature(cmd)}] :: {string.Join("; ", problems.Take(3))}");
+
+            if (!IntermediateBot.Succeeded(state, cmd, before))
+                blacklist.Add(IntermediateBot.Signature(cmd));
+        }
+        return (applied, null);
+    }
+
+    // Stage a single card's [On Play] in a controlled board and step through its pending effects
+    // one command at a time, printing the ORDERED sequence of prompts (buttons) the client would
+    // show, plus zone counts before/after — so a dropped or mis-ordered clause is visible.
+    static void Probe(string cardId)
+    {
+        var def = CardData.GetCard(cardId);
+        Console.WriteLine($"=== PROBE {cardId} {def?.Name} ===\n{def?.Effect}\n");
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "probe:" + cardId });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 5;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 3; N.TurnsStarted = 3;
+        S.Hand.Clear();
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        S.CostArea.Clear();
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"pcd{i}", Rested = false });
+        S.DonDeck = 0;
+        N.CharacterArea[0] = new CardInstance { InstanceId = "n-target", CardId = "ST01-006", Owner = "north", Zone = "character", Rested = false };
+        // Fill the hand with recognizable, playable cheap Characters so trash/play steps have targets.
+        for (int i = 0; i < 5; i++)
+            S.Hand.Add(new CardInstance { InstanceId = $"hand{i}", CardId = "ST01-006", Owner = "south", Zone = "hand" });
+        var src = new CardInstance { InstanceId = "SRC", CardId = cardId, Owner = "south", Zone = "hand" };
+        S.Hand.Add(src);
+        Console.WriteLine($"BEFORE: hand={S.Hand.Count} board={S.CharacterArea.Count(c => c != null)} trash={S.Trash.Count} deck={S.Deck.Count}\n");
+        int mark = st.EventLog.Count;
+        GameEngine.ApplyCommand(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = src.InstanceId, SlotIndex = 0 });
+
+        // Step through prompts: at each step print the active pending effect (button text/zone), then
+        // supply the FIRST hand card as a target (so trash/play steps actually consume a card).
+        int guard = 0;
+        while (guard++ < 40)
+        {
+            if (st.DeckLook != null && st.DeckLook.Seat == "south")
+            {
+                var dl = st.DeckLook;
+                string stepBefore = dl.Step; int cardsBefore = dl.Cards.Count;
+                Console.WriteLine($"DECKLOOK step={dl.Step} cards={dl.Cards.Count} src={dl.SourceName} postLook='{dl.PostLookClause}'");
+                if (dl.Step == "select")
+                {
+                    string dlPick = dl.Cards.FirstOrDefault()?.InstanceId ?? "";
+                    int leftBefore = dl.Cards.Count;
+                    GameEngine.ApplyCommand(st, new GameCommand { Type = "deckLookSelect", Seat = "south", Target = dlPick });
+                    if (st.DeckLook == dl && dl.Cards.Count == leftBefore)
+                        GameEngine.ApplyCommand(st, new GameCommand { Type = "deckLookSelect", Seat = "south", Target = "" });
+                }
+                else if (dl.Step == "rearrange")
+                    GameEngine.ApplyCommand(st, new GameCommand { Type = "deckLookConfirmOrder", Seat = "south", OrderedInstanceIds = dl.Cards.Select(c => c.InstanceId).ToList() });
+                else
+                    GameEngine.ApplyCommand(st, new GameCommand { Type = "deckLookScryConfirm", Seat = "south", OrderedInstanceIds = new System.Collections.Generic.List<string>() });
+                if (ReferenceEquals(st.DeckLook, dl) && st.DeckLook.Step == stepBefore && st.DeckLook.Cards.Count == cardsBefore) st.DeckLook = null;
+                continue;
+            }
+            var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            if (pe == null) break;
+            Console.WriteLine($"PROMPT #{guard}: zone={pe.TargetZone} sel={pe.SelectionsRemaining} optional={pe.Optional}");
+            Console.WriteLine($"    text='{(pe.Text ?? "").Replace("\n", " / ")}'");
+            string pick = S.Hand.FirstOrDefault(c => c.InstanceId != "SRC")?.InstanceId;
+            var before = (S.Hand.Count, S.CharacterArea.Count(c => c != null), S.Trash.Count);
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = pick });
+            var after = (S.Hand.Count, S.CharacterArea.Count(c => c != null), S.Trash.Count);
+            if (before == after && st.PendingEffects.Contains(pe))
+            {   // target rejected — try passing/skipping so we don't spin
+                GameEngine.ApplyCommand(st, new GameCommand { Type = "passEffect", Seat = "south", EffectId = pe.EffectId });
+            }
+        }
+        Console.WriteLine($"\nAFTER: hand={S.Hand.Count} board={S.CharacterArea.Count(c => c != null)} trash={S.Trash.Count} deck={S.Deck.Count}");
+        Console.WriteLine("\n--- resolution log ---");
+        foreach (var l in st.EventLog.Skip(mark)) Console.WriteLine("  " + l.Message);
     }
 
     static void Diag(string sd, string nd, int seed)

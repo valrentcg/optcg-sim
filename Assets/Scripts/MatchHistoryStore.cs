@@ -257,6 +257,14 @@ public static class MatchHistoryStore
         foreach (var e in state.EventLog)
         {
             if (e == null || e.Turn <= 0 || string.IsNullOrEmpty(e.Message)) continue;
+            // INFO PRIVACY: a private entry (e.g. a card searched from deck to hand) names a
+            // card only its owning seat may see. Redact it for the reviewing player.
+            string msg = e.Message;
+            if (!string.IsNullOrEmpty(e.PrivateSeat) && e.PrivateSeat != youSeat)
+            {
+                if (string.IsNullOrEmpty(e.PublicMessage)) continue;
+                msg = e.PublicMessage;
+            }
             if (current == null || current.turn != e.Turn)
             {
                 current = new MatchTurn
@@ -272,13 +280,13 @@ public static class MatchHistoryStore
             string actorSeat = e.Actor == "south" || e.Actor == "north"
                 ? e.Actor
                 : ActiveSeatForTurn(state, e.Turn);   // "system" lines belong to the active player
-            string text = e.Message.Length > MaxActionTextChars
-                ? e.Message.Substring(0, MaxActionTextChars - 1) + "…"
-                : e.Message;
+            string text = msg.Length > MaxActionTextChars
+                ? msg.Substring(0, MaxActionTextChars - 1) + "…"
+                : msg;
             current.acts.Add(new MatchAct
             {
                 s = actorSeat == youSeat ? "you" : "opp",
-                k = ClassifyLogMessage(e.Message),
+                k = ClassifyLogMessage(msg),
                 t = text,
             });
         }

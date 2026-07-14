@@ -5292,11 +5292,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         foreach (var e in state.EventLog)
         {
+            // INFO PRIVACY: a private entry names a card only the owning seat may see. The viewer
+            // is BottomSeat (south in solo/versus-AI, localSeat when networked). Non-owners see the
+            // redacted PublicMessage, or nothing when there is no public form.
+            string message = e.Message;
+            if (!string.IsNullOrEmpty(e.PrivateSeat) && e.PrivateSeat != BottomSeat)
+            {
+                if (string.IsNullOrEmpty(e.PublicMessage)) continue;
+                message = e.PublicMessage;
+            }
             string actorName = null;
             if (!string.IsNullOrEmpty(e.Actor) && e.Actor != "system" &&
                 state.Players.TryGetValue(e.Actor, out var actorP) && actorP != null)
                 actorName = actorP.Name;
-            BuildLogEntry(content, actorName, e.Message, width);
+            BuildLogEntry(content, actorName, message, width);
         }
 
         // Snap to the most recent entry; the player scrolls up to review earlier turns.

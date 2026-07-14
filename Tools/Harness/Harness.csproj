@@ -14,6 +14,8 @@
     <Compile Include="Program.cs" />
     <Compile Include="CardLibraryLoader.cs" />
     <Compile Include="Scenarios.cs" />
+    <Compile Include="EffectCoverage.cs" />
+    <Compile Include="Invariants.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\GameEngine.cs" Link="Engine\GameEngine.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\GameState.cs" Link="Engine\GameState.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\CardData.cs" Link="Engine\CardData.cs" />

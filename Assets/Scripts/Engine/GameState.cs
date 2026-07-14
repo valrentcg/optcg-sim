@@ -154,6 +154,11 @@ namespace OnePieceTcg.Engine
         public int RemainingBudget = -1;
         // First pick's instance id for two-step effects (base-power swaps etc.).
         public string FirstPickId;
+        // The REMAINDER of a compound effect ("A. Then, B") stashed while clause A is still being
+        // resolved over one or more picks. `Text` is truncated to the clause CURRENTLY resolving so
+        // the action button shows only that step; when A finishes, `Text` advances to this and the
+        // button updates to the next step. Empty = no pending continuation.
+        public string PendingContinuation;
     }
 
     /// <summary>A serializable player action. Optional fields are used per command type.</summary>
@@ -181,6 +186,13 @@ namespace OnePieceTcg.Engine
         public string Time;
         public int Turn;
         public long Sequence;   // monotonic order (replaces JS wall-clock timestamp for determinism)
+
+        // INFO PRIVACY: when PrivateSeat is set, only a viewer on that seat sees Message (which
+        // may name a hidden card, e.g. a card searched from deck to hand). Every other viewer
+        // sees PublicMessage instead — or nothing, if PublicMessage is null. Empty/null
+        // PrivateSeat means the entry is fully public (the common case).
+        public string PrivateSeat;
+        public string PublicMessage;
     }
 
     /// <summary>Full match state. The single source of truth the engine mutates.</summary>
@@ -226,6 +238,13 @@ namespace OnePieceTcg.Engine
         // Double Attack cards may attack twice (count < 2); others are blocked after 1.
         // Cleared at the start of every turn in ApplyStartOfTurn.
         public Dictionary<string, int> AttackCountThisTurn = new Dictionary<string, int>();
+
+        // Owner-seats whose Character(s) were K.O.'d this turn (for "if your opponent's Character
+        // has been K.O.'d during this turn" — OP16-100). Cleared each turn in ApplyStartOfTurn.
+        public HashSet<string> CharKoedThisTurn = new HashSet<string>();
+        // Per-seat highest base cost of an Event that seat activated this turn (for "if you have
+        // activated an Event with a base cost of N or more during this turn" — OP15-002).
+        public Dictionary<string, int> HighestEventCostThisTurn = new Dictionary<string, int>();
 
         // Alternate name overrides: instanceId → effective name string.
         // Set by "This card's name is also treated as [X]" effects. Cleared when card leaves play.
@@ -292,6 +311,12 @@ namespace OnePieceTcg.Engine
         public int SelectCount = 1;  // how many picks the select step allows
         public bool ToTop;           // rearranged cards go to the TOP of the deck (ST17-003)
         public bool LifeMode;        // cards came from LIFE; confirmed order writes back to Life (ST13-012 Makino)
+
+        // A trailing self-hand-disposal clause the deck-look flow itself does NOT perform, e.g.
+        // "… place the rest at the bottom … Then, trash 1 card from your hand." (OP16-067 Tsuru,
+        // OP09-034 Perona, OP10-057 Leo, OP13-086 …). Deck-look texts skip the ". Then," split, so
+        // this tail is captured when the look opens and resolved once the look COMPLETES.
+        public string PostLookClause;
     }
 
     /// <summary>
