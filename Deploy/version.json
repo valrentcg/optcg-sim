@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.10",
-  "buildNumber": 11,
+  "buildVersion": "1.0.11",
+  "buildNumber": 12,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Gameplay fixes + match flow (Bug Testing Season). Matches now end with a Win/Lose screen; Netcode tears down cleanly so back-to-back matches connect; on a loss you see the opponent's hand & Life. Card fixes: [Double Attack] deals 2 Life damage (and can close at 1 Life); counter events like Blaze Slice work; Black Uta is K.O.'d by Characters; Gum-Gum Bell adds the right card; Black Luffy's leader effect and Shanks' defensive effect fire; many battle-effect hangs fixed. QoL: summoning-sick characters greyed out, a shield on active Blockers, play a 6th character over one to trash it, and your deck searches are now hidden from your opponent.",
+  "notes": "AI opponent overhaul + more card fixes. The bot no longer swings into a wall (it only attacks when the hit actually connects), spreads DON!! across attackers for efficient hits instead of dumping it all on the Leader, and only counters when it can fully stop the attack (no more wasted partial counters). Card fixes: Crocodile & Mihawk's draw-2/trash-1/then-play now resolves in order (it no longer plays the card you meant to trash); Sabo/Ace/Luffy's 'reveal top of Life, play if it matches' only grants the +2000 when a card is actually played; many more effect conditions (DON!!x2 thresholds, power/cost checks, attribute-icon effects, K.O. and removal-replacement effects) now resolve correctly, and multi-step effects show one action at a time. The Blocker shield now renders on active Blockers.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
