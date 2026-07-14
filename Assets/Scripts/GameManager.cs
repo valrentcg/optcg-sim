@@ -8799,19 +8799,51 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // QoL: a small shield on an active [Blocker] that can currently redirect an attack.
             if (!card.Rested && GameEngine.HasBlocker(state, card))
             {
-                var shield = PanelObject("Blocker Shield", holder, new Color(0.16f, 0.52f, 0.85f, 0.95f));
+                var art = LoadBlockerShieldSprite();
+                var shield = PanelObject("Blocker Shield", holder,
+                    art != null ? Color.white : new Color(0.16f, 0.52f, 0.85f, 0.95f));
                 shield.anchorMin = new Vector2(0.03f, 0.79f);
                 shield.anchorMax = new Vector2(0.27f, 0.99f);
                 shield.offsetMin = Vector2.zero; shield.offsetMax = Vector2.zero;
-                Round(shield);
-                AddOutline(shield.gameObject, new Color(1f, 1f, 1f, 0.9f), 1f);
-                shield.GetComponent<Image>().raycastTarget = false;
-                var sg = TextObject("Shield Glyph", shield, "⛨", 13, Color.white, TextAnchor.MiddleCenter, titleFont);
-                Stretch(sg.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-                sg.raycastTarget = false;
+                var simg = shield.GetComponent<Image>();
+                simg.raycastTarget = false;
+                if (art != null)
+                {
+                    // Use the shield art directly (square, preserve aspect); no panel/glyph.
+                    simg.sprite = art;
+                    simg.preserveAspect = true;
+                }
+                else
+                {
+                    // Fallback until Assets/Resources/blocker_shield.png is present: drawn glyph badge.
+                    Round(shield);
+                    AddOutline(shield.gameObject, new Color(1f, 1f, 1f, 0.9f), 1f);
+                    var sg = TextObject("Shield Glyph", shield, "⛨", 13, Color.white, TextAnchor.MiddleCenter, titleFont);
+                    Stretch(sg.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+                    sg.raycastTarget = false;
+                }
                 shield.SetAsLastSibling();
             }
         }
+    }
+
+    // Blocker shield art: drop a PNG at Assets/Resources/blocker_shield.png and it replaces the
+    // drawn glyph badge on active [Blocker]s. Cached (loaded once); works whether the PNG imports
+    // as a Sprite or a plain Texture2D.
+    private Sprite _blockerShieldSprite;
+    private bool _blockerShieldLoaded;
+    private Sprite LoadBlockerShieldSprite()
+    {
+        if (_blockerShieldLoaded) return _blockerShieldSprite;
+        _blockerShieldLoaded = true;
+        _blockerShieldSprite = Resources.Load<Sprite>("blocker_shield");
+        if (_blockerShieldSprite == null)
+        {
+            var tex = Resources.Load<Texture2D>("blocker_shield");
+            if (tex != null)
+                _blockerShieldSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+        }
+        return _blockerShieldSprite;
     }
 
     private void AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color bg)

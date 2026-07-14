@@ -80,6 +80,16 @@ namespace OnePieceTcg.Engine.Bot
             {
                 case "attachDon":
                     return GameEngine.ActiveDonCount(state.Players[cmd.Seat]);
+                case "activateMain":
+                {
+                    // Composite state fingerprint — an activation that no-ops (already used, not
+                    // actually activatable) leaves all of these unchanged, so it gets blacklisted.
+                    var pp = state.Players[cmd.Seat];
+                    long f = state.PendingEffects.Count * 1_000_000L
+                             + pp.AbilityUsedThisTurn.Count * 10_000L
+                             + GameEngine.ActiveDonCount(pp) * 100L + pp.Hand.Count;
+                    return f;
+                }
                 case "deckLookSelect":
                     return state.DeckLook?.Cards.Count ?? -1;
                 case "deckLookConfirmOrder":
@@ -107,6 +117,14 @@ namespace OnePieceTcg.Engine.Bot
                     return !state.Players[cmd.Seat].Hand.Any(c => c.InstanceId == cmd.InstanceId);
                 case "attachDon":
                     return GameEngine.ActiveDonCount(state.Players[cmd.Seat]) != (int)before;
+                case "activateMain":
+                {
+                    var pp = state.Players[cmd.Seat];
+                    long f = state.PendingEffects.Count * 1_000_000L
+                             + pp.AbilityUsedThisTurn.Count * 10_000L
+                             + GameEngine.ActiveDonCount(pp) * 100L + pp.Hand.Count;
+                    return f != (long)before;
+                }
                 case "declareAttack":
                     return state.Battle != null && state.Battle.AttackerId == cmd.Attacker;
                 case "blockAttack":
@@ -308,9 +326,50 @@ namespace OnePieceTcg.Engine.Bot
         {
             var def = GameEngine.GetCard(card);
             if (def == null) return 0;
-            // Cost dominates (bigger investment = more important card); power breaks ties
-            // and matters on its own for board-state cards.
-            return def.Cost * 1000 + GameEngine.GetPower(state, card);
+            // Cost dominates (bigger investment = more important card); power breaks ties.
+            double v = def.Cost * 1000 + GameEngine.GetPower(state, card);
+            // Keyword-aware: a Blocker walls attacks, Double Attack racers hit twice, Rush is tempo —
+            // so they're worth more to keep (and worth more to remove from the opponent).
+            if (GameEngine.HasBlocker(state, card)) v += 1500;
+            if (GameEngine.HasDoubleAttack(state, card)) v += 1500;
+            if (GameEngine.HasRush(state, card)) v += 500;
+            return v;
+        }
+
+        // DON!! needed for `atk` (at its CURRENT power, which already includes attached DON!! on your
+        // turn) to reach `targetPower` — i.e. to win the battle (attacker power >= defender power).
+        private static int DonToReach(GameState s, CardInstance atk, int targetPower)
+        {
+            int cur = GameEngine.GetPower(s, atk);
+            return cur >= targetPower ? 0 : (targetPower - cur + 999) / 1000;
+        }
+
+        // Cheapest PROFITABLE attack for `atk` within `budget` extra DON!!: (targetId, donNeeded).
+        // A profitable attack is one that CONNECTS — never a 3000 attacker swinging into a 5000 leader
+        // for nothing. Prefers K.O.'ing a rested enemy Character (removes a threat) unless `race` is on
+        // (then it hits the Leader to push lethal). Returns null when nothing connects within budget.
+        private static (string targetId, int don)? PlanAttack(GameState s, string seat, CardInstance atk, int budget, bool race)
+        {
+            var opp = s.Players[GameEngine.OtherSeat(seat)];
+            (string id, int don, double val)? koPick = null;
+            foreach (var t in opp.CharacterArea)
+            {
+                if (t == null || !t.Rested) continue;                 // can only attack rested Characters
+                int need = DonToReach(s, atk, GameEngine.GetPower(s, t));
+                if (need > budget) continue;
+                double val = Value(s, t) - need * 250;                 // favour high value, low DON!! spend
+                if (koPick == null || val > koPick.Value.val) koPick = (t.InstanceId, need, val);
+            }
+            (string id, int don)? leaderPick = null;
+            if (opp.Leader != null)
+            {
+                int need = DonToReach(s, atk, GameEngine.GetPower(s, opp.Leader));
+                if (need <= budget) leaderPick = (opp.Leader.InstanceId, need);
+            }
+            if (race && leaderPick != null) return (leaderPick.Value.id, leaderPick.Value.don);
+            if (koPick != null) return (koPick.Value.id, koPick.Value.don);
+            if (leaderPick != null) return (leaderPick.Value.id, leaderPick.Value.don);
+            return null;
         }
 
         // ---- Deck-look resolution (simplified: pick the single best matching card) --
@@ -395,7 +454,9 @@ namespace OnePieceTcg.Engine.Bot
                         return new GameCommand { Type = "passBlock", Seat = seat };
 
                     bool leaderLethalRisk = battle.TargetId == me.Leader?.InstanceId && me.Life.Count == 0;
-                    var surviving = blockers.Where(b => GameEngine.GetPower(state, b) >= attackPower)
+                    // A blocker survives only if its power EXCEEDS the attack (a tie loses — attacker
+                    // wins on >=). Block with the smallest survivor to keep the bigger blockers back.
+                    var surviving = blockers.Where(b => GameEngine.GetPower(state, b) > attackPower)
                         .OrderBy(b => GameEngine.GetPower(state, b));
                     foreach (var b in surviving)
                     {
@@ -414,17 +475,41 @@ namespace OnePieceTcg.Engine.Bot
                 }
                 case "counter":
                 {
-                    int need = battle.AttackPower - battle.DefensePower;
-                    var options = me.Hand.Where(c => GameEngine.CanCounterFromHand(state, seat, c))
-                        .OrderBy(c => GameEngine.GetCounterPower(c));
-                    bool worthSaving = me.Life.Count > 2 && need <= 0;
-                    if (need > 0 || (battle.TargetId != me.Leader?.InstanceId && !worthSaving))
+                    // To SURVIVE, the defender's power must EXCEED the attacker's — a TIE loses the
+                    // battle (attacker wins on >=). So the boost we need is attack - defense + 1, not
+                    // attack - defense (that was the "counter 6k into 6k and still take damage" bug).
+                    int need = battle.AttackPower - battle.DefensePower + 1;
+                    if (need <= 0) return new GameCommand { Type = "passCounter", Seat = seat };
+
+                    bool targetIsLeader = battle.TargetId == me.Leader?.InstanceId;
+                    var target = FindCard(state, seat, battle.TargetId);
+                    // Worth defending? Protect the Leader when Life is getting low (or it's lethal);
+                    // for a Character, only save a genuinely valuable one — otherwise let it die and
+                    // keep the counters for the Leader.
+                    bool worthDefending = targetIsLeader
+                        ? (me.Life.Count <= 3 || me.Life.Count == 0)
+                        : (target != null && (GameEngine.GetCard(target)?.Cost ?? 0) >= 5);
+                    if (!worthDefending) return new GameCommand { Type = "passCounter", Seat = seat };
+
+                    // AWARENESS: only commit counters if the AI can AFFORD to reach `need`. A
+                    // [Counter] event costs DON!! to play, so summing every eligible counter over-
+                    // counts — the AI would start countering, run out of DON!!, and stop partway
+                    // (wasting the cards while still taking the hit). Use the DON!!-constrained max.
+                    var usable = me.Hand.Where(c => GameEngine.CanCounterFromHand(state, seat, c))
+                        .Select(c => (card: c, cp: GameEngine.GetCounterPower(c)))
+                        .Where(x => x.cp > 0)
+                        .OrderByDescending(x => x.cp)
+                        .ToList();
+                    if (MaxAffordableCounter(state, seat) < need) return new GameCommand { Type = "passCounter", Seat = seat };
+
+                    // If one counter alone suffices, use the SMALLEST such (don't overspend a big
+                    // counter on a small need); otherwise stack largest-first to reach `need`.
+                    var single = usable.Where(x => x.cp >= need).OrderBy(x => x.cp).ToList();
+                    var plan = single.Count > 0 ? new List<(CardInstance card, int cp)> { single[0] } : usable;
+                    foreach (var x in plan)
                     {
-                        foreach (var c in options.Where(c => GameEngine.GetCounterPower(c) >= Math.Max(need, 0)))
-                        {
-                            var cmd = Try(blacklist, new GameCommand { Type = "counterWithCard", Seat = seat, InstanceId = c.InstanceId });
-                            if (cmd != null) return cmd;
-                        }
+                        var cmd = Try(blacklist, new GameCommand { Type = "counterWithCard", Seat = seat, InstanceId = x.card.InstanceId });
+                        if (cmd != null) return cmd;
                     }
                     return new GameCommand { Type = "passCounter", Seat = seat };
                 }
@@ -436,6 +521,31 @@ namespace OnePieceTcg.Engine.Bot
             }
         }
 
+        // Maximum total counter power the defender can actually AFFORD this Counter step. Character
+        // [Counter] cards trash from hand for free; [Counter] events cost their printed cost in DON!!,
+        // so we can only play the subset that fits the active-DON!! budget (greedy, highest power
+        // first). Under-counts vs. a perfect knapsack, which is the SAFE side — the bot never starts
+        // a counter chain it can't finish.
+        private static int MaxAffordableCounter(GameState state, string seat)
+        {
+            var me = state.Players[seat];
+            int don = GameEngine.ActiveDonCount(me);
+            int total = 0;
+            var events = new List<(int cp, int cost)>();
+            foreach (var c in me.Hand)
+            {
+                if (!GameEngine.CanCounterFromHand(state, seat, c)) continue;
+                int cp = GameEngine.GetCounterPower(c);
+                if (cp <= 0) continue;
+                var def = GameEngine.GetCard(c);
+                if (def != null && def.Type == "event") events.Add((cp, def.Cost));
+                else total += cp;               // character [Counter] — free to play
+            }
+            foreach (var e in events.OrderByDescending(x => x.cp))
+                if (e.cost <= don) { don -= e.cost; total += e.cp; }
+            return total;
+        }
+
         private static CardInstance FindCard(GameState state, string seat, string instanceId)
         {
             if (string.IsNullOrEmpty(seat) || string.IsNullOrEmpty(instanceId)) return null;
@@ -445,6 +555,29 @@ namespace OnePieceTcg.Engine.Bot
             if (c != null) return c;
             if (p.Stage?.InstanceId == instanceId) return p.Stage;
             return null;
+        }
+
+        private static IEnumerable<CardInstance> BoardCards(PlayerState p)
+        {
+            if (p.Leader != null) yield return p.Leader;
+            foreach (var c in p.CharacterArea) if (c != null) yield return c;
+            if (p.Stage != null) yield return p.Stage;
+        }
+
+        // Should the bot proactively fire this card's [Activate: Main] ability? Conservative: only
+        // clearly-beneficial ones (card advantage / removal / tempo), and never ones whose printed
+        // cost spends our own hand or Life (so it doesn't pay a cost just to trigger something).
+        private static bool BeneficialActivateMain(string effect)
+        {
+            if (string.IsNullOrEmpty(effect)
+                || effect.IndexOf("[Activate: Main]", StringComparison.OrdinalIgnoreCase) < 0) return false;
+            string e = effect.ToLowerInvariant();
+            if (e.Contains("you may trash") && e.Contains("from your hand")) return false;
+            if (e.Contains("trash") && e.Contains("from the top of your life")) return false;
+            if (e.Contains("trash this character")) return false;
+            return e.Contains("draw ") || e.Contains("k.o.") || e.Contains("set up to") || e.Contains("rest up to")
+                || e.Contains("play up to") || e.Contains("add up to") || e.Contains("return up to")
+                || e.Contains("gains +") || e.Contains("look at");
         }
 
         // ---- Main phase: deploy -> attach DON!! -> attack -> end turn -------------
@@ -464,9 +597,12 @@ namespace OnePieceTcg.Engine.Bot
                 if (cmd != null) return cmd;
             }
 
-            // 2) Attack planning. Only consider characters/leader that started the turn
-            //    already in play (no summoning-sick check needed beyond Rush, which
-            //    GameEngine.HasRush already folds in).
+            // 2) [Activate: Main] usage is DISABLED for now — a repeatable (non-Once-Per-Turn)
+            //    activation whose success-check saw state change every tick could re-fire forever
+            //    and stall the game. Re-enable with a per-turn "already activated" guard on the card.
+
+            // 3) Attack planning. No attacks on your very first turn (summoning sickness — Rush is
+            //    handled per-attacker below).
             if (p.TurnsStarted <= 1) return Try(blacklist, new GameCommand { Type = "endTurn", Seat = seat });
 
             var opponent = state.Players[GameEngine.OtherSeat(seat)];
@@ -479,41 +615,44 @@ namespace OnePieceTcg.Engine.Bot
                 .OrderByDescending(a => GameEngine.GetPower(state, a))
                 .ToList();
 
-            foreach (var attacker in attackers)
+            int activeDon = GameEngine.ActiveDonCount(p);
+
+            // Lethal/race read: if enough of my attackers can reach the opponent's Leader to cover
+            // their Life (plus their active blockers), push face instead of trading. Approximate —
+            // it doesn't perfectly account for shared DON!!, just biases target selection.
+            int oppLeaderPow = opponent.Leader != null ? GameEngine.GetPower(state, opponent.Leader) : 999;
+            int leaderReachers = attackers.Count(a => DonToReach(state, a, oppLeaderPow) <= activeDon);
+            int oppBlockers = opponent.CharacterArea.Count(c => c != null && !c.Rested && GameEngine.HasBlocker(state, c));
+            bool race = opponent.Leader != null && opponent.Life.Count > 0
+                        && leaderReachers >= opponent.Life.Count + oppBlockers;
+
+            // Step A — declare any attacker that ALREADY connects (needs 0 more DON!!). This spends
+            //          our cheapest hits first and leaves DON!! for the rest.
+            foreach (var atk in attackers)
             {
-                int attackerPower = GameEngine.GetPower(state, attacker);
-
-                // Prefer a favorable trade against a rested opposing character (removes a
-                // threat); otherwise chip the leader.
-                var restedTargets = opponent.CharacterArea.Where(c => c != null && c.Rested).ToList();
-                var favorableTrade = restedTargets
-                    .Where(t => attackerPower > GameEngine.GetPower(state, t))
-                    .OrderByDescending(t => Value(state, t))
-                    .FirstOrDefault();
-
-                string targetId = favorableTrade?.InstanceId ?? opponent.Leader?.InstanceId;
-                if (string.IsNullOrEmpty(targetId)) continue;
-
-                // 3) Dump remaining active DON!! onto this attacker before declaring — cheap
-                //    insurance against an unseen blocker/counter, and how the mined replay
-                //    data consistently sequences it (Attach N Don immediately precedes Attack).
-                int activeDon = GameEngine.ActiveDonCount(p);
-                if (activeDon > 0)
-                {
-                    var attachCmd = Try(blacklist, new GameCommand { Type = "attachDon", Seat = seat, Target = attacker.InstanceId, Amount = activeDon });
-                    if (attachCmd != null) return attachCmd;
-                }
-
-                var attackCmd = Try(blacklist, new GameCommand { Type = "declareAttack", Seat = seat, Attacker = attacker.InstanceId, Target = targetId });
-                if (attackCmd != null) return attackCmd;
-
-                // This attacker's only plan was rejected (blacklisted) — try the next one
-                // rather than getting stuck retrying the same declaration.
+                var plan = PlanAttack(state, seat, atk, 0, race);
+                if (plan == null) continue;
+                var cmd = Try(blacklist, new GameCommand { Type = "declareAttack", Seat = seat, Attacker = atk.InstanceId, Target = plan.Value.targetId });
+                if (cmd != null) return cmd;
             }
-            // Try(), not a bare return: if endTurn itself is somehow illegal right now (the
-            // original bug's actual failure mode — IsTurnPlayerInMain blocked by an unrelated
-            // pending effect), yield (null) instead of re-issuing the same rejected command
-            // forever. ChangedFor("endTurn") below detects success via ActiveSeat changing.
+
+            // Step B — SPREAD DON!!: give the CHEAPEST-to-ready attacker exactly enough DON!! to
+            //          connect (never dump the whole pool on one card), maximizing the number of
+            //          connecting hits. Next tick, Step A declares that now-ready attacker.
+            CardInstance bestAtk = null; int bestDon = int.MaxValue; string bestTarget = null;
+            foreach (var atk in attackers)
+            {
+                var plan = PlanAttack(state, seat, atk, activeDon, race);
+                if (plan == null || plan.Value.don < 1) continue;      // 0-DON ones handled in Step A
+                if (plan.Value.don < bestDon) { bestDon = plan.Value.don; bestAtk = atk; bestTarget = plan.Value.targetId; }
+            }
+            if (bestAtk != null)
+            {
+                var attach = Try(blacklist, new GameCommand { Type = "attachDon", Seat = seat, Target = bestAtk.InstanceId, Amount = bestDon });
+                if (attach != null) return attach;
+            }
+
+            // No attacker can profitably connect (even with DON!!) — don't throw away swings; end turn.
             return Try(blacklist, new GameCommand { Type = "endTurn", Seat = seat });
         }
     }

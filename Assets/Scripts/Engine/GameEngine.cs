@@ -4702,6 +4702,51 @@ namespace OnePieceTcg.Engine
                 }
             }
 
+            // ---- "Reveal 1 card from the top of your Life cards. If that card is [Name] (with a
+            // cost of N), you may play that card. If you do, <rider>." (ST13-007 Sabo.) The <rider>
+            // (e.g. Leader +2000) is GATED on actually playing the revealed card — without this
+            // handler the trailing power-buff clause fired unconditionally.
+            if (ContainsAll(text, "Reveal 1 card from the top of your Life cards")
+                && ContainsAll(text, "If that card is") && ContainsAll(text, "play that card"))
+            {
+                if (owner.Life.Count == 0)
+                { Log(state, effect.Seat, $"{sourceName}: no Life cards to reveal."); return EffectResolution.Resolved; }
+                var revealed = owner.Life[owner.Life.Count - 1];   // top of Life = end of the list
+                var revDef = GetCard(revealed);
+                var nameM = System.Text.RegularExpressions.Regex.Match(text, @"If that card is (?:an? )?\[([^\]]+)\]");
+                var costM = System.Text.RegularExpressions.Regex.Match(text, @"with a cost of (\d+)");
+                bool matches = revDef != null
+                    && (!nameM.Success || NameMatches(state, revealed, nameM.Groups[1].Value.Trim()))
+                    && (!costM.Success || revDef.Cost == int.Parse(costM.Groups[1].Value));
+                Log(state, effect.Seat, $"{sourceName} reveals {NameId(revDef)} from the top of Life.");
+                int slot = owner.CharacterArea.FindIndex(c => c == null);
+                if (matches && revDef.Type == "character" && slot >= 0)
+                {
+                    owner.Life.RemoveAt(owner.Life.Count - 1);
+                    revealed.Zone = "character"; revealed.FaceUp = false; revealed.PlayedOnTurn = state.TurnNumber;
+                    owner.CharacterArea[slot] = revealed;
+                    Log(state, effect.Seat, $"{sourceName}: plays {NameId(revDef)} from Life.");
+                    if (HasTiming(revDef.Effect, "On Play"))
+                        QueueAndAutoResolve(state, effect.Seat, revealed, "onPlay", ExtractTimedClause(revDef.Effect, "On Play"), true, EffectScope.Instant, InferTargetZone(revDef.Effect));
+                    // "If you do, <rider>" — resolve the rider ONLY now that the card was played.
+                    int idyIdx = text.IndexOf("If you do,", StringComparison.OrdinalIgnoreCase);
+                    if (idyIdx >= 0)
+                    {
+                        string rider = text.Substring(idyIdx + "If you do,".Length).Trim();
+                        var riderSrc = FindCardInstance(state, effect.SourceInstanceId) ?? owner.Leader;
+                        if (riderSrc != null && !string.IsNullOrWhiteSpace(rider))
+                            QueueAndAutoResolve(state, effect.Seat, riderSrc, effect.Timing, rider, IsOptionalEffectText(rider), EffectScope.Instant, InferTargetZone(rider));
+                    }
+                }
+                else
+                {
+                    // Not a match (or no room / not a Character) — the card stays on top of Life and
+                    // the "If you do" rider does NOT fire.
+                    Log(state, effect.Seat, $"{sourceName}: revealed card was not played — no rider.");
+                }
+                return EffectResolution.Resolved;
+            }
+
             // ---- Power REDUCTION: "Give up to N of your opponent's (Leader or) Characters
             // −N power during this turn." (26+ cards, e.g. OP01-006). Negative TemporaryPowerBonus.
             {

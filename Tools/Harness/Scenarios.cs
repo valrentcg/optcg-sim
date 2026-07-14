@@ -42,6 +42,7 @@ static class Scenarios
         IpponmatsuSlashAttributeFilter();
         KingKoReplacementReturnDon();
         RemovalImmunityBlocksBounce();
+        SaboRevealPlayGatesBuff();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -389,6 +390,37 @@ static class Scenarios
         Check("§10-1-1/§10-2-9: [Rush] beats summoning sickness; [DON!! x1] grants [Blocker] only with DON attached",
               rushOk && noBlockerNoDon && blockerWithDon,
               $"rushOk={rushOk} blockerNoDon(want F)={!noBlockerNoDon} blockerWithDon={blockerWithDon}  {Tail(st)}");
+    }
+
+    // Playtest bug (reported): ST13-007 Sabo "[Activate: Main] trash this: Reveal top of Life. If it's
+    // a [Sabo] cost 5, you may play it. If you do, your Leader gains +2000…". The +2000 was firing
+    // even when no 5-cost Sabo was revealed/played. Verify it only buffs when the Sabo is played.
+    static void SaboRevealPlayGatesBuff()
+    {
+        GameState Build(string topOfLifeCardId)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "sabo7:" + topOfLifeCardId });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; S.TurnsStarted = 4;
+            for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+            for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sbd{i}", Rested = false });
+            S.Life.Clear();
+            S.Life.Add(MakeInPlay(topOfLifeCardId, "south"));   // end of list = TOP of Life (revealed)
+            var sabo = MakeInPlay("ST13-007", "south"); sabo.PlayedOnTurn = 0; S.CharacterArea[0] = sabo;
+            Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = sabo.InstanceId });
+            Drive(st, "south");
+            return st;
+        }
+        int leaderBase = GameEngine.GetCard(GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "x" }).Players["south"].Leader).Power;
+        var withSabo = Build("ST13-008");   // 5-cost Sabo on top → played, Leader +2000
+        bool played = withSabo.Players["south"].CharacterArea.Any(c => c?.CardId == "ST13-008");
+        bool buffed = GameEngine.GetPower(withSabo, withSabo.Players["south"].Leader) >= leaderBase + 2000;
+        var noSabo = Build("ST01-006");     // non-Sabo on top → NOT played, NO buff
+        bool notPlayed = !noSabo.Players["south"].CharacterArea.Any(c => c?.CardId == "ST01-006");
+        bool notBuffed = GameEngine.GetPower(noSabo, noSabo.Players["south"].Leader) < leaderBase + 2000;
+        Check("ST13-007 Sabo: Leader +2000 fires ONLY when a 5-cost Sabo is revealed & played",
+              played && buffed && notPlayed && notBuffed,
+              $"withSabo[played={played} buffed={buffed}] noSabo[notPlayed={notPlayed} notBuffed={notBuffed}]  {Tail(withSabo)}");
     }
 
     // Official Q&A (OP02-027 Inuarashi): "cannot be removed from the field by your opponent's
