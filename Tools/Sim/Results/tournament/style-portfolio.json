@@ -1,0 +1,158 @@
+{
+  "Black": {
+    "winrate": 0.375,
+    "games": 40,
+    "genome": {
+      "MulliganKeep": 1.25,
+      "FaceBias": 0.618,
+      "CounterLifeFloor": 5,
+      "CounterCharCost": 2.556,
+      "BlockBias": 0.003,
+      "TurnOrderFirst": 0.297
+    }
+  },
+  "Black/Yellow": {
+    "winrate": 0.5161,
+    "games": 31,
+    "genome": {
+      "MulliganKeep": 2.335,
+      "FaceBias": 0.863,
+      "CounterLifeFloor": 3.619,
+      "CounterCharCost": 1.511,
+      "BlockBias": 0.621,
+      "TurnOrderFirst": 0.241
+    }
+  },
+  "Blue/Purple": {
+    "winrate": 0.6552,
+    "games": 29,
+    "genome": {
+      "MulliganKeep": 1.25,
+      "FaceBias": 0.618,
+      "CounterLifeFloor": 5,
+      "CounterCharCost": 2.556,
+      "BlockBias": 0.003,
+      "TurnOrderFirst": 0.297
+    }
+  },
+  "Blue/Yellow": {
+    "winrate": 0.7727,
+    "games": 22,
+    "genome": {
+      "MulliganKeep": 2.046,
+      "FaceBias": 0.532,
+      "CounterLifeFloor": 5,
+      "CounterCharCost": 1.611,
+      "BlockBias": 0.003,
+      "TurnOrderFirst": 0.557
+    }
+  },
+  "Green": {
+    "winrate": 0.75,
+    "games": 16,
+    "genome": {
+      "MulliganKeep": 3.67,
+      "FaceBias": 0.69,
+      "CounterLifeFloor": 3.631,
+      "CounterCharCost": 6.493,
+      "BlockBias": 0.631,
+      "TurnOrderFirst": 0.585
+    }
+  },
+  "Green/Purple": {
+    "winrate": 0.6769,
+    "games": 65,
+    "genome": {
+      "MulliganKeep": 1,
+      "FaceBias": 0.5,
+      "CounterLifeFloor": 2.268,
+      "CounterCharCost": 5,
+      "BlockBias": 0.5,
+      "TurnOrderFirst": 1
+    }
+  },
+  "Purple": {
+    "winrate": 0.4706,
+    "games": 17,
+    "genome": {
+      "MulliganKeep": 1.736,
+      "FaceBias": 0.532,
+      "CounterLifeFloor": 4.863,
+      "CounterCharCost": 1.916,
+      "BlockBias": 0.261,
+      "TurnOrderFirst": 0.416
+    }
+  },
+  "Purple/Yellow": {
+    "winrate": 0.875,
+    "games": 16,
+    "genome": {
+      "MulliganKeep": 2.046,
+      "FaceBias": 0.532,
+      "CounterLifeFloor": 3.308,
+      "CounterCharCost": 2.551,
+      "BlockBias": 0.82,
+      "TurnOrderFirst": 0.557
+    }
+  },
+  "Red": {
+    "winrate": 0.75,
+    "games": 20,
+    "genome": {
+      "MulliganKeep": 1.736,
+      "FaceBias": 0.532,
+      "CounterLifeFloor": 4.863,
+      "CounterCharCost": 1.916,
+      "BlockBias": 0.261,
+      "TurnOrderFirst": 0.416
+    }
+  },
+  "Red/Black": {
+    "winrate": 0.9167,
+    "games": 12,
+    "genome": {
+      "MulliganKeep": 1.25,
+      "FaceBias": 0.618,
+      "CounterLifeFloor": 5,
+      "CounterCharCost": 2.556,
+      "BlockBias": 0.003,
+      "TurnOrderFirst": 0.297
+    }
+  },
+  "Red/Blue": {
+    "winrate": 0.6429,
+    "games": 14,
+    "genome": {
+      "MulliganKeep": 1.736,
+      "FaceBias": 0.532,
+      "CounterLifeFloor": 4.863,
+      "CounterCharCost": 1.916,
+      "BlockBias": 0.261,
+      "TurnOrderFirst": 0.416
+    }
+  },
+  "Red/Green": {
+    "winrate": 0.75,
+    "games": 12,
+    "genome": {
+      "MulliganKeep": 2.046,
+      "FaceBias": 0.532,
+      "CounterLifeFloor": 3.308,
+      "CounterCharCost": 2.551,
+      "BlockBias": 0.82,
+      "TurnOrderFirst": 0.557
+    }
+  },
+  "Yellow": {
+    "winrate": 0.8315,
+    "games": 89,
+    "genome": {
+      "MulliganKeep": 2.765,
+      "FaceBias": 0.533,
+      "CounterLifeFloor": 3.268,
+      "CounterCharCost": 6.194,
+      "BlockBias": 0.445,
+      "TurnOrderFirst": 0.291
+    }
+  }
+}

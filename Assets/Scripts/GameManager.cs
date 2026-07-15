@@ -225,7 +225,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // unchanged → would otherwise infinite-loop); IntermediateBot keys it with its own
     // Signature() so the same set works for either tier without collisions in practice.
     private string aiSeat;
-    private string aiDifficulty = "beginner"; // "beginner" | "intermediate" — set from PendingAiDifficulty in NewMatch()
+    private string aiDifficulty = "beginner"; // "beginner"|"intermediate"|"advanced" — set from PendingAiDifficulty in NewMatch()
     private float aiNextActionAt;
     private readonly HashSet<string> aiTriedThisTurn = new HashSet<string>();
     private int aiLastTurnSeen = -1;
@@ -408,18 +408,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (isReplayMode) ReplayAutoAdvanceTick();
 
         // Bot: one action per think-tick whenever any decision belongs to the AI seat
-        // (turn actions, effect targets, choices, battle responses). Difficulty picks
-        // which decision core drives that single action. Mapping is intentionally inverted
-        // from the class names: a 435-game all-starter-decks benchmark (Beginner's greedy
-        // AiTick vs Intermediate's pickier IntermediateBot) showed AiTick winning ~65% of
-        // the time — Intermediate's selectivity about "only take favorable trades" loses to
-        // straightforward constant aggression on these decks. So "beginner" (the easier
-        // difficulty a new player picks) routes to the actually-weaker IntermediateBot, and
-        // "intermediate" routes to the actually-stronger AiTick.
+        // (turn actions, effect targets, choices, battle responses). Difficulty picks which
+        // decision core drives that single action. Three tiers, produced by the out-of-ship
+        // discovery platform (Tools/Sim):
+        //   "beginner"     — Engine/Bot/IntermediateBot.cs (the original ported bot).
+        //   "intermediate" — Engine/Bot/ChampionBot.cs (Elo-tournament champion; beats Beginner ~54%).
+        //   "advanced"     — Engine/Bot/Search/SearchBot.cs, the every-legal-action rollout SEARCH
+        //                    bot (beats Intermediate ~87%). Runs on this thread; see AdvancedAiTick.
         if (aiSeat != null && !isReplayMode && state != null && state.Status != "finished"
             && Time.unscaledTime >= aiNextActionAt)
         {
-            bool acted = aiDifficulty == "beginner" ? IntermediateAiTick() : AiTick();
+            bool acted = aiDifficulty == "beginner" ? IntermediateAiTick()
+                       : aiDifficulty == "advanced" ? AdvancedAiTick()
+                       : ChampionAiTick();
             if (acted) aiNextActionAt = Time.unscaledTime + 2.0f;                          // thinking pause
             else aiNextActionAt = Mathf.Max(aiNextActionAt, Time.unscaledTime + 0.25f);    // respect delays the tick set
         }
@@ -634,7 +635,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         suppressMoveAnim.Clear();
         // Hotseat/versus-self: both seats are this player; generic names.
         southDisplayName = "Player 1";
-        northDisplayName = aiSeat == null ? "Player 2" : (aiDifficulty == "beginner" ? "Beginner Bot" : "Intermediate Bot");
+        northDisplayName = aiSeat == null ? "Player 2"
+            : aiDifficulty == "advanced" ? "Advanced Bot"
+            : aiDifficulty == "intermediate" ? "Intermediate Bot"
+            : "Beginner Bot";
         state = GameEngine.CreateMatch(config);
         selectedId = null;
         selectedSeat = null;
@@ -7209,6 +7213,73 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         var cmd = IntermediateBot.DecideOneCommand(state, aiSeat, aiTriedThisTurn);
+        if (cmd == null) return false;
+        object before = IntermediateBot.SnapshotFor(state, cmd);
+        Dispatch(cmd);
+        if (!IntermediateBot.Succeeded(state, cmd, before))
+            aiTriedThisTurn.Add(IntermediateBot.Signature(cmd));
+        return true;
+    }
+
+    // ── Intermediate (Champion) Bot decision core ────────────────────────────
+    // Same per-tick adapter as IntermediateAiTick, but drives Engine/Bot/ChampionBot.cs —
+    // the style evolved by the out-of-ship Elo tournament (beats the plain IntermediateBot
+    // ~54% head-to-head). ChampionBot returns the same command shapes, so IntermediateBot's
+    // SnapshotFor/Succeeded/Signature still key the no-op blacklist correctly.
+    private bool ChampionAiTick()
+    {
+        var p = state.Players.ContainsKey(aiSeat) ? state.Players[aiSeat] : null;
+        if (p == null) return false;
+        if (activeMoveGhosts > 0) return false;
+        if (handDealAnimating) return false;
+        if (mulliganDealAnimating > 0) return false;
+        if (state.TurnNumber != aiLastTurnSeen)
+        {
+            aiLastTurnSeen = state.TurnNumber;
+            aiTriedThisTurn.Clear();
+            if (state.Status == "active" && state.ActiveSeat == aiSeat)
+            {
+                aiNextActionAt = Time.unscaledTime + 2.9f;
+                return false;
+            }
+        }
+
+        var cmd = ChampionBot.DecideOneCommand(state, aiSeat, aiTriedThisTurn);
+        if (cmd == null) return false;
+        object before = IntermediateBot.SnapshotFor(state, cmd);
+        Dispatch(cmd);
+        if (!IntermediateBot.Succeeded(state, cmd, before))
+            aiTriedThisTurn.Add(IntermediateBot.Signature(cmd));
+        return true;
+    }
+
+    // ── Advanced (Search) Bot decision core ──────────────────────────────────
+    // Drives Engine/Bot/Search/SearchBot.cs — the every-legal-action rollout search bot (beats the
+    // Champion ~87% head-to-head). Same per-tick adapter; SearchBot returns the same command shapes
+    // so IntermediateBot's SnapshotFor/Succeeded/Signature key the no-op blacklist correctly.
+    // NOTE: a single SearchBot decision runs several full playouts on cloned state (~hundreds of ms)
+    // on this (main) thread. The tick loop pauses between actions so it fires at most once per tick;
+    // if it visibly hitches the UI, move the SearchBot.DecideOneCommand call onto a worker thread and
+    // Dispatch its result on the next tick.
+    private bool AdvancedAiTick()
+    {
+        var p = state.Players.ContainsKey(aiSeat) ? state.Players[aiSeat] : null;
+        if (p == null) return false;
+        if (activeMoveGhosts > 0) return false;
+        if (handDealAnimating) return false;
+        if (mulliganDealAnimating > 0) return false;
+        if (state.TurnNumber != aiLastTurnSeen)
+        {
+            aiLastTurnSeen = state.TurnNumber;
+            aiTriedThisTurn.Clear();
+            if (state.Status == "active" && state.ActiveSeat == aiSeat)
+            {
+                aiNextActionAt = Time.unscaledTime + 2.9f;
+                return false;
+            }
+        }
+
+        var cmd = OnePieceTcg.Engine.Bot.Search.SearchBot.DecideOneCommand(state, aiSeat, aiTriedThisTurn);
         if (cmd == null) return false;
         object before = IntermediateBot.SnapshotFor(state, cmd);
         Dispatch(cmd);

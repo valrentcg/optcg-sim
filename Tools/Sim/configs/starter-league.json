@@ -1,0 +1,15 @@
+{
+  "experimentId": "starter-league-001",
+  "decks": [],
+  "southPolicy": "baseline",
+  "opponentPolicyPool": ["baseline"],
+  "gamesPerCondition": 500,
+  "swapStartingPlayer": true,
+  "pairedSeeds": true,
+  "saveDecisionLogs": false,
+  "decisionSampleRate": 0.01,
+  "commandCap": 20000,
+  "maxDegreeOfParallelism": 0,
+  "seedPrefix": "league",
+  "outputDir": "Results"
+}

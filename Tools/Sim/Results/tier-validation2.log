@@ -1,0 +1,12 @@
+== advanced(champ-rollout) vs intermediate ==
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+advanced vs intermediate: 14/16 = 87.5% (16 games, 312s)
+== advanced vs beginner ==
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+advanced vs beginner: 9/16 = 56.2% (16 games, 276s)

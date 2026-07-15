@@ -1,0 +1,32 @@
+=== OVERNIGHT START Tue Jul 14 00:02:54 EDT 2026 ===
+Loaded 2636 card definitions.
+
+Heuristic discovery 'overnight-turnorder'  family=turn-order
+  Should south choose to go FIRST (vs second)?
+  decks(south)=33  opponents(north)=33  samples/matchup=500
+  paired trials = 544,500    1,089,000 games
+  output  C:\Users\Nperr\One Piece TCG Simulator\Tools\Sim\Results\overnight-turnorder
+  50,000/544,500 trials  (62 games/s)
+  100,000/544,500 trials  (61 games/s)
+  150,000/544,500 trials  (61 games/s)
+  200,000/544,500 trials  (60 games/s)
+  250,000/544,500 trials  (59 games/s)
+  300,000/544,500 trials  (59 games/s)
+  350,000/544,500 trials  (58 games/s)
+  400,000/544,500 trials  (57 games/s)
+  450,000/544,500 trials  (56 games/s)
+  500,000/544,500 trials  (55 games/s)
+Done: 544,500 paired trials (1,089,000 games) in 20,863.3s (52 games/s).  skipped(no-result)=1
+  Overall effect (first vs second): +7.2 pp [+7.0, +7.3]  n=544,499
+  Report  C:\Users\Nperr\One Piece TCG Simulator\Tools\Sim\Results\overnight-turnorder\heuristics.md
+  Trial shards  C:\Users\Nperr\One Piece TCG Simulator\Tools\Sim\Results\overnight-turnorder\trials.part*.jsonl
+=== turn-order done Tue Jul 14 05:50:37 EDT 2026 ===
+Loaded 2636 card definitions.
+
+Heuristic discovery 'overnight-mulligan'  family=mulligan
+  Should south KEEP its opening hand (vs mulligan)?
+  decks(south)=33  opponents(north)=33  samples/matchup=500
+  paired trials = 544,500    1,089,000 games
+  output  C:\Users\Nperr\One Piece TCG Simulator\Tools\Sim\Results\overnight-mulligan
+  50,000/544,500 trials  (58 games/s)
+=== ALL DONE Tue Jul 14 06:31:40 EDT 2026 ===

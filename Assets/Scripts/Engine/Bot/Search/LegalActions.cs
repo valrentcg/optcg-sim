@@ -1,0 +1,151 @@
+// Legal-action enumerator for the Advanced (search) bot. Generates a candidate SUPERSET with cheap
+// filters, then uses the engine itself as the legality oracle (Validate: clone + apply, keep the
+// moves that actually change state). Covers main-phase plays/attacks/DON/activation, defense
+// counter/block/trigger, effect targeting (On Play / Main / trigger), A/B choices, deck-look picks,
+// and passes. Mirror of the out-of-ship Tools/Sim enumerator. Pure C#.
+
+using System.Collections.Generic;
+using System.Linq;
+
+namespace OnePieceTcg.Engine.Bot.Search
+{
+    public static class LegalActions
+    {
+        public static List<GameCommand> Candidates(GameState state, string seat)
+        {
+            var list = new List<GameCommand>();
+            if (state == null || !state.Players.ContainsKey(seat)) return list;
+            var me = state.Players[seat];
+
+            if (state.ActiveChoice != null && state.ActiveChoice.Seat == seat)
+            {
+                list.Add(new GameCommand { Type = "resolveChoice", Seat = seat, Target = "A" });
+                list.Add(new GameCommand { Type = "resolveChoice", Seat = seat, Target = "B" });
+                return list;
+            }
+
+            if (state.DeckLook != null && state.DeckLook.Seat == seat)
+            {
+                foreach (var c in state.DeckLook.Cards)
+                    list.Add(new GameCommand { Type = "deckLookSelect", Seat = seat, Target = c.InstanceId });
+                list.Add(new GameCommand { Type = "deckLookSelect", Seat = seat, Target = "" });
+                list.Add(new GameCommand { Type = "deckLookConfirmOrder", Seat = seat, OrderedInstanceIds = state.DeckLook.Cards.Select(c => c.InstanceId).ToList() });
+                list.Add(new GameCommand { Type = "deckLookScryConfirm", Seat = seat, OrderedInstanceIds = state.DeckLook.Cards.Select(c => c.InstanceId).ToList() });
+                return list;
+            }
+
+            var myEffect = state.PendingEffects.FirstOrDefault(e => e.Seat == seat);
+            if (myEffect != null)
+            {
+                foreach (var id in TargetCandidates(state, seat))
+                    list.Add(new GameCommand { Type = "resolveEffect", Seat = seat, EffectId = myEffect.EffectId, Target = id });
+                list.Add(new GameCommand { Type = "resolveEffect", Seat = seat, EffectId = myEffect.EffectId, Target = "" });
+                if (myEffect.Optional)
+                    list.Add(new GameCommand { Type = "passEffect", Seat = seat, EffectId = myEffect.EffectId });
+                return list;
+            }
+
+            if (state.Battle != null && state.Battle.TargetSeat == seat)
+            {
+                switch (state.Battle.Step)
+                {
+                    case "block":
+                        list.Add(new GameCommand { Type = "passBlock", Seat = seat });
+                        foreach (var c in me.CharacterArea.Where(c => c != null && !c.Rested && (GameEngine.GetCard(c)?.Keywords?.Contains("Blocker") ?? false)))
+                            list.Add(new GameCommand { Type = "blockAttack", Seat = seat, Blocker = c.InstanceId });
+                        break;
+                    case "counter":
+                        list.Add(new GameCommand { Type = "passCounter", Seat = seat });
+                        foreach (var c in me.Hand.Where(c => GameEngine.CanCounterFromHand(state, seat, c)))
+                            list.Add(new GameCommand { Type = "counterWithCard", Seat = seat, InstanceId = c.InstanceId });
+                        break;
+                    case "trigger":
+                        list.Add(new GameCommand { Type = "useTrigger", Seat = seat });
+                        list.Add(new GameCommand { Type = "passTrigger", Seat = seat });
+                        break;
+                    default:
+                        list.Add(new GameCommand { Type = "resolveAttack", Seat = seat });
+                        break;
+                }
+                return list;
+            }
+
+            if (state.ActiveSeat == seat && state.Phase == "main"
+                && state.PendingEffects.Count == 0 && state.ActiveChoice == null && state.DeckLook == null)
+            {
+                list.Add(new GameCommand { Type = "endTurn", Seat = seat });
+                int don = GameEngine.ActiveDonCount(me);
+                var opp = state.Players[GameEngine.OtherSeat(seat)];
+                foreach (var c in me.Hand)
+                {
+                    var d = CardData.GetCard(c.CardId);
+                    if (d != null && d.Type != "leader" && GameEngine.GetCost(state, c) <= don)
+                        list.Add(new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
+                }
+                if (don > 0)
+                    foreach (var c in Board(me))
+                        list.Add(new GameCommand { Type = "attachDon", Seat = seat, Target = c.InstanceId, Amount = 1 });
+                foreach (var c in Board(me))
+                    list.Add(new GameCommand { Type = "activateMain", Seat = seat, InstanceId = c.InstanceId });
+                var targets = new List<string>();
+                if (opp.Leader != null) targets.Add(opp.Leader.InstanceId);
+                targets.AddRange(opp.CharacterArea.Where(c => c != null && c.Rested).Select(c => c.InstanceId));
+                foreach (var atk in Board(me).Where(c => !c.Rested))
+                    foreach (var tgt in targets)
+                        list.Add(new GameCommand { Type = "declareAttack", Seat = seat, Attacker = atk.InstanceId, Target = tgt });
+            }
+            return list;
+        }
+
+        private static IEnumerable<CardInstance> Board(PlayerState p)
+        {
+            if (p.Leader != null) yield return p.Leader;
+            foreach (var c in p.CharacterArea) if (c != null) yield return c;
+        }
+
+        private static IEnumerable<string> TargetCandidates(GameState state, string seat)
+        {
+            var me = state.Players[seat];
+            var op = state.Players[GameEngine.OtherSeat(seat)];
+            if (me.Leader != null) yield return me.Leader.InstanceId;
+            if (op.Leader != null) yield return op.Leader.InstanceId;
+            foreach (var c in me.CharacterArea) if (c != null) yield return c.InstanceId;
+            foreach (var c in op.CharacterArea) if (c != null) yield return c.InstanceId;
+            foreach (var c in me.Hand) yield return c.InstanceId;
+            foreach (var c in me.Trash) yield return c.InstanceId;
+            if (me.Stage != null) yield return me.Stage.InstanceId;
+            if (op.Stage != null) yield return op.Stage.InstanceId;
+        }
+
+        /// <summary>Keep only candidates the engine accepts: clone, apply, keep the ones that change
+        /// real game state (fingerprint excludes the always-growing log/history).</summary>
+        public static List<KeyValuePair<GameCommand, GameState>> Validate(GameState state, string seat, List<GameCommand> candidates)
+        {
+            var legal = new List<KeyValuePair<GameCommand, GameState>>();
+            long before = Fingerprint(state);
+            foreach (var cmd in candidates)
+            {
+                var clone = GameClone.Clone(state);
+                GameEngine.ApplyCommand(clone, cmd);
+                if (Fingerprint(clone) != before) legal.Add(new KeyValuePair<GameCommand, GameState>(cmd, clone));
+            }
+            return legal;
+        }
+
+        private static long Fingerprint(GameState s)
+        {
+            long h = (s.Battle != null ? 7 : 0) + s.PendingEffects.Count * 13
+                     + s.TurnNumber * 17 + (s.Phase == null ? 0 : s.Phase.GetHashCode()) + (s.ActiveSeat == null ? 0 : s.ActiveSeat.GetHashCode())
+                     + (s.ActiveChoice != null ? 29 : 0) + (s.DeckLook == null ? 0 : s.DeckLook.Cards.Count * 37)
+                     + (s.Battle == null || s.Battle.Step == null ? 0 : s.Battle.Step.GetHashCode()) + (s.Status == "finished" ? 999999999L : 0);
+            foreach (var p in s.Players.Values)
+            {
+                h = h * 31 + p.Hand.Count * 7 + p.CharacterArea.Count(c => c != null) * 11
+                    + p.Trash.Count * 3 + p.Life.Count * 5 + GameEngine.ActiveDonCount(p) * 2 + p.Deck.Count * 101;
+                foreach (var c in p.CharacterArea) if (c != null) h = h * 17 + GameEngine.GetPower(s, c) + (c.Rested ? 1 : 0);
+                if (p.Leader != null) h = h * 17 + GameEngine.GetPower(s, p.Leader) + (p.Leader.Rested ? 1 : 0);
+            }
+            return h;
+        }
+    }
+}

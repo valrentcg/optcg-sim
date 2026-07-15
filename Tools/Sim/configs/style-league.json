@@ -1,0 +1,12 @@
+{
+  "experimentId": "style-league",
+  "decks": [],
+  "southPolicy": "baseline",
+  "opponentPolicyPool": ["baseline", "aggro", "conservative"],
+  "gamesPerCondition": 120,
+  "swapStartingPlayer": true,
+  "pairedSeeds": true,
+  "saveDecisionLogs": false,
+  "seedPrefix": "sl",
+  "outputDir": "Results"
+}

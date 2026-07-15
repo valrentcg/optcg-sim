@@ -1,0 +1,13 @@
+{
+  "experimentId": "overnight-counter-economy",
+  "family": "counter-economy",
+  "decks": [],
+  "opponents": [],
+  "opponentPolicies": ["baseline", "aggro", "conservative"],
+  "samplesPerMatchup": 150,
+  "commandCap": 20000,
+  "maxDegreeOfParallelism": 0,
+  "seedPrefix": "on",
+  "outputDir": "Results",
+  "minSamples": 3000
+}

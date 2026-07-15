@@ -24,6 +24,19 @@ namespace OnePieceTcg.Engine
 
     public static class GameEngine
     {
+        static GameEngine()
+        {
+            // This engine matches card text with ~272 DISTINCT inline patterns across ~298
+            // Regex.Match/IsMatch call sites. The static Regex helpers look a pattern up in a process-wide
+            // cache that holds only 15 entries by default, so with that many hot patterns nearly every call
+            // misses and re-parses + re-compiles its regex from scratch. That made GetPower — which regexes
+            // the effect text of every board card on every call — cost ~180us instead of arithmetic, and
+            // GetPower is called per character by both the search's board evaluation and its state
+            // fingerprint. Sizing the cache above the pattern count turns those misses into hits.
+            // Real game benefits identically; it just never had a profiler pointed at it.
+            System.Text.RegularExpressions.Regex.CacheSize = 512;
+        }
+
         // ---- Public API ---------------------------------------------------
 
         public static GameState CreateMatch(MatchConfig config = null)

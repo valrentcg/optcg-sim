@@ -1,0 +1,23 @@
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+Planner tournament 'hour-test'  pop=48  gens=12  decks=37
+  search budget: beam=3 depth=6 nodes=120 work=800 turnCap=24
+  288 games/gen x 12 gens = 3456 games, dop=24
+  gen  1: topElo=1533 meanElo=1500  [7.2m elapsed, 0.67 games/s, ETA 79m]
+  gen  2: topElo=1539 meanElo=1487  [12.1m elapsed, 0.80 games/s, ETA 60m]
+  gen  3: topElo=1541 meanElo=1488  [16.7m elapsed, 0.86 games/s, ETA 50m]
+  gen  4: topElo=1562 meanElo=1488  [20.9m elapsed, 0.92 games/s, ETA 42m]
+  gen  5: topElo=1575 meanElo=1488  [26.3m elapsed, 0.91 games/s, ETA 37m]
+  gen  6: topElo=1568 meanElo=1488  [32.0m elapsed, 0.90 games/s, ETA 32m]
+  gen  7: topElo=1576 meanElo=1489  [36.9m elapsed, 0.91 games/s, ETA 26m]
+  gen  8: topElo=1593 meanElo=1489  [41.0m elapsed, 0.94 games/s, ETA 20m]
+  gen  9: topElo=1626 meanElo=1489  [45.8m elapsed, 0.94 games/s, ETA 15m]
+  gen 10: topElo=1637 meanElo=1490  [50.1m elapsed, 0.96 games/s, ETA 10m]
+  gen 11: topElo=1634 meanElo=1490  [53.7m elapsed, 0.98 games/s, ETA 5m]
+  gen 12: topElo=1642 meanElo=1490  [57.8m elapsed, 1.00 games/s, ETA 0m]
+
+=== champion weights ===
+  MyLife=1.27 OppLife=-2.18 LifeDanger=-0.82 LowLifeEnabler=0.00 MyBoardPow=0.74 OppBoardPow=-0.21 MyChars=1.26 OppChars=-1.00 MyBlockers=0.87 OppBlockers=-0.87 OppRested=-0.06 MyActiveAtk=-0.73 MyHand=0.77 OppHand=-0.16 MyCounterReserve=0.01 MyActiveDon=0.21 OppActiveDon=-0.16 MyAttachedDon=0.02 MyDeck=0.25 OppDeck=-0.43 MyTrash=-0.47 FinishPressure=2.04 LethalProximity=0.76 AltWinProgress=1.36
+Ladder  C:\Users\Nperr\One Piece TCG Simulator\Tools\Sim\Results\hour-test\planner-ladder.csv

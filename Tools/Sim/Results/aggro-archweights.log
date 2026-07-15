@@ -1,0 +1,42 @@
+Loaded 2636 card definitions.
+
+[--arch-weights: per-archetype rules of engagement - aggro races (board x0.5, life/finish x2)]
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+[--arch aggro: pool restricted to 5 deck(s): op15-foxy, op15-g-zoro, op16-br-koby, op16-g-zoro, op16-rayleigh]
+  budget: beam=6 depth=10 nodes=400 work=20000 truncLines=True turnCap=24
+
+=== duel: gendefault vs BASELINE ===
+  A(gendefault) wins 92 | B wins 208 | no-result 0
+  A win rate = 30.7%   95% CI [25.7%, 36.1%]  (n=300 decided)
+  => A is significantly WEAKER
+
+  === ADJUDICATION (rules-8.2 raw-Life tiebreak) ===
+  5/300 games (1.7%) hit the turn cap and were decided on LIFE, not won
+  --- OUTRIGHT wins only (n=295) ---
+    aggro      30.2%  ( 89/295)
+  --- ADJUDICATED only (n=5) ---
+    aggro      60.0%  (  3/  5)
+
+  === PLANNER win rate BY ITS OWN DECK ===
+   13.3%  (  8/ 60)  op16-rayleigh              OP12-001     [aggro   ] avgCost=2.1 blockers=0 counters=30 removal=32 searchers=25 lowLifePayoff=True altWin=''
+   31.7%  ( 19/ 60)  op16-br-koby               OP11-001     [aggro   ] avgCost=3.3 blockers=4 counters=33 removal=45 searchers=12 lowLifePayoff=False altWin=''
+   31.7%  ( 19/ 60)  op15-foxy                  OP07-059     [aggro   ] avgCost=3.4 blockers=4 counters=38 removal=41 searchers=7 lowLifePayoff=False altWin=''
+   36.7%  ( 22/ 60)  op16-g-zoro                OP12-020     [aggro   ] avgCost=3.3 blockers=0 counters=36 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   40.0%  ( 24/ 60)  op15-g-zoro                OP14-020     [aggro   ] avgCost=3.2 blockers=2 counters=34 removal=35 searchers=8 lowLifePayoff=True altWin=''
+  spread: worst 13.3%  best 40.0%  (5 decks)
+
+  === PLANNER win rate BY OPPONENT DECK ===
+   13.3%  (  8/ 60)  op16-rayleigh              OP12-001     [aggro   ] avgCost=2.1 blockers=0 counters=30 removal=32 searchers=25 lowLifePayoff=True altWin=''
+   31.7%  ( 19/ 60)  op16-br-koby               OP11-001     [aggro   ] avgCost=3.3 blockers=4 counters=33 removal=45 searchers=12 lowLifePayoff=False altWin=''
+   31.7%  ( 19/ 60)  op15-foxy                  OP07-059     [aggro   ] avgCost=3.4 blockers=4 counters=38 removal=41 searchers=7 lowLifePayoff=False altWin=''
+   36.7%  ( 22/ 60)  op16-g-zoro                OP12-020     [aggro   ] avgCost=3.3 blockers=0 counters=36 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   40.0%  ( 24/ 60)  op15-g-zoro                OP14-020     [aggro   ] avgCost=3.2 blockers=2 counters=34 removal=35 searchers=8 lowLifePayoff=True altWin=''
+  spread: worst 13.3%  best 40.0%  (5 decks)
+
+  === BY PLANNER'S OWN ARCHETYPE ===
+  aggro      30.7%  ( 92/300)  95% CI [25.7%, 36.1%]
+
+  === BY OPPONENT ARCHETYPE ===
+  aggro      30.7%  ( 92/300)  95% CI [25.7%, 36.1%]
+ARMDONE

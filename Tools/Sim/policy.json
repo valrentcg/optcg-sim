@@ -1,0 +1,449 @@
+{
+  "schema": "optcg-heuristic-policy/1",
+  "note": "Deck-agnostic decision heuristics from matched-seed counterfactuals. The bot computes the same generic features from its deck vs the opponent's and looks up the preferred choice. Prefer rules with holdout=='validated'.",
+  "min_samples": 8000,
+  "holdout_frac": 0.2,
+  "families": {
+    "mulligan": {
+      "family": "mulligan",
+      "choiceA": "keep",
+      "choiceB": "mulligan",
+      "min_samples": 8000,
+      "overall": {
+        "prefer": "mulligan",
+        "effect_pp": -0.14,
+        "ci95_pp": [
+          -1.7,
+          1.41
+        ],
+        "n": 5713
+      },
+      "rules": []
+    },
+    "turn-order": {
+      "family": "turn-order",
+      "choiceA": "first",
+      "choiceB": "second",
+      "min_samples": 8000,
+      "overall": {
+        "prefer": "first",
+        "effect_pp": 7.13,
+        "ci95_pp": [
+          6.97,
+          7.28
+        ],
+        "n": 435669
+      },
+      "rules": [
+        {
+          "feature": "opp_avg_cost",
+          "value": "5.0",
+          "prefer": "first",
+          "effect_pp": 16.42,
+          "ci95_pp": [
+            15.73,
+            17.11
+          ],
+          "n": 26391,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_avg_cost",
+          "value": "4.5",
+          "prefer": "first",
+          "effect_pp": 16.34,
+          "ci95_pp": [
+            15.43,
+            17.26
+          ],
+          "n": 13174,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_avg_cost",
+          "value": "5.0",
+          "prefer": "first",
+          "effect_pp": 16.1,
+          "ci95_pp": [
+            15.4,
+            16.79
+          ],
+          "n": 26373,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_avg_cost",
+          "value": "4.5",
+          "prefer": "first",
+          "effect_pp": 15.94,
+          "ci95_pp": [
+            15.02,
+            16.86
+          ],
+          "n": 13185,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_low_curve",
+          "value": "0.1",
+          "prefer": "first",
+          "effect_pp": 10.85,
+          "ci95_pp": [
+            10.37,
+            11.33
+          ],
+          "n": 52679,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_low_curve",
+          "value": "0.1",
+          "prefer": "first",
+          "effect_pp": 10.65,
+          "ci95_pp": [
+            10.17,
+            11.13
+          ],
+          "n": 52780,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_low_curve",
+          "value": "0.0",
+          "prefer": "first",
+          "effect_pp": 9.2,
+          "ci95_pp": [
+            8.23,
+            10.18
+          ],
+          "n": 13171,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_low_curve",
+          "value": "0.0",
+          "prefer": "first",
+          "effect_pp": 8.76,
+          "ci95_pp": [
+            7.78,
+            9.75
+          ],
+          "n": 13135,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_avg_cost",
+          "value": "3.5",
+          "prefer": "first",
+          "effect_pp": 8.14,
+          "ci95_pp": [
+            7.8,
+            8.48
+          ],
+          "n": 92416,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_low_curve",
+          "value": "0.4",
+          "prefer": "first",
+          "effect_pp": 8.09,
+          "ci95_pp": [
+            7.65,
+            8.52
+          ],
+          "n": 52769,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_avg_cost",
+          "value": "3.5",
+          "prefer": "first",
+          "effect_pp": 7.98,
+          "ci95_pp": [
+            7.64,
+            8.32
+          ],
+          "n": 92410,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_low_curve",
+          "value": "0.2",
+          "prefer": "first",
+          "effect_pp": 7.92,
+          "ci95_pp": [
+            7.56,
+            8.29
+          ],
+          "n": 92347,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_low_curve",
+          "value": "0.4",
+          "prefer": "first",
+          "effect_pp": 7.92,
+          "ci95_pp": [
+            7.48,
+            8.35
+          ],
+          "n": 52993,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_low_curve",
+          "value": "0.2",
+          "prefer": "first",
+          "effect_pp": 7.9,
+          "ci95_pp": [
+            7.54,
+            8.27
+          ],
+          "n": 92389,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_low_curve",
+          "value": "0.6",
+          "prefer": "first",
+          "effect_pp": 7.56,
+          "ci95_pp": [
+            6.89,
+            8.24
+          ],
+          "n": 26332,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_avg_cost",
+          "value": "4.0",
+          "prefer": "first",
+          "effect_pp": 7.32,
+          "ci95_pp": [
+            7.04,
+            7.6
+          ],
+          "n": 132008,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_leader_life",
+          "value": "5",
+          "prefer": "first",
+          "effect_pp": 7.31,
+          "ci95_pp": [
+            7.13,
+            7.5
+          ],
+          "n": 316898,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_avg_cost",
+          "value": "4.0",
+          "prefer": "first",
+          "effect_pp": 7.3,
+          "ci95_pp": [
+            7.02,
+            7.58
+          ],
+          "n": 132029,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_leader_life",
+          "value": "5",
+          "prefer": "first",
+          "effect_pp": 7.29,
+          "ci95_pp": [
+            7.1,
+            7.47
+          ],
+          "n": 316746,
+          "holdout": "validated"
+        },
+        {
+          "feature": "i_am_faster",
+          "value": "false",
+          "prefer": "first",
+          "effect_pp": 7.24,
+          "ci95_pp": [
+            7.02,
+            7.46
+          ],
+          "n": 225582,
+          "holdout": "validated"
+        },
+        {
+          "feature": "i_am_faster",
+          "value": "true",
+          "prefer": "first",
+          "effect_pp": 7.0,
+          "ci95_pp": [
+            6.78,
+            7.23
+          ],
+          "n": 210087,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_leader_life",
+          "value": "4",
+          "prefer": "first",
+          "effect_pp": 6.91,
+          "ci95_pp": [
+            6.56,
+            7.25
+          ],
+          "n": 92386,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_leader_life",
+          "value": "4",
+          "prefer": "first",
+          "effect_pp": 6.69,
+          "ci95_pp": [
+            6.35,
+            7.04
+          ],
+          "n": 92400,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_leader_life",
+          "value": "6+",
+          "prefer": "first",
+          "effect_pp": 6.4,
+          "ci95_pp": [
+            5.77,
+            7.03
+          ],
+          "n": 26371,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_low_curve",
+          "value": "0.6",
+          "prefer": "first",
+          "effect_pp": 6.12,
+          "ci95_pp": [
+            5.43,
+            6.8
+          ],
+          "n": 26360,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_low_curve",
+          "value": "0.3",
+          "prefer": "first",
+          "effect_pp": 6.03,
+          "ci95_pp": [
+            5.75,
+            6.31
+          ],
+          "n": 132155,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_leader_life",
+          "value": "6+",
+          "prefer": "first",
+          "effect_pp": 5.95,
+          "ci95_pp": [
+            5.33,
+            6.57
+          ],
+          "n": 26537,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_low_curve",
+          "value": "0.3",
+          "prefer": "first",
+          "effect_pp": 5.89,
+          "ci95_pp": [
+            5.62,
+            6.17
+          ],
+          "n": 132170,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_avg_cost",
+          "value": "3.0",
+          "prefer": "first",
+          "effect_pp": 4.95,
+          "ci95_pp": [
+            4.66,
+            5.24
+          ],
+          "n": 131993,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_avg_cost",
+          "value": "3.0",
+          "prefer": "first",
+          "effect_pp": 4.91,
+          "ci95_pp": [
+            4.62,
+            5.2
+          ],
+          "n": 132240,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_low_curve",
+          "value": "0.5",
+          "prefer": "first",
+          "effect_pp": 4.7,
+          "ci95_pp": [
+            4.31,
+            5.09
+          ],
+          "n": 65958,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_low_curve",
+          "value": "0.5",
+          "prefer": "first",
+          "effect_pp": 4.3,
+          "ci95_pp": [
+            3.92,
+            4.69
+          ],
+          "n": 66100,
+          "holdout": "validated"
+        },
+        {
+          "feature": "opp_avg_cost",
+          "value": "2.5",
+          "prefer": "first",
+          "effect_pp": 2.71,
+          "ci95_pp": [
+            2.18,
+            3.25
+          ],
+          "n": 39435,
+          "holdout": "validated"
+        },
+        {
+          "feature": "my_avg_cost",
+          "value": "2.5",
+          "prefer": "first",
+          "effect_pp": 2.41,
+          "ci95_pp": [
+            1.88,
+            2.95
+          ],
+          "n": 39684,
+          "holdout": "validated"
+        }
+      ]
+    }
+  }
+}

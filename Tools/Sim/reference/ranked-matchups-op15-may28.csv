@@ -1,0 +1,16 @@
+# REAL ranked matchup winrates — OPTCG Sim ranked mode, OP15 meta, "May 28th" weekly power ranking.
+# Source: screenshot provided by the user (transcribed — may contain minor read errors).
+# This is GROUND TRUTH (aggregate winrates from real ranked games) and is far stronger than
+# baseline-bot self-play for modeling deck power / matchups. Value = row leader's win% vs column leader.
+# The 9th column leader was cut off in the screenshot ("OP14-..."), labeled OP14b here.
+row_leader,vs_OP15-058,vs_OP11Nami,vs_OP15-002,vs_OP13Ace,vs_OP14Mihawk,vs_OP15-098,vs_OP13Luffy,vs_OP05Enel,vs_OP14b,vs_OP09Teach,overall_winrate,W,L,avg_dur_s
+OP15-058,50,34.8,66.9,55,67.6,45.1,52,40.4,48.9,66.5,51.5,10770,10134,671.5
+OP11Nami,65.2,50,37.4,32.9,36.6,67,41,43.8,55.5,36.3,52.4,7533,6847,664.3
+OP15-002,33.1,62.6,50,60.3,53.3,40,45,60,61.1,40.4,48.2,3506,3775,673.7
+OP13Ace,45,67.1,39.7,50,35.3,48.4,65,55.1,65.9,51.7,52.1,2504,2304,669.2
+OP14Mihawk,32.4,63.4,46.7,64.7,50,45.8,53.5,45,39.8,58.6,48.6,2178,2304,690.2
+OP15-098,54.9,33,60,51.6,54.2,50,17.9,69.8,45.4,66.1,48.7,2137,2254,582.2
+OP13Luffy,48,59,55,35,46.5,82.1,50,52.8,53.6,36.1,53.2,1928,1695,720.7
+OP05Enel,59.6,56.2,40,44.9,55,30.2,47.2,50,33.8,47.5,50.3,1200,1185,699.8
+OP14b,51.1,44.5,38.9,34.1,60.2,54.6,46.4,66.2,50,35.1,48.1,1130,1218,663
+OP09Teach,33.5,63.7,59.6,48.3,41.4,33.9,63.9,52.5,64.9,50,48.2,500,537,496.6

@@ -52,6 +52,15 @@ sysinfo.txt
 # Large card-art asset library — synced via Plastic SCM cloud instead of git
 /Assets/StreamingAssets/Cards/
 
+# Sim harness build output (Tools/ is outside Assets/, so Unity's [Oo]bj/ rule above doesn't reach it)
+/Tools/Sim/bin/
+/Tools/Sim/obj/
+
+# Sim self-play game dumps: 200MB+ of regenerable JSONL from a seeded, deterministic runner — the seeds
+# and configs are committed, so these can be rebuilt exactly. The small .log/.csv results ARE kept: they
+# are the experiment trail (win rates, CIs, ladders) and total ~0.2MB.
+*.jsonl
+
 # OS files
 .DS_Store
 Thumbs.db

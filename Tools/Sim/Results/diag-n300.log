@@ -1,0 +1,207 @@
+### A: BY-DECK breakdown (reply off, n=300) — is the gap archetype-shaped?
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+  budget: beam=6 depth=10 nodes=400 work=20000 truncLines=True turnCap=24
+
+=== duel: gendefault vs BASELINE ===
+  A(gendefault) wins 151 | B wins 149 | no-result 0
+  A win rate = 50.3%   95% CI [44.7%, 56.0%]  (n=300 decided)
+  => NOT significant - indistinguishable at this n
+
+  === PLANNER win rate BY ITS OWN DECK ===
+    0.0%  (  0/  8)  op16-black-yamato          OP16-079     [midrange] avgCost=4.4 blockers=8 counters=42 removal=50 searchers=12 lowLifePayoff=False altWin=''
+    0.0%  (  0/  9)  op15-foxy                  OP07-059     [aggro   ] avgCost=3.4 blockers=4 counters=38 removal=41 searchers=7 lowLifePayoff=False altWin=''
+   12.5%  (  1/  8)  op16-krieg                 OP15-001     [midrange] avgCost=4.0 blockers=8 counters=41 removal=22 searchers=8 lowLifePayoff=False altWin=''
+   12.5%  (  1/  8)  op16-sengoku               OP16-060     [midrange] avgCost=3.9 blockers=4 counters=29 removal=51 searchers=15 lowLifePayoff=False altWin=''
+   22.2%  (  2/  9)  eb03-five-elders           OP13-079     [midrange] avgCost=4.6 blockers=0 counters=40 removal=50 searchers=12 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-g-zoro                OP12-020     [aggro   ] avgCost=3.3 blockers=0 counters=36 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op15-rg-luffy              OP13-001     [midrange] avgCost=4.1 blockers=4 counters=32 removal=29 searchers=8 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-rayleigh              OP12-001     [aggro   ] avgCost=2.1 blockers=0 counters=30 removal=32 searchers=25 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  eb03-py-rosinante          OP12-061     [midrange] avgCost=3.8 blockers=11 counters=36 removal=33 searchers=16 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=5 counters=36 removal=37 searchers=5 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op15-purple-doffy          OP14-060     [midrange] avgCost=4.5 blockers=0 counters=38 removal=46 searchers=13 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-g-mihawk              OP14-020     [midrange] avgCost=3.9 blockers=4 counters=34 removal=46 searchers=10 lowLifePayoff=True altWin=''
+   37.5%  (  3/  8)  op16-black-teach           OP09-081     [midrange] avgCost=3.5 blockers=11 counters=30 removal=46 searchers=12 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  op16-gp-luffy              EB02-010     [midrange] avgCost=3.6 blockers=6 counters=33 removal=48 searchers=13 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  op15-g-zoro                OP14-020     [aggro   ] avgCost=3.2 blockers=2 counters=34 removal=35 searchers=8 lowLifePayoff=True altWin=''
+   37.5%  (  3/  8)  eb03-green-mihawk          OP14-020     [midrange] avgCost=4.2 blockers=3 counters=35 removal=39 searchers=6 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op16-red-ace               OP16-001     [combo   ] avgCost=4.8 blockers=10 counters=27 removal=32 searchers=20 lowLifePayoff=False altWin='blocker-trigger'
+   50.0%  (  4/  8)  op16-br-koby               OP11-001     [aggro   ] avgCost=3.3 blockers=4 counters=33 removal=45 searchers=12 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-yb-teach              OP16-080     [midrange] avgCost=4.2 blockers=7 counters=27 removal=45 searchers=14 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op16-py-rosinante          OP12-061     [midrange] avgCost=3.5 blockers=15 counters=32 removal=41 searchers=17 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op16-moria                 OP14-080     [midrange] avgCost=4.0 blockers=4 counters=27 removal=46 searchers=28 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  op15-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=10 counters=34 removal=37 searchers=6 lowLifePayoff=False altWin=''
+   62.5%  (  5/  8)  op16-blue-lucy             OP15-002     [combo   ] avgCost=2.9 blockers=4 counters=18 removal=34 searchers=10 lowLifePayoff=False altWin='blocker-trigger'
+   62.5%  (  5/  8)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+   75.0%  (  6/  8)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   75.0%  (  6/  8)  op16-gp-lim                OP09-022     [midrange] avgCost=4.0 blockers=4 counters=41 removal=33 searchers=4 lowLifePayoff=False altWin=''
+   75.0%  (  6/  8)  op16-br-ace                OP13-002     [combo   ] avgCost=4.7 blockers=12 counters=26 removal=33 searchers=8 lowLifePayoff=True altWin='blocker-trigger'
+   75.0%  (  6/  8)  op15-py-crocodile          OP04-058     [midrange] avgCost=4.5 blockers=7 counters=35 removal=34 searchers=20 lowLifePayoff=True altWin=''
+   87.5%  (  7/  8)  op15-br-ace                OP13-002     [combo   ] avgCost=5.0 blockers=12 counters=28 removal=33 searchers=10 lowLifePayoff=True altWin='blocker-trigger'
+   87.5%  (  7/  8)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+   87.5%  (  7/  8)  op16-luffy-n-ace           ST30-001     [midrange] avgCost=3.7 blockers=6 counters=33 removal=37 searchers=14 lowLifePayoff=True altWin=''
+   88.9%  (  8/  9)  eb03-by-nami               OP11-041     [midrange] avgCost=4.3 blockers=5 counters=31 removal=41 searchers=8 lowLifePayoff=True altWin=''
+   88.9%  (  8/  9)  op15-y-luffy               OP15-098     [midrange] avgCost=4.2 blockers=6 counters=40 removal=34 searchers=29 lowLifePayoff=True altWin=''
+  100.0%  (  8/  8)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+  100.0%  (  8/  8)  op16-kalgara               OP08-098     [midrange] avgCost=4.0 blockers=4 counters=39 removal=34 searchers=27 lowLifePayoff=True altWin=''
+  spread: worst 0.0%  best 100.0%  (37 decks)
+
+  === PLANNER win rate BY OPPONENT DECK ===
+    0.0%  (  0/  8)  op16-luffy-n-ace           ST30-001     [midrange] avgCost=3.7 blockers=6 counters=33 removal=37 searchers=14 lowLifePayoff=True altWin=''
+    0.0%  (  0/  9)  op15-y-luffy               OP15-098     [midrange] avgCost=4.2 blockers=6 counters=40 removal=34 searchers=29 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-kalgara               OP08-098     [midrange] avgCost=4.0 blockers=4 counters=39 removal=34 searchers=27 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-red-ace               OP16-001     [combo   ] avgCost=4.8 blockers=10 counters=27 removal=32 searchers=20 lowLifePayoff=False altWin='blocker-trigger'
+   25.0%  (  2/  8)  op15-py-crocodile          OP04-058     [midrange] avgCost=4.5 blockers=7 counters=35 removal=34 searchers=20 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  eb03-py-rosinante          OP12-061     [midrange] avgCost=3.8 blockers=11 counters=36 removal=33 searchers=16 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=5 counters=36 removal=37 searchers=5 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op15-g-zoro                OP14-020     [aggro   ] avgCost=3.2 blockers=2 counters=34 removal=35 searchers=8 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op15-purple-doffy          OP14-060     [midrange] avgCost=4.5 blockers=0 counters=38 removal=46 searchers=13 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  op16-g-zoro                OP12-020     [aggro   ] avgCost=3.3 blockers=0 counters=36 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   37.5%  (  3/  8)  op16-br-ace                OP13-002     [combo   ] avgCost=4.7 blockers=12 counters=26 removal=33 searchers=8 lowLifePayoff=True altWin='blocker-trigger'
+   37.5%  (  3/  8)  op16-yb-teach              OP16-080     [midrange] avgCost=4.2 blockers=7 counters=27 removal=45 searchers=14 lowLifePayoff=True altWin=''
+   37.5%  (  3/  8)  op16-py-rosinante          OP12-061     [midrange] avgCost=3.5 blockers=15 counters=32 removal=41 searchers=17 lowLifePayoff=True altWin=''
+   37.5%  (  3/  8)  op16-gp-luffy              EB02-010     [midrange] avgCost=3.6 blockers=6 counters=33 removal=48 searchers=13 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op16-gp-lim                OP09-022     [midrange] avgCost=4.0 blockers=4 counters=41 removal=33 searchers=4 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-blue-lucy             OP15-002     [combo   ] avgCost=2.9 blockers=4 counters=18 removal=34 searchers=10 lowLifePayoff=False altWin='blocker-trigger'
+   50.0%  (  4/  8)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  eb03-green-mihawk          OP14-020     [midrange] avgCost=4.2 blockers=3 counters=35 removal=39 searchers=6 lowLifePayoff=True altWin=''
+   55.6%  (  5/  9)  eb03-by-nami               OP11-041     [midrange] avgCost=4.3 blockers=5 counters=31 removal=41 searchers=8 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  op15-rg-luffy              OP13-001     [midrange] avgCost=4.1 blockers=4 counters=32 removal=29 searchers=8 lowLifePayoff=False altWin=''
+   75.0%  (  6/  8)  op16-br-koby               OP11-001     [aggro   ] avgCost=3.3 blockers=4 counters=33 removal=45 searchers=12 lowLifePayoff=False altWin=''
+   75.0%  (  6/  8)  op16-black-yamato          OP16-079     [midrange] avgCost=4.4 blockers=8 counters=42 removal=50 searchers=12 lowLifePayoff=False altWin=''
+   75.0%  (  6/  8)  op16-black-teach           OP09-081     [midrange] avgCost=3.5 blockers=11 counters=30 removal=46 searchers=12 lowLifePayoff=False altWin=''
+   75.0%  (  6/  8)  op16-krieg                 OP15-001     [midrange] avgCost=4.0 blockers=8 counters=41 removal=22 searchers=8 lowLifePayoff=False altWin=''
+   75.0%  (  6/  8)  op16-moria                 OP14-080     [midrange] avgCost=4.0 blockers=4 counters=27 removal=46 searchers=28 lowLifePayoff=True altWin=''
+   75.0%  (  6/  8)  op16-g-mihawk              OP14-020     [midrange] avgCost=3.9 blockers=4 counters=34 removal=46 searchers=10 lowLifePayoff=True altWin=''
+   87.5%  (  7/  8)  op15-br-ace                OP13-002     [combo   ] avgCost=5.0 blockers=12 counters=28 removal=33 searchers=10 lowLifePayoff=True altWin='blocker-trigger'
+   87.5%  (  7/  8)  op15-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=10 counters=34 removal=37 searchers=6 lowLifePayoff=False altWin=''
+   87.5%  (  7/  8)  op16-rayleigh              OP12-001     [aggro   ] avgCost=2.1 blockers=0 counters=30 removal=32 searchers=25 lowLifePayoff=True altWin=''
+   87.5%  (  7/  8)  op16-sengoku               OP16-060     [midrange] avgCost=3.9 blockers=4 counters=29 removal=51 searchers=15 lowLifePayoff=False altWin=''
+  100.0%  (  9/  9)  eb03-five-elders           OP13-079     [midrange] avgCost=4.6 blockers=0 counters=40 removal=50 searchers=12 lowLifePayoff=True altWin=''
+  100.0%  (  9/  9)  op15-foxy                  OP07-059     [aggro   ] avgCost=3.4 blockers=4 counters=38 removal=41 searchers=7 lowLifePayoff=False altWin=''
+  spread: worst 0.0%  best 100.0%  (37 decks)
+
+  === BY PLANNER'S OWN ARCHETYPE ===
+  aggro      26.8%  ( 11/ 41)  95% CI [15.7%, 41.9%]
+  combo      68.8%  ( 22/ 32)  95% CI [51.4%, 82.0%]
+  control    72.9%  ( 35/ 48)  95% CI [59.0%, 83.4%]
+  midrange   46.4%  ( 83/179)  95% CI [39.2%, 53.7%]
+
+  === BY OPPONENT ARCHETYPE ===
+  aggro      65.9%  ( 27/ 41)  95% CI [50.5%, 78.4%]
+  combo      50.0%  ( 16/ 32)  95% CI [33.6%, 66.4%]
+  control    39.6%  ( 19/ 48)  95% CI [27.0%, 53.7%]
+  midrange   49.7%  ( 89/179)  95% CI [42.5%, 57.0%]
+### B: MIRROR (same deck both sides, n=300) — skill isolated from deck luck
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+  budget: beam=6 depth=10 nodes=400 work=20000 truncLines=True turnCap=24
+
+=== duel: gendefault vs BASELINE ===
+  A(gendefault) wins 137 | B wins 163 | no-result 0
+  A win rate = 45.7%   95% CI [40.1%, 51.3%]  (n=300 decided)
+  => NOT significant - indistinguishable at this n
+
+  === PLANNER win rate BY ITS OWN DECK ===
+    0.0%  (  0/  8)  op15-purple-doffy          OP14-060     [midrange] avgCost=4.5 blockers=0 counters=38 removal=46 searchers=13 lowLifePayoff=False altWin=''
+    0.0%  (  0/  8)  op16-luffy-n-ace           ST30-001     [midrange] avgCost=3.7 blockers=6 counters=33 removal=37 searchers=14 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-g-zoro                OP12-020     [aggro   ] avgCost=3.3 blockers=0 counters=36 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-yb-teach              OP16-080     [midrange] avgCost=4.2 blockers=7 counters=27 removal=45 searchers=14 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-rayleigh              OP12-001     [aggro   ] avgCost=2.1 blockers=0 counters=30 removal=32 searchers=25 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-kalgara               OP08-098     [midrange] avgCost=4.0 blockers=4 counters=39 removal=34 searchers=27 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op15-y-luffy               OP15-098     [midrange] avgCost=4.2 blockers=6 counters=40 removal=34 searchers=29 lowLifePayoff=True altWin=''
+   20.0%  (  2/ 10)  op15-foxy                  OP07-059     [aggro   ] avgCost=3.4 blockers=4 counters=38 removal=41 searchers=7 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=5 counters=36 removal=37 searchers=5 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-gp-luffy              EB02-010     [midrange] avgCost=3.6 blockers=6 counters=33 removal=48 searchers=13 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-red-ace               OP16-001     [combo   ] avgCost=4.8 blockers=10 counters=27 removal=32 searchers=20 lowLifePayoff=False altWin='blocker-trigger'
+   25.0%  (  2/  8)  op16-krieg                 OP15-001     [midrange] avgCost=4.0 blockers=8 counters=41 removal=22 searchers=8 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  op15-py-crocodile          OP04-058     [midrange] avgCost=4.5 blockers=7 counters=35 removal=34 searchers=20 lowLifePayoff=True altWin=''
+   37.5%  (  3/  8)  op16-br-koby               OP11-001     [aggro   ] avgCost=3.3 blockers=4 counters=33 removal=45 searchers=12 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  eb03-py-rosinante          OP12-061     [midrange] avgCost=3.8 blockers=11 counters=36 removal=33 searchers=16 lowLifePayoff=True altWin=''
+   40.0%  (  4/ 10)  eb03-by-nami               OP11-041     [midrange] avgCost=4.3 blockers=5 counters=31 removal=41 searchers=8 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op15-rg-luffy              OP13-001     [midrange] avgCost=4.1 blockers=4 counters=32 removal=29 searchers=8 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-black-teach           OP09-081     [midrange] avgCost=3.5 blockers=11 counters=30 removal=46 searchers=12 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-gp-lim                OP09-022     [midrange] avgCost=4.0 blockers=4 counters=41 removal=33 searchers=4 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-black-yamato          OP16-079     [midrange] avgCost=4.4 blockers=8 counters=42 removal=50 searchers=12 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op15-g-zoro                OP14-020     [aggro   ] avgCost=3.2 blockers=2 counters=34 removal=35 searchers=8 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op16-sengoku               OP16-060     [midrange] avgCost=3.9 blockers=4 counters=29 removal=51 searchers=15 lowLifePayoff=False altWin=''
+   62.5%  (  5/  8)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  eb03-five-elders           OP13-079     [midrange] avgCost=4.6 blockers=0 counters=40 removal=50 searchers=12 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  op15-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=10 counters=34 removal=37 searchers=6 lowLifePayoff=False altWin=''
+   62.5%  (  5/  8)  op16-py-rosinante          OP12-061     [midrange] avgCost=3.5 blockers=15 counters=32 removal=41 searchers=17 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  eb03-green-mihawk          OP14-020     [midrange] avgCost=4.2 blockers=3 counters=35 removal=39 searchers=6 lowLifePayoff=True altWin=''
+   75.0%  (  6/  8)  op16-br-ace                OP13-002     [combo   ] avgCost=4.7 blockers=12 counters=26 removal=33 searchers=8 lowLifePayoff=True altWin='blocker-trigger'
+   75.0%  (  6/  8)  op16-blue-lucy             OP15-002     [combo   ] avgCost=2.9 blockers=4 counters=18 removal=34 searchers=10 lowLifePayoff=False altWin='blocker-trigger'
+   87.5%  (  7/  8)  op15-br-ace                OP13-002     [combo   ] avgCost=5.0 blockers=12 counters=28 removal=33 searchers=10 lowLifePayoff=True altWin='blocker-trigger'
+   87.5%  (  7/  8)  op16-g-mihawk              OP14-020     [midrange] avgCost=3.9 blockers=4 counters=34 removal=46 searchers=10 lowLifePayoff=True altWin=''
+   87.5%  (  7/  8)  op16-moria                 OP14-080     [midrange] avgCost=4.0 blockers=4 counters=27 removal=46 searchers=28 lowLifePayoff=True altWin=''
+  100.0%  (  8/  8)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+  100.0%  (  8/  8)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+  spread: worst 0.0%  best 100.0%  (37 decks)
+
+  === PLANNER win rate BY OPPONENT DECK ===
+    0.0%  (  0/  8)  op15-purple-doffy          OP14-060     [midrange] avgCost=4.5 blockers=0 counters=38 removal=46 searchers=13 lowLifePayoff=False altWin=''
+    0.0%  (  0/  8)  op16-luffy-n-ace           ST30-001     [midrange] avgCost=3.7 blockers=6 counters=33 removal=37 searchers=14 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-g-zoro                OP12-020     [aggro   ] avgCost=3.3 blockers=0 counters=36 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-yb-teach              OP16-080     [midrange] avgCost=4.2 blockers=7 counters=27 removal=45 searchers=14 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-rayleigh              OP12-001     [aggro   ] avgCost=2.1 blockers=0 counters=30 removal=32 searchers=25 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op16-kalgara               OP08-098     [midrange] avgCost=4.0 blockers=4 counters=39 removal=34 searchers=27 lowLifePayoff=True altWin=''
+   12.5%  (  1/  8)  op15-y-luffy               OP15-098     [midrange] avgCost=4.2 blockers=6 counters=40 removal=34 searchers=29 lowLifePayoff=True altWin=''
+   20.0%  (  2/ 10)  op15-foxy                  OP07-059     [aggro   ] avgCost=3.4 blockers=4 counters=38 removal=41 searchers=7 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+   25.0%  (  2/  8)  op16-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=5 counters=36 removal=37 searchers=5 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-gp-luffy              EB02-010     [midrange] avgCost=3.6 blockers=6 counters=33 removal=48 searchers=13 lowLifePayoff=False altWin=''
+   25.0%  (  2/  8)  op16-red-ace               OP16-001     [combo   ] avgCost=4.8 blockers=10 counters=27 removal=32 searchers=20 lowLifePayoff=False altWin='blocker-trigger'
+   25.0%  (  2/  8)  op16-krieg                 OP15-001     [midrange] avgCost=4.0 blockers=8 counters=41 removal=22 searchers=8 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  op15-py-crocodile          OP04-058     [midrange] avgCost=4.5 blockers=7 counters=35 removal=34 searchers=20 lowLifePayoff=True altWin=''
+   37.5%  (  3/  8)  op16-br-koby               OP11-001     [aggro   ] avgCost=3.3 blockers=4 counters=33 removal=45 searchers=12 lowLifePayoff=False altWin=''
+   37.5%  (  3/  8)  eb03-py-rosinante          OP12-061     [midrange] avgCost=3.8 blockers=11 counters=36 removal=33 searchers=16 lowLifePayoff=True altWin=''
+   40.0%  (  4/ 10)  eb03-by-nami               OP11-041     [midrange] avgCost=4.3 blockers=5 counters=31 removal=41 searchers=8 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op15-rg-luffy              OP13-001     [midrange] avgCost=4.1 blockers=4 counters=32 removal=29 searchers=8 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-black-teach           OP09-081     [midrange] avgCost=3.5 blockers=11 counters=30 removal=46 searchers=12 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-gp-lim                OP09-022     [midrange] avgCost=4.0 blockers=4 counters=41 removal=33 searchers=4 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op16-black-yamato          OP16-079     [midrange] avgCost=4.4 blockers=8 counters=42 removal=50 searchers=12 lowLifePayoff=False altWin=''
+   50.0%  (  4/  8)  op15-g-zoro                OP14-020     [aggro   ] avgCost=3.2 blockers=2 counters=34 removal=35 searchers=8 lowLifePayoff=True altWin=''
+   50.0%  (  4/  8)  op16-sengoku               OP16-060     [midrange] avgCost=3.9 blockers=4 counters=29 removal=51 searchers=15 lowLifePayoff=False altWin=''
+   62.5%  (  5/  8)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  eb03-five-elders           OP13-079     [midrange] avgCost=4.6 blockers=0 counters=40 removal=50 searchers=12 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  op15-g-bonney              OP07-019     [midrange] avgCost=4.4 blockers=10 counters=34 removal=37 searchers=6 lowLifePayoff=False altWin=''
+   62.5%  (  5/  8)  op16-py-rosinante          OP12-061     [midrange] avgCost=3.5 blockers=15 counters=32 removal=41 searchers=17 lowLifePayoff=True altWin=''
+   62.5%  (  5/  8)  eb03-green-mihawk          OP14-020     [midrange] avgCost=4.2 blockers=3 counters=35 removal=39 searchers=6 lowLifePayoff=True altWin=''
+   75.0%  (  6/  8)  op16-br-ace                OP13-002     [combo   ] avgCost=4.7 blockers=12 counters=26 removal=33 searchers=8 lowLifePayoff=True altWin='blocker-trigger'
+   75.0%  (  6/  8)  op16-blue-lucy             OP15-002     [combo   ] avgCost=2.9 blockers=4 counters=18 removal=34 searchers=10 lowLifePayoff=False altWin='blocker-trigger'
+   87.5%  (  7/  8)  op15-br-ace                OP13-002     [combo   ] avgCost=5.0 blockers=12 counters=28 removal=33 searchers=10 lowLifePayoff=True altWin='blocker-trigger'
+   87.5%  (  7/  8)  op16-g-mihawk              OP14-020     [midrange] avgCost=3.9 blockers=4 counters=34 removal=46 searchers=10 lowLifePayoff=True altWin=''
+   87.5%  (  7/  8)  op16-moria                 OP14-080     [midrange] avgCost=4.0 blockers=4 counters=27 removal=46 searchers=28 lowLifePayoff=True altWin=''
+  100.0%  (  8/  8)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+  100.0%  (  8/  8)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+  spread: worst 0.0%  best 100.0%  (37 decks)
+
+  === BY PLANNER'S OWN ARCHETYPE ===
+  aggro      26.2%  ( 11/ 42)  95% CI [15.3%, 41.1%]
+  combo      65.6%  ( 21/ 32)  95% CI [48.3%, 79.6%]
+  control    66.7%  ( 32/ 48)  95% CI [52.5%, 78.3%]
+  midrange   41.0%  ( 73/178)  95% CI [34.0%, 48.4%]
+
+  === BY OPPONENT ARCHETYPE ===
+  aggro      26.2%  ( 11/ 42)  95% CI [15.3%, 41.1%]
+  combo      65.6%  ( 21/ 32)  95% CI [48.3%, 79.6%]
+  control    66.7%  ( 32/ 48)  95% CI [52.5%, 78.3%]
+  midrange   41.0%  ( 73/178)  95% CI [34.0%, 48.4%]
+ALLDONE

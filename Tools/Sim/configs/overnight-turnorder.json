@@ -1,0 +1,12 @@
+{
+  "experimentId": "overnight-turnorder",
+  "family": "turn-order",
+  "decks": [],
+  "opponents": [],
+  "samplesPerMatchup": 500,
+  "commandCap": 20000,
+  "maxDegreeOfParallelism": 0,
+  "seedPrefix": "on",
+  "outputDir": "Results",
+  "minSamples": 3000
+}

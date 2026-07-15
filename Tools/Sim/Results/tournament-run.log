@@ -1,0 +1,64 @@
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+Tournament 'tournament'  pop=48  gens=30  rounds/gen=6  games/pair=8
+  meta decks=37  colors=[Black,Black/Yellow,Blue/Purple,Blue/Yellow,Green,Green/Purple,Purple,Purple/Yellow,Red,Red/Black,Red/Blue,Red/Green,Yellow]
+  ~1,152 games/generation  (~34,560 total)
+
+  gen  1: topElo=1536 meanElo=1500  topWR=75%  [MulliganKeep=3.70 FaceBias=0.81 CounterLifeFloor=3.65 CounterCharCost=2.82 BlockBias=0.10 TurnOrderFirst=0.63]
+  gen  2: topElo=1537 meanElo=1482  topWR=64%  [MulliganKeep=3.70 FaceBias=0.81 CounterLifeFloor=3.65 CounterCharCost=2.82 BlockBias=0.10 TurnOrderFirst=0.63]
+  gen  3: topElo=1542 meanElo=1482  topWR=60%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=3.00 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen  4: topElo=1543 meanElo=1482  topWR=58%  [MulliganKeep=3.70 FaceBias=0.81 CounterLifeFloor=3.65 CounterCharCost=2.82 BlockBias=0.10 TurnOrderFirst=0.63]
+  gen  5: topElo=1540 meanElo=1482  topWR=56%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen  6: topElo=1558 meanElo=1482  topWR=57%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen  7: topElo=1547 meanElo=1483  topWR=54%  [MulliganKeep=1.54 FaceBias=0.80 CounterLifeFloor=3.07 CounterCharCost=0.32 BlockBias=0.25 TurnOrderFirst=0.02]
+  gen  8: topElo=1558 meanElo=1483  topWR=56%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen  9: topElo=1567 meanElo=1483  topWR=56%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen 10: topElo=1567 meanElo=1484  topWR=56%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen 11: topElo=1560 meanElo=1483  topWR=60%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 12: topElo=1561 meanElo=1484  topWR=55%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen 13: topElo=1559 meanElo=1484  topWR=57%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 14: topElo=1559 meanElo=1484  topWR=54%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen 15: topElo=1557 meanElo=1484  topWR=54%  [MulliganKeep=1.72 FaceBias=0.55 CounterLifeFloor=4.86 CounterCharCost=2.81 BlockBias=0.06 TurnOrderFirst=0.42]
+  gen 16: topElo=1572 meanElo=1485  topWR=53%  [MulliganKeep=2.76 FaceBias=0.53 CounterLifeFloor=3.27 CounterCharCost=6.19 BlockBias=0.45 TurnOrderFirst=0.29]
+  gen 17: topElo=1568 meanElo=1485  topWR=53%  [MulliganKeep=2.76 FaceBias=0.53 CounterLifeFloor=3.27 CounterCharCost=6.19 BlockBias=0.45 TurnOrderFirst=0.29]
+  gen 18: topElo=1580 meanElo=1485  topWR=53%  [MulliganKeep=2.76 FaceBias=0.53 CounterLifeFloor=3.27 CounterCharCost=6.19 BlockBias=0.45 TurnOrderFirst=0.29]
+  gen 19: topElo=1569 meanElo=1486  topWR=54%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 20: topElo=1571 meanElo=1485  topWR=54%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 21: topElo=1576 meanElo=1486  topWR=54%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 22: topElo=1579 meanElo=1486  topWR=54%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 23: topElo=1595 meanElo=1486  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 24: topElo=1612 meanElo=1486  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 25: topElo=1594 meanElo=1486  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 26: topElo=1591 meanElo=1486  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 27: topElo=1599 meanElo=1485  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 28: topElo=1605 meanElo=1486  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 29: topElo=1601 meanElo=1487  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  gen 30: topElo=1606 meanElo=1486  topWR=55%  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+
+=== Elo ladder (top styles) ===
+  Elo 1606  WR 55%  (bred)  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  Elo 1563  WR 51%  (random)  [MulliganKeep=2.76 FaceBias=0.53 CounterLifeFloor=3.27 CounterCharCost=6.19 BlockBias=0.45 TurnOrderFirst=0.29]
+  Elo 1560  WR 51%  (random)  [MulliganKeep=3.70 FaceBias=0.81 CounterLifeFloor=3.65 CounterCharCost=2.82 BlockBias=0.10 TurnOrderFirst=0.63]
+  Elo 1541  WR 51%  (bred)  [MulliganKeep=2.05 FaceBias=0.53 CounterLifeFloor=3.31 CounterCharCost=3.51 BlockBias=0.75 TurnOrderFirst=0.56]
+  Elo 1539  WR 55%  (bred)  [MulliganKeep=1.25 FaceBias=0.62 CounterLifeFloor=5.00 CounterCharCost=2.56 BlockBias=0.00 TurnOrderFirst=0.30]
+  Elo 1527  WR 53%  (bred)  [MulliganKeep=2.05 FaceBias=0.53 CounterLifeFloor=3.31 CounterCharCost=3.51 BlockBias=0.82 TurnOrderFirst=0.56]
+
+=== Best style per deck color (the portfolio the in-game bot picks from) ===
+  Black   : WR 38% (n=40)  [MulliganKeep=1.25 FaceBias=0.62 CounterLifeFloor=5.00 CounterCharCost=2.56 BlockBias=0.00 TurnOrderFirst=0.30]
+  Black/Yellow: WR 52% (n=31)  [MulliganKeep=2.34 FaceBias=0.86 CounterLifeFloor=3.62 CounterCharCost=1.51 BlockBias=0.62 TurnOrderFirst=0.24]
+  Blue/Purple: WR 66% (n=29)  [MulliganKeep=1.25 FaceBias=0.62 CounterLifeFloor=5.00 CounterCharCost=2.56 BlockBias=0.00 TurnOrderFirst=0.30]
+  Blue/Yellow: WR 77% (n=22)  [MulliganKeep=2.05 FaceBias=0.53 CounterLifeFloor=5.00 CounterCharCost=1.61 BlockBias=0.00 TurnOrderFirst=0.56]
+  Green   : WR 75% (n=16)  [MulliganKeep=3.67 FaceBias=0.69 CounterLifeFloor=3.63 CounterCharCost=6.49 BlockBias=0.63 TurnOrderFirst=0.59]
+  Green/Purple: WR 68% (n=65)  [MulliganKeep=1.00 FaceBias=0.50 CounterLifeFloor=2.27 CounterCharCost=5.00 BlockBias=0.50 TurnOrderFirst=1.00]
+  Purple  : WR 47% (n=17)  [MulliganKeep=1.74 FaceBias=0.53 CounterLifeFloor=4.86 CounterCharCost=1.92 BlockBias=0.26 TurnOrderFirst=0.42]
+  Purple/Yellow: WR 88% (n=16)  [MulliganKeep=2.05 FaceBias=0.53 CounterLifeFloor=3.31 CounterCharCost=2.55 BlockBias=0.82 TurnOrderFirst=0.56]
+  Red     : WR 75% (n=20)  [MulliganKeep=1.74 FaceBias=0.53 CounterLifeFloor=4.86 CounterCharCost=1.92 BlockBias=0.26 TurnOrderFirst=0.42]
+  Red/Black: WR 92% (n=12)  [MulliganKeep=1.25 FaceBias=0.62 CounterLifeFloor=5.00 CounterCharCost=2.56 BlockBias=0.00 TurnOrderFirst=0.30]
+  Red/Blue: WR 64% (n=14)  [MulliganKeep=1.74 FaceBias=0.53 CounterLifeFloor=4.86 CounterCharCost=1.92 BlockBias=0.26 TurnOrderFirst=0.42]
+  Red/Green: WR 75% (n=12)  [MulliganKeep=2.05 FaceBias=0.53 CounterLifeFloor=3.31 CounterCharCost=2.55 BlockBias=0.82 TurnOrderFirst=0.56]
+  Yellow  : WR 83% (n=89)  [MulliganKeep=2.76 FaceBias=0.53 CounterLifeFloor=3.27 CounterCharCost=6.19 BlockBias=0.45 TurnOrderFirst=0.29]
+
+Ladder curve  C:\Users\Nperr\One Piece TCG Simulator\Tools\Sim\Results\tournament\ladder-curve.csv
+Portfolio     C:\Users\Nperr\One Piece TCG Simulator\Tools\Sim\Results\tournament\style-portfolio.json

@@ -1,0 +1,86 @@
+### control @400 (anchor, n=300)
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+[--arch control: pool restricted to 6 deck(s): eb03-up-luffy, op15-by-nami, op15-up-luffy, op16-boa-hancock, op16-red-shanks, op16-up-luffy]
+  budget: beam=6 depth=10 nodes=400 work=20000 truncLines=True turnCap=24
+
+=== duel: gendefault vs BASELINE ===
+  A(gendefault) wins 170 | B wins 130 | no-result 0
+  A win rate = 56.7%   95% CI [51.0%, 62.2%]  (n=300 decided)
+  => A is significantly STRONGER
+
+  === ADJUDICATION (rules-8.2 raw-Life tiebreak) ===
+  2/300 games (0.7%) hit the turn cap and were decided on LIFE, not won
+  --- OUTRIGHT wins only (n=298) ---
+    control    57.0%  (170/298)
+  --- ADJUDICATED only (n=2) ---
+    control     0.0%  (  0/  2)
+
+  === PLANNER win rate BY ITS OWN DECK ===
+   42.0%  ( 21/ 50)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+   46.0%  ( 23/ 50)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   56.0%  ( 28/ 50)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+   58.0%  ( 29/ 50)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   60.0%  ( 30/ 50)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   78.0%  ( 39/ 50)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+  spread: worst 42.0%  best 78.0%  (6 decks)
+
+  === PLANNER win rate BY OPPONENT DECK ===
+   42.0%  ( 21/ 50)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+   46.0%  ( 23/ 50)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   56.0%  ( 28/ 50)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+   58.0%  ( 29/ 50)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   60.0%  ( 30/ 50)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   78.0%  ( 39/ 50)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+  spread: worst 42.0%  best 78.0%  (6 decks)
+
+  === BY PLANNER'S OWN ARCHETYPE ===
+  control    56.7%  (170/300)  95% CI [51.0%, 62.2%]
+
+  === BY OPPONENT ARCHETYPE ===
+  control    56.7%  (170/300)  95% CI [51.0%, 62.2%]
+### control @3200 (n=300)
+Loaded 2636 card definitions.
+
+Imported 41 meta deck(s): eb03-by-nami, eb03-five-elders, eb03-green-mihawk, eb03-py-rosinante, eb03-up-luffy, op15-br-ace, op15-by-nami, op15-foxy, op15-g-bonney, op15-g-zoro, op15-purple-doffy, op15-py-crocodile, op15-rg-luffy, op15-up-luffy, op15-y-luffy, op16-black-teach, op16-black-yamato, op16-blue-buggy, op16-blue-lucy, op16-boa-hancock, op16-br-ace, op16-br-koby, op16-g-bonney, op16-g-mihawk, op16-g-zoro, op16-gb-luffy, op16-gp-lim, op16-gp-luffy, op16-kalgara, op16-krieg, op16-luffy-n-ace, op16-moria, op16-p-enel, op16-py-rosinante, op16-rayleigh, op16-red-ace, op16-red-shanks, op16-sengoku, op16-up-luffy, op16-uy-nami, op16-yb-teach
+
+[--arch control: pool restricted to 6 deck(s): eb03-up-luffy, op15-by-nami, op15-up-luffy, op16-boa-hancock, op16-red-shanks, op16-up-luffy]
+  budget: beam=16 depth=16 nodes=3200 work=200000 truncLines=True turnCap=24
+
+=== duel: gendefault vs BASELINE ===
+  A(gendefault) wins 203 | B wins 97 | no-result 0
+  A win rate = 67.7%   95% CI [62.2%, 72.7%]  (n=300 decided)
+  => A is significantly STRONGER
+
+  === ADJUDICATION (rules-8.2 raw-Life tiebreak) ===
+  0/300 games (0.0%) hit the turn cap and were decided on LIFE, not won
+  --- OUTRIGHT wins only (n=300) ---
+    control    67.7%  (203/300)
+  ADJUDICATED only: none
+
+  === PLANNER win rate BY ITS OWN DECK ===
+   62.0%  ( 31/ 50)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   64.0%  ( 32/ 50)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   66.0%  ( 33/ 50)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   68.0%  ( 34/ 50)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+   68.0%  ( 34/ 50)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+   78.0%  ( 39/ 50)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+  spread: worst 62.0%  best 78.0%  (6 decks)
+
+  === PLANNER win rate BY OPPONENT DECK ===
+   62.0%  ( 31/ 50)  eb03-up-luffy              OP11-040     [control ] avgCost=5.8 blockers=8 counters=34 removal=33 searchers=8 lowLifePayoff=True altWin=''
+   64.0%  ( 32/ 50)  op15-by-nami               OP11-041     [control ] avgCost=4.7 blockers=11 counters=31 removal=47 searchers=13 lowLifePayoff=True altWin=''
+   66.0%  ( 33/ 50)  op15-up-luffy              OP11-040     [control ] avgCost=5.3 blockers=5 counters=34 removal=34 searchers=8 lowLifePayoff=True altWin=''
+   68.0%  ( 34/ 50)  op16-boa-hancock           OP14-041     [control ] avgCost=5.4 blockers=9 counters=31 removal=30 searchers=24 lowLifePayoff=True altWin=''
+   68.0%  ( 34/ 50)  op16-up-luffy              OP11-040     [control ] avgCost=5.5 blockers=8 counters=33 removal=34 searchers=6 lowLifePayoff=False altWin=''
+   78.0%  ( 39/ 50)  op16-red-shanks            OP09-001     [control ] avgCost=5.2 blockers=18 counters=36 removal=36 searchers=4 lowLifePayoff=False altWin=''
+  spread: worst 62.0%  best 78.0%  (6 decks)
+
+  === BY PLANNER'S OWN ARCHETYPE ===
+  control    67.7%  (203/300)  95% CI [62.2%, 72.7%]
+
+  === BY OPPONENT ARCHETYPE ===
+  control    67.7%  (203/300)  95% CI [62.2%, 72.7%]
+CTRLDONE

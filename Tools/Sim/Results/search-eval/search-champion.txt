@@ -1,0 +1,1 @@
+BoardPowerPerK=1.87 CharCount=0.14 Life=0.96 HandAdv=-0.14 ActiveDon=-0.38 CounterReserve=-0.45 Blockers=0.40 RestedOpp=0.38 TrashValue=-0.15 AggroLowLife=-0.53
