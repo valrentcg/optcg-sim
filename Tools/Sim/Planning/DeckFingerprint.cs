@@ -17,12 +17,34 @@ namespace OnePieceTcg.Sim.Planning
             var ctx = new DeckContext();
             int n = 0; long costSum = 0;
             int lowLife = 0, immediateWin = 0, selfDeckout = 0, blockerWin = 0;
+            var bandCounts = new System.Collections.Generic.Dictionary<int, int>(); // threshold → copies referencing it
 
             void Scan(string cardId, int qty)
             {
                 var d = CardData.GetCard(cardId);
                 if (d == null) return;
                 string t = ((d.Effect ?? "") + " " + (d.Trigger ?? "")).ToLowerInvariant();
+                if (d.Type == "event") ctx.Events += qty;
+                if (t.Contains("activate: main")) ctx.MainActivations += qty;
+                if (cardId == deck.Leader && t.Contains("activate: main")) ctx.RequiresMainActivation = true;
+                if (System.Text.RegularExpressions.Regex.IsMatch(t, @"don!!\s*[−-]\s*\d"))
+                    ctx.DonMinusEffects += qty;
+                // Archetype-level DON!! recovery (leader OR characters), keyed off the shared detector.
+                if (OnePieceTcg.Engine.Bot.Search.DonOpportunityModel.IsDonRecovery(d.Effect)
+                    || OnePieceTcg.Engine.Bot.Search.DonOpportunityModel.IsDonRecovery(d.Trigger))
+                    ctx.HasDonRecovery = true;
+                // Trash-recursion: cards that act "from your trash" (play/add a body back).
+                if (t.Contains("from your trash")) ctx.TrashRecurCards += qty;
+                // WS-1: a leader that shrinks the DON!! deck ("your DON!! deck consists of N cards").
+                var capM = System.Text.RegularExpressions.Regex.Match(t, @"don!!\s*deck consists of (\d+) cards");
+                if (capM.Success) ctx.DonDeckCap = int.Parse(capM.Groups[1].Value);
+                // WS-1: cards that key off a low-DON band ("N or less DON!! cards on your field").
+                foreach (System.Text.RegularExpressions.Match m in
+                         System.Text.RegularExpressions.Regex.Matches(t, @"(\d+) or less don!! cards on your field"))
+                {
+                    int thr = int.Parse(m.Groups[1].Value);
+                    bandCounts[thr] = (bandCounts.TryGetValue(thr, out var c) ? c : 0) + qty;
+                }
                 if (d.Type != "event") { n += qty; costSum += (long)d.Cost * qty; }
                 if (d.Keywords?.Contains("Blocker") ?? false) ctx.Blockers += qty;
                 if (d.Counter > 0 || (d.Keywords?.Contains("Counter") ?? false)) ctx.Counters += qty;
@@ -42,6 +64,13 @@ namespace OnePieceTcg.Sim.Planning
             foreach (var (cardId, qty) in deck.List) if (cardId != deck.Leader) Scan(cardId, qty);
 
             ctx.AvgCost = n == 0 ? 0 : (double)costSum / n;
+            // The band the deck cares about most = the threshold the most copies reference.
+            if (bandCounts.Count > 0)
+            {
+                var dominant = bandCounts.OrderByDescending(kv => kv.Value).First();
+                ctx.DonBandThreshold = dominant.Key;
+                ctx.DonBandCards = dominant.Value;
+            }
             ctx.HasLowLifePayoff = lowLife >= 3;   // a few payoff cards ⇒ this deck weaponizes low life
             ctx.AltWin =
                 selfDeckout >= 1 ? "self-deckout" :
@@ -63,6 +92,7 @@ namespace OnePieceTcg.Sim.Planning
 
         public static string Describe(DeckContext c) =>
             $"[{c.Archetype,-8}] avgCost={c.AvgCost:0.0} blockers={c.Blockers} counters={c.Counters} removal={c.Removal} " +
-            $"searchers={c.Searchers} lowLifePayoff={c.HasLowLifePayoff} altWin='{c.AltWin}'";
+            $"searchers={c.Searchers} events={c.Events} mainActs={c.MainActivations} donMinus={c.DonMinusEffects} " +
+            $"leaderEngine={c.RequiresMainActivation} lowLifePayoff={c.HasLowLifePayoff} altWin='{c.AltWin}'";
     }
 }

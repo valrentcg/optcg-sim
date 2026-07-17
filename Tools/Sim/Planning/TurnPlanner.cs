@@ -82,8 +82,27 @@ namespace OnePieceTcg.Sim.Planning
             public long ReplyBudget = 0;
         }
 
-        /// <summary>Returns the best sequence of MY commands to play this turn (may be just [endTurn]).
-        /// <paramref name="oppDefence"/> resolves the opponent's blocks/counters/triggers while searching.</summary>
+        /// <summary>THE PRODUCTION ENTRY. Plan a turn over a <see cref="Search.SearchWorld"/> — the sampled
+        /// world the search is entitled to run on. This is the signature every shipped caller should use:
+        /// it takes a world whose provenance (honest determinization vs the unsafe legacy clone) is an
+        /// explicit, auditable property of the type rather than something a call site decides ad hoc.
+        ///
+        /// ⚠ The boundary is not yet compile-enforced: the raw <see cref="PlanTurn(GameState,string,double[],DeckContext,Options)"/>
+        /// core below is still reachable in-assembly (the perfect-info control in privacy-test needs it).
+        /// Making a raw-state plan a COMPILE error is the encapsulation step (design §14.7), after
+        /// migration — naming the surface is the honest interim.</summary>
+        public static List<GameCommand> PlanTurn(Search.SearchWorld world, double[] w, DeckContext ctx,
+            Options opt = null)
+        {
+            if (world == null) throw new System.ArgumentNullException(nameof(world));
+            return PlanTurn(world.State, world.Seat, w, ctx, opt);
+        }
+
+        /// <summary>THE RAW CORE — plans directly on a <see cref="GameState"/>, i.e. with whatever
+        /// information that state carries. Kept accessible only for (a) the <see cref="PlanTurn(Search.SearchWorld,double[],DeckContext,Options)"/>
+        /// overload and (b) the explicit perfect-info CONTROL in privacy-test. Production planners must not
+        /// call this directly; they go through a SearchWorld so the information they searched is auditable.
+        /// <paramref name="seat"/> is the planning seat; the opponent's defence is resolved along the way.</summary>
         public static List<GameCommand> PlanTurn(GameState state, string seat, double[] w, DeckContext ctx,
             Options opt = null)
         {

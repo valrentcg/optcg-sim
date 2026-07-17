@@ -1,0 +1,97 @@
+{
+  "version": "expert-replay-v1",
+  "trainedUtc": "2026-07-17T00:11:05.5811363Z",
+  "minimumBounty": 1000,
+  "replayCount": 5,
+  "expertPlayers": 10,
+  "global": {
+    "playerGames": 10,
+    "attacks": 143,
+    "leaderAttacks": 113,
+    "deploys": 87,
+    "counters": 53,
+    "blocks": 0,
+    "choseFirst": 4,
+    "openingHands": 5,
+    "mulligans": 6
+  },
+  "leaders": {
+    "OP15-058": {
+      "playerGames": 2,
+      "attacks": 32,
+      "leaderAttacks": 24,
+      "deploys": 18,
+      "counters": 9,
+      "blocks": 0,
+      "choseFirst": 0,
+      "openingHands": 1,
+      "mulligans": 1
+    },
+    "OP16-022": {
+      "playerGames": 1,
+      "attacks": 12,
+      "leaderAttacks": 11,
+      "deploys": 12,
+      "counters": 9,
+      "blocks": 0,
+      "choseFirst": 1,
+      "openingHands": 0,
+      "mulligans": 1
+    },
+    "OP16-080": {
+      "playerGames": 1,
+      "attacks": 10,
+      "leaderAttacks": 5,
+      "deploys": 6,
+      "counters": 7,
+      "blocks": 0,
+      "choseFirst": 0,
+      "openingHands": 1,
+      "mulligans": 0
+    },
+    "ST30-001": {
+      "playerGames": 1,
+      "attacks": 14,
+      "leaderAttacks": 13,
+      "deploys": 8,
+      "counters": 4,
+      "blocks": 0,
+      "choseFirst": 0,
+      "openingHands": 0,
+      "mulligans": 1
+    },
+    "OP11-041": {
+      "playerGames": 2,
+      "attacks": 23,
+      "leaderAttacks": 20,
+      "deploys": 11,
+      "counters": 11,
+      "blocks": 0,
+      "choseFirst": 1,
+      "openingHands": 2,
+      "mulligans": 1
+    },
+    "OP12-061": {
+      "playerGames": 2,
+      "attacks": 34,
+      "leaderAttacks": 28,
+      "deploys": 25,
+      "counters": 8,
+      "blocks": 0,
+      "choseFirst": 1,
+      "openingHands": 1,
+      "mulligans": 1
+    },
+    "OP07-059": {
+      "playerGames": 1,
+      "attacks": 18,
+      "leaderAttacks": 12,
+      "deploys": 7,
+      "counters": 5,
+      "blocks": 0,
+      "choseFirst": 1,
+      "openingHands": 0,
+      "mulligans": 1
+    }
+  }
+}

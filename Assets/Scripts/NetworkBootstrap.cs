@@ -12,7 +12,14 @@ public static class NetworkBootstrap
 {
     public static void EnsureNetworkManager()
     {
-        if (NetworkManager.Singleton != null) return;
+        if (NetworkManager.Singleton != null)
+        {
+            // Already created (e.g. a prior match that ShutdownNetwork tore down but left the
+            // GameObject). Re-arm the connect callback so the NEXT session re-registers its named-
+            // message handlers on the fresh CustomMessagingManager (idempotent -= / +=).
+            MatchNetworkSync.EnsureHandlersRegistered();
+            return;
+        }
 
         var go = new GameObject("NetworkManager");
         Object.DontDestroyOnLoad(go);

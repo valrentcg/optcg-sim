@@ -514,7 +514,7 @@ public partial class MainMenuManager : MonoBehaviour
         // behind the splash, before any interaction.
 #if !UNITY_EDITOR && UNITY_STANDALONE_WIN
         ShowUpdateSplash();
-        bool restarting = await UpdateChecker.CheckAndApplyDesktopUpdateAsync(s => _updateStatus = s);
+        bool restarting = await UpdateChecker.CheckAndApplyDesktopUpdateAsync(p => _updateProgress = p);
         if (restarting) return;          // keep the splash up; Velopack relaunches us momentarily
         HideUpdateSplash();
 #endif
@@ -525,45 +525,110 @@ public partial class MainMenuManager : MonoBehaviour
     // ── Update splash ─────────────────────────────────────────────────────────
     // Minimal self-contained canvas (sorted above everything) shown during the
     // launch-time Velopack check. Status text arrives from background threads via
-    // _updateStatus; Update() applies it on the main thread.
+    // _updateProgress; Update() applies it on the main thread via ApplyUpdateSplashProgress().
     private static GameObject _updateSplash;
-    private static Text _updateSplashText;
-    private static volatile string _updateStatus;
+    private static Text _updateSplashTitle, _updateSplashVersion, _updateSplashPercent, _updateSplashNotes;
+    private static RectTransform _updateSplashBarFill;
+    private static float _updateBarShown;                          // smoothed 0..1 bar fill
+    private const float UpdateBarInset = 40f, UpdateBarSpan = 520f; // track geometry within the 600-wide panel
+    private static volatile UpdateChecker.UpdateProgress _updateProgress;
+
+    private static Text SplashText(Transform parent, int size, Color color, TextAnchor anchor,
+        Vector2 aMin, Vector2 aMax, Vector2 oMin, Vector2 oMax, bool wrap = false)
+    {
+        var t = new GameObject("T").AddComponent<Text>();
+        t.transform.SetParent(parent, false);
+        t.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        t.fontSize = size; t.alignment = anchor; t.color = color;
+        t.horizontalOverflow = wrap ? HorizontalWrapMode.Wrap : HorizontalWrapMode.Overflow;
+        t.verticalOverflow = VerticalWrapMode.Truncate;
+        var rt = t.rectTransform; rt.anchorMin = aMin; rt.anchorMax = aMax; rt.offsetMin = oMin; rt.offsetMax = oMax;
+        return t;
+    }
+
+    private static Image SplashImage(Transform parent, Color color, Vector2 aMin, Vector2 aMax, Vector2 oMin, Vector2 oMax)
+    {
+        var img = new GameObject("Img").AddComponent<Image>();
+        img.transform.SetParent(parent, false);
+        img.color = color; img.raycastTarget = false;
+        var rt = img.rectTransform; rt.anchorMin = aMin; rt.anchorMax = aMax; rt.offsetMin = oMin; rt.offsetMax = oMax;
+        return img;
+    }
 
     private static void ShowUpdateSplash()
     {
         if (_updateSplash != null) return;
+        _updateProgress = null; _updateBarShown = 0f;
         _updateSplash = new GameObject("Update Splash");
         UnityEngine.Object.DontDestroyOnLoad(_updateSplash);
         var canvas = _updateSplash.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
         canvas.sortingOrder = 32000;   // above every menu canvas
 
-        var bg = new GameObject("BG").AddComponent<Image>();
-        bg.transform.SetParent(_updateSplash.transform, false);
-        bg.color = new Color32(7, 13, 22, 255);
-        var bgRt = bg.rectTransform;
-        bgRt.anchorMin = Vector2.zero; bgRt.anchorMax = Vector2.one;
-        bgRt.offsetMin = Vector2.zero; bgRt.offsetMax = Vector2.zero;
+        // Deep-navy ground matching the menu.
+        SplashImage(_updateSplash.transform, new Color32(7, 13, 22, 255), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
-        _updateSplashText = new GameObject("Status").AddComponent<Text>();
-        _updateSplashText.transform.SetParent(_updateSplash.transform, false);
-        _updateSplashText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        _updateSplashText.fontSize = 18;
-        _updateSplashText.alignment = TextAnchor.MiddleCenter;
-        _updateSplashText.color = new Color32(126, 200, 227, 255);
-        _updateSplashText.text = "CHECKING FOR UPDATES...";
-        var txtRt = _updateSplashText.rectTransform;
-        txtRt.anchorMin = Vector2.zero; txtRt.anchorMax = Vector2.one;
-        txtRt.offsetMin = Vector2.zero; txtRt.offsetMax = Vector2.zero;
+        // Centered card panel with an accent top rule.
+        var panel = SplashImage(_updateSplash.transform, new Color32(14, 28, 46, 255),
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+        panel.rectTransform.sizeDelta = new Vector2(600f, 400f);
+        SplashImage(panel.transform, new Color32(79, 195, 224, 255), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -4), Vector2.zero);
+
+        SplashText(panel.transform, 13, new Color32(120, 150, 175, 255), TextAnchor.UpperCenter,
+            new Vector2(0, 1), new Vector2(1, 1), new Vector2(24, -40), new Vector2(-24, -18)).text = "ONE PIECE TCG";
+
+        _updateSplashTitle = SplashText(panel.transform, 24, new Color32(126, 200, 227, 255), TextAnchor.UpperCenter,
+            new Vector2(0, 1), new Vector2(1, 1), new Vector2(24, -86), new Vector2(-24, -46));
+        _updateSplashTitle.fontStyle = FontStyle.Bold;
+        _updateSplashTitle.text = "CHECKING FOR UPDATES…";
+
+        _updateSplashVersion = SplashText(panel.transform, 16, new Color32(200, 214, 228, 255), TextAnchor.UpperCenter,
+            new Vector2(0, 1), new Vector2(1, 1), new Vector2(24, -116), new Vector2(-24, -88));
+
+        // Progress track (full span) + fill (left-anchored, width driven each frame).
+        SplashImage(panel.transform, new Color32(28, 42, 60, 255), new Vector2(0, 1), new Vector2(1, 1),
+            new Vector2(UpdateBarInset, -150), new Vector2(-UpdateBarInset, -132));
+        var fill = SplashImage(panel.transform, new Color32(79, 195, 224, 255), new Vector2(0, 1), new Vector2(0, 1),
+            new Vector2(UpdateBarInset, -150), new Vector2(UpdateBarInset, -132));
+        _updateSplashBarFill = fill.rectTransform;
+
+        _updateSplashPercent = SplashText(panel.transform, 13, new Color32(126, 200, 227, 255), TextAnchor.UpperCenter,
+            new Vector2(0, 1), new Vector2(1, 1), new Vector2(24, -174), new Vector2(-24, -154));
+
+        SplashText(panel.transform, 11, new Color32(120, 150, 175, 255), TextAnchor.UpperLeft,
+            new Vector2(0, 1), new Vector2(1, 1), new Vector2(UpdateBarInset, -200), new Vector2(-UpdateBarInset, -182)).text = "WHAT'S NEW";
+        _updateSplashNotes = SplashText(panel.transform, 12, new Color32(206, 218, 230, 255), TextAnchor.UpperLeft,
+            new Vector2(0, 0), new Vector2(1, 1), new Vector2(UpdateBarInset, 24), new Vector2(-UpdateBarInset, -218), wrap: true);
     }
 
     private static void HideUpdateSplash()
     {
         if (_updateSplash != null) UnityEngine.Object.Destroy(_updateSplash);
         _updateSplash = null;
-        _updateSplashText = null;
-        _updateStatus = null;
+        _updateSplashTitle = _updateSplashVersion = _updateSplashPercent = _updateSplashNotes = null;
+        _updateSplashBarFill = null;
+        _updateProgress = null;
+    }
+
+    // Applies the latest update-progress snapshot to the themed splash (main thread; called from Update).
+    private static void ApplyUpdateSplashProgress()
+    {
+        var pr = _updateProgress;
+        if (_updateSplash == null || pr == null) return;
+        if (_updateSplashTitle != null) _updateSplashTitle.text = pr.phase ?? "";
+        if (_updateSplashVersion != null)
+            _updateSplashVersion.text = (!string.IsNullOrEmpty(pr.fromVersion) && !string.IsNullOrEmpty(pr.toVersion))
+                ? $"v{pr.fromVersion}    →    v{pr.toVersion}" : "";
+        float target = pr.percent < 0 ? _updateBarShown : Mathf.Clamp01(pr.percent / 100f);
+        _updateBarShown = Mathf.MoveTowards(_updateBarShown, target, Time.unscaledDeltaTime * 1.2f);
+        if (_updateSplashBarFill != null)
+        {
+            var om = _updateSplashBarFill.offsetMax;
+            om.x = UpdateBarInset + UpdateBarSpan * _updateBarShown;
+            _updateSplashBarFill.offsetMax = om;
+        }
+        if (_updateSplashPercent != null) _updateSplashPercent.text = pr.percent >= 0 ? pr.percent + "%" : "";
+        if (_updateSplashNotes != null && !string.IsNullOrEmpty(pr.notes)) _updateSplashNotes.text = pr.notes;
     }
 
     // ── Tab navigation between input fields ──────────────────────────────────
@@ -575,10 +640,9 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void Update()
     {
-        // Update-splash status arrives from Velopack's background threads; apply
-        // it to the UI here, on the main thread.
-        if (_updateSplashText != null && _updateStatus != null)
-            _updateSplashText.text = _updateStatus;
+        // Update-splash progress arrives from Velopack's background threads; apply
+        // it to the themed splash here, on the main thread (with a smoothed bar).
+        ApplyUpdateSplashProgress();
 
         // Coalesced re-render when async card art/library data arrives (CDN
         // builds): many loads can complete in one frame; rebuild the menu once.

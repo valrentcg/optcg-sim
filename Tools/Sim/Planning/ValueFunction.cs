@@ -12,6 +12,30 @@ namespace OnePieceTcg.Sim.Planning
         public string AltWin = "";      // "" | "self-deckout" (Nami) | "opp-deckout" | "blocker-trigger" (Roger) | ...
         public double AvgCost;          // curve
         public int Blockers, Counters, Removal, Searchers; // rough archetype shape (per copy)
+        public int Events, MainActivations, DonMinusEffects;
+        // A leader whose engine is an [Activate: Main] ability (Enel, ST03 Crocodile, etc.) must be
+        // routed through the guarded activation layer regardless of its coarse curve archetype.
+        public bool RequiresMainActivation;
+        // WS-1 DON-engine identity (detected from printed text, never a card-id/Enel profile).
+        public int DonDeckCap = 10;      // DON!! deck size; a leader can shrink it ("consists of 6 cards" → Enel).
+        public int DonBandThreshold = -1; // the "N or less DON!! cards on your field" the deck keys off; -1 = none.
+        public int DonBandCards = 0;      // how many copies care about that band (strength of the preference).
+        /// <summary>A deck built around DON manipulation: it pays DON!! −N costs and/or its leader re-ramps DON
+        /// every turn (activation engine). For these, active DON!! is fuel to SPEND, not a hoard to protect —
+        /// and if the DON-deck cap can never exceed the band (Enel: cap 6 ≤ band 6) the bonuses are always on,
+        /// so the lever is spending DON on effects, not sitting on it.</summary>
+        public bool IsDonEngine => DonMinusEffects >= 3 || (RequiresMainActivation && DonDeckCap < 10) || DonBandCards >= 3;
+        /// <summary>Archetype-level: the deck runs DON!!-recovery cards (leader OR characters that set a DON!!
+        /// active / pull one from the DON!! deck), so returning DON!! is part of its plan, not a dead cost.</summary>
+        public bool HasDonRecovery;
+        /// <summary>Copies that play/add a card FROM the trash. A deck built on this treats the trash as a
+        /// resource — bodies there are discounted future plays, so losing one to the trash is only a partial
+        /// loss and a stocked trash (plus the self-mill that fills it) is an asset, not card loss.</summary>
+        public int TrashRecurCards;
+        public bool IsTrashRecursion => TrashRecurCards >= 4;
+        /// <summary>True when the deck can never exceed its band (cap ≤ threshold), so the band bonuses are
+        /// permanently on and there is nothing to "manage" — only spend into.</summary>
+        public bool DonBandAlwaysOn => DonBandThreshold >= 0 && DonDeckCap <= DonBandThreshold;
         /// <summary>"aggro" | "midrange" | "control" | "combo" — how this deck WANTS to win, decided once
         /// from the list at match start (both lists are known pre-match, Comp. Rules §8.1).
         /// ⚠ Derived from AvgCost/Blockers ONLY. Counters and Removal look like archetype signals and are
@@ -123,7 +147,23 @@ namespace OnePieceTcg.Sim.Planning
 
         // Weight indices (order matches Names/Scale/RawDefaults).
         private const int I_OppLife = 1, I_MyBoardPow = 4, I_OppBoardPow = 5,
-                          I_FinishPressure = 21, I_LethalProximity = 22;
+                          I_MyActiveDon = 15, I_FinishPressure = 21, I_LethalProximity = 22;
+
+        /// <summary>WS-1 A/B toggle. When true (default), DON-engine decks (DON-minus payers / re-ramp
+        /// activation leaders / low-DON-band decks) are scored with DON as FUEL, not a hoard: the standing
+        /// reward for parked active DON!! is removed so spending it on the engine's effects is not penalised,
+        /// and decks that can cross a DON band are nudged to sit in it. Off = the generic DON scoring, so the
+        /// change can be A/B'd on identical seeds. Deck-context driven — no card-id logic.</summary>
+        public static bool DonEngineAware = true;
+
+        /// <summary>WS-trash A/B toggle. When true (default), a trash-recursion deck values the bodies in its
+        /// own trash as recur fuel — so a stocked trash is an asset, self-mill that fills it is not card loss,
+        /// and losing a body to the trash is only a PARTIAL loss (it can come back), which frees the bot to
+        /// trade and chump-block more willingly. Deck-context driven, no card ids.
+        /// DEFAULT OFF: measured 0/24 inert on Yamato-Lucy — like every passive eval-term this session, it
+        /// changes no decisions (the engine already executes; the matchup loss is real, not a bot gap). The
+        /// IsTrashRecursion DETECTION is retained as infrastructure.</summary>
+        public static bool TrashRecursionAware = false;
 
         /// <summary>Bend a weight vector toward how THIS deck actually wins. Measured 2026-07-15: in MIRROR
         /// matches (same deck both sides, so deck strength contributes nothing) the planner wins 66.7% with
@@ -177,7 +217,41 @@ namespace OnePieceTcg.Sim.Planning
             var a = Attributes(s, seat, ctx);
             double v = 0;
             for (int i = 0; i < a.Length; i++) v += w[i] * a[i];
+            if (DonEngineAware && ctx.IsDonEngine) v += DonEngineAdjust(s, seat, ctx, w, a);
+            if (TrashRecursionAware && ctx.IsTrashRecursion) v += TrashRecursionValue(s, seat);
             return v;
+        }
+
+        /// <summary>Recur fuel in the trash: each own-Character in the trash is a discounted future play for a
+        /// recursion deck, so it offsets part of the cost of that body having died and rewards building the
+        /// trash. Capped so it never dominates board/life.</summary>
+        private static double TrashRecursionValue(GameState s, string seat)
+        {
+            var me = s.Players[seat];
+            int fuel = me.Trash.Count(c => c != null && CardData.GetCard(c.CardId)?.Type == "character");
+            return 0.25 * Math.Min(fuel, 8);
+        }
+
+        /// <summary>WS-1 DON-engine scoring, applied only to decks whose identity is DON manipulation.
+        /// (1) Cancel the generic reward for parked active DON!! — for these decks it is fuel the leader
+        /// refills, so hoarding it is not an advantage and spending it on DON!! −N effects must not read as a
+        /// loss. (2) For decks that CAN cross a low-DON band, nudge toward sitting in it (strength scales with
+        /// how many copies care). Enel and any cap ≤ band deck are always in-band, so (2) is skipped there —
+        /// only (1) applies. Returns a delta added on top of the weighted sum.</summary>
+        private static double DonEngineAdjust(GameState s, string seat, DeckContext ctx, double[] w, double[] a)
+        {
+            double d = 0;
+            // (1) neutralise the hoard bias (a[I_MyActiveDon] is already normalised; w folds Scale back in).
+            d -= w[I_MyActiveDon] * a[I_MyActiveDon];
+            // (2) band management, only where the band is actually reachable/exceedable.
+            if (ctx.DonBandThreshold >= 0 && !ctx.DonBandAlwaysOn)
+            {
+                int fieldDon = s.Players[seat].CostArea.Count; // DON!! on your field (active + rested/given)
+                double overshoot = Math.Max(0, fieldDon - ctx.DonBandThreshold);
+                double bandFit = fieldDon <= ctx.DonBandThreshold ? 1.0 : -overshoot;
+                d += 0.3 * Math.Min(1.0, ctx.DonBandCards / 8.0) * bandFit;
+            }
+            return d;
         }
 
         /// <summary>The feature vector for a position (from seat's view). Scaled so weights are ~O(1).</summary>

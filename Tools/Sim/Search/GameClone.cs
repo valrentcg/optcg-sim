@@ -54,7 +54,7 @@ namespace OnePieceTcg.Sim.Search
             g.HighestEventCostThisTurn = new Dictionary<string, int>(s.HighestEventCostThisTurn);
             g.NameOverrides = new Dictionary<string, string>(s.NameOverrides);
             g.BasePowerOverrides = s.BasePowerOverrides.Select(b => new BasePowerOverride { TargetInstanceId = b.TargetInstanceId, Value = b.Value, OwnerSeat = b.OwnerSeat, Duration = b.Duration }).ToList();
-            g.TimedPowerBonuses = s.TimedPowerBonuses.Select(b => new TimedPowerBonus { TargetInstanceId = b.TargetInstanceId, Delta = b.Delta, OwnerSeat = b.OwnerSeat }).ToList();
+            g.TimedPowerBonuses = s.TimedPowerBonuses.Select(b => new TimedPowerBonus { TargetInstanceId = b.TargetInstanceId, Delta = b.Delta, OwnerSeat = b.OwnerSeat, Duration = b.Duration }).ToList();
             return g;
         }
 

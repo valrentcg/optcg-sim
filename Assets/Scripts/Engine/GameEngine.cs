@@ -442,8 +442,21 @@ namespace OnePieceTcg.Engine
                 else return 0;
                 return bonus * (count / Math.Max(1, per));
             }
-            // Board condition: "If you have 3 or more Characters" (Urouge pattern).
-            if (ContainsAll(text, "3 or more Characters") && owner.CharacterArea.Count(c => c != null) < 3) return 0;
+            // Gate on an embedded "If <condition>," carried by the SENTENCE that grants the power —
+            // evaluated by the shared EvaluateCondition (fail-closed on unknown, like every other
+            // conditional path). Without this, a DON-passive self-buff applied UNCONDITIONALLY: ST14-001
+            // leader +1000 with no 8-cost Character, OP01-032, OP04-106, P-044. (Subsumes the old
+            // hardcoded Urouge "3 or more Characters" special-case.)
+            foreach (var sentence in text.Split('.'))
+            {
+                if (!System.Text.RegularExpressions.Regex.IsMatch(sentence, @"[+＋]\d{3,5}\s*power|gains?\s*\+",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
+                var ifm = System.Text.RegularExpressions.Regex.Match(sentence, @"\bIf ([^,]+),",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (ifm.Success && !EvaluateCondition(state, owner.Seat, ifm.Groups[1].Value.Trim(),
+                        instance.InstanceId, logUnknown: false))
+                    return 0;
+            }
             return bonus;
         }
 
@@ -490,10 +503,18 @@ namespace OnePieceTcg.Engine
                         // not "All of your …") buffs ONLY its own source card — it must never leak
                         // onto the rest of the board (ST25-002 Cabaji's [Opponent's Turn] +5000 was
                         // being applied to every Character instead of just Cabaji).
+                        // Match a self-buff even when the "gains +N power" is split from "this Character"
+                        // by another clause — "this Character cannot be K.O.'d … and gains +2000 power"
+                        // (ST14-009 Franky, ST15-003 Kingdew). The bare-substring form missed those, so
+                        // the +N leaked onto every OTHER Character and skipped the source itself.
                         bool selfScoped = !boardWide &&
                             (ContainsAll(aText, "This Character gains") || ContainsAll(aText, "this Character gains")
                              || ContainsAll(aText, "this card gains") || ContainsAll(aText, "This card gains")
-                             || ContainsAll(aText, "this Leader gains") || ContainsAll(aText, "This Leader gains"));
+                             || ContainsAll(aText, "this Leader gains") || ContainsAll(aText, "This Leader gains")
+                             || System.Text.RegularExpressions.Regex.IsMatch(aText,
+                                    @"\bthis (?:Character|card|Leader)\b.{0,120}?\bgains?\b.{0,30}?\+\d{3,5}\s*power",
+                                    System.Text.RegularExpressions.RegexOptions.IgnoreCase
+                                    | System.Text.RegularExpressions.RegexOptions.Singleline));
                         if (selfScoped)
                         {
                             if (aura.InstanceId != instance.InstanceId) continue; // never buffs others
@@ -512,6 +533,15 @@ namespace OnePieceTcg.Engine
                             System.Text.RegularExpressions.Regex.Replace(aText, @"^\s*(\[[^\]]+\]\s*/?\s*)+", ""),
                             @"^If ([^,]+),", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                         if (condA.Success && !EvaluateCondition(state, candidateSeat, condA.Groups[1].Value.Trim(), aura.InstanceId)) continue;
+                        // TRAILING "… gains +N power if <condition>" (no leading comma) — gate it too, but
+                        // ONLY when the condition is one we actually understand, so an unparseable trailing
+                        // clause never silently switches off an otherwise-working aura (was applied blindly).
+                        string trailCondA = TrailingAuraCondition(aText);
+                        if (trailCondA != null)
+                        {
+                            bool trailMet = EvaluateCondition(state, candidateSeat, trailCondA, aura.InstanceId, logUnknown: false);
+                            if (_conditionRecognized && !trailMet) continue;
+                        }
                         int bonus = ParsePowerGain(aText);
                         if (bonus <= 0)
                         {
@@ -519,20 +549,26 @@ namespace OnePieceTcg.Engine
                             if (gainPl.Success) bonus = int.Parse(gainPl.Groups[1].Value);
                         }
                         if (bonus <= 0) continue;
-                        // Aura-side base power/cost filters on the RECIPIENT.
-                        int bpCapA = ParseLimit(aText, @"(\d{3,5}) base power or less");
+                        // Aura-side base power/cost filters on the RECIPIENT. Read them from a
+                        // condition-stripped copy: a leading "If <cond>," (already evaluated above) often
+                        // carries its own "cost of N or more", which must NOT be mistaken for a recipient
+                        // cost filter and exclude the source itself (ST14-009 Franky: cost 5 < condition's 6).
+                        string aFilter = System.Text.RegularExpressions.Regex.Replace(
+                            System.Text.RegularExpressions.Regex.Replace(aText, @"^\s*(\[[^\]]+\]\s*/?\s*)+", ""),
+                            @"^If [^,]+,\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        int bpCapA = ParseLimit(aFilter, @"(\d{3,5}) base power or less");
                         if (bpCapA >= 0 && instanceDef.Power > bpCapA) continue;
-                        int bpMinA = ParseLimit(aText, @"(\d{3,5}) base power or more");
+                        int bpMinA = ParseLimit(aFilter, @"(\d{3,5}) base power or more");
                         if (bpMinA >= 0 && instanceDef.Power < bpMinA) continue;
-                        var bpEqA = System.Text.RegularExpressions.Regex.Match(aText, @"with (\d{3,5}) base power gain");
+                        var bpEqA = System.Text.RegularExpressions.Regex.Match(aFilter, @"with (\d{3,5}) base power gain");
                         if (bpEqA.Success && instanceDef.Power != int.Parse(bpEqA.Groups[1].Value)) continue;
-                        int bcMinA = ParseLimit(aText, @"base cost of (\d+) or more");
+                        int bcMinA = ParseLimit(aFilter, @"base cost of (\d+) or more");
                         if (bcMinA >= 0 && instanceDef.Cost < bcMinA) continue;
-                        var bcEqA = System.Text.RegularExpressions.Regex.Match(aText, @"with a base cost of (\d+) gain");
+                        var bcEqA = System.Text.RegularExpressions.Regex.Match(aFilter, @"with a base cost of (\d+) gain");
                         if (bcEqA.Success && instanceDef.Cost != int.Parse(bcEqA.Groups[1].Value)) continue;
-                        int cMinA = ParseLimit(aText, @"cost of (\d+) or more");
+                        int cMinA = ParseLimit(aFilter, @"cost of (\d+) or more");
                         if (cMinA >= 0 && GetCost(state, instance) < cMinA) continue;
-                        int cMaxA = ParseLimit(aText, @"cost of (\d+) or less");
+                        int cMaxA = ParseLimit(aFilter, @"cost of (\d+) or less");
                         if (cMaxA >= 0 && GetCost(state, instance) > cMaxA) continue;
                         // Color filter ("All of your red Characters …").
                         bool colorOkA = true;
@@ -665,7 +701,10 @@ namespace OnePieceTcg.Engine
                             colorOkC = false;
                     if (!colorOkC) continue;
                     if (!CardPassesFeatureFilter(qual, instDef)) continue;
-                    int cMin = ParseLimit(line, @"cost of (\d+) or more");
+                    // Read the recipient cost filter from the AURA sentence only (m.Value), not the whole
+                    // line — otherwise a later sentence's "cost of 8 or more" (ST14-001's leader-power
+                    // clause) is mistaken for a recipient filter and suppresses the "+1 cost to all" aura.
+                    int cMin = ParseLimit(m.Value, @"cost of (\d+) or more");
                     if (cMin >= 0 && instDef.Cost < cMin) continue;
                     total += int.Parse(m.Groups[2].Value);
                 }
@@ -1322,6 +1361,22 @@ namespace OnePieceTcg.Engine
             int donToDraw = state.TurnNumber == 1 ? 1 : 2;
             DrawDon(state, seat, donToDraw, true);
             state.Phase = "main";
+            // Delayed "opponent rests N DON!! at the start of their next Main Phase" (PRB02-005): now that
+            // this player's DON have refreshed to active, rest that many of them, then clear the markers.
+            var delayedRest = state.ActiveModifiers
+                .Where(m => m.ModifierType == "restActiveDonDelayed" && m.OwnerSeat == seat).ToList();
+            if (delayedRest.Count > 0)
+            {
+                int drRested = 0;
+                foreach (var _ in delayedRest)
+                {
+                    var activeDon = p.CostArea.FirstOrDefault(d => !d.Rested);
+                    if (activeDon == null) break;
+                    activeDon.Rested = true; drRested++;
+                }
+                state.ActiveModifiers.RemoveAll(m => m.ModifierType == "restActiveDonDelayed" && m.OwnerSeat == seat);
+                if (drRested > 0) Log(state, seat, $"{p.Name} rests {drRested} DON!! (delayed effect from the opponent).");
+            }
             Log(state, seat, $"{p.Name} begins turn {state.TurnNumber}.");
             ApplyStartOfTurnEffects(state, seat);
         }
@@ -2479,14 +2534,21 @@ namespace OnePieceTcg.Engine
             // CLAUSE ONLY (e.g. "…+2000 power. Then, set 1 DON!! active"). Never read other
             // clauses — countering with a Character must NOT trigger its [On Play] text
             // (which frequently contains its own "Then," sentence).
-            string effectText = ExtractTimedClause(counterDef.Effect ?? "", "Counter") ?? "";
-            int thenIdx = effectText.IndexOf("Then,", StringComparison.OrdinalIgnoreCase);
-            if (thenIdx < 0) thenIdx = effectText.IndexOf("Then ", StringComparison.OrdinalIgnoreCase);
-            if (thenIdx >= 0)
+            // GUARD: only when the card actually HAS a [Counter] clause. ExtractTimedClause falls
+            // back to the WHOLE effect text on a miss, so without this a Character used purely for
+            // its printed Counter value would wrongly fire the "Then," of its [Activate: Main]/
+            // [On Play] text (a 228-card class — Haredas ST14-008, Arlong EB02-011, …).
+            if (HasTiming(counterDef.Effect, "Counter"))
             {
-                string secondary = NormalizeClause(effectText.Substring(thenIdx).Trim());
-                QueueEffect(state, defenderSeat, counterCard, "counter", secondary,
-                    IsOptionalEffectText(secondary), EffectScope.Instant, InferTargetZone(secondary));
+                string effectText = ExtractTimedClause(counterDef.Effect ?? "", "Counter") ?? "";
+                int thenIdx = effectText.IndexOf("Then,", StringComparison.OrdinalIgnoreCase);
+                if (thenIdx < 0) thenIdx = effectText.IndexOf("Then ", StringComparison.OrdinalIgnoreCase);
+                if (thenIdx >= 0)
+                {
+                    string secondary = NormalizeClause(effectText.Substring(thenIdx).Trim());
+                    QueueEffect(state, defenderSeat, counterCard, "counter", secondary,
+                        IsOptionalEffectText(secondary), EffectScope.Instant, InferTargetZone(secondary));
+                }
             }
         }
 
@@ -3584,8 +3646,25 @@ namespace OnePieceTcg.Engine
         // logUnknown=false suppresses the "Unknown condition" game-log line — pass it when calling
         // from a hot/redundant path (e.g. GetCost on every render) so an unhandled condition doesn't
         // spam the event log; it still evaluates to false, just silently.
+        // Set false only when EvaluateCondition falls through to its unknown-condition fallback, so callers
+        // can distinguish "recognized and not met" from "could not parse". Used by the aura scanners to gate
+        // a trailing condition ONLY when it is understood — never turning off an aura on a misparse.
+        [ThreadStatic] private static bool _conditionRecognized;
+
+        // A TRAILING "… if <condition>" gate on an aura/buff clause (no leading comma; runs to the clause
+        // end), e.g. "this Character gains +2000 power during this turn if you have 2 or more rested
+        // Characters." Distinct from a leading "If <cond>,". Returns the condition text, or null.
+        private static string TrailingAuraCondition(string clause)
+        {
+            if (string.IsNullOrEmpty(clause)) return null;
+            var m = System.Text.RegularExpressions.Regex.Match(clause,
+                @"\bif ([^.,]{3,90})\.?\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success ? m.Groups[1].Value.Trim() : null;
+        }
+
         private static bool EvaluateCondition(GameState state, string seat, string condition, string sourceInstanceId = null, bool logUnknown = true)
         {
+            _conditionRecognized = true;
             var p   = Player(state, seat);
             var opp = Player(state, OtherSeat(seat));
 
@@ -3614,6 +3693,14 @@ namespace OnePieceTcg.Engine
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (leaderIs.Success)
                 return p.Leader != null && NameMatches(state, p.Leader, leaderIs.Groups[1].Value.Trim());
+
+            // "your Leader is multicolored" / "your opponent's Leader is multicolored" — a multicolor card's
+            // Color holds two colors joined by '/' (e.g. "Red/Green"). (PRB02-005 Luffy.)
+            if (ContainsAll(condition, "Leader is multicolored"))
+            {
+                var mcLead = (ContainsAll(condition, "opponent") ? opp : p).Leader;
+                return mcLead != null && (GetCard(mcLead)?.Color ?? "").Contains("/");
+            }
 
             // "this Character was played on this turn" (ST19-003 Tashigi's Activate:Main).
             if (ContainsAll(condition, "was played on this turn") || ContainsAll(condition, "was played this turn"))
@@ -3941,9 +4028,23 @@ namespace OnePieceTcg.Engine
             // "there is a Character with a cost of N or more" / "there are 2 or more Characters with a cost of N or more" (either board)
             if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"there (?:is a|are \d+ or more) Characters? with a cost of (\d+) or more", RO))().Success)
             { int n = int.Parse(M().Groups[1].Value); int c = Seats().Sum(s => Player(state, s).CharacterArea.Count(x => x != null && GetCost(state, x) >= n)); return condition.IndexOf("2 or more", StringComparison.OrdinalIgnoreCase) >= 0 ? c >= 2 : c >= 1; }
-            // "you have N or more active DON!! cards"
-            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"you have (\d+) or more active DON!! cards", RO))().Success)
-                return p.CostArea.Count(d => !d.Rested) >= int.Parse(M().Groups[1].Value);
+            // "you have N or more/less active DON!! cards"
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"you have (\d+) or (more|less) active DON!! cards", RO))().Success)
+            { var m = M(); int n = int.Parse(m.Groups[1].Value); int a = p.CostArea.Count(d => !d.Rested);
+              return m.Groups[2].Value.Equals("more", StringComparison.OrdinalIgnoreCase) ? a >= n : a <= n; }
+            // "you have any DON!! cards on your field" (≥1)
+            if (ContainsAll(condition, "you have any DON!! cards on your field")) return TotalFieldDon(p) >= 1;
+            // "this Character is active" / "this Character is rested" (the source card's own state)
+            if (ContainsAll(condition, "this Character is active") || ContainsAll(condition, "this Character is rested"))
+            { var s = FindCardInstance(state, sourceInstanceId);
+              return s != null && (ContainsAll(condition, "is active") ? !s.Rested : s.Rested); }
+            // "there is a Character with N power or more" (either board's current power)
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"there is a Character with (\d{3,5}) power or more", RO))().Success)
+            { int n = int.Parse(M().Groups[1].Value); return Seats().Any(s => Player(state, s).CharacterArea.Any(c => c != null && GetPower(state, c) >= n)); }
+            // "your deck has N or less cards" / "0 cards"
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"your deck has (\d+) or less cards", RO))().Success)
+                return p.Deck.Count <= int.Parse(M().Groups[1].Value);
+            if (ContainsAll(condition, "your deck has 0 cards")) return p.Deck.Count == 0;
             // "you/your opponent have N or more rested cards"
             if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"(you|opponent) (?:have|has) (\d+) or more rested cards", RO))().Success)
             { var m = M(); var who = m.Groups[1].Value.Equals("you", StringComparison.OrdinalIgnoreCase) ? p : opp; return RestedCards(who) >= int.Parse(m.Groups[2].Value); }
@@ -4049,6 +4150,7 @@ namespace OnePieceTcg.Engine
               return p.CharacterArea.Any(c => c != null && GetCard(c).Power >= bp && (NameMatches(state, c, n1) || (n2 != null && NameMatches(state, c, n2)))); }
 
             // Unknown condition: skip and (unless silenced) log.
+            _conditionRecognized = false;
             if (logUnknown) Log(state, seat, $"Unknown condition '{condition}' — treating as not met.");
             return false;
         }
@@ -4319,6 +4421,12 @@ namespace OnePieceTcg.Engine
         private static bool CardPassesFeatureFilter(string effectText, CardDef def)
         {
             if (string.IsNullOrEmpty(effectText)) return true;
+            // "… with no base effect" — the target must be a VANILLA card (no printed ability text). This
+            // qualifier was previously absorbed by the target regex but never enforced, so effects like
+            // OP03-091 (set cost of a "no base effect" Character to 0) could hit ANY Character. (9 cards.)
+            if (effectText.IndexOf("no base effect", StringComparison.OrdinalIgnoreCase) >= 0
+                && !string.IsNullOrWhiteSpace(def?.Effect))
+                return false;
             // ＜X＞ attribute target filter ("your ＜Slash＞ attribute Characters", "＜Slash＞ attribute
             // Character card", "reveal … ＜Slash＞ attribute card"). Strip Leader-attribute CONDITIONS
             // first ("If your (opponent's) Leader has the ＜X＞ attribute" describes the leader, not
@@ -4474,8 +4582,15 @@ namespace OnePieceTcg.Engine
                         if (isLeader && !textLeader) return false;
                         if (isChar && !textChar) return false;
                     }
-                    bool mentionsOpp = text.IndexOf("opponent's", StringComparison.OrdinalIgnoreCase) >= 0;
-                    bool mentionsYour = System.Text.RegularExpressions.Regex.IsMatch(text, @"of your (?!opponent)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    // A DURATION phrase such as "until the end of your opponent's next turn" contains
+                    // "opponent's" but names no TARGET. Strip opponent-duration tails before deriving
+                    // ownership, or a "… of your Characters …" buff wrongly sets mentionsOpp and offers the
+                    // opponent's cards as valid targets (19–30 card class, e.g. Haredas ST14-008 +2 cost).
+                    string scopeText = System.Text.RegularExpressions.Regex.Replace(text,
+                        @"(?:until|during)[^.]*?your opponent's[^.]*?(?:turn|phase)", "",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    bool mentionsOpp = scopeText.IndexOf("opponent's", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool mentionsYour = System.Text.RegularExpressions.Regex.IsMatch(scopeText, @"of your (?!opponent)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (!ownerAgnostic)
                     {
                         if (mentionsOpp && !mentionsYour && card.Owner == effect.Seat) return false;
@@ -4565,6 +4680,113 @@ namespace OnePieceTcg.Engine
         private static bool HasTiming(string text, string timing)
         {
             return !string.IsNullOrWhiteSpace(text) && text.IndexOf("[" + timing + "]", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        /// <summary>Outcome of the v2 operability probe (Tools/Sim EffectCoverageAudit).</summary>
+        public enum AuditResolveOutcome { Recognized, NotAutomated, Threw }
+
+        /// <summary>v2 audit oracle: dry-run the REAL resolver (<see cref="TryResolveKnownEffect"/>) — not
+        /// the auto-resolve gate — on a throwaway, richly-populated state, and report whether it recognizes
+        /// the body. Only an explicit <c>NotAutomated</c> return (the resolver fell through every handler
+        /// without throwing) is a genuine silent-no-op gap; any resolution — or a throw partway through
+        /// execution (a handler DID match) — counts as recognized. Conservative: it under-reports rather than
+        /// invents gaps. Stateless from the caller's view (builds its own scratch state each call).</summary>
+        public static AuditResolveOutcome AuditResolverRecognizes(string cardId, string timing, string bodyText)
+        {
+            try
+            {
+                var st = BuildAuditScratchState(cardId, out string srcId);
+                string body = System.Text.RegularExpressions.Regex.Replace(bodyText ?? "", @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+                // Strip a leading "DON!! −N (…):" cost prefix, exactly as ResolveEffect does before it reaches
+                // the resolver — else the cost text prevents any handler from matching (false gap).
+                if (ParseDonMinusCost(body) > 0)
+                {
+                    string db = DonMinusBody(body);
+                    if (!string.Equals(db, body, StringComparison.Ordinal)) body = db;
+                }
+                // Strip a leading "If <cond>," so we test the BODY, not the gate (the resolver would
+                // otherwise short-circuit to Resolved on an unmet condition and hide the body).
+                body = System.Text.RegularExpressions.Regex.Replace(body, @"^If [^,]{3,90},\s*", "",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (string.IsNullOrWhiteSpace(body)) return AuditResolveOutcome.Recognized;
+                var eff = new PendingEffect
+                {
+                    EffectId = "AUDIT", Seat = "south", SourceInstanceId = srcId, SourceCardId = cardId,
+                    Timing = timing ?? "main", Text = body, Scope = EffectScope.Instant, TargetZone = InferTargetZone(body),
+                };
+                return TryResolveKnownEffect(st, eff, null) == EffectResolution.NotAutomated
+                    ? AuditResolveOutcome.NotAutomated : AuditResolveOutcome.Recognized;
+            }
+            catch { return AuditResolveOutcome.Threw; }
+        }
+
+        /// <summary>v2 audit oracle for the [Trigger] path: dry-run the REAL trigger resolver
+        /// (<see cref="TryResolveKnownTrigger"/>) on a scratch state with the card revealed as a Life
+        /// trigger. Returns true if the trigger resolves (plays/queues/handles), false if it would divert
+        /// silently to hand — the genuine trigger no-op. Throw mid-execution ⇒ a handler ran ⇒ recognized.</summary>
+        /// <summary>Audit probe: whether EvaluateCondition can actually parse a condition string (vs falling
+        /// through to its unknown fallback → fail-closed). Used by the aura/condition blind-spot sweep to
+        /// enumerate conditions the engine silently treats as "not met" all game.</summary>
+        public static bool AuditConditionRecognized(string condition)
+        {
+            try
+            {
+                var st = BuildAuditScratchState("ST01-002", out _);
+                EvaluateCondition(st, "south", condition, "SRC", logUnknown: false);
+                return _conditionRecognized;
+            }
+            catch { return true; }   // threw mid-evaluation ⇒ a branch matched ⇒ recognized
+        }
+
+        public static bool AuditTriggerRecognizes(string cardId)
+        {
+            try
+            {
+                var st = BuildAuditScratchState(cardId, out _);
+                var life = AuditInst("LIFE", cardId, "south", "life");
+                st.Players["south"].Life.Add(life);
+                return TryResolveKnownTrigger(st, "south", life);
+            }
+            catch { return true; }
+        }
+
+        private static CardInstance AuditInst(string iid, string cid, string seat, string zone) =>
+            new CardInstance { InstanceId = iid, CardId = cid, Owner = seat, Zone = zone };
+
+        private static GameState BuildAuditScratchState(string cardId, out string sourceInstanceId)
+        {
+            var st = new GameState
+            {
+                Status = "active", ActiveSeat = "south", Phase = "main", TurnNumber = 5,
+                Players = new Dictionary<string, PlayerState>(),
+            };
+            foreach (var seat in new[] { "south", "north" })
+            {
+                var p = new PlayerState { Seat = seat, TurnsStarted = 3 };
+                p.Leader = AuditInst(seat + "-LEADER", "ST01-001", seat, "leader");
+                for (int i = 0; i < 10; i++) p.Deck.Add(AuditInst(seat + "-DK" + i, "ST01-002", seat, "deck"));
+                for (int i = 0; i < 5; i++)  p.Hand.Add(AuditInst(seat + "-HD" + i, "ST01-002", seat, "hand"));
+                for (int i = 0; i < 5; i++)  p.Life.Add(AuditInst(seat + "-LF" + i, "ST01-002", seat, "life"));
+                for (int i = 0; i < 3; i++)  p.Trash.Add(AuditInst(seat + "-TR" + i, "ST01-002", seat, "trash"));
+                for (int i = 0; i < 3; i++)  p.CharacterArea[i] = AuditInst(seat + "-CH" + i, "ST01-002", seat, "character");
+                for (int i = 0; i < 8; i++)  p.CostArea.Add(new DonInstance { InstanceId = seat + "-DON" + i });
+                st.Players[seat] = p;
+            }
+            string type = CardData.GetCard(cardId)?.Type ?? "character";
+            var south = st.Players["south"];
+            var src = AuditInst("SRC", cardId, "south", type == "leader" ? "leader" : type == "stage" ? "stage" : "character");
+            for (int i = 0; i < 5; i++) src.AttachedDonIds.Add("SRC-DON" + i);   // meet [DON!! xN] gates up to x5
+            if (type == "leader") south.Leader = src;
+            else if (type == "stage") south.Stage = src;
+            else south.CharacterArea[0] = src;
+            sourceInstanceId = "SRC";
+            // Battle context so [When Attacking]/[On Block]/[Counter] handlers that read state.Battle resolve.
+            st.Battle = new BattleState
+            {
+                Id = "B", Step = "attack", AttackerSeat = "south", AttackerId = "SRC",
+                TargetSeat = "north", TargetId = "north-LEADER", AttackPower = 5000, DefensePower = 5000,
+            };
+            return st;
         }
 
         private static EffectResolution TryResolveKnownEffect(GameState state, PendingEffect effect, string targetId)
@@ -5514,15 +5736,29 @@ namespace OnePieceTcg.Engine
                 // blanket "during this turn" (ST06-016 White Out, which also covers battle K.O.).
                 // The cannotBeKod modifier is honored by BOTH the battle path (line ~2627) and the
                 // effect path (CannotBeKoedByEffect). Snapshots the current board (per existing design).
-                if (System.Text.RegularExpressions.Regex.IsMatch(text,
-                        @"[Nn]one of your Characters can be K\.O\.'d",
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                // Optional {type} filter between "your" and "Characters" — "none of your {ODYSSEY} or
+                // {Straw Hat Crew} type Characters can be K.O.'d by effects…" (OP09-033). Empty filter ⇒ all.
+                var noneImm = System.Text.RegularExpressions.Regex.Match(text,
+                        @"[Nn]one of your (.*?)Characters can be K\.O\.'d",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (noneImm.Success)
                 {
+                    var noneTypes = System.Text.RegularExpressions.Regex.Matches(noneImm.Groups[1].Value, @"\{([^}]+)\}");
                     string noneDur = ContainsAll(text, "until the") ? "untilNextTurn" : "thisTurn";
                     int noneC = 0;
                     var noneSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
                     foreach (var c in owner.CharacterArea)
-                        if (c != null) { AddModifier(state, noneSrc, c, "cannotBeKod", noneDur, null, effect.Seat); noneC++; }
+                    {
+                        if (c == null) continue;
+                        if (noneTypes.Count > 0)
+                        {
+                            bool anyT = false;
+                            foreach (System.Text.RegularExpressions.Match tm in noneTypes)
+                                if (GetCard(c).HasFeature(tm.Groups[1].Value.Trim())) { anyT = true; break; }
+                            if (!anyT) continue;
+                        }
+                        AddModifier(state, noneSrc, c, "cannotBeKod", noneDur, null, effect.Seat); noneC++;
+                    }
                     Log(state, effect.Seat, $"{sourceName}: {noneC} Character(s) cannot be K.O.'d.");
                     return EffectResolution.Resolved;
                 }
@@ -5740,6 +5976,72 @@ namespace OnePieceTcg.Engine
                     Log(state, effect.Seat, $"{sourceName} attaches {geDon.Count} rested DON!! to {NameId(GetCard(geT))}.");
                     effect.SelectionsRemaining--;
                     if (effect.SelectionsRemaining > 0 && owner.CostArea.Any(d => d.Rested)) return EffectResolution.WaitingForTarget;
+                    return EffectResolution.Resolved;
+                }
+                // "give up to N DON!! card from your opponent's cost area to N of your opponent's
+                // Characters." — force the opponent's own DON off their cost area onto their Character:
+                // a tempo-denial (they lose access to that DON) (OP15-028 Meowban Brothers). Auto-picks an
+                // ACTIVE opponent DON (max denial) and their first Character; "up to" ⇒ no-op if either is absent.
+                var oppDonGive = System.Text.RegularExpressions.Regex.Match(text,
+                    @"give up to (\d+) DON!! cards? from your opponent's cost area to .*?opponent's Characters?",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (oppDonGive.Success)
+                {
+                    int odN = int.Parse(oppDonGive.Groups[1].Value);
+                    var odOpp = Player(state, OtherSeat(effect.Seat));
+                    int odMoved = 0;
+                    for (int k = 0; k < odN; k++)
+                    {
+                        var odChar = odOpp.CharacterArea.FirstOrDefault(c => c != null);
+                        var odDon = odOpp.CostArea.FirstOrDefault(d => !d.Rested) ?? odOpp.CostArea.FirstOrDefault();
+                        if (odChar == null || odDon == null) break;
+                        odOpp.CostArea.Remove(odDon);
+                        odChar.AttachedDonIds.Add(odDon.InstanceId);
+                        odMoved++;
+                    }
+                    Log(state, effect.Seat, $"{sourceName} moves {odMoved} of the opponent's DON!! from their cost area onto their Character(s).");
+                    return EffectResolution.Resolved;
+                }
+                // "activate the [Main] effect of up to 1 Event card with a cost of N or less in your
+                // trash." — replay a trashed Event's [Main] without moving it (EB03-031 Reiju). "Up to" ⇒
+                // no-op when no eligible Event is in the trash.
+                var actTrash = System.Text.RegularExpressions.Regex.Match(text,
+                    @"activate the \[Main\] effect of up to \d+ Event cards? with a cost of (\d+) or less in your trash",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (actTrash.Success)
+                {
+                    int atCap = int.Parse(actTrash.Groups[1].Value);
+                    var atEvent = owner.Trash.FirstOrDefault(c =>
+                    {
+                        var cd = GetCard(c);
+                        return cd != null && cd.Type == "event" && cd.Cost <= atCap && HasTiming(cd.Effect, "Main");
+                    });
+                    if (atEvent == null)
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: no eligible Event in the trash to activate.");
+                        return EffectResolution.Resolved;
+                    }
+                    var atDef = GetCard(atEvent);
+                    string atMain = ExtractTimedClause(atDef.Effect ?? "", "Main");
+                    QueueAndAutoResolve(state, effect.Seat, atEvent, "main", atMain,
+                        IsOptionalEffectText(atMain), EffectScope.Instant, InferTargetZone(atMain));
+                    Log(state, effect.Seat, $"{sourceName} activates the [Main] effect of {NameId(atDef)} from the trash.");
+                    return EffectResolution.Resolved;
+                }
+                // "your opponent rests N of their active DON!! cards at the start of their next Main
+                // Phase." — DELAYED: mark the opponent's leader; ApplyStartOfTurn drains it when their turn
+                // begins (PRB02-005). The "delayed" duration survives normal turn cleanup until it fires.
+                var delayRestM = System.Text.RegularExpressions.Regex.Match(text,
+                    @"your opponent rests (\d+) of their active DON!! cards? at the start of their next Main Phase",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (delayRestM.Success)
+                {
+                    int drN = int.Parse(delayRestM.Groups[1].Value);
+                    string drSeat = OtherSeat(effect.Seat);
+                    var drCarrier = Player(state, drSeat).Leader;
+                    for (int k = 0; k < drN; k++)
+                        AddModifier(state, drCarrier, drCarrier, "restActiveDonDelayed", "delayed", null, drSeat);
+                    Log(state, effect.Seat, $"{sourceName}: the opponent will rest {drN} DON!! at the start of their next Main Phase.");
                     return EffectResolution.Resolved;
                 }
                 // "Give up to N (total )of your currently given DON!! cards to N of your (…)
@@ -7256,13 +7558,20 @@ namespace OnePieceTcg.Engine
             // (rested) Characters …" with static caps (cost≤/exact, base cost, power≤,
             // TOTAL power≤) or dynamic caps ("equal to or less than the number of …").
             {
-                // "K.O. all Characters with a cost of N or less." — board-wide, both sides.
+                // "K.O. all [rested] Characters with a cost of N or less." — board-wide, both sides
+                // (optional "rested" filter: OP05-040 Birdcage's End-of-Turn wipe).
                 var koAll = System.Text.RegularExpressions.Regex.Match(text,
-                    @"K\.O\. all Characters with a cost of (\d+) or less",
+                    @"K\.O\. all (rested )?Characters with a cost of (\d+) or less",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                if (koAll.Success)
+                // "K.O. all Characters other than this Character." — board-wide, excluding the source
+                // (OP01-094 Kaido's DON!! −6 board wipe).
+                bool koAllExcl = !koAll.Success && System.Text.RegularExpressions.Regex.IsMatch(text,
+                    @"K\.O\. all Characters other than this Character",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (koAll.Success || koAllExcl)
                 {
-                    int kaCap = int.Parse(koAll.Groups[1].Value);
+                    bool kaRestedOnly = koAll.Success && koAll.Groups[1].Success;
+                    int kaCap = koAll.Success ? int.Parse(koAll.Groups[2].Value) : int.MaxValue;
                     int kaC = 0;
                     foreach (var st3 in Seats())
                     {
@@ -7271,6 +7580,8 @@ namespace OnePieceTcg.Engine
                         {
                             var ck = pk.CharacterArea[i];
                             if (ck == null || GetCost(state, ck) > kaCap) continue;
+                            if (kaRestedOnly && !ck.Rested) continue;
+                            if (koAllExcl && ck.InstanceId == effect.SourceInstanceId) continue;
                             if (st3 != effect.Seat && CannotBeKoedByEffect(state, ck)) continue;
                             if (st3 != effect.Seat && TryRemovalReplacement(state, st3, ck)) continue;
                             MoveToTrash(state, st3, ck.InstanceId);
@@ -7362,8 +7673,10 @@ namespace OnePieceTcg.Engine
 
             // ---- Generic "Set up to N of your … as active" (feature/cost filters, multi). --
             {
+                // "of your" is optional — some cards imply it ("set up to 1 {Egghead} type Character with a
+                // cost of 5 or less as active", OP07-117). The own-seat guard below still enforces ownership.
                 var saM = System.Text.RegularExpressions.Regex.Match(text,
-                    @"Set up to (\d+) of your (.*?) as active",
+                    @"[Ss]et up to (\d+) (?:of your )?(.*?) as active",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (saM.Success && !ContainsAll(saM.Groups[2].Value, "DON!!"))
                 {
@@ -8026,6 +8339,7 @@ namespace OnePieceTcg.Engine
                 && !ContainsAll(text, "Choose one")
                 && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle"))
                 && (ContainsAll(text, "Leader") || ContainsAll(text, "Character") || ContainsAll(text, "of your cards")
+                    || ContainsAll(text, "this card gains")   // self-buff phrased "this card" (OP02-111 Fullbody)
                     || System.Text.RegularExpressions.Regex.IsMatch(text, @"of your \[[^\]]+\] cards")))
             {
                 int bonus = ParsePowerGain(text);
@@ -8440,6 +8754,33 @@ namespace OnePieceTcg.Engine
             }
 
             // Grant Rush to a Leader or Character this turn.
+            // "[Rush: Character]" = [Rush] + may attack the opponent's ACTIVE Characters, this turn
+            // (EB04-007 Zoro: "this Character gains [Rush: Character] during this turn").
+            if (ContainsAll(text, "gains [Rush: Character]"))
+            {
+                bool rcSelf = ContainsAll(text, "this Character gains") || ContainsAll(text, "this card gains")
+                    || ContainsAll(text, "this Leader gains");
+                CardInstance rcTarget = rcSelf
+                    ? FindAnyInPlay(state, effect.SourceInstanceId, out var rcSeat)
+                    : FindAnyInPlay(state, targetId, out rcSeat);
+                if (rcTarget == null)
+                {
+                    if (rcSelf) return EffectResolution.Resolved;   // source left the field — fizzle
+                    Log(state, effect.Seat, $"Choose a Character to gain [Rush: Character] for {sourceName}.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                if (!rcSelf && rcSeat != effect.Seat)
+                {
+                    Log(state, effect.Seat, "That is not a valid [Rush: Character] target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                var rcSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
+                AddModifier(state, rcSrc, rcTarget, "keyword", "thisTurn", "Rush");
+                AddModifier(state, rcSrc, rcTarget, "canAttackActive", "thisTurn", null, effect.Seat);
+                Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(rcTarget))} gains [Rush: Character] this turn.");
+                return EffectResolution.Resolved;
+            }
+
             if (ContainsAll(text, "gains [Rush]") && ContainsAll(text, "this turn"))
             {
                 var target = FindAnyInPlay(state, targetId, out var targetSeat);
@@ -9092,6 +9433,27 @@ namespace OnePieceTcg.Engine
             return EffectResolution.NotAutomated;
         }
 
+        // Whether a [Trigger] body can actually be resolved. The auto-resolve pattern gate
+        // (IsAutomatedEffectPattern) is a poorer mirror than the real resolver, so for anything it
+        // rejects, dry-run TryResolveKnownEffect on a deep clone and trust its verdict. A throw mid-
+        // execution means a handler DID match (resolvable); only an explicit NotAutomated is a no-op.
+        private static bool TriggerBodyResolvable(GameState state, string seat, CardInstance src, string triggerText)
+        {
+            if (IsAutomatedEffectPattern(triggerText)) return true;
+            try
+            {
+                var clone = OnePieceTcg.Engine.Bot.Search.GameClone.Clone(state);
+                var probe = new PendingEffect
+                {
+                    EffectId = "trig-probe", Seat = seat, SourceInstanceId = src.InstanceId,
+                    SourceCardId = src.CardId, Timing = "trigger", Text = triggerText, Optional = true,
+                    TargetZone = InferTargetZone(triggerText),
+                };
+                return TryResolveKnownEffect(clone, probe, null) != EffectResolution.NotAutomated;
+            }
+            catch { return true; }
+        }
+
         private static bool TryResolveKnownTrigger(GameState state, string defenderSeat, CardInstance cardFromLife)
         {
             if (cardFromLife == null) return false;
@@ -9115,7 +9477,8 @@ namespace OnePieceTcg.Engine
                 }
             }
 
-            if (trigger.IndexOf("Play this card", StringComparison.OrdinalIgnoreCase) >= 0 && def.Type == "character")
+            if (trigger.IndexOf("Play this card", StringComparison.OrdinalIgnoreCase) >= 0
+                && (def.Type == "character" || def.Type == "stage"))
             {
                 // Conditional variants: "If your Leader is [X] / has the {T} type / … , play this
                 // card." — evaluate the condition first; unmet → fall through (card goes to hand).
@@ -9129,6 +9492,22 @@ namespace OnePieceTcg.Engine
                 {
                     Log(state, defenderSeat, $"{NameId(def)} Trigger needs {trigDonMinus} DON!! on the field to play this card.");
                     condOk = false;
+                }
+                if (condOk && def.Type == "stage")
+                {
+                    // A Stage plays to the single Stage zone, replacing (and trashing) any current one.
+                    if (trigDonMinus > 0) PayDonMinus(state, defenderSeat, trigDonMinus);
+                    if (defender.Stage != null) { defender.Stage.Zone = "trash"; defender.Trash.Add(defender.Stage); }
+                    cardFromLife.Zone = "stage";
+                    cardFromLife.PlayedOnTurn = state.TurnNumber;
+                    defender.Stage = cardFromLife;
+                    Log(state, defenderSeat, $"{NameId(def)} Trigger plays this Stage to the field.");
+                    state.Battle = null;
+                    state.Phase = "main";
+                    if (HasTiming(def.Effect, "On Play"))
+                        QueueAndAutoResolve(state, defenderSeat, cardFromLife, "onPlay", def.Effect, true,
+                            EffectScope.Instant, InferTargetZone(def.Effect));
+                    return true;
                 }
                 if (condOk)
                 {
@@ -9155,10 +9534,17 @@ namespace OnePieceTcg.Engine
                 }
             }
 
-            // "Activate this card's [Main] effect." / "Activate this card's effect."
-            if (trigger.IndexOf("Activate this card's [Main] effect", StringComparison.OrdinalIgnoreCase) >= 0
-                || trigger.IndexOf("Activate this card's effect", StringComparison.OrdinalIgnoreCase) >= 0)
+            // "Activate this card's [Main]/[Counter]/[On Play] effect." — delegate to the NAMED clause.
+            // Was [Main]-only, so the [Counter] and [On Play] variants (OP01-028, OP06-013, OP08-106, …)
+            // silently diverted the life card to hand instead of firing.
+            var actSelf = System.Text.RegularExpressions.Regex.Match(trigger,
+                @"Activate this card's (?:\[(Main|Counter|On Play|On K\.O\.)\] )?effect",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (actSelf.Success)
             {
+                string wantTiming = actSelf.Groups[1].Success ? actSelf.Groups[1].Value : "Main";
+                string clauseText = ExtractTimedClause(def.Effect ?? "", wantTiming);
+                if (string.IsNullOrWhiteSpace(clauseText)) clauseText = def.Effect ?? "";
                 var pending = new PendingEffect
                 {
                     EffectId = $"trigger-{++state.EffectSequence}",
@@ -9166,13 +9552,14 @@ namespace OnePieceTcg.Engine
                     SourceInstanceId = cardFromLife.InstanceId,
                     SourceCardId = cardFromLife.CardId,
                     Timing = "trigger",
-                    Text = def.Effect,
+                    Text = clauseText,
                     Optional = true,
+                    TargetZone = InferTargetZone(clauseText),
                 };
                 state.PendingEffects.Add(pending);
                 cardFromLife.Zone = "trash";
                 Player(state, defenderSeat).Trash.Add(cardFromLife);
-                Log(state, defenderSeat, $"{NameId(def)} Trigger activates its Main effect.");
+                Log(state, defenderSeat, $"{NameId(def)} Trigger activates its {wantTiming} effect.");
                 state.Battle = null;
                 state.Phase = "main";
                 return true;
@@ -9204,11 +9591,13 @@ namespace OnePieceTcg.Engine
                 return true;
             }
 
-            // Generic: any other event whose [Trigger] text matches a known resolvable effect
+            // Generic: any other event whose [Trigger] text can actually be resolved
             // (Diable Jambe's K.O., Guard Point's power buff, Scalpel's set-DON-active, etc.).
             // Using the trigger uses the event, so it goes to trash just like the [Main]-effect
-            // case above, not to hand.
-            if (IsAutomatedEffectPattern(trigger))
+            // case above, not to hand. Gate on the FULL resolver, not just the (poorer) auto-resolve
+            // pattern gate — otherwise resolvable triggers (return-to-bottom, negate, rest-Leader…)
+            // were wrongly diverted to hand.
+            if (TriggerBodyResolvable(state, defenderSeat, cardFromLife, trigger))
             {
                 var pending = new PendingEffect
                 {
@@ -9245,6 +9634,12 @@ namespace OnePieceTcg.Engine
 
         // Mirrors the phrase combinations TryResolveKnownEffect actually knows how to resolve,
         // so generic event-trigger queuing only fires for effects we can really automate.
+        /// <summary>Audit probe: exposes the queued-effect recognition gate for the DB-wide operability
+        /// sweep (Tools/Sim EffectCoverageAudit). Pure/stateless — mirrors exactly the boundary that decides
+        /// whether a mandatory On Play / On K.O. / Activate:Main / When-Attacking / Trigger / DON!!-cost body
+        /// auto-resolves (QueueAndAutoResolve line ~4153) or is silently dropped as a no-op.</summary>
+        public static bool AuditEffectRecognized(string clauseText) => IsAutomatedEffectPattern(clauseText);
+
         private static bool IsAutomatedEffectPattern(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return false;

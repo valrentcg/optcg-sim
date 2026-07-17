@@ -82,6 +82,10 @@ public class PresencePayload
     public string hoverCardId;        // instance/card id being hovered, or null/empty for none
     public int[] raisedHandIndexes;   // indexes of the sender's hand cards currently lifted
     public int[] donGroups;           // sender's DON!! group partition (empty/null = ungrouped)
+    // Live hand-reorder: the sender is dragging the card at slot handDragFrom toward slot handDragTo
+    // within their own hand. Both -1 when not reordering. (Sent every frame, so idle = -1/-1.)
+    public int handDragFrom = -1;
+    public int handDragTo = -1;
 }
 
 public static class MatchNetworkSync
@@ -123,6 +127,14 @@ public static class MatchNetworkSync
         nm.OnClientConnectedCallback -= OnClientConnected;
         nm.OnClientConnectedCallback += OnClientConnected;
     }
+
+    /// <summary>Reset after a Netcode shutdown. Shutdown() destroys the CustomMessagingManager, and the
+    /// NEXT StartHost/StartClient builds a fresh one WITHOUT our named-message handlers — but the
+    /// registration is guarded by the static <c>handlersRegistered</c>, which survives the shutdown. Without
+    /// this reset, every match after the first re-uses that stale "true" and OnClientConnected skips
+    /// registration, so match-start/deck/name messages are silently dropped and both clients hang on
+    /// "Connecting you to your opponent…". Called from LobbyManager.ShutdownNetwork.</summary>
+    public static void ResetHandlerRegistration() => handlersRegistered = false;
 
     // CustomMessagingManager is only populated once NetworkManager finishes starting
     // (StartHost/StartClient), so handler registration has to wait for that - this

@@ -1,17 +1,22 @@
 using System.Collections.Generic;
 using System.Linq;
 using OnePieceTcg.Engine;
+using OnePieceTcg.Sim.Search;
 
 namespace OnePieceTcg.Sim.Planning
 {
     /// <summary>
-    /// A fully self-derived decision-maker — no IntermediateBot anywhere in its choices. On its own turn
-    /// it asks <see cref="TurnPlanner"/> for the best full-turn sequence (finds lethal + combos, actually
-    /// attacks) and plays it out; every reactive decision (defence, effect resolution during the
-    /// opponent's turn, mulligan, coin flip) comes from its <see cref="ValueFunction"/> via
-    /// <see cref="ValuePolicy"/>. The value-function WEIGHTS are the tunable genome the tournament evolves.
+    /// ⚠ THE PERFECT-INFORMATION CONTROL (an <see cref="ILegacyAgent"/>, NOT honest). It receives the
+    /// referee <see cref="GameState"/> and searches a <see cref="SearchWorld"/> built from the UNSAFE legacy
+    /// view — a verbatim referee clone. Every historical measurement was this bot; it is preserved, and
+    /// still the default, ONLY as the explicit perfect-info baseline. The HONEST agent is
+    /// <see cref="ObservedPlannerBot"/>, which is structurally incapable of receiving a GameState.
+    ///
+    /// On its own turn it asks <see cref="TurnPlanner"/> for the best full-turn sequence; every reactive
+    /// decision (defence, effect resolution, mulligan, coin flip) comes from <see cref="ValuePolicy"/>. The
+    /// value-function WEIGHTS are the tunable genome the tournament evolves.
     /// </summary>
-    public sealed class PlannerBot : IAgent
+    public sealed class PlannerBot : ILegacyAgent
     {
         private readonly double[] _w;
         private readonly DeckContext _ctx;
@@ -67,12 +72,12 @@ namespace OnePieceTcg.Sim.Planning
             {
                 if (ReplanEveryCommand)
                 {
-                    var fresh = TurnPlanner.PlanTurn(state, seat, _w, _ctx, _opt);
+                    var fresh = TurnPlanner.PlanTurn(BuildWorld(state, seat), _w, _ctx, _opt);
                     if (fresh.Count > 0) return fresh[0];       // act on the first move, then replan
                 }
                 else if (_planTurn != state.TurnNumber)
                 {
-                    _plan = TurnPlanner.PlanTurn(state, seat, _w, _ctx, _opt);
+                    _plan = TurnPlanner.PlanTurn(BuildWorld(state, seat), _w, _ctx, _opt);
                     _planTurn = state.TurnNumber;
                     _idx = 0;
                 }
@@ -87,5 +92,12 @@ namespace OnePieceTcg.Sim.Planning
             // Defence and opponent-turn responses — value-driven, self-derived.
             return ValuePolicy.Decide(state, seat, _w, _ctx);
         }
+
+        /// <summary>Build the world the planner searches. This bot is the PERFECT-INFO CONTROL, so it always
+        /// wraps the referee state in the unsafe legacy view (by reference — TurnPlanner clones before it
+        /// mutates, so behaviour is bit-identical to the pre-boundary code). The honest projection+sampling
+        /// path lives in <see cref="ObservedPlannerBot"/>, which never sees a GameState.</summary>
+        private SearchWorld BuildWorld(GameState state, string seat)
+            => SearchWorld.FromLegacy(new UnsafeLegacyPlannerView { Seat = seat, Raw = state });
     }
 }

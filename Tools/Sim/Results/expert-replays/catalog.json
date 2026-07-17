@@ -1,0 +1,262 @@
+{
+  "generatedUtc": "2026-07-17T00:10:55.1626639Z",
+  "minimumBounty": 1000,
+  "source": "https://stats.tcgmatchmaking.com/replays",
+  "replays": [
+    {
+      "id": "J2t4izPqwjPGkDcgzAeE",
+      "timestamp": "2026-07-17T00:06:44",
+      "rawFile": "raw/J2t4izPqwjPGkDcgzAeE.log",
+      "players": [
+        {
+          "seat": 1,
+          "leader": "OP15-058",
+          "bounty": 2057.0365455521,
+          "won": true,
+          "expert": true,
+          "matchedDeckId": "op16-p-enel",
+          "observedDistinctCards": 16,
+          "proxyOverlap": 15,
+          "proxyCoverage": 0.9375,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 15,
+            "leaderAttacks": 8,
+            "deploys": 9,
+            "counters": 5,
+            "blocks": 0,
+            "choseFirst": 0,
+            "openingHands": 1,
+            "mulligans": 1
+          }
+        },
+        {
+          "seat": 2,
+          "leader": "OP16-022",
+          "bounty": 1105.75633479412,
+          "won": false,
+          "expert": true,
+          "matchedDeckId": "op16-gb-luffy",
+          "observedDistinctCards": 17,
+          "proxyOverlap": 15,
+          "proxyCoverage": 0.75,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 12,
+            "leaderAttacks": 11,
+            "deploys": 12,
+            "counters": 9,
+            "blocks": 0,
+            "choseFirst": 1,
+            "openingHands": 0,
+            "mulligans": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "Uqsip7KB1I1VF2bfrfBd",
+      "timestamp": "2026-07-17T00:10:02",
+      "rawFile": "raw/Uqsip7KB1I1VF2bfrfBd.log",
+      "players": [
+        {
+          "seat": 1,
+          "leader": "OP16-080",
+          "bounty": 1065.07052211625,
+          "won": false,
+          "expert": true,
+          "matchedDeckId": "op16-yb-teach",
+          "observedDistinctCards": 16,
+          "proxyOverlap": 13,
+          "proxyCoverage": 0.8125,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 10,
+            "leaderAttacks": 5,
+            "deploys": 6,
+            "counters": 7,
+            "blocks": 0,
+            "choseFirst": 0,
+            "openingHands": 1,
+            "mulligans": 0
+          }
+        },
+        {
+          "seat": 2,
+          "leader": "ST30-001",
+          "bounty": 1905.78064423543,
+          "won": true,
+          "expert": true,
+          "matchedDeckId": "op16-luffy-n-ace",
+          "observedDistinctCards": 17,
+          "proxyOverlap": 14,
+          "proxyCoverage": 0.8235294117647058,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 14,
+            "leaderAttacks": 13,
+            "deploys": 8,
+            "counters": 4,
+            "blocks": 0,
+            "choseFirst": 0,
+            "openingHands": 0,
+            "mulligans": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "GRVrO7yIr1M5eVOYpZ7f",
+      "timestamp": "bootstrap-2026-07-16",
+      "rawFile": "raw/GRVrO7yIr1M5eVOYpZ7f.log",
+      "players": [
+        {
+          "seat": 1,
+          "leader": "OP11-041",
+          "bounty": 1029,
+          "won": false,
+          "expert": true,
+          "matchedDeckId": "op15-by-nami",
+          "observedDistinctCards": 15,
+          "proxyOverlap": 11,
+          "proxyCoverage": 0.7333333333333333,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 6,
+            "leaderAttacks": 6,
+            "deploys": 3,
+            "counters": 6,
+            "blocks": 0,
+            "choseFirst": 0,
+            "openingHands": 1,
+            "mulligans": 1
+          }
+        },
+        {
+          "seat": 2,
+          "leader": "OP12-061",
+          "bounty": 1765,
+          "won": true,
+          "expert": true,
+          "matchedDeckId": "op16-py-rosinante",
+          "observedDistinctCards": 16,
+          "proxyOverlap": 15,
+          "proxyCoverage": 1,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 16,
+            "leaderAttacks": 14,
+            "deploys": 12,
+            "counters": 3,
+            "blocks": 0,
+            "choseFirst": 1,
+            "openingHands": 0,
+            "mulligans": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "HjBoM17yWjAsohHA4tfS",
+      "timestamp": "bootstrap-2026-07-16",
+      "rawFile": "raw/HjBoM17yWjAsohHA4tfS.log",
+      "players": [
+        {
+          "seat": 1,
+          "leader": "OP11-041",
+          "bounty": 1713,
+          "won": true,
+          "expert": true,
+          "matchedDeckId": "op15-by-nami",
+          "observedDistinctCards": 16,
+          "proxyOverlap": 13,
+          "proxyCoverage": 0.8666666666666667,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 17,
+            "leaderAttacks": 14,
+            "deploys": 8,
+            "counters": 5,
+            "blocks": 0,
+            "choseFirst": 1,
+            "openingHands": 1,
+            "mulligans": 0
+          }
+        },
+        {
+          "seat": 2,
+          "leader": "OP15-058",
+          "bounty": 3171,
+          "won": false,
+          "expert": true,
+          "matchedDeckId": "op16-p-enel",
+          "observedDistinctCards": 16,
+          "proxyOverlap": 14,
+          "proxyCoverage": 0.875,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 17,
+            "leaderAttacks": 16,
+            "deploys": 9,
+            "counters": 4,
+            "blocks": 0,
+            "choseFirst": 0,
+            "openingHands": 0,
+            "mulligans": 0
+          }
+        }
+      ]
+    },
+    {
+      "id": "yu0lTmtuuBWelEEtzIOl",
+      "timestamp": "bootstrap-2026-07-16",
+      "rawFile": "raw/yu0lTmtuuBWelEEtzIOl.log",
+      "players": [
+        {
+          "seat": 1,
+          "leader": "OP12-061",
+          "bounty": 2025,
+          "won": true,
+          "expert": true,
+          "matchedDeckId": "op16-py-rosinante",
+          "observedDistinctCards": 16,
+          "proxyOverlap": 14,
+          "proxyCoverage": 0.9333333333333333,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 18,
+            "leaderAttacks": 14,
+            "deploys": 13,
+            "counters": 5,
+            "blocks": 0,
+            "choseFirst": 0,
+            "openingHands": 1,
+            "mulligans": 1
+          }
+        },
+        {
+          "seat": 2,
+          "leader": "OP07-059",
+          "bounty": 1786,
+          "won": false,
+          "expert": true,
+          "matchedDeckId": "op15-foxy",
+          "observedDistinctCards": 15,
+          "proxyOverlap": 13,
+          "proxyCoverage": 0.8666666666666667,
+          "actions": {
+            "playerGames": 0,
+            "attacks": 18,
+            "leaderAttacks": 12,
+            "deploys": 7,
+            "counters": 5,
+            "blocks": 0,
+            "choseFirst": 1,
+            "openingHands": 0,
+            "mulligans": 1
+          }
+        }
+      ]
+    }
+  ]
+}

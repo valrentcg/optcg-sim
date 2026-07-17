@@ -152,21 +152,53 @@ public static class UpdateChecker
     ///
     /// Returns true when an update was found and a restart is imminent — the
     /// caller should keep its "updating" UI up and skip the rest of its boot.
-    public static async Task<bool> CheckAndApplyDesktopUpdateAsync(Action<string> status = null)
+    /// <summary>Structured update progress for the themed launch splash. Mutated in place across phases
+    /// and reported repeatedly; the UI thread reads the latest snapshot.</summary>
+    public sealed class UpdateProgress
+    {
+        public string phase = "CHECKING FOR UPDATES…";   // human-readable phase
+        public int percent = -1;                         // 0..100 during download; -1 = indeterminate
+        public string fromVersion;                       // version we're on
+        public string toVersion;                         // version we're updating to
+        public string notes;                             // the new release's patch notes (markdown-ish)
+    }
+
+    public static async Task<bool> CheckAndApplyDesktopUpdateAsync(Action<UpdateProgress> report = null)
     {
 #if !UNITY_EDITOR && UNITY_STANDALONE_WIN
+        var prog = new UpdateProgress();
         try
         {
-            status?.Invoke("CHECKING FOR UPDATES...");
+            report?.Invoke(prog);
             var source = new GithubSource(GithubRepoUrl, null, false);
             var mgr = new UpdateManager(source);
 
             var newVersion = await mgr.CheckForUpdatesAsync();
             if (newVersion == null) return false;
 
-            Debug.Log($"[UpdateChecker] Velopack update found: {newVersion.TargetFullRelease.Version} - downloading.");
-            await mgr.DownloadUpdatesAsync(newVersion, p => status?.Invoke($"DOWNLOADING UPDATE... {p}%"));
-            status?.Invoke("RESTARTING TO APPLY UPDATE...");
+            prog.fromVersion = mgr.CurrentVersion?.ToString();
+            prog.toVersion = newVersion.TargetFullRelease.Version?.ToString();
+            // Release notes come from the packed release (vpk pack --releaseNotes). The exact property name
+            // has varied across Velopack versions (NotesMarkdown / NotesHTML), so fetch it by reflection to
+            // stay build-proof regardless of the installed Velopack version.
+            try
+            {
+                var rel = newVersion.TargetFullRelease;
+                var pi = rel.GetType().GetProperty("NotesMarkdown") ?? rel.GetType().GetProperty("NotesHtml")
+                         ?? rel.GetType().GetProperty("NotesHTML");
+                prog.notes = pi?.GetValue(rel) as string;
+            }
+            catch { prog.notes = null; }
+
+            Debug.Log($"[UpdateChecker] Velopack update found: {prog.toVersion} - downloading.");
+            prog.phase = "DOWNLOADING UPDATE";
+            prog.percent = 0;
+            report?.Invoke(prog);
+            await mgr.DownloadUpdatesAsync(newVersion, p => { prog.percent = p; report?.Invoke(prog); });
+
+            prog.phase = "RESTARTING TO APPLY UPDATE…";
+            prog.percent = 100;
+            report?.Invoke(prog);
             mgr.ApplyUpdatesAndRestart(newVersion);
             return true;
         }

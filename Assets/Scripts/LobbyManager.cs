@@ -164,5 +164,9 @@ public static class LobbyManager
         if (!nm.IsListening && !nm.IsConnectedClient && !nm.IsServer) return;
         try { nm.Shutdown(); }
         catch (Exception ex) { Debug.LogWarning($"Netcode shutdown failed: {ex.Message}"); }
+        // Shutdown() destroys the CustomMessagingManager; the next match rebuilds it WITHOUT our named-
+        // message handlers. Clear the registration guard so OnClientConnected re-registers them next time —
+        // otherwise every match after the first drops all messages and hangs on "Connecting…".
+        MatchNetworkSync.ResetHandlerRegistration();
     }
 }

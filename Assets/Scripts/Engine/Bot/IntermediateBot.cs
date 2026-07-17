@@ -44,6 +44,128 @@ namespace OnePieceTcg.Engine.Bot
 {
     public static class IntermediateBot
     {
+        /// <summary>WS-3 A/B research toggle. When true (default and shipped behaviour) effect target
+        /// selection uses the shared <see cref="OnePieceTcg.Engine.Bot.Search.RemovalModel"/> — soft debuffs
+        /// prefer live threats and "return to hand" is treated as removal. When false, targeting reverts to
+        /// the old generic ranking, so identical seeds can be replayed both ways to isolate the model's effect.
+        /// Set once per arm (read concurrently by playout workers; never flip mid-run).</summary>
+        public static bool RemovalModelEnabled = true;
+
+        /// <summary>WS-2 A/B research toggle. When true (default), a −cost debuff aimed at the opponent is
+        /// valued as a K.O. SETUP when the seat has a KO-by-cost finisher that the reduced cost unlocks — so
+        /// it targets the biggest body the combo can remove instead of being written off as a weak debuff.
+        /// Off = WS-3 soft-debuff handling only. Deck-context driven (RemovalModel), no card-id logic.</summary>
+        public static bool CostComboAware = true;
+
+        /// <summary>WS-1 opportunity-cost A/B toggle. When true (default), a DON-minus event that ALSO has a
+        /// [Counter] mode is held instead of played when <see cref="OnePieceTcg.Engine.Bot.Search.DonOpportunityModel"/>
+        /// judges its Main effect worth less than keeping it for defence (no legal target + low Life under a
+        /// live attacker). Off = always play it if affordable. Only gates DON-minus + Counter events; every
+        /// other card is unaffected.</summary>
+        public static bool OpportunityHoldEnabled = true;
+
+        /// <summary>A/B toggle for the lethal/desperation pivot. When on, if the bot judges it will die next
+        /// turn even after using all its defence, it stops playing conservatively — commits every DON!! to
+        /// offence (no Counter reserve) and swings face to disperse attacks and take its best shot at closing
+        /// the game THIS turn, since holding back only guarantees the loss.
+        /// DEFAULT OFF: measured net −1 on Enel-Lucy (stole 2 dead games, threw away 3 winnable ones) — the
+        /// detection over-counts opponent damage (assumes every attacker connects), so it false-fires. Kept
+        /// gated for refinement (a connect-aware damage model + a margin) before it can ship on.</summary>
+        public static bool LethalPivotEnabled = false;
+
+        /// <summary>A/B toggle for the restand engine (Zoro et al.): load the Leader's [DON!! xN] "set this
+        /// Leader as active" gate, have it attack a Character to satisfy the "battled a Character" condition,
+        /// then <see cref="OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy"/> restands it for a second
+        /// swing. Text-driven, card-id-free — works for any restand leader the bot is handed.</summary>
+        public static bool RestandEngineEnabled = true;
+
+        /// <summary>A/B toggle: value a Character by its effect-based threat (repeatable engines, auras,
+        /// when-attacking payoffs), not just stats — so a small body with a per-turn engine is correctly
+        /// prioritised for removal over a vanilla bigger body. Feeds all target selection via Value().</summary>
+        public static bool ThreatModelEnabled = true;
+
+        /// <summary>If the Leader has an UNUSED "set this Leader as active" [Activate: Main], its [DON!! xN]
+        /// gate (0 if ungated); -1 if there is no such ability or it is already used this turn.</summary>
+        internal static int LeaderRestandGate(GameState state, string seat)
+        {
+            var p = state.Players[seat];
+            var leader = p.Leader;
+            if (leader == null || p.AbilityUsedThisTurn.Contains(leader.InstanceId)) return -1;
+            string e = (GameEngine.GetCard(leader)?.Effect ?? "").ToLowerInvariant();
+            if (e.IndexOf("activate: main", StringComparison.Ordinal) < 0 || !e.Contains("set this leader as active")) return -1;
+            var gate = System.Text.RegularExpressions.Regex.Match(e, @"\[don!! x(\d+)\]");
+            return gate.Success ? int.Parse(gate.Groups[1].Value) : 0;
+        }
+
+        /// <summary>Rough "will I be dead on the opponent's next turn even if I hold everything back?" read: the
+        /// opponent's Leader + every Character can attack next turn (double attackers count twice), and my
+        /// blockers and Counter cards each save about one hit. If that still kills me, defence is wasted — the
+        /// caller should pivot all-in. Conservative by construction (it credits ALL my counters as saves), so
+        /// it fires only when the loss is otherwise near-certain.</summary>
+        internal static bool DyingNextTurn(GameState state, string seat)
+        {
+            var me = state.Players[seat];
+            var opp = state.Players[GameEngine.OtherSeat(seat)];
+            int myLife = me.Life.Count;
+            if (myLife <= 0 || me.Leader == null) return false;
+
+            // They attack my Leader for Life damage next turn; the bar to clear is my Leader's power. Estimate
+            // each attacker's NEXT-turn power (its attached DON!! count, which is not credited on my turn) and
+            // how much fresh DON!! it needs to reach that bar. Give their refreshing DON!! to the cheapest-to-
+            // connect attackers first (that maximises connecting hits); count each hit as 1 (2 with Double
+            // Attack). An attacker that can't reach my Leader — even with DON!! — does NOT threaten Life, which
+            // is exactly the over-count the old "every attacker connects" version made.
+            int myLeaderPow = GameEngine.GetPower(state, me.Leader);
+            int budget = opp.CostArea.Count;   // DON!! that refreshes to active next turn
+            var needs = new List<(int need, int dmg)>();
+            void Consider(CardInstance a)
+            {
+                if (a == null) return;
+                int pow = GameEngine.GetPower(state, a) + (a.AttachedDonIds?.Count ?? 0) * 1000;
+                int need = pow >= myLeaderPow ? 0 : (myLeaderPow - pow + 999) / 1000;
+                needs.Add((need, GameEngine.HasDoubleAttack(state, a) ? 2 : 1));
+            }
+            Consider(opp.Leader);
+            foreach (var c in opp.CharacterArea) Consider(c);
+
+            int connects = 0;
+            foreach (var (need, dmg) in needs.OrderBy(n => n.need))
+                if (need <= budget) { budget -= need; connects += dmg; }
+
+            // Only truly dying if my whole STABILISATION kit still can't survive the turn — a control deck
+            // with freeze/bounce/life-gain can stall and swing the game, so it must not pivot all-in while it
+            // holds those. StabilizationCushion counts everything that denies a hit or buys survival.
+            return connects - StabilizationCushion(state, seat) >= myLife;
+        }
+
+        /// <summary>How many of the opponent's next-turn hits I can deny or survive: blockers on board (free),
+        /// plus, from hand, Counter cards (reactive), playable removal/disable (K.O. / bounce / rest / freeze),
+        /// life-gain, and deployable blockers. This is what lets a stall deck decline the desperation pivot and
+        /// grind instead of throwing the game — going all-in is only correct once this can no longer save me.</summary>
+        private static int StabilizationCushion(GameState state, string seat)
+        {
+            var me = state.Players[seat];
+            int budget = me.CostArea.Count;   // DON!! I refresh next turn to deploy proactive defence
+            int blockers = me.CharacterArea.Count(c => c != null && GameEngine.HasBlocker(state, c));
+            int counters = 0, proactive = 0;
+            foreach (var card in me.Hand)
+            {
+                var def = GameEngine.GetCard(card);
+                if (def == null) continue;
+                if (GameEngine.GetCounterPower(card) > 0) { counters++; continue; }   // reactive, ~free
+                var kind = OnePieceTcg.Engine.Bot.Search.RemovalModel.Classify(def.Effect);
+                bool disable = kind == OnePieceTcg.Engine.Bot.Search.RemovalKind.Ko
+                    || kind == OnePieceTcg.Engine.Bot.Search.RemovalKind.Bounce
+                    || kind == OnePieceTcg.Engine.Bot.Search.RemovalKind.Rest
+                    || kind == OnePieceTcg.Engine.Bot.Search.RemovalKind.Freeze;
+                string e = (def.Effect ?? "").ToLowerInvariant();
+                bool lifeGain = e.Contains("to the top of your life") || (e.Contains("add") && e.Contains("life card"));
+                bool blocker = def.Type == "character" && (def.Keywords?.Contains("Blocker") ?? false);
+                if ((disable || lifeGain || blocker) && def.Cost <= budget) proactive++;
+            }
+            return blockers + counters + Math.Min(proactive, budget);   // proactive plays are bounded by my DON!!
+        }
+
         // ---- Public entry points -------------------------------------------------
 
         /// <summary>Applies commands for <paramref name="seat"/> until it has no further
@@ -281,13 +403,39 @@ namespace OnePieceTcg.Engine.Bot
                     return new GameCommand { Type = "passEffect", Seat = seat, EffectId = effect.EffectId };
             }
 
-            bool negative = IsNegativeEffectText(effect.Text);
+            // WS-3: classify the removal kind once from the shared model. Treat ANY classified removal —
+            // including "return to the owner's hand", which IsNegativeEffectText does not catch — as a
+            // negative effect, so a removal aimed at the opponent picks their BIGGEST body (wantMax) rather
+            // than falling through to the smallest. (Latent bug previously masked by single-target fixtures.)
+            var kind = RemovalModelEnabled
+                ? OnePieceTcg.Engine.Bot.Search.RemovalModel.Classify(effect.Text)
+                : OnePieceTcg.Engine.Bot.Search.RemovalKind.None;
+            bool softDebuff = OnePieceTcg.Engine.Bot.Search.RemovalModel.IsSoft(kind);
+            bool negative = IsNegativeEffectText(effect.Text) || kind != OnePieceTcg.Engine.Bot.Search.RemovalKind.None;
+            // A SOFT debuff (−power / −cost / rest / freeze) aimed at the opponent only earns its target's
+            // value if that target is still a live threat this exchange; on a spent (rested, non-blocking)
+            // body it changes nothing, so steeply discount it. Permanent removal (K.O. / bounce / trash)
+            // keeps full value. Positive effects on your own cards are untouched.
             var ranked = candidates
                 .Select(c =>
                 {
                     bool ownedBySelf = c.Owner == seat;
                     bool wantMax = (ownedBySelf && !negative) || (!ownedBySelf && negative);
                     double v = Value(state, c);
+                    if (!ownedBySelf && negative && softDebuff
+                        && !OnePieceTcg.Engine.Bot.Search.RemovalModel.IsLiveThreat(state, c, kind))
+                        v *= 0.15;
+                    // WS-2: a −cost debuff that drops this body under an available KO-by-cost threshold is a
+                    // removal SETUP (the finisher lands next), so restore its full investment value and let the
+                    // ranking pick the biggest body the combo can actually remove.
+                    if (CostComboAware && !ownedBySelf
+                        && kind == OnePieceTcg.Engine.Bot.Search.RemovalKind.CostDown)
+                    {
+                        int amount = OnePieceTcg.Engine.Bot.Search.RemovalModel.CostDownAmount(effect.Text);
+                        int koThreshold = OnePieceTcg.Engine.Bot.Search.RemovalModel.BestEffectiveCostKoThreshold(state, seat);
+                        if (amount > 0 && koThreshold >= 0 && GameEngine.GetCost(state, c) - amount <= koThreshold)
+                            v = Value(state, c);
+                    }
                     return (card: c, score: wantMax ? v : -v);
                 })
                 .OrderByDescending(x => x.score);
@@ -351,7 +499,31 @@ namespace OnePieceTcg.Engine.Bot
             if (GameEngine.HasBlocker(state, card)) v += 1500;
             if (GameEngine.HasDoubleAttack(state, card)) v += 1500;
             if (GameEngine.HasRush(state, card)) v += 500;
+            // Threat beyond stats: a character's EFFECTS can make it far more dangerous than its power.
+            if (ThreatModelEnabled) v += EffectThreat(def);
             return v;
+        }
+
+        /// <summary>Effect-based threat a Character presents beyond its printed stats — what makes a small body
+        /// a priority answer. A repeatable [Activate: Main] engine (per-turn search, removal, or cost/DON
+        /// manipulation — e.g. a card that cost-reduces every turn) compounds value every turn it lives; a
+        /// continuous board aura and a [When Attacking] payoff add threat too. Text-driven, no card ids.</summary>
+        internal static double EffectThreat(CardDef def)
+        {
+            string e = (def?.Effect ?? "").ToLowerInvariant();
+            if (e.Length == 0) return 0;
+            double t = 0;
+            if (e.Contains("[activate: main]"))
+            {
+                t += 2000;   // a per-turn engine at all is worth removing
+                if (e.Contains("draw") || e.Contains("look at") || e.Contains("search")
+                    || (e.Contains("add") && e.Contains("hand"))) t += 2000;     // recurring card advantage
+                if (e.Contains("k.o.") || e.Contains("rest") || e.Contains("return")
+                    || e.Contains("cost") || e.Contains("don!!")) t += 2000;      // recurring disruption / resource
+            }
+            if (e.Contains("all of your") && (e.Contains("gain") || e.Contains("become"))) t += 1500; // board aura
+            if (e.Contains("[when attacking]")) t += 1000;   // extra payoff every swing
+            return t;
         }
 
         // DON!! needed for `atk` (at its CURRENT power, which already includes attached DON!! on your
@@ -656,6 +828,22 @@ namespace OnePieceTcg.Engine.Bot
 
         // ---- Main phase: deploy -> attach DON!! -> attack -> end turn -------------
 
+        // WS-1 opportunity cost: a DON-minus event that also has a [Counter] mode may be worth more held for
+        // defence than played now. Only such cards are gated; everything else always plays if affordable.
+        private static bool ShouldPlayNow(GameState state, string seat, CardInstance c)
+        {
+            if (!OpportunityHoldEnabled) return true;
+            var def = GameEngine.GetCard(c);
+            if (def == null || def.Type != "event") return true;
+            // Gate EVERY DON-minus event (not only those with a [Counter] mode). A no-Counter card like
+            // Lightning Dragon still has a hold decision: its freeze is worth keeping for a turn with a target
+            // rather than burning the card for the draw alone. The model weighs Main-now vs the card's option
+            // value (Counter defence + unrealised targeted disruption).
+            bool donMinus = OnePieceTcg.Engine.Bot.Search.DonOpportunityModel.DonMinusCost(def.Effect) > 0;
+            if (!donMinus) return true;
+            return OnePieceTcg.Engine.Bot.Search.DonOpportunityModel.ShouldUseMain(state, seat, c);
+        }
+
         private static GameCommand DecideMainPhase(GameState state, string seat, HashSet<string> blacklist)
         {
             var p = state.Players[seat];
@@ -663,7 +851,7 @@ namespace OnePieceTcg.Engine.Bot
             // 1) Deploy the highest-value affordable card first (spends DON!! on board
             //    presence before combat math — matches the deploy-then-attach-then-attack
             //    ordering seen across the mined ranked-ladder replays).
-            var playable = p.Hand.Where(c => GameEngine.CanPlayFromHand(state, seat, c))
+            var playable = p.Hand.Where(c => GameEngine.CanPlayFromHand(state, seat, c) && ShouldPlayNow(state, seat, c))
                 .OrderByDescending(c => MainPlayValue(state, seat, c));
             foreach (var c in playable)
             {
@@ -700,6 +888,63 @@ namespace OnePieceTcg.Engine.Bot
             int oppBlockers = opponent.CharacterArea.Count(c => c != null && !c.Rested && GameEngine.HasBlocker(state, c));
             bool race = opponent.Leader != null && opponent.Life.Count > 0
                         && leaderReachers >= opponent.Life.Count + oppBlockers;
+
+            // Lethal/desperation pivot: if I lose next turn even after holding everything back, conservative
+            // play only guarantees the loss. Abandon the Counter reserve and swing face — disperse every
+            // attack at the Leader to force the opponent to have all the answers, and take the best shot at
+            // closing now. (Only fires when death is near-certain; see DyingNextTurn.)
+            if (LethalPivotEnabled && DyingNextTurn(state, seat))
+            {
+                race = true;
+                counterReserve = 0;
+            }
+
+            // Restand engine: set up the Leader's [DON!! xN] restand so one leader swing becomes two. Load the
+            // gate first, then attack a rested Character it can K.O. (never face here) — that satisfies "battled
+            // a Character", and AdvancedActivationPolicy then restands the Leader for a face swing. Only while
+            // the ability is unused this turn and there is a Character to hit; otherwise fall through to normal
+            // attacks. Gated to restand Leaders, so no other deck is affected.
+            if (RestandEngineEnabled)
+            {
+                int rGate = LeaderRestandGate(state, seat);
+                if (rGate >= 0 && p.Leader != null && !p.Leader.Rested)
+                {
+                    int attached = p.Leader.AttachedDonIds?.Count ?? 0;
+                    if (attached < rGate && activeDon >= 1)
+                    {
+                        var load = Try(blacklist, new GameCommand { Type = "attachDon", Seat = seat, Target = p.Leader.InstanceId, Amount = 1 });
+                        if (load != null) return load;
+                    }
+                    else if (attached >= rGate)
+                    {
+                        var plan = PlanAttack(state, seat, p.Leader, 0, race: false);
+                        if (plan != null && plan.Value.targetId != opponent.Leader?.InstanceId)
+                        {
+                            // A rested body the Leader can K.O. exists — attack it to trigger the restand.
+                            var atk = Try(blacklist, new GameCommand { Type = "declareAttack", Seat = seat, Attacker = p.Leader.InstanceId, Target = plan.Value.targetId });
+                            if (atk != null) return atk;
+                        }
+                        else if (opponent.CharacterArea.Any(c => c != null && !c.Rested))
+                        {
+                            // No rested target yet, but the opponent has an active body — CREATE the target by
+                            // activating one of our own "rest an opponent" abilities (Kuina/Arlong-style). That
+                            // is the front half of the combo the guide is built around; next tick the Leader
+                            // attacks the newly-rested body and restands. Generic: any Activate:Main that rests
+                            // an opponent, not a card id.
+                            foreach (var ally in p.CharacterArea)
+                            {
+                                if (ally == null || p.AbilityUsedThisTurn.Contains(ally.InstanceId)) continue;
+                                string ae = (GameEngine.GetCard(ally)?.Effect ?? "").ToLowerInvariant();
+                                if (ae.Contains("[activate: main]") && ae.Contains("rest") && ae.Contains("opponent"))
+                                {
+                                    var act = Try(blacklist, new GameCommand { Type = "activateMain", Seat = seat, Target = ally.InstanceId });
+                                    if (act != null) return act;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Commit every DON!! that has no concrete defensive job BEFORE the first attack.
             // The previous sequence immediately swung every attacker that already connected, so

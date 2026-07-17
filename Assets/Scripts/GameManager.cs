@@ -155,6 +155,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // ---- Presence (networked only): what WE are hovering, and the opponent's last payload ----
     private string presenceHoverCardId;
     private int presenceRaisedHandIndex = -1;
+    private int presenceHandDragFrom = -1;   // slot we're dragging within our own hand (live reorder), -1 = none
+    private int presenceHandDragTo = -1;     // current target slot of that reorder drag
     private PresencePayload opponentPresence;
     private RectTransform opponentPresenceGlow;
     // Top-hand (opponent) fan holders + their rest positions, so PresenceReceived can lift
@@ -212,6 +214,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private RectTransform sideRoot;
     private RectTransform leftRoot;
     private RectTransform previewRoot;
+    private RectTransform blockerPreviewRoot;   // right-hand info panel shown when hovering a [Blocker] shield
     private CardInstance previewLockCard;   // last left-clicked card, shown in the docked left preview
     private bool menuOpen;                   // game menu (upper-right) open/closed
     private bool soundMenuOpen;              // sound settings panel (opened from the game menu)
@@ -451,6 +454,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 hoverCardId = presenceHoverCardId,
                 raisedHandIndexes = presenceRaisedHandIndex >= 0 ? new[] { presenceRaisedHandIndex } : new int[0],
                 donGroups = (localSeat == state.ActiveSeat && donGroupSizes.Count > 1) ? donGroupSizes.ToArray() : new int[0],
+                handDragFrom = presenceHandDragFrom,
+                handDragTo = presenceHandDragTo,
             });
         }
 
@@ -1567,16 +1572,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             for (int c = 0; c < nClusters; c++) w += cardW + (clusterCards[c].Count - 1) * intra;
             return w;
         }
-        float minGap = cardW * 0.18f;
-        float maxGap = cardW * 1.1f;
-        float minimal = SumSpans() + minGap * Mathf.Max(0, nClusters - 1);
-        if (minimal > availW && minimal > 0f)
+        // Groups sit TIGHT together — a fixed, small inter-group gap, with the whole cluster centered —
+        // rather than spreading to fill the entire cost-area width the instant a 2nd group is made.
+        float gap = nClusters > 1 ? cardW * 0.5f : 0f;
+        float need = SumSpans() + gap * Mathf.Max(0, nClusters - 1);
+        if (need > availW && need > 0f)
         {
-            float scale = availW / minimal;
-            cardW *= scale; cardH *= scale; intra *= scale; minGap *= scale; maxGap *= scale;
+            float scale = availW / need;
+            cardW *= scale; cardH *= scale; intra *= scale; gap *= scale;
         }
         float sumSpans = SumSpans();
-        float gap = nClusters > 1 ? Mathf.Clamp((availW - sumSpans) / (nClusters - 1), minGap, maxGap) : 0f;
         float total = sumSpans + gap * Mathf.Max(0, nClusters - 1);
         float x = -total * 0.5f + cardW * 0.5f;
         for (int c = 0; c < nClusters; c++)
@@ -1698,6 +1703,59 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         previewImageFitter.aspectRatio = previewCardAspect;
         previewTitle = TextObject("Preview Title", previewRoot, "", 18, Ink, TextAnchor.MiddleCenter);
         Stretch(previewTitle.rectTransform, new Vector2(0.04f, 0.02f), new Vector2(0.96f, 0.15f), Vector2.zero, Vector2.zero);
+
+        // Blocker hover-info popout. Mirrors the CARD preview's geometry EXACTLY (same outer rect, same card
+        // aspect, same rim-glow-on-an-inset-holder) so switching between hovering a card and a shield never
+        // makes the box jump horizontally and the gold glow stays on-screen. A warm-brown vertical gradient
+        // (board top-down wash styling) fills the box; NO hard border (it would read as an edge under the glow).
+        blockerPreviewRoot = PanelObject("Blocker Preview", canvas.transform, new Color(0, 0, 0, 0));
+        Stretch(blockerPreviewRoot, new Vector2(0.76f, 0.195f), new Vector2(0.998f, 0.805f), Vector2.zero, Vector2.zero);
+        var bpGroup = blockerPreviewRoot.gameObject.AddComponent<CanvasGroup>();
+        bpGroup.blocksRaycasts = false; bpGroup.interactable = false;
+        blockerPreviewRoot.gameObject.SetActive(false);
+
+        var bpRegion = PanelObject("Blocker Preview Region", blockerPreviewRoot, new Color(0, 0, 0, 0));
+        Stretch(bpRegion, new Vector2(0.05f, 0.18f), new Vector2(0.95f, 0.98f), Vector2.zero, Vector2.zero);
+        const float bpAspect = 168f / 235f;   // standard card proportion, same as the card preview
+
+        // Gold rim glow on a card-aspect holder — contained on-screen exactly like the card preview's glow.
+        var bpGlowHolder = PanelObject("Blocker Preview Glow", bpRegion, new Color(0, 0, 0, 0));
+        var bpGlowFit = bpGlowHolder.gameObject.AddComponent<AspectRatioFitter>();
+        bpGlowFit.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+        bpGlowFit.aspectRatio = bpAspect;
+        AddMysticalCardOutline(bpGlowHolder, true);
+
+        // Card-shaped box: warm-brown base + a vertical gradient (lighter at top → base at bottom).
+        var bpBox = PanelObject("Blocker Preview Box", bpRegion, (Color)new Color32(44, 32, 20, 255));
+        var bpBoxFit = bpBox.gameObject.AddComponent<AspectRatioFitter>();
+        bpBoxFit.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
+        bpBoxFit.aspectRatio = bpAspect;
+        RoundBig(bpBox);
+        var bpGrad = new GameObject("Blocker Preview Gradient").AddComponent<RectTransform>();
+        bpGrad.SetParent(bpBox, false);
+        Stretch(bpGrad, Vector2.zero, Vector2.one, new Vector2(8f, 8f), new Vector2(-8f, -8f));  // inset so square corners tuck inside the rounding
+        var bpGradImg = bpGrad.gameObject.AddComponent<RawImage>();
+        bpGradImg.texture = GetVGradientTexture();
+        bpGradImg.color = new Color32(96, 68, 38, 150);   // warm brown, fades toward the darker base at the bottom
+        bpGradImg.raycastTarget = false;
+
+        var bpShield = PanelObject("Blocker Preview Shield", bpBox, new Color(0, 0, 0, 0));
+        Stretch(bpShield, new Vector2(0.26f, 0.56f), new Vector2(0.74f, 0.88f), Vector2.zero, Vector2.zero);
+        var bpImg = bpShield.GetComponent<Image>();
+        var bpArt = LoadBlockerShieldSprite();
+        if (bpArt != null) { bpImg.sprite = bpArt; bpImg.preserveAspect = true; bpImg.color = Color.white; }
+        else { bpImg.color = new Color(0.16f, 0.52f, 0.85f, 0.95f); Round(bpShield); }
+        bpImg.raycastTarget = false;
+
+        var bpTitle = TextObject("Blocker Preview Title", bpBox, "Blocker", 20, new Color(0.95f, 0.78f, 0.50f, 1f), TextAnchor.MiddleCenter, titleFont);
+        Stretch(bpTitle.rectTransform, new Vector2(0.06f, 0.45f), new Vector2(0.94f, 0.55f), Vector2.zero, Vector2.zero);
+        bpTitle.raycastTarget = false;
+        var bpDesc = TextObject("Blocker Preview Desc", bpBox,
+            "After your opponent declares an attack, you may rest this Character to make it the new target of that attack.",
+            14, Ink, TextAnchor.UpperCenter);
+        Stretch(bpDesc.rectTransform, new Vector2(0.09f, 0.14f), new Vector2(0.91f, 0.44f), Vector2.zero, Vector2.zero);
+        bpDesc.raycastTarget = false;
+        bpDesc.raycastTarget = false;
     }
 
     private void Render()
@@ -1708,6 +1766,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // destroys the hovered card's CardHover before its OnPointerExit fires, which would otherwise
         // leave the preview stuck up. Re-hovering re-shows it.
         HidePreview();
+        HideBlockerPreview();
         Clear(boardRoot);
         Clear(sideRoot);
         Clear(leftRoot);
@@ -2626,7 +2685,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawMatchResultPeekChip()
     {
         var chip = PanelObject("Result Peek Chip", boardRoot, (Color)new Color32(14, 30, 46, 240));
-        Stretch(chip, new Vector2(0.42f, 0.93f), new Vector2(0.58f, 0.985f), Vector2.zero, Vector2.zero);
+        // Top-LEFT corner (mirroring the menu button's top-right) so it no longer covers the opponent's
+        // fanned hand across the top-center — you can inspect their final hand at match end.
+        Stretch(chip, new Vector2(0.02f, 0.93f), new Vector2(0.17f, 0.985f), Vector2.zero, Vector2.zero);
         Round(chip);
         AddRoundedCardBorder(chip, Accent, 1f);
         chip.SetAsLastSibling();
@@ -6684,6 +6745,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 opponentPresenceHandGlows.Add(AddMysticalCardOutline(slot, false));
             }
         }
+
+        // (iii) A card the opponent is mid-reorder within their hand: lift it and slide it toward its
+        // target slot, so you see them repositioning their hand in real time.
+        int dFrom = opponentPresence.handDragFrom, dTo = opponentPresence.handDragTo;
+        if (dFrom >= 0 && dFrom < opponentHandSlots.Count && dTo >= 0 && dTo < opponentHandSlotHomes.Count)
+        {
+            var dslot = opponentHandSlots[dFrom];
+            if (dslot != null)
+            {
+                float tx = opponentHandSlotHomes[dTo].x;
+                dslot.anchoredPosition = new Vector2(tx, opponentHandSlotHomes[dFrom].y - 16f);  // lifted + slid to target
+                dslot.SetAsLastSibling();
+                opponentPresenceHandGlows.Add(AddMysticalCardOutline(dslot, false));
+            }
+        }
     }
 
     // Publishes hover on non-card zones (DON!!, deck/DON!!-deck/trash piles, Life stacks) so
@@ -8275,6 +8351,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (previewRoot != null) previewRoot.gameObject.SetActive(false);
     }
 
+    // Shown while the cursor is over a [Blocker] shield; hidden on exit / board rebuild.
+    public void ShowBlockerPreview()
+    {
+        if (blockerPreviewRoot == null) return;
+        HidePreview();                          // don't fight the card preview for the right slot
+        blockerPreviewRoot.gameObject.SetActive(true);
+        blockerPreviewRoot.SetAsLastSibling();
+    }
+
+    public void HideBlockerPreview()
+    {
+        if (blockerPreviewRoot != null) blockerPreviewRoot.gameObject.SetActive(false);
+    }
+
     // Preview a card by its id (used by the clickable card links in the combat log).
     public void ShowPreviewById(string cardId)
     {
@@ -8364,8 +8454,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (card.Rested)
         {
             // Rested cards turn 90deg (the standard cue) but stay fully opaque - dimming them let the
-            // DON tucked behind the character show through, which read as a visual bug.
-            cardBody.localRotation = Quaternion.Euler(0, 0, 90f);
+            // DON tucked behind the character show through, which read as a visual bug. Negative Z = clockwise,
+            // so the card tips onto its RIGHT side.
+            cardBody.localRotation = Quaternion.Euler(0, 0, -90f);
         }
 
         if (faceUp)
@@ -8988,7 +9079,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (!isReplayMode && seat == state.ActiveSeat && !card.Rested
                 && GameEngine.IsSummoningSick(state, card))
             {
-                var dim = PanelObject("Summoning Sick Dim", holder, new Color(0f, 0f, 0f, 0.5f));
+                // A cool-grey WASH (not a dark shadow) so a card played this turn without [Rush] reads as
+                // faded / greyed-out ("can't attack yet") rather than just darkened.
+                var dim = PanelObject("Summoning Sick Dim", holder, new Color(0.52f, 0.55f, 0.60f, 0.55f));
                 Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
                 Round(dim);
                 dim.GetComponent<Image>().raycastTarget = false;
@@ -9009,21 +9102,29 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // player's cards straddle their top edge, the far (opponent/bot) player's cards
                 // straddle their bottom edge — so every shield sits toward the middle of the board.
                 float edgeY = seat != BottomSeat ? 0f : 1f;
+                // Nudge the badge INWARD only enough that the ring glow doesn't cross the row divider into the
+                // other player's region — but keep it riding HIGH on the card's edge (smaller offset ⇒ higher /
+                // less art covered; raise toward 0.5 to tuck it fully onto the card).
+                float inwardY = (edgeY < 0.5f ? 1f : -1f) * shieldSize * 0.12f;
+                // Ring glow: steel grey at rest, GOLD while the shield is hovered (like the card hover glow).
+                Color shieldGlowIdle  = new Color(0.62f, 0.66f, 0.71f, 0.90f);
+                Color shieldGlowHover = new Color(0.98f, 0.74f, 0.28f, 0.95f);
+                RawImage shieldGlow = null;
 
-                // Faint grey glow behind the shield — a tight radial halo that HUGS the shield (like
-                // the card glow hugs a card), not a big soft square. Only while the blocker is live.
+                // Ring glow that circularly HUGS the shield's rim (like the card rim glow hugs a card border)
+                // — a thin ring, transparent at the core, not a solid square. Live blockers only.
                 if (!blockDisabled)
                 {
                     var sglow = new GameObject("Blocker Shield Glow").AddComponent<RectTransform>();
                     sglow.SetParent(holder, false);
                     sglow.anchorMin = sglow.anchorMax = new Vector2(0.5f, edgeY);
-                    sglow.pivot = new Vector2(0.5f, 0.5f);                        // straddle the edge
-                    sglow.sizeDelta = new Vector2(shieldSize * 1.5f, shieldSize * 1.5f);
-                    sglow.anchoredPosition = Vector2.zero;
-                    var sgi = sglow.gameObject.AddComponent<RawImage>();
-                    sgi.texture = GetGlowAuraTexture(0.12f, 2.4f);               // radial, hugs the icon
-                    sgi.color = new Color(0.82f, 0.85f, 0.90f, 0.55f);           // faint grey halo
-                    sgi.raycastTarget = false;
+                    sglow.pivot = new Vector2(0.5f, 0.5f);
+                    sglow.sizeDelta = new Vector2(shieldSize * 1.5f, shieldSize * 1.5f); // tight to the rim
+                    sglow.anchoredPosition = new Vector2(0f, inwardY);
+                    shieldGlow = sglow.gameObject.AddComponent<RawImage>();
+                    shieldGlow.texture = GetRingGlowTexture(0.62f, 0.10f);       // thin ring hugging the shield rim
+                    shieldGlow.color = shieldGlowIdle;                           // steel grey (turns gold on hover)
+                    shieldGlow.raycastTarget = false;
                     sglow.SetAsLastSibling();
                 }
 
@@ -9033,9 +9134,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 shield.anchorMin = shield.anchorMax = new Vector2(0.5f, edgeY);
                 shield.pivot = new Vector2(0.5f, 0.5f);
                 shield.sizeDelta = new Vector2(shieldSize, shieldSize);
-                shield.anchoredPosition = Vector2.zero;
+                shield.anchoredPosition = new Vector2(0f, inwardY);   // tucked onto the card edge, not past it
+                // Far (north) side: flip the shield vertically so its TOP points toward the middle of the
+                // board (matching the near side) instead of pointing away.
+                if (seat != BottomSeat) shield.localScale = new Vector3(1f, -1f, 1f);
                 var simg = shield.GetComponent<Image>();
-                simg.raycastTarget = false;
+                // Hoverable + clickable: hover shows the blocker preview and turns the glow gold; a click
+                // forwards to the card's click so the shield icon can also declare a block.
+                simg.raycastTarget = true;
+                shield.gameObject.AddComponent<BlockerShieldHover>().Init(this, shieldGlow, shieldGlowIdle, shieldGlowHover, card, seat);
                 if (art != null)
                 {
                     // Use the shield art directly (square, preserve aspect); no panel/glyph.
@@ -9834,6 +9941,37 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         tex.SetPixels32(px);
         tex.Apply(false, true);
         _glowAuraTexCache[key] = tex;
+        return tex;
+    }
+
+    private static readonly Dictionary<int, Texture2D> _ringGlowTexCache = new Dictionary<int, Texture2D>();
+    // Radial RING halo: alpha peaks at normalized radius `peak` (0 = center, 1 = mid-edge) and falls off
+    // both inward and outward with a Gaussian of width `thickness`, transparent at the core. So it HUGS the
+    // rim of a circular/badge element (like the card rim glow hugs a card border) instead of filling a
+    // solid square behind it.
+    private static Texture2D GetRingGlowTexture(float peak, float thickness)
+    {
+        int key = Mathf.RoundToInt(peak * 1000f) * 1000 + Mathf.RoundToInt(thickness * 1000f);
+        if (_ringGlowTexCache.TryGetValue(key, out var cached) && cached != null) return cached;
+        const int W = 128, H = 128;
+        var tex = new Texture2D(W, H, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[W * H];
+        float twoTSq = 2f * thickness * thickness;
+        for (int y = 0; y < H; y++)
+        {
+            for (int x = 0; x < W; x++)
+            {
+                float nx = (x + 0.5f) / W - 0.5f;
+                float ny = (y + 0.5f) / H - 0.5f;
+                float r = Mathf.Sqrt(nx * nx + ny * ny) * 2f;   // 0 at center, 1 at mid-edge
+                float d = r - peak;
+                float a = Mathf.Clamp01(Mathf.Exp(-(d * d) / twoTSq));
+                px[y * W + x] = new Color32(255, 255, 255, (byte)(a * 255f));
+            }
+        }
+        tex.SetPixels32(px);
+        tex.Apply(false, true);
+        _ringGlowTexCache[key] = tex;
         return tex;
     }
 
@@ -10687,6 +10825,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 {
                     UpdateLivePreview(eventData);
                     SnapHeldCardToPreviewSlot();
+                    // Stream the live reorder so the opponent sees this card lift and slide in our hand.
+                    manager.presenceHandDragFrom = originalIndex;
+                    manager.presenceHandDragTo = previewIndex;
                 }
                 else
                 {
@@ -10702,6 +10843,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         public void OnEndDrag(PointerEventData eventData)
         {
             manager.isDraggingHandCard = false;
+            manager.presenceHandDragFrom = manager.presenceHandDragTo = -1;   // stop streaming the reorder
 
             if (inHandReorder)
             {
@@ -10860,6 +11002,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         private void ExitInHandReorder(bool hideSourceForGhost = false)
         {
             inHandReorder = false;
+            manager.presenceHandDragFrom = manager.presenceHandDragTo = -1;   // no longer reordering in-hand
             var row = manager.GetHandRow(handSeat);
             if (row != null)
             {
@@ -11349,6 +11492,27 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         public void Init(GameManager owner, string id) { manager = owner; cardId = id; }
         public void OnPointerEnter(PointerEventData eventData) { manager.ShowPreviewById(cardId); }
         public void OnPointerExit(PointerEventData eventData) { manager.HidePreview(); }
+    }
+
+    // Hover a [Blocker] shield → show the blocker info preview on the right and turn the ring glow gold;
+    // revert on exit. CLICKING the shield forwards to the card's own click, so during a block you can
+    // declare the block by clicking either the card or its shield icon (the icon sits on top and would
+    // otherwise absorb the click).
+    private sealed class BlockerShieldHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler
+    {
+        private GameManager manager;
+        private RawImage glow;
+        private Color idleColor, hoverColor;
+        private CardInstance card;
+        private string seat;
+        public void Init(GameManager owner, RawImage shieldGlow, Color idle, Color hover, CardInstance c, string s)
+        { manager = owner; glow = shieldGlow; idleColor = idle; hoverColor = hover; card = c; seat = s; }
+        public void OnPointerEnter(PointerEventData eventData)
+        { if (glow != null) glow.color = hoverColor; if (manager != null) manager.ShowBlockerPreview(); }
+        public void OnPointerExit(PointerEventData eventData)
+        { if (glow != null) glow.color = idleColor; if (manager != null) manager.HideBlockerPreview(); }
+        public void OnPointerClick(PointerEventData eventData)
+        { if (manager != null && card != null) manager.OnCardClick(card, seat); }
     }
 
     private sealed class CardHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler

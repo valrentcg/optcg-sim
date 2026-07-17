@@ -128,7 +128,7 @@ namespace OnePieceTcg.Sim.Search
                         list.Add(new GameCommand { Type = "attachDon", Seat = seat, Target = c.InstanceId, Amount = 1 });
                 // activate a Main effect on each board card
                 foreach (var c in BoardAttackers(me))
-                    list.Add(new GameCommand { Type = "activateMain", Seat = seat, InstanceId = c.InstanceId });
+                    list.Add(new GameCommand { Type = "activateMain", Seat = seat, Target = c.InstanceId });
                 // declare an attack: each ready attacker × each legal target (opp leader + rested opp chars)
                 var targets = new List<string>();
                 if (opp.Leader != null) targets.Add(opp.Leader.InstanceId);

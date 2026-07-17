@@ -77,29 +77,56 @@ public static class FriendsManager
     public static event Action FriendsChanged;
 
     private static Task _friendsInitTask;
+    private static string _friendsInitPlayerId;   // the player FriendsService was initialized FOR
+    private static bool _friendsHandlersHooked;   // subscribe the relationship/presence events only once
 
     public static async Task EnsureReadyAsync()
     {
         await AccountManager.EnsureReadyAsync();
+
+        // FriendsService binds to the auth player at init time. If the signed-in player has changed since
+        // we last initialized (anonymous → account, a re-login, or an account switch), re-initialize for the
+        // NEW player — otherwise we keep querying the previous player's (usually empty) friends/requests,
+        // which reads to the user as "my friends vanished after a game".
+        string current = CurrentPlayerId();
+        if (_friendsInitTask != null && !string.Equals(_friendsInitPlayerId, current, StringComparison.Ordinal))
+            _friendsInitTask = null;
+        if (_friendsInitTask == null) _friendsInitPlayerId = current;
+
         _friendsInitTask ??= InitializeAndSubscribeAsync();
         await _friendsInitTask;
     }
 
+    private static string CurrentPlayerId()
+    {
+        try { return AuthenticationService.Instance.PlayerId; } catch { return null; }
+    }
+
     private static async Task InitializeAndSubscribeAsync()
     {
-        await FriendsService.Instance.InitializeAsync();
+        // InitializeAsync is safe to call again after an auth player change; it rebinds the service to the
+        // current player. Tolerate an "already initialized" style throw so a re-init for the new player
+        // doesn't abort the whole flow.
+        try { await FriendsService.Instance.InitializeAsync(); }
+        catch (Exception ex) { Debug.LogWarning($"FriendsManager: FriendsService.InitializeAsync ({ex.Message}) — continuing."); }
+        if (_friendsHandlersHooked) { await PublishOnlineAsync(); return; }
+        _friendsHandlersHooked = true;
         FriendsService.Instance.RelationshipAdded += _ => FriendsChanged?.Invoke();
         FriendsService.Instance.RelationshipDeleted += _ => FriendsChanged?.Invoke();
         // PresenceUpdated fires whenever a friend's Availability changes (client opened/
         // closed) - routed into the same FriendsChanged repaint the relationship events use,
         // so the menu's online/offline dots update live without any extra plumbing.
         FriendsService.Instance.PresenceUpdated += _ => FriendsChanged?.Invoke();
+        await PublishOnlineAsync();
+    }
 
-        // Publish our own availability as ONLINE so we show up green in friends' lists.
-        // The Friends service flips us back to OFFLINE automatically when the client's
-        // WebSocket drops (app quit/crash), so no explicit sign-out call is required.
-        // Best-effort: in the editor / no-services / offline case this must never throw
-        // to the caller - friends lists still work, we just appear offline to others.
+    // Publish our own availability as ONLINE so we show up green in friends' lists. Re-run after a re-init
+    // for a new player so the account (not the old session) is the one shown online. The Friends service
+    // flips us to OFFLINE automatically when the client's WebSocket drops (app quit/crash), so no explicit
+    // sign-out call is required. Best-effort: in the editor / no-services / offline case this must never
+    // throw to the caller — friends lists still work, we just appear offline to others.
+    private static async Task PublishOnlineAsync()
+    {
         try
         {
             await FriendsService.Instance.SetPresenceAsync(Availability.Online, new PresenceActivity());

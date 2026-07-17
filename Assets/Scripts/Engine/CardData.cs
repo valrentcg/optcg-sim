@@ -103,6 +103,21 @@ namespace OnePieceTcg.Engine
             var def = Card(id, name, type, color, cost, power, life, counter, keywords, effect, trigger, features);
             def.Rarity = rarity ?? "";
             def.Attribute = attribute ?? "";
+            // Some cards (23 in the library) carry their [Trigger] clause inside the EFFECT text with an
+            // empty trigger field, so every def.Trigger consumer (life reveal @~2706, "with a [Trigger]"
+            // gates, TryResolveKnownTrigger) missed it and the trigger silently never fired. Lift the
+            // [Trigger] clause into the trigger field once, at load, so all paths see it.
+            if (string.IsNullOrWhiteSpace(def.Trigger) && !string.IsNullOrEmpty(def.Effect))
+            {
+                int ti = def.Effect.IndexOf("[Trigger]", StringComparison.OrdinalIgnoreCase);
+                // Only a real [Trigger] CLAUSE (start of the effect or start of a line) — never an inline
+                // "…Character with a [Trigger]…" keyword reference (OP03-022, OP05-002, OP13-110).
+                if (ti == 0 || (ti > 0 && def.Effect[ti - 1] == '\n'))
+                {
+                    int nl = def.Effect.IndexOf('\n', ti);
+                    def.Trigger = (nl >= 0 ? def.Effect.Substring(ti, nl - ti) : def.Effect.Substring(ti)).Trim();
+                }
+            }
             Library[id] = def;
         }
 

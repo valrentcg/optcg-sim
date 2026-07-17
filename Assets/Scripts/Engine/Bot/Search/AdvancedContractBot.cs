@@ -43,12 +43,17 @@ namespace OnePieceTcg.Engine.Bot.Search
                 || (state.DeckLook != null && state.DeckLook.Seat == seat)
                 || state.PendingEffects.Any(e => e.Seat == seat)
                 || (state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger");
-            // Rollout search treats consuming a Trigger as a legal state change even when its
-            // optional payload has no target. Apply the same strict value gate as the incumbent
-            // before search, so Advanced cannot trash a useful Event from Life for a no-op.
-            if (state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger"
-                && !IntermediateBot.ShouldUseTrigger(state, seat))
-                return new GameCommand { Type = "passTrigger", Seat = seat };
+            // Battle Trigger step: decide use vs. take-into-hand with the dedicated utility evaluator
+            // (simulate both lines, weigh removal/body/defensive power/Life/DON/draw against the card's
+            // [Counter] + card advantage, with a lethal override). This subsumes the old zero-value gate —
+            // a no-target/no-value Trigger scores ~0 and is declined — and, unlike the generic rollout,
+            // does not wash out a Trigger's marginal defensive value.
+            if (state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger")
+                return new GameCommand
+                {
+                    Type = TriggerUtilityPolicy.ShouldUse(state, seat) ? "useTrigger" : "passTrigger",
+                    Seat = seat,
+                };
             if (resolutionDecision)
                 return SearchBot.DecideOneCommand(state, seat, blacklist);
 

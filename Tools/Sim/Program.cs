@@ -781,6 +781,493 @@ switch (mode)
         }
     }
 
+    case "strategy-fixture-test":
+        return OnePieceTcg.Sim.Planning.StrategyFixtureTest.Run(BuildRegistry(out _));
+
+    case "effect-coverage-audit":
+        // DB-wide operability sweep: printed effect text vs what the engine can resolve.
+        return OnePieceTcg.Sim.Planning.EffectCoverageAudit.Run(args.Length > 1 ? args[1] : null);
+
+    case "condition-audit":
+        // Aura/condition blind-spot sweep: printed conditions EvaluateCondition can't parse (fail-closed).
+        return OnePieceTcg.Sim.Planning.ConditionAudit.Run(args.Length > 1 ? args[1] : null);
+
+    case "privacy-test":
+    {
+        var reg = BuildRegistry(out _);
+        var south = reg.Resolve(reg.Ids.First()); var north = reg.Resolve(reg.Ids.Skip(1).First());
+        int trials = 8;
+        for (int i = 1; i < args.Length - 1; i++)
+            if (args[i] == "--trials" && int.TryParse(args[i + 1], out var tn)) trials = tn;
+        return OnePieceTcg.Sim.Search.PrivacyTest.Run(south, north, trials);
+    }
+
+    case "observed-seam-test":
+    {
+        var reg = BuildRegistry(out _);
+        var south = reg.Resolve(reg.Ids.First()); var north = reg.Resolve(reg.Ids.Skip(1).First());
+        return OnePieceTcg.Sim.Runner.ObservedSeamTest.Run(south, north);
+    }
+
+    case "boundary-test":
+    {
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Select(reg.Resolve).ToList();
+        return OnePieceTcg.Sim.Runner.BoundaryFixtureTest.Run(pool);
+    }
+
+    case "determinizer-test":
+    {
+        var reg = BuildRegistry(out _);
+        var south = reg.Resolve(reg.Ids.First()); var north = reg.Resolve(reg.Ids.Skip(1).First());
+        return OnePieceTcg.Sim.Runner.DeterminizerTest.Run(south, north);
+    }
+
+    case "ledger-test":
+        return OnePieceTcg.Sim.Runner.LedgerTest.Run();
+
+    case "nested-decklook-test":
+        BuildRegistry(out _);
+        return OnePieceTcg.Sim.Runner.NestedDeckLookTest.Run();
+
+    case "kworld-test":
+        return OnePieceTcg.Sim.Runner.KWorldTest.Run();
+
+    case "honest-play":
+    {
+        // Honest (K=1 determinized) planner vs the held-out IntermediateBot baseline. A FIRST honest number,
+        // not a trustworthy measurement (small n, no pairing/CI, K=1, pre-ledger).
+        int n = args.Length > 1 && int.TryParse(args[1], out var hn) ? hn : 20;
+        int kWorlds = args.Length > 2 && int.TryParse(args[2], out var kw) ? kw : 1;   // honest-play [n] [k] [nodeBudget] [arch]
+        int nodeBudget = args.Length > 3 && int.TryParse(args[3], out var nb) ? nb : 600;
+        if (args.Contains("arch")) OnePieceTcg.Sim.Planning.ValueFunction.ArchetypeWeights = true;   // bend eval per deck archetype
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
+            .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; })
+            .OrderBy(x => x).ToList();
+        // Replan-every-command determinizes + searches per command × K worlds; NodeBudget is the search knee lever.
+        var opt = new OnePieceTcg.Sim.Planning.TurnPlanner.Options { BeamWidth = 8, MaxDepth = 12, NodeBudget = nodeBudget, WorkBudget = System.Math.Max(30000, nodeBudget * 50) };
+        var rng = new System.Random(7);
+        int decided = 0, resultWins = 0, outright = 0, outrightWins = 0, stuck = 0, threw = 0; var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < n; i++)
+        {
+            string dS = pool[rng.Next(pool.Count)], dR = pool[rng.Next(pool.Count)];
+            var sDef = reg.Resolve(dS); var nDef = reg.Resolve(dR);
+            string first = i % 2 == 0 ? "south" : "north";
+            var honest = new OnePieceTcg.Sim.Planning.HonestPlannerBot(sDef, nDef,
+                ctx: OnePieceTcg.Sim.Planning.DeckFingerprint.Analyze(sDef), goFirst: first == "south", opt: opt, kWorlds: kWorlds);
+            var baseline = new OnePieceTcg.Sim.BaselineAgent();
+            try
+            {
+                var st = OnePieceTcg.Sim.Planning.GameRunner.Play(honest, baseline, sDef, nDef, $"honest:{i}", first, 20000, 60);
+                if (OnePieceTcg.Sim.Planning.GameRunner.Stuck) { stuck++; System.Console.WriteLine($"  game {i + 1}/{n}: STUCK ({sw.Elapsed.TotalSeconds:F0}s)"); continue; }
+                decided++;
+                bool outrightGame = st.Status == "finished" && OnePieceTcg.Sim.Planning.GameRunner.Winner(st) != null;
+                if (outrightGame) { outright++; if (OnePieceTcg.Sim.Planning.GameRunner.Winner(st) == "south") outrightWins++; }
+                if (OnePieceTcg.Sim.Planning.GameRunner.Result(st) == "south") resultWins++;
+                System.Console.WriteLine($"  game {i + 1}/{n}: {OnePieceTcg.Sim.Planning.GameRunner.Result(st) ?? "tie"}{(outrightGame ? "" : " (adjudicated)")} ({sw.Elapsed.TotalSeconds:F0}s)");
+            }
+            catch (System.Exception e)
+            {
+                threw++;
+                System.Console.WriteLine($"  game {i + 1}/{n}: DETERMINIZE THREW ({dS} vs {dR}): {e.Message}");
+            }
+        }
+        // Wilson 95% score interval on the result win rate — small n has a WIDE interval, printed so it can't
+        // be over-read as "strength".
+        double p = decided > 0 ? (double)resultWins / decided : 0;
+        double z = 1.96, z2 = z * z, N = System.Math.Max(1, decided);
+        double denom = 1 + z2 / N, center = (p + z2 / (2 * N)) / denom;
+        double half = z * System.Math.Sqrt(p * (1 - p) / N + z2 / (4 * N * N)) / denom;
+        System.Console.WriteLine();
+        System.Console.WriteLine($"HONEST (K={kWorlds}) vs IntermediateBot: {resultWins}/{decided} = {100 * p:F0}% (95% CI [{100 * (center - half):F0}%, {100 * (center + half):F0}%])");
+        System.Console.WriteLine($"  outright-only: {outrightWins}/{outright}; adjudicated: {resultWins - outrightWins}/{decided - outright}; stuck: {stuck}; determinize-threw: {threw}; {n} games, {sw.Elapsed.TotalSeconds:F0}s");
+        System.Console.WriteLine($"⚠ NOT a trustworthy measurement: unpaired, K={kWorlds}, modest budget. Trustworthy = paired (deck+turn-order swap), n≥300, honest-vs-perfect-info for the contamination delta.");
+        return 0;
+    }
+
+    case "honest-mutate":
+    {
+        // Small, paired, archetype-specific EOD pilot. Usage:
+        // honest-mutate [trainPairs] [holdoutPairs] [nodeBudget] [archetype] [dop] [seedOffset] [mirror|field]
+        int trainPairs = args.Length > 1 && int.TryParse(args[1], out var mt) ? mt : 6;
+        int holdoutPairs = args.Length > 2 && int.TryParse(args[2], out var mh) ? mh : 10;
+        int mutationBudget = args.Length > 3 && int.TryParse(args[3], out var mb) ? mb : 250;
+        string mutationArch = args.Length > 4 ? args[4] : "aggro";
+        int mutationDop = args.Length > 5 && int.TryParse(args[5], out var md) ? md : 4;
+        int mutationSeedOffset = args.Length > 6 && int.TryParse(args[6], out var ms) ? ms : 0;
+        bool mutationMirror = args.Length <= 7 || !string.Equals(args[7], "field", System.StringComparison.OrdinalIgnoreCase);
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.Run(
+            BuildRegistry(out _), trainPairs, holdoutPairs, mutationBudget, mutationArch, mutationDop,
+            mutationSeedOffset, mutationMirror);
+    }
+
+    case "honest-policy-check":
+    {
+        // Direct paired search-vs-policy A/B. Usage:
+        // honest-policy-check [pairs] [nodeBudget] [archetype] [dop] [seedOffset] [mirror|field]
+        int policyPairs = args.Length > 1 && int.TryParse(args[1], out var pp) ? pp : 10;
+        int policyBudget = args.Length > 2 && int.TryParse(args[2], out var pb) ? pb : 100;
+        string policyArch = args.Length > 3 ? args[3] : "aggro";
+        int policyDop = args.Length > 4 && int.TryParse(args[4], out var pd) ? pd : 4;
+        int policySeedOffset = args.Length > 5 && int.TryParse(args[5], out var ps) ? ps : 0;
+        bool policyMirror = args.Length > 6 && string.Equals(args[6], "mirror", System.StringComparison.OrdinalIgnoreCase);
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunPolicyCheck(
+            BuildRegistry(out _), policyPairs, policyBudget, policyArch, policyDop, policySeedOffset,
+            policyMirror);
+    }
+
+    case "expert-sync":
+    {
+        // Download the rolling public OPBounty feed plus the stable high-bounty bootstrap replays,
+        // aggregate observable expert actions, and match their card pools to validated local meta lists.
+        // expert-sync [minimumBounty] [outputDir]
+        double expertBounty = args.Length > 1 && double.TryParse(args[1], out var eb) ? eb : 1000;
+        string expertOutput = args.Length > 2 ? args[2] : OnePieceTcg.Sim.Expert.ExpertReplayCorpus.DefaultOutputDir;
+        return OnePieceTcg.Sim.Expert.ExpertReplayCorpus.Sync(BuildRegistry(out _), expertBounty, expertOutput);
+    }
+
+    case "honest-expert-check":
+    {
+        // Paired contract-v2 vs replay-learned policy on replay-matched high-bounty deck proxies.
+        // honest-expert-check [pairs] [dop] [seedOffset] [corpusDir]
+        int expertPairs = args.Length > 1 && int.TryParse(args[1], out var ep) ? ep : 30;
+        int expertDop = args.Length > 2 && int.TryParse(args[2], out var ed) ? ed : 6;
+        int expertSeed = args.Length > 3 && int.TryParse(args[3], out var es) ? es : 0;
+        string expertDir = args.Length > 4 ? args[4] : OnePieceTcg.Sim.Expert.ExpertReplayCorpus.DefaultOutputDir;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunExpertCheck(
+            BuildRegistry(out _), expertPairs, expertDop, expertSeed, expertDir);
+    }
+
+    case "honest-expert-gate":
+    {
+        // Fresh-seed single-arm confirmation of the retained policy's 55% high-bounty-suite target.
+        // honest-expert-gate [pairs] [dop] [seedOffset] [corpusDir]
+        int gatePairs = args.Length > 1 && int.TryParse(args[1], out var gp) ? gp : 30;
+        int gateDop = args.Length > 2 && int.TryParse(args[2], out var gd) ? gd : 6;
+        int gateSeed = args.Length > 3 && int.TryParse(args[3], out var gs) ? gs : 900000;
+        string gateDir = args.Length > 4 ? args[4] : OnePieceTcg.Sim.Expert.ExpertReplayCorpus.DefaultOutputDir;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunExpertGate(
+            BuildRegistry(out _), gatePairs, gateDop, gateSeed, gateDir);
+    }
+
+    case "honest-matchup-check":
+    {
+        // Exact A->B and B->A matchup, with the honest Advanced candidate in both seats per seed.
+        // honest-matchup-check <deckA> <deckB> [pairs] [dop] [seedOffset] [scope] [opponent]
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: honest-matchup-check <deckA> <deckB> [pairs] [dop] [seedOffset] [scope] [opponent]");
+            return 1;
+        }
+        int matchupPairs = args.Length > 3 && int.TryParse(args[3], out var mp) ? mp : 20;
+        int matchupDop = args.Length > 4 && int.TryParse(args[4], out var mdp) ? mdp : 8;
+        int matchupSeed = args.Length > 5 && int.TryParse(args[5], out var mso) ? mso : 0;
+        string matchupScope = args.Length > 6 ? args[6].ToLowerInvariant() : "contract-v2";
+        string matchupOpponent = args.Length > 7 ? args[7].ToLowerInvariant() : "champion";
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunMatchupCheck(
+            BuildRegistry(out _), args[1], args[2], matchupPairs, matchupDop, matchupSeed,
+            matchupScope, matchupOpponent);
+    }
+
+    case "honest-advanced-selfplay":
+    {
+        // Same honest Advanced architecture on both sides; each deck goes first once per pair.
+        // honest-advanced-selfplay <deckA> <deckB> [pairs] [dop] [seedOffset] [scopeA] [scopeB]
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: honest-advanced-selfplay <deckA> <deckB> [pairs] [dop] [seedOffset] [scopeA] [scopeB]");
+            return 1;
+        }
+        int selfPairs = args.Length > 3 && int.TryParse(args[3], out var sp) ? sp : 30;
+        int selfDop = args.Length > 4 && int.TryParse(args[4], out var sd) ? sd : 8;
+        int selfSeed = args.Length > 5 && int.TryParse(args[5], out var ss) ? ss : 0;
+        string selfScopeA = args.Length > 6 ? args[6].ToLowerInvariant() : "contract-v2";
+        string selfScopeB = args.Length > 7 ? args[7].ToLowerInvariant() : selfScopeA;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunAdvancedSelfPlay(
+            BuildRegistry(out _), args[1], args[2], selfPairs, selfDop, selfSeed, selfScopeA, selfScopeB);
+    }
+
+    case "trigger-policy-ab":
+    {
+        // Paired A/B of the dedicated battle-Trigger evaluator vs the generic rollout, on identical seeds.
+        // trigger-policy-ab <deckA> <deckB> [pairs] [dop] [seedOffset]
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: trigger-policy-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int abPairs = args.Length > 3 && int.TryParse(args[3], out var abp) ? abp : 20;
+        int abDop = args.Length > 4 && int.TryParse(args[4], out var abd) ? abd : 8;
+        int abSeed = args.Length > 5 && int.TryParse(args[5], out var abs) ? abs : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunTriggerPolicyAB(
+            BuildRegistry(out _), args[1], args[2], abPairs, abDop, abSeed);
+    }
+
+    case "removal-model-ab":
+    {
+        // Paired A/B of the WS-3 removal-capability targeting model vs the generic ranking, identical seeds.
+        // removal-model-ab <deckA> <deckB> [pairs] [dop] [seedOffset]
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: removal-model-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int rmPairs = args.Length > 3 && int.TryParse(args[3], out var rmp) ? rmp : 20;
+        int rmDop = args.Length > 4 && int.TryParse(args[4], out var rmd) ? rmd : 8;
+        int rmSeed = args.Length > 5 && int.TryParse(args[5], out var rms) ? rms : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunRemovalModelAB(
+            BuildRegistry(out _), args[1], args[2], rmPairs, rmDop, rmSeed);
+    }
+
+    case "enel-diagnostic":
+    {
+        // WS-1 play-trace: what does the advanced bot actually DO piloting a DON-engine deck?
+        // enel-diagnostic [engineDeck] [oppDeck] [games] [seedOffset]
+        string edEngine = args.Length > 1 ? args[1] : "op16-p-enel";
+        string edOpp = args.Length > 2 ? args[2] : "op16-blue-lucy";
+        int edGames = args.Length > 3 && int.TryParse(args[3], out var edg) ? edg : 6;
+        int edSeed = args.Length > 4 && int.TryParse(args[4], out var eds) ? eds : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunEnelDiagnostic(
+            BuildRegistry(out _), edEngine, edOpp, edGames, edSeed);
+    }
+
+    case "trash-ab":
+    {
+        // Paired A/B of the trash-recursion model, identical seeds. (deckA should be the recursion deck.)
+        // trash-ab <deckA> <deckB> [pairs] [dop] [seedOffset]
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: trash-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int trP = args.Length > 3 && int.TryParse(args[3], out var trp) ? trp : 20;
+        int trD = args.Length > 4 && int.TryParse(args[4], out var trd) ? trd : 8;
+        int trS = args.Length > 5 && int.TryParse(args[5], out var trs) ? trs : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunTrashAB(
+            BuildRegistry(out _), args[1], args[2], trP, trD, trS);
+    }
+
+    case "threat-model-ab":
+    {
+        // Paired A/B of the effect-threat target-value model, identical seeds.
+        // threat-model-ab <deckA> <deckB> [pairs] [dop] [seedOffset]
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: threat-model-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int tmP = args.Length > 3 && int.TryParse(args[3], out var tmp) ? tmp : 20;
+        int tmD = args.Length > 4 && int.TryParse(args[4], out var tmd) ? tmd : 8;
+        int tmS = args.Length > 5 && int.TryParse(args[5], out var tms) ? tms : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunThreatModelAB(
+            BuildRegistry(out _), args[1], args[2], tmP, tmD, tmS);
+    }
+
+    case "sac-recur-ab":
+    {
+        // Paired A/B of the sacrifice-to-recur unlock (trash a small body to deploy a bigger one from trash).
+        // sac-recur-ab <deckA> <deckB> [pairs] [dop] [seedOffset]   (deckA should be the recursion deck)
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: sac-recur-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int srP = args.Length > 3 && int.TryParse(args[3], out var srp) ? srp : 20;
+        int srD = args.Length > 4 && int.TryParse(args[4], out var srd) ? srd : 8;
+        int srS = args.Length > 5 && int.TryParse(args[5], out var srs) ? srs : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunSacRecurAB(
+            BuildRegistry(out _), args[1], args[2], srP, srD, srS);
+    }
+
+    case "restand-ab":
+    {
+        // Paired A/B of the restand engine (Zoro-style multi-attack), identical seeds.
+        // restand-ab <deckA> <deckB> [pairs] [dop] [seedOffset]   (deckA should be the restand deck)
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: restand-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int rsP = args.Length > 3 && int.TryParse(args[3], out var rsp) ? rsp : 20;
+        int rsD = args.Length > 4 && int.TryParse(args[4], out var rsd) ? rsd : 8;
+        int rsS = args.Length > 5 && int.TryParse(args[5], out var rss) ? rss : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunRestandAB(
+            BuildRegistry(out _), args[1], args[2], rsP, rsD, rsS);
+    }
+
+    case "lethal-pivot-ab":
+    {
+        // Paired A/B of the lethal/desperation pivot (all-in when dead next turn), identical seeds.
+        // lethal-pivot-ab <deckA> <deckB> [pairs] [dop] [seedOffset]
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: lethal-pivot-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int lvP = args.Length > 3 && int.TryParse(args[3], out var lvp) ? lvp : 20;
+        int lvD = args.Length > 4 && int.TryParse(args[4], out var lvd) ? lvd : 8;
+        int lvS = args.Length > 5 && int.TryParse(args[5], out var lvs) ? lvs : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunLethalPivotAB(
+            BuildRegistry(out _), args[1], args[2], lvP, lvD, lvS);
+    }
+
+    case "leader-setup-ab":
+    {
+        // Paired A/B of the proactive [DON!! xN] leader-engine setup, identical seeds.
+        // leader-setup-ab <deckA> <deckB> [pairs] [dop] [seedOffset]   (deckA should have the [DON!! xN] leader)
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: leader-setup-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int lsP = args.Length > 3 && int.TryParse(args[3], out var lsp) ? lsp : 20;
+        int lsD = args.Length > 4 && int.TryParse(args[4], out var lsd) ? lsd : 8;
+        int lsS = args.Length > 5 && int.TryParse(args[5], out var lss) ? lss : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunLeaderSetupAB(
+            BuildRegistry(out _), args[1], args[2], lsP, lsD, lsS);
+    }
+
+    case "opportunity-ab":
+    {
+        // Paired A/B of the WS-1 opportunity-cost hold model (use-Main vs hold-for-Counter), identical seeds.
+        // opportunity-ab <deckA> <deckB> [pairs] [dop] [seedOffset]   (deckA should be the DON-engine deck)
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: opportunity-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int opP = args.Length > 3 && int.TryParse(args[3], out var opp) ? opp : 20;
+        int opD = args.Length > 4 && int.TryParse(args[4], out var opd) ? opd : 8;
+        int opS = args.Length > 5 && int.TryParse(args[5], out var ops) ? ops : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunOpportunityAB(
+            BuildRegistry(out _), args[1], args[2], opP, opD, opS);
+    }
+
+    case "cost-combo-ab":
+    {
+        // Paired A/B of the WS-2 -cost->KO-by-cost targeting vs generic, identical seeds.
+        // cost-combo-ab <deckA> <deckB> [pairs] [dop] [seedOffset]   (deckA should be the cost-down deck)
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: cost-combo-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int ccP = args.Length > 3 && int.TryParse(args[3], out var ccp) ? ccp : 20;
+        int ccD = args.Length > 4 && int.TryParse(args[4], out var ccd) ? ccd : 8;
+        int ccS = args.Length > 5 && int.TryParse(args[5], out var ccs) ? ccs : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunCostComboAB(
+            BuildRegistry(out _), args[1], args[2], ccP, ccD, ccS);
+    }
+
+    case "don-engine-ab":
+    {
+        // Paired A/B of the WS-1 DON-engine scoring vs generic DON scoring, identical seeds.
+        // don-engine-ab <deckA> <deckB> [pairs] [dop] [seedOffset]   (deckA should be the DON-engine deck)
+        if (args.Length < 3)
+        {
+            Console.WriteLine("usage: don-engine-ab <deckA> <deckB> [pairs] [dop] [seedOffset]");
+            return 1;
+        }
+        int deP = args.Length > 3 && int.TryParse(args[3], out var dep) ? dep : 20;
+        int deD = args.Length > 4 && int.TryParse(args[4], out var ded) ? ded : 8;
+        int deS = args.Length > 5 && int.TryParse(args[5], out var des) ? des : 0;
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunDonEngineAB(
+            BuildRegistry(out _), args[1], args[2], deP, deD, deS);
+    }
+
+    case "honest-advanced-check":
+    {
+        // Rollout-improved honest policy vs the proven greedy floor. Usage:
+        // honest-advanced-check [pairs] [archetype] [dop] [seedOffset] [mirror|field]
+        //                       [all|resolution|defense|pressure|pressure-resolution|contract-v1|contract-v2]
+        //                       [baseline|champion|aggro|conservative]
+        int advancedPairs = args.Length > 1 && int.TryParse(args[1], out var ap) ? ap : 6;
+        string advancedArch = args.Length > 2 ? args[2] : "all";
+        int advancedDop = args.Length > 3 && int.TryParse(args[3], out var ad) ? ad : 4;
+        int advancedSeedOffset = args.Length > 4 && int.TryParse(args[4], out var ass) ? ass : 0;
+        bool advancedMirror = args.Length > 5 && string.Equals(args[5], "mirror", System.StringComparison.OrdinalIgnoreCase);
+        string advancedScope = args.Length > 6 ? args[6].ToLowerInvariant() : "all";
+        string advancedOpponent = args.Length > 7 ? args[7].ToLowerInvariant() : "baseline";
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunAdvancedCheck(
+            BuildRegistry(out _), advancedPairs, advancedArch, advancedDop, advancedSeedOffset,
+            advancedMirror, advancedScope, advancedOpponent);
+    }
+
+    case "honest-advanced-invalid-replay":
+    {
+        // Diagnostic-only replay of the advanced arm; stops after the first invalid.
+        // honest-advanced-invalid-replay [pairs] [dop] [seedOffset] [scope]
+        int replayPairs = args.Length > 1 && int.TryParse(args[1], out var rp) ? rp : 150;
+        int replayDop = args.Length > 2 && int.TryParse(args[2], out var rd) ? rd : 8;
+        int replaySeed = args.Length > 3 && int.TryParse(args[3], out var rs) ? rs : 1180000;
+        string replayScope = args.Length > 4 ? args[4].ToLowerInvariant() : "contract-v2";
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunAdvancedInvalidReplay(
+            BuildRegistry(out _), replayPairs, replayDop, replaySeed, replayScope);
+    }
+
+    case "honest-advanced-replay-one":
+    {
+        // honest-advanced-replay-one [scenarioIndex] [seedOffset] [scope] [south|north]
+        int oneIndex = args.Length > 1 && int.TryParse(args[1], out var oi) ? oi : 96;
+        int oneSeed = args.Length > 2 && int.TryParse(args[2], out var os) ? os : 1180000;
+        string oneScope = args.Length > 3 ? args[3].ToLowerInvariant() : "contract-v2";
+        bool oneSouth = args.Length <= 4 || !string.Equals(args[4], "north", System.StringComparison.OrdinalIgnoreCase);
+        return OnePieceTcg.Sim.Planning.HonestMutationPilot.RunAdvancedReplayOne(
+            BuildRegistry(out _), oneIndex, oneSeed, oneScope, oneSouth);
+    }
+
+    case "contamination":
+    {
+        // THE CONTAMINATION DELTA (paired): perfect-info PlannerBot vs baseline AND honest HonestPlannerBot vs
+        // baseline on the SAME deck pair + seed + turn order. delta = perfect-info winrate − honest winrate is
+        // how much the illegal perfect information inflated the bot. First paired signal, CI'd; NOT the final
+        // n≥300 experiment.
+        int n = args.Length > 1 && int.TryParse(args[1], out var cn) ? cn : 12;
+        int cseed = args.Length > 2 && int.TryParse(args[2], out var cs) ? cs : 11;   // contamination [n] [seed] — vary seed for independent samples to pool
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
+            .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; })
+            .OrderBy(x => x).ToList();
+        var opt = new OnePieceTcg.Sim.Planning.TurnPlanner.Options { BeamWidth = 6, MaxDepth = 10, NodeBudget = 600, WorkBudget = 30000 };
+        var rng = new System.Random(cseed);
+        int piDecided = 0, piWins = 0, hoDecided = 0, hoWins = 0, threw = 0; var sw = System.Diagnostics.Stopwatch.StartNew();
+        string piRun = OnePieceTcg.Sim.ProgressBoard.Start("perfect", $"perfect-info planner (contamination) | n={n} | seed={cseed}", n);
+        string hoRun = OnePieceTcg.Sim.ProgressBoard.Start("honest", $"honest planner (contamination) | n={n} | seed={cseed}", n);
+        System.Console.WriteLine($"progress dashboard: {OnePieceTcg.Sim.ProgressBoard.DashboardPath}");
+        System.Console.WriteLine("  open that file in a browser to watch the bars fill live.");
+        for (int i = 0; i < n; i++)
+        {
+            string dS = pool[rng.Next(pool.Count)], dR = pool[rng.Next(pool.Count)];
+            var sDef = reg.Resolve(dS); var nDef = reg.Resolve(dR);
+            string first = i % 2 == 0 ? "south" : "north"; string seed = $"contam:{cseed}:{i}";
+            var ctx = OnePieceTcg.Sim.Planning.DeckFingerprint.Analyze(sDef);
+            var baseP = new OnePieceTcg.Sim.BaselineAgent();
+            var pi = new OnePieceTcg.Sim.Planning.PlannerBot(ctx: ctx, opt: opt, goFirst: first == "south");
+            var piSt = OnePieceTcg.Sim.Planning.GameRunner.Play(pi, baseP, sDef, nDef, seed, first, 20000, 60);
+            if (OnePieceTcg.Sim.Planning.GameRunner.Stuck) { OnePieceTcg.Sim.ProgressBoard.Tick(piRun, -1); }
+            else { piDecided++; bool w = OnePieceTcg.Sim.Planning.GameRunner.Result(piSt) == "south"; if (w) piWins++; OnePieceTcg.Sim.ProgressBoard.Tick(piRun, w ? 1 : 0); }
+            try
+            {
+                var baseH = new OnePieceTcg.Sim.BaselineAgent();
+                var ho = new OnePieceTcg.Sim.Planning.HonestPlannerBot(sDef, nDef, ctx: ctx, opt: opt, goFirst: first == "south");
+                var hoSt = OnePieceTcg.Sim.Planning.GameRunner.Play(ho, baseH, sDef, nDef, seed, first, 20000, 60);
+                if (OnePieceTcg.Sim.Planning.GameRunner.Stuck) { OnePieceTcg.Sim.ProgressBoard.Tick(hoRun, -1); }
+                else { hoDecided++; bool w = OnePieceTcg.Sim.Planning.GameRunner.Result(hoSt) == "south"; if (w) hoWins++; OnePieceTcg.Sim.ProgressBoard.Tick(hoRun, w ? 1 : 0); }
+            }
+            catch (System.Exception e) { threw++; OnePieceTcg.Sim.ProgressBoard.Tick(hoRun, -1); System.Console.WriteLine($"  game {i + 1}: honest threw: {e.Message}"); }
+            System.Console.WriteLine($"  game {i + 1}/{n}: perfect={(OnePieceTcg.Sim.Planning.GameRunner.Result(piSt) ?? "tie")} ({sw.Elapsed.TotalSeconds:F0}s)");
+        }
+        OnePieceTcg.Sim.ProgressBoard.Finish(piRun); OnePieceTcg.Sim.ProgressBoard.Finish(hoRun);
+        double piP = piDecided > 0 ? (double)piWins / piDecided : 0, hoP = hoDecided > 0 ? (double)hoWins / hoDecided : 0;
+        System.Console.WriteLine();
+        System.Console.WriteLine($"PERFECT-INFO vs baseline: {piWins}/{piDecided} = {100 * piP:F0}%");
+        System.Console.WriteLine($"HONEST (K=1)  vs baseline: {hoWins}/{hoDecided} = {100 * hoP:F0}% ({threw} honest threw)");
+        System.Console.WriteLine($"CONTAMINATION DELTA (perfect − honest): {100 * (piP - hoP):F0}pp — how much perfect info inflated the bot.");
+        System.Console.WriteLine($"⚠ n={n}, unpaired-outcome, K=1 honest, modest budget — a FIRST signal, not the n≥300 verdict. {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
     case "evolve":
     {
         OnePieceTcg.Sim.Learning.EvolveConfig cfg = (args.Length > 1 && File.Exists(args[1]))

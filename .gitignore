@@ -61,6 +61,10 @@ sysinfo.txt
 # are the experiment trail (win rates, CIs, ladders) and total ~0.2MB.
 *.jsonl
 
+# Public replay evidence can contain player handles and authoritative hidden-state rows. Keep the
+# aggregate privacy-safe model/catalog, but never commit the regenerable raw logs.
+/Tools/Sim/Results/expert-replays/raw/
+
 # OS files
 .DS_Store
 Thumbs.db
@@ -72,3 +76,7 @@ Desktop.ini
 # App secret — real value lives here on build machines only, never committed
 Assets/Scripts/AppConfig.Local.cs
 Assets/Scripts/AppConfig.Local.cs.meta
+
+# Tools/Audit is a checked-in read-only analyzer; the blanket *.csproj rule above would
+# silently swallow its project file and make the tool non-reproducible.
+!Tools/Audit/Audit.csproj
