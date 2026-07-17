@@ -141,19 +141,20 @@ public partial class MainMenuManager : MonoBehaviour
         if (aiDifficultyLoaded && aiDifficultyLoadedFor == acct) return;
         aiDifficultyLoaded = true;
         aiDifficultyLoadedFor = acct;
-        aiDifficulty = PlayerPrefs.GetString(AiDifficultyPrefKey(), "beginner") == "intermediate"
-            ? "intermediate" : "beginner";
+        var v = PlayerPrefs.GetString(AiDifficultyPrefKey(), "beginner");
+        aiDifficulty = (v == "intermediate" || v == "advanced") ? v : "beginner";
     }
 
     private void SetAiDifficulty(string value)
     {
-        aiDifficulty = value == "intermediate" ? "intermediate" : "beginner";
+        aiDifficulty = (value == "intermediate" || value == "advanced") ? value : "beginner";
         PlayerPrefs.SetString(AiDifficultyPrefKey(), aiDifficulty);
         PlayerPrefs.Save();
         RenderMenu();
     }
 
-    private static string AiDifficultyLabel(string d) => d == "intermediate" ? "INTERMEDIATE" : "BEGINNER";
+    private static string AiDifficultyLabel(string d) =>
+        d == "advanced" ? "ADVANCED" : d == "intermediate" ? "INTERMEDIATE" : "BEGINNER";
 
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
     private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
@@ -5386,15 +5387,15 @@ public partial class MainMenuManager : MonoBehaviour
         var row = PanelObject("AI Difficulty Row", portal, new Color(0f, 0f, 0f, 0f));
         Stretch(row, aMin, aMax, new Vector2(12f, 1f), new Vector2(-12f, -1f));
 
-        BuildDifficultyPill(row, "BEGINNER", "beginner", 0f, 0.5f, 3f, true);
-        BuildDifficultyPill(row, "INTERMEDIATE", "intermediate", 0.5f, 1f, 3f, false);
+        const float g = 3f;
+        BuildDifficultyPill(row, "BEGINNER", "beginner", 0f, 1f / 3f, 0f, g);
+        BuildDifficultyPill(row, "INTERMEDIATE", "intermediate", 1f / 3f, 2f / 3f, g, g);
+        BuildDifficultyPill(row, "ADVANCED", "advanced", 2f / 3f, 1f, g, 0f);
     }
 
     private void BuildDifficultyPill(RectTransform parent, string label, string value,
-        float xMin, float xMax, float halfGap, bool isLeft)
+        float xMin, float xMax, float offLeft, float offRight)
     {
-        float offLeft = isLeft ? 0f : halfGap;
-        float offRight = isLeft ? halfGap : 0f;
         bool selected = aiDifficulty == value;
 
         var pill = PanelObject(label + " Pill", parent, selected ? Accent : new Color(0f, 0f, 0f, 0f));
@@ -5403,7 +5404,7 @@ public partial class MainMenuManager : MonoBehaviour
         Round(pill);
         if (!selected) AddRoundedCardBorder(pill, MenuB, 1f);
 
-        var t = TextObject("t", pill, label, 9, selected ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
+        var t = TextObject("t", pill, label, 7, selected ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 

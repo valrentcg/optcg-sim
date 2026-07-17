@@ -173,17 +173,21 @@ export async function handleQueueJoin(env: Env, playerId: string, body: any): Pr
   const myRow = await getQueue(env, playerId);
   if (myRow?.proposal_id) {
     const p = await getProposal(env, myRow.proposal_id);
-    if (p && (p.state === "pending" || p.state === "accepted" || p.state === "matched")) {
-      // A live ready-check (pending) or a genuine re-join during the connect handshake
-      // (recently accepted/matched) — return the current view, don't re-enqueue.
-      if (p.state === "pending" || now - p.created_at < STALE_MATCH_MS) {
-        return await proposalView(env, playerId, p.id, now);
-      }
-      // Older accepted/matched = a match the player has already finished/abandoned. Drop
-      // it so this deliberate re-queue starts a fresh search instead of a dead session.
+    if (p && p.state === "pending") {
+      // A live ready-check the player is still in — return the current view, don't re-enqueue.
+      return await proposalView(env, playerId, p.id, now);
+    }
+    // accepted/matched = the connect handshake, or (far more commonly) a match this player has
+    // now LEFT. A deliberate QueueJoin only comes from the menu, i.e. AFTER the match/handshake
+    // is over — the client never re-joins to reconnect mid-connect. So there is no live session
+    // to hand back; returning the old `matched` view is exactly the "stuck on connecting" bug
+    // (a fast requeue got pinned to the finished session's dead id). Clear the whole proposal —
+    // both queue rows and the proposal row — so NEITHER player stays pinned, then re-enqueue
+    // fresh below. (STALE_MATCH_MS still backstops abandoned proposals in proposalView.)
+    if (p && (p.state === "accepted" || p.state === "matched")) {
       await clearProposal(env, p);
     }
-    // declined/expired/missing/stale → fall through and re-enqueue fresh
+    // declined/expired/missing → fall through and re-enqueue fresh
   }
 
   const enqueuedAt = myRow && !myRow.proposal_id ? myRow.enqueued_at : now;
@@ -251,9 +255,15 @@ export async function handleQueueCancel(env: Env, playerId: string): Promise<any
   if (myRow?.proposal_id) {
     const p = await getProposal(env, myRow.proposal_id);
     if (p && (p.state === "pending" || p.state === "accepted")) {
+      // Backing out of a live ready-check: put the opponent back in the pool, mark declined.
       const opp = playerId === p.player_a ? p.player_b : p.player_a;
       await env.DB.prepare("UPDATE queue SET proposal_id = NULL, enqueued_at = ? WHERE player_id = ?").bind(now, opp).run();
       await env.DB.prepare("UPDATE proposals SET state = 'declined' WHERE id = ?").bind(p.id).run();
+    } else if (p && p.state === "matched") {
+      // The match this proposal spawned is over (end-of-match release / leave to menu). Clear the
+      // whole proposal so neither player stays pinned to the finished session — this is what lets
+      // a fast requeue start a fresh search instead of hanging on "connecting".
+      await clearProposal(env, p);
     }
   }
   await env.DB.prepare("DELETE FROM queue WHERE player_id = ?").bind(playerId).run();

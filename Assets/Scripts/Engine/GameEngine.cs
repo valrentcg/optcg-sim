@@ -138,6 +138,16 @@ namespace OnePieceTcg.Engine
                 Record(state, command);
                 return state;
             }
+            // Surrender ends the match from any pre-finish state (active, setup, mulligan…), so it
+            // sits above the "active only" guard below — a player can bail out before the game is
+            // even underway. Deterministic and order-free: both networked clients apply the same
+            // command and reach the same finished state.
+            if (command.Type == "concede")
+            {
+                Concede(state, actor);
+                Record(state, command);
+                return state;
+            }
             // Hand re-arranging is allowed during the mulligan overlay too (cosmetic only).
             if (state.Status != "active" && command.Type != "startGame"
                 && !(state.Status == "mulligan" && command.Type == "reorderHand")) return state;
@@ -569,7 +579,39 @@ namespace OnePieceTcg.Engine
                 foreach (var m in instance.Modifiers) cost += m.CostDelta;
             cost += GetPassiveCostBonus(state, instance);
             cost += GetPassiveCostAuraBonus(state, instance);
+            cost += GetHandSelfCostBonus(state, instance);
             return Math.Max(0, cost);
+        }
+
+        // Passive SELF cost reductions that apply to a card WHILE IT SITS IN HAND. A whole family of
+        // cards reads "[If <condition>, ]give this card in your hand −X cost" — e.g. ST23-001 Uta
+        // ("If you have a Character with 10000 power or more, …−4"), OP07-064 Sanji, OP15-021 Ace,
+        // ST23-002 Shanks, etc. GetPassiveCostBonus only inspects in-play cards, so this hand-side
+        // discount lives here. The condition is evaluated by the SHARED EvaluateCondition (silently —
+        // this runs on every GetCost), so any condition the engine already understands works for free
+        // and new ones added there benefit these cards too. Read by GetCost, so it flows through the
+        // play-cost display, the can-play affordability check, and the actual DON!! payment alike.
+        private static readonly System.Text.RegularExpressions.Regex HandSelfCostRx =
+            new System.Text.RegularExpressions.Regex(
+                @"(?:if (.+?),\s*)?give this card in your hand\s*[-−–‑‒—]\s*(\d+) cost",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        private static int GetHandSelfCostBonus(GameState state, CardInstance instance)
+        {
+            if (instance == null || instance.Zone != "hand") return 0;
+            var text = GetCard(instance)?.Effect ?? "";
+            if (text.IndexOf("this card in your hand", StringComparison.OrdinalIgnoreCase) < 0) return 0;
+            if (instance.Owner == null || !state.Players.ContainsKey(instance.Owner)) return 0;
+            int total = 0;
+            foreach (var line in text.Split('\n'))
+            {
+                var m = HandSelfCostRx.Match(line);
+                if (!m.Success) continue;
+                int reduce = int.Parse(m.Groups[2].Value);
+                bool condOk = !m.Groups[1].Success   // unconditional "give this card in your hand −X cost"
+                    || EvaluateCondition(state, instance.Owner, m.Groups[1].Value.Trim(), instance.InstanceId, logUnknown: false);
+                if (condOk) total -= reduce;
+            }
+            return total;
         }
 
         // Continuous cost AURAS: "All of your (black) ({T} type) Characters gain +N cost."
@@ -843,6 +885,26 @@ namespace OnePieceTcg.Engine
             instance != null && (HasKeyword(instance, "Blocker")
                 || HasKeywordModifier(state, instance, "Blocker")
                 || HasPrintedKeywordGrant(state, instance, "Blocker"));
+
+        // The card's [Blocker] ability has been CANCELLED (e.g. Limejuice's per-character "cannot
+        // activate [Blocker] this turn") — only blocking is disabled, the card's other effects are
+        // untouched. Deliberately NOT IsEffectNegated: that is full card-off (Teach) and gets its own
+        // "negated" treatment. Used by the UI to cross out the shield.
+        public static bool IsBlockCancelled(GameState state, CardInstance instance) =>
+            instance != null && HasModifier(state, instance, "cannotBlock");
+
+        // The attack currently at its block step cannot be blocked by this card — the attacker is
+        // [Unblockable], or a NoBlocker / power-ban flag on the battle bars this blocker. Lets the UI
+        // cross out the shield of an eligible blocker the moment an unblockable attack is incoming.
+        public static bool BlockBarredByCurrentAttack(GameState state, CardInstance instance)
+        {
+            var b = state?.Battle;
+            if (b == null || b.Step != "block" || instance == null || b.TargetSeat != instance.Owner) return false;
+            if (b.NoBlocker) return true;
+            if (b.BlockerPowerBan.HasValue && GetPower(state, instance) >= b.BlockerPowerBan.Value) return true;
+            var atk = FindInPlay(Player(state, b.AttackerSeat), b.AttackerId);
+            return atk != null && (HasKeyword(atk, "Unblockable") || HasKeywordModifier(state, atk, "Unblockable"));
+        }
 
         // Summoning sickness: a Character played this turn can't attack unless it has [Rush].
         public static bool IsSummoningSick(GameState state, CardInstance instance) =>
@@ -1822,7 +1884,11 @@ namespace OnePieceTcg.Engine
                     p.CharacterArea[slotPM] = taken;
                     Log(state, seat, $"{p.Name} plays {NameId(def)} from the deck{(dl.PlayRested ? " rested" : "")}.");
                     if (HasTiming(def.Effect, "On Play"))
-                        QueueAndAutoResolve(state, seat, taken, "onPlay", ExtractTimedClause(def.Effect, "On Play"), true,
+                        // Do not auto-resolve a nested On Play while the parent DeckLook still owns its
+                        // unselected cards. Starting another look here overwrites state.DeckLook and orphans
+                        // the parent's remainder. Queue it; the runner resolves it after this look returns
+                        // every remaining card to its destination.
+                        QueueEffect(state, seat, taken, "onPlay", ExtractTimedClause(def.Effect, "On Play"), true,
                             EffectScope.Instant, InferTargetZone(def.Effect));
                 }
                 else
@@ -2191,7 +2257,7 @@ namespace OnePieceTcg.Engine
                     foreach (var c in d.CharacterArea)
                     {
                         if (c == null || c.Rested || c.InstanceId == state.Battle.TargetId) continue;
-                        if (IsEffectNegated(state, c)) continue;
+                        if (IsEffectNegated(state, c) || HasModifier(state, c, "cannotBlock")) continue;
                         if (!HasKeyword(c, "Blocker") && !HasKeywordModifier(state, c, "Blocker") && !HasPrintedKeywordGrant(state, c, "Blocker")) continue;
                         if (state.Battle.BlockerPowerBan.HasValue && GetPower(state, c) >= state.Battle.BlockerPowerBan.Value) continue;
                         if (HasModifier(state, c, "cannotBeRested")) continue;   // blocking rests the blocker
@@ -2277,7 +2343,7 @@ namespace OnePieceTcg.Engine
             var defender = Player(state, defenderSeat);
             var blocker = FindInPlay(defender, blockerId);
             // Blocker keyword check: printed keyword OR granted via CardModifier.
-            if (blocker == null || blocker.Rested || IsEffectNegated(state, blocker)
+            if (blocker == null || blocker.Rested || IsEffectNegated(state, blocker) || HasModifier(state, blocker, "cannotBlock")
                 || (!HasKeyword(blocker, "Blocker") && !HasKeywordModifier(state, blocker, "Blocker") && !HasPrintedKeywordGrant(state, blocker, "Blocker"))) return;
             if (blocker.InstanceId == state.Battle.TargetId) return;
             if (state.Battle.NoBlocker) return;
@@ -3259,6 +3325,10 @@ namespace OnePieceTcg.Engine
 
         private static void ResolveEffect(GameState state, string seat, string effectId, string targetId)
         {
+            // A deck-look/choice is a nested decision inside the currently resolving effect. Advancing a
+            // different queued effect here can open another transient zone and overwrite the first one,
+            // orphaning its cards. Finish the active sub-decision before any pending effect may advance.
+            if (state.DeckLook != null || state.ActiveChoice != null) return;
             var effect = FindPendingEffect(state, seat, effectId);
             if (effect == null) return;
 
@@ -3372,6 +3442,7 @@ namespace OnePieceTcg.Engine
 
         private static void PassEffect(GameState state, string seat, string effectId)
         {
+            if (state.DeckLook != null || state.ActiveChoice != null) return;
             var effect = FindPendingEffect(state, seat, effectId);
             if (effect == null) return;
             // "Up to N" effects may always choose zero targets, "You may"/"If" effects are
@@ -3477,7 +3548,10 @@ namespace OnePieceTcg.Engine
 
         // Evaluate the most common One Piece TCG conditional expressions.
         // Returns true if the condition is met for the given seat.
-        private static bool EvaluateCondition(GameState state, string seat, string condition, string sourceInstanceId = null)
+        // logUnknown=false suppresses the "Unknown condition" game-log line — pass it when calling
+        // from a hot/redundant path (e.g. GetCost on every render) so an unhandled condition doesn't
+        // spam the event log; it still evaluates to false, just silently.
+        private static bool EvaluateCondition(GameState state, string seat, string condition, string sourceInstanceId = null, bool logUnknown = true)
         {
             var p   = Player(state, seat);
             var opp = Player(state, OtherSeat(seat));
@@ -3538,6 +3612,18 @@ namespace OnePieceTcg.Engine
                     ? p.Life.Count <= n : p.Life.Count >= n;
             }
 
+            // Clauses that legitimately contain " and " as part of a SINGLE condition must be matched
+            // before the generic "split on and" below, or the split mangles them.
+            // "you have a Character with N power or more and a type including \"X\"" (OP16-005 Thatch).
+            var pwrAndType = System.Text.RegularExpressions.Regex.Match(condition,
+                @"you have a Character with (\d{3,5}) power or more and a type including ""([^""]+)""",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (pwrAndType.Success)
+            {
+                int nPt = int.Parse(pwrAndType.Groups[1].Value); string tagPt = pwrAndType.Groups[2].Value.Trim();
+                return p.CharacterArea.Any(c => c != null && GetPower(state, c) >= nPt && GetCard(c).HasFeature(tagPt));
+            }
+
             // Compound conditions joined by "and" — every part must hold.
             if (condition.IndexOf(" and ", StringComparison.OrdinalIgnoreCase) > 0)
             {
@@ -3547,8 +3633,8 @@ namespace OnePieceTcg.Engine
                 // Only recurse when both halves look like standalone conditions (avoid splitting
                 // phrases like "Leader or Character" — those contain no digits/verbs anyway).
                 if (left.Length > 8 && right.Length > 8)
-                    return EvaluateCondition(state, seat, left, sourceInstanceId)
-                        && EvaluateCondition(state, seat, right, sourceInstanceId);
+                    return EvaluateCondition(state, seat, left, sourceInstanceId, logUnknown)
+                        && EvaluateCondition(state, seat, right, sourceInstanceId, logUnknown);
             }
 
             // "you have a Character with a cost of N or more"
@@ -3914,8 +4000,23 @@ namespace OnePieceTcg.Engine
             { var m = M(); int n = int.Parse(m.Groups[1].Value); string ta = m.Groups[2].Value.Trim(), tb = m.Groups[3].Value.Trim();
               return p.CharacterArea.Count(c => c != null && (GetCard(c).HasFeature(ta) || GetCard(c).HasFeature(tb))) >= n; }
 
-            // Unknown condition: skip and log.
-            Log(state, seat, $"Unknown condition '{condition}' — treating as not met.");
+            // "the number of DON!! cards on your field is at least N less than the number on your
+            // opponent's field" (OP07-064 Sanji).
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"number of DON!! cards on your field is at least (\d+) less than the number on your opponent's field", RO))().Success)
+                return TotalFieldDon(opp) - TotalFieldDon(p) >= int.Parse(M().Groups[1].Value);
+            // "your Leader's card name includes \"X\"" (OP16-015 Monkey.D.Luffy).
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"Leader.s card name includes ""([^""]+)""", RO))().Success)
+                return p.Leader != null && (GetCard(p.Leader)?.Name ?? "").IndexOf(M().Groups[1].Value.Trim(), StringComparison.OrdinalIgnoreCase) >= 0;
+            // "your opponent has a Character with N base power or more" (ST23-002 Shanks).
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"opponent has a Character with (\d{3,5}) base power or more", RO))().Success)
+            { int n = int.Parse(M().Groups[1].Value); return opp.CharacterArea.Any(c => c != null && GetCard(c).Power >= n); }
+            // "you have a [Name] (or [Name]) Character with N base power or more" (ST26-001 Soba Mask).
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"you have a \[([^\]]+)\](?: or \[([^\]]+)\])? Character with (\d{3,5}) base power or more", RO))().Success)
+            { var m = M(); string n1 = m.Groups[1].Value.Trim(); string n2 = m.Groups[2].Success ? m.Groups[2].Value.Trim() : null; int bp = int.Parse(m.Groups[3].Value);
+              return p.CharacterArea.Any(c => c != null && GetCard(c).Power >= bp && (NameMatches(state, c, n1) || (n2 != null && NameMatches(state, c, n2)))); }
+
+            // Unknown condition: skip and (unless silenced) log.
+            if (logUnknown) Log(state, seat, $"Unknown condition '{condition}' — treating as not met.");
             return false;
         }
 
@@ -6709,7 +6810,11 @@ namespace OnePieceTcg.Engine
                 {
                     if (c == null) continue;
                     if (lbPw >= 0 && GetPower(state, c) > lbPw) continue;
-                    AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), c, "effectsNegated", "thisTurn", null, effect.Seat);
+                    // "cannot activate [Blocker]" cancels ONLY the block ability — NOT the card's
+                    // other effects. Use a dedicated "cannotBlock" modifier, not "effectsNegated"
+                    // (that is full card-off negation, e.g. Teach, and wrongly disabled every other
+                    // effect on the target while also showing it as "negated" in the UI).
+                    AddModifier(state, FindAnyInPlay(state, effect.SourceInstanceId, out _), c, "cannotBlock", "thisTurn", null, effect.Seat);
                     lbCount++;
                 }
                 Log(state, effect.Seat, $"{sourceName}: {lbCount} opponent Character(s) cannot activate [Blocker] this turn.");
@@ -9581,6 +9686,19 @@ namespace OnePieceTcg.Engine
             state.Phase = "finished";
             state.Battle = null;
             state.PendingEffects.Clear();
+        }
+
+        // A player surrenders: the match ends at once and the OTHER seat wins. The winner is read
+        // back from the trailing "{name} wins." log by ReplayStore.ExtractWinner, exactly like every
+        // other win path, so it must be logged LAST. No-op if the game is already finished (guards a
+        // surrender racing a natural game end, or a double concede).
+        private static void Concede(GameState state, string seat)
+        {
+            if (state.Status == "finished") return;
+            string winner = OtherSeat(seat);
+            Log(state, "system", $"{Player(state, seat).Name} surrendered.");
+            Log(state, "system", $"{Player(state, winner).Name} wins.");
+            FinishGame(state);
         }
 
         private static void CheckRuleProcessing(GameState state)

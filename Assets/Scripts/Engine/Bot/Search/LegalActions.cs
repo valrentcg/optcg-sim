@@ -86,7 +86,7 @@ namespace OnePieceTcg.Engine.Bot.Search
                     foreach (var c in Board(me))
                         list.Add(new GameCommand { Type = "attachDon", Seat = seat, Target = c.InstanceId, Amount = 1 });
                 foreach (var c in Board(me))
-                    list.Add(new GameCommand { Type = "activateMain", Seat = seat, InstanceId = c.InstanceId });
+                    list.Add(new GameCommand { Type = "activateMain", Seat = seat, Target = c.InstanceId });
                 var targets = new List<string>();
                 if (opp.Leader != null) targets.Add(opp.Leader.InstanceId);
                 targets.AddRange(opp.CharacterArea.Where(c => c != null && c.Rested).Select(c => c.InstanceId));

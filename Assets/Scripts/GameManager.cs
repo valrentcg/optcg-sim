@@ -125,6 +125,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private bool isNetworked;
     private bool isRankedMatch;   // networked match launched from the Ranked queue → reports to RankedStore
     private string networkedMode; // "ranked"|"casual"|"custom" for a networked match (else null)
+    // Ranked identity captured at match start, WHILE both players are connected: a mid-match leave
+    // disconnects the opponent, after which LobbyManager.OpponentPlayerId() is gone — so we cache it
+    // here to still file the dual-report when a surrender/leave ends the game.
+    private string cachedRankedMatchId;
+    private string cachedRankedOppId;
     private string localSeat;
     // Set when the networked peer disconnects mid-match; Render() shows the
     // "OPPONENT LEFT — YOU WIN!" modal until the player returns to the menu.
@@ -210,6 +215,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private CardInstance previewLockCard;   // last left-clicked card, shown in the docked left preview
     private bool menuOpen;                   // game menu (upper-right) open/closed
     private bool soundMenuOpen;              // sound settings panel (opened from the game menu)
+    private bool surrenderConfirmOpen;       // "are you sure you want to surrender?" confirm modal
     private RectTransform deckLookOverlay;    // full-screen search/look overlay (lives on the canvas)
     private RectTransform trashOverlay;       // trash-viewer popup (confined to the local play area)
     private RectTransform mulliganOverlay;    // opening-hand overlay (deck-look style)
@@ -228,6 +234,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private string aiDifficulty = "beginner"; // "beginner"|"intermediate"|"advanced" — set from PendingAiDifficulty in NewMatch()
     private float aiNextActionAt;
     private readonly HashSet<string> aiTriedThisTurn = new HashSet<string>();
+    // Advanced tier only: instance-ids whose [Activate: Main] the activation layer already tried this turn,
+    // so a repeatable ability cannot loop. Keyed by card instance id, distinct from aiTriedThisTurn's
+    // command signatures. Cleared on each turn change alongside aiTriedThisTurn.
+    private readonly HashSet<string> aiActivatedThisTurn = new HashSet<string>();
+    // Advanced tier only: the AI deck's archetype, classified once at match start, gates which strategy
+    // module the contract router applies (midrange→activation, control→pressure). Default midrange.
+    private string aiArchetype = "midrange";
     private int aiLastTurnSeen = -1;
     private int lastBannerTurn = -1;          // last (turn, seat) a turn banner was shown for
     private string lastBannerSeat;
@@ -413,8 +426,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // discovery platform (Tools/Sim):
         //   "beginner"     — Engine/Bot/IntermediateBot.cs (the original ported bot).
         //   "intermediate" — Engine/Bot/ChampionBot.cs (Elo-tournament champion; beats Beginner ~54%).
-        //   "advanced"     — Engine/Bot/Search/SearchBot.cs, the every-legal-action rollout SEARCH
-        //                    bot (beats Intermediate ~87%). Runs on this thread; see AdvancedAiTick.
+        //   "advanced"     — Engine/Bot/Search/AdvancedContractBot.cs: the validated advanced contract
+        //                    (contract-v2) — IntermediateBot base + activation (midrange) + pressure (control)
+        //                    + SearchBot rollout on tactical branches, gated by AI-deck archetype. Runs on
+        //                    this thread; see AdvancedAiTick.
         if (aiSeat != null && !isReplayMode && state != null && state.Status != "finished"
             && Time.unscaledTime >= aiNextActionAt)
         {
@@ -623,7 +638,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         currentMatchConfig = config;
         aiSeat = PendingAiNorth ? "north" : null;
         aiDifficulty = string.IsNullOrEmpty(PendingAiDifficulty) ? "beginner" : PendingAiDifficulty;
+        // Advanced router gate: classify the AI deck's archetype once from its list.
+        aiArchetype = OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.ClassifyArchetype(config.NorthDeckDef);
         aiTriedThisTurn.Clear();
+        aiActivatedThisTurn.Clear();
         aiLastTurnSeen = -1;
         // Fresh match: stale animation bookkeeping from the previous game must not
         // suppress the new game's opening-deal / Life-deal animations.
@@ -987,6 +1005,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         networkedMode = PendingNetworkedMode;
         PendingNetworkedMode = null;
         localSeat = seat;
+        // Capture now, while connected — these must survive a mid-match disconnect so a leave/
+        // surrender can still be ranked-reported (see cachedRankedOppId).
+        cachedRankedMatchId = LobbyManager.CurrentSession?.Id;
+        cachedRankedOppId = LobbyManager.OpponentPlayerId();
 
         var config = new MatchConfig { Seed = seed };
         // Deck picks travel in the match-start payload (see MatchStartPayload) and
@@ -1049,7 +1071,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (!isNetworked || opponentLeft || isReplayMode) return;
         if (state == null || state.Status == "finished") return;
-        opponentLeft = true;
+        // Treat the disconnect as the opponent conceding: finish the match with us as the winner and
+        // RECORD it (history/stats + ranked report), so a mid-match leave is a real loss for them —
+        // not just a cosmetic "you win". We derive this locally from the disconnect; the leaver's own
+        // client independently records its loss (see ReturnToMenu), and the server's dual-report
+        // reconciles the two. Record BEFORE flipping opponentLeft so SaveFinishedMatchRecords still
+        // files the ranked report. This is also the fallback when a leaver's concede message doesn't
+        // arrive before their teardown.
+        state = GameEngine.ApplyCommand(state, new GameCommand { Type = "concede", Seat = OtherSeatLocal(localSeat) });
+        if (!replaySaved) { replaySaved = true; SaveFinishedMatchRecords(); }
+        opponentLeft = true;   // drives the "OPPONENT LEFT — YOU WIN!" overlay
         Render();
     }
 
@@ -1141,10 +1172,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // — the server moves ratings only when both players' reports agree, so a
             // lone client can't forge a result. Solo/bot games don't count. Same
             // fire-and-forget contract; never blocks match end.
-            if (isNetworked && isRankedMatch && !opponentLeft)
+            // A surrender / leave-to-menu is now a real, reportable result (the old !opponentLeft
+            // guard is gone): both clients reach the same finished state via the concede command, so
+            // both file their halves. Prefer the ids cached at match start — after a mid-match
+            // disconnect the live session lookup is empty.
+            if (isNetworked && isRankedMatch)
             {
-                string rankedMatchId = LobbyManager.CurrentSession?.Id;
-                string rankedOppId = LobbyManager.OpponentPlayerId();
+                string rankedMatchId = !string.IsNullOrEmpty(cachedRankedMatchId) ? cachedRankedMatchId : LobbyManager.CurrentSession?.Id;
+                string rankedOppId = !string.IsNullOrEmpty(cachedRankedOppId) ? cachedRankedOppId : LobbyManager.OpponentPlayerId();
                 if (!string.IsNullOrEmpty(rankedMatchId) && !string.IsNullOrEmpty(rankedOppId))
                     _ = RankedStore.ReportMatchAsync(rankedMatchId, rankedOppId, summary.result == "win");
             }
@@ -6102,6 +6137,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Built last so the dropdown overlays everything else in the side panel.
         if (menuOpen && !ResultScreenActive()) DrawGameMenu();
         if (soundMenuOpen) DrawSoundMenu();
+        if (surrenderConfirmOpen) DrawSurrenderConfirm();
     }
 
     // Hamburger button in the upper-right corner; toggles the game menu.
@@ -6134,14 +6170,60 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddRoundedCardBorder(menu, Accent, 1.3f);
         menu.SetAsLastSibling();
 
-        AddMenuItem(menu, "New Match", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
-            () => { menuOpen = false; NewMatch(); });
+        // In a live networked match the top slot is Surrender (New Match is a solo-only concept and
+        // makes no sense mid-PvP); everywhere else it stays New Match.
+        bool netActive = isNetworked && !isReplayMode && state != null && state.Status == "active" && !opponentLeft;
+        if (netActive)
+            AddMenuItem(menu, "Surrender", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
+                () => { menuOpen = false; surrenderConfirmOpen = true; Render(); });
+        else
+            AddMenuItem(menu, "New Match", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
+                () => { menuOpen = false; NewMatch(); });
         AddMenuItem(menu, "Main Menu", new Vector2(0.07f, 0.545f), new Vector2(0.93f, 0.71f),
             () => { menuOpen = false; ReturnToMenu(); });
         AddMenuItem(menu, "Sound", new Vector2(0.07f, 0.30f), new Vector2(0.93f, 0.465f),
             () => { menuOpen = false; soundMenuOpen = true; Render(); });
         AddMenuItem(menu, "Close", new Vector2(0.07f, 0.045f), new Vector2(0.93f, 0.21f),
             () => { menuOpen = false; Render(); });
+    }
+
+    // Confirmation before surrendering a live match (opened from the game menu's "Surrender" item).
+    // Guards against a mis-click throwing the game — surrender is irreversible.
+    private void DrawSurrenderConfirm()
+    {
+        var dim = PanelObject("Surrender Dim", boardRoot, new Color32(8, 10, 14, 210));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+
+        Color danger = new Color(0.93f, 0.48f, 0.48f);
+        var panel = PanelObject("Surrender Panel", boardRoot, (Color)new Color32(14, 30, 46, 250));
+        Stretch(panel, new Vector2(0.32f, 0.38f), new Vector2(0.68f, 0.62f), Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, danger, 2f);
+        panel.SetAsLastSibling();
+
+        var label = TextObject("Surrender Title", panel, "SURRENDER?", 22, danger, TextAnchor.MiddleCenter, titleFont);
+        label.fontStyle = FontStyle.Bold;
+        Stretch(label.rectTransform, new Vector2(0.06f, 0.58f), new Vector2(0.94f, 0.92f), Vector2.zero, Vector2.zero);
+
+        var sub = TextObject("Surrender Sub", panel, "You'll lose this match. This can't be undone.", 12, Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(sub.rectTransform, new Vector2(0.06f, 0.42f), new Vector2(0.94f, 0.58f), Vector2.zero, Vector2.zero);
+
+        var buttons = RowObject("Surrender Buttons", panel, 10, TextAnchor.MiddleCenter);
+        Stretch(buttons, new Vector2(0.08f, 0.10f), new Vector2(0.92f, 0.38f), Vector2.zero, Vector2.zero);
+        AddButton(buttons, "CANCEL", () => { surrenderConfirmOpen = false; Render(); });
+        AddButton(buttons, "SURRENDER", ConfirmSurrender);
+    }
+
+    // Concede the current match: the opponent wins, the result is recorded + ranked-reported, and
+    // (networked) the 'concede' command is sent so the opponent's client ends on the same result.
+    // The engine command (GameEngine.Concede) is the single source of truth on both sides. Dispatch
+    // handles the local apply, the finished-match records, and the network send.
+    private void ConfirmSurrender()
+    {
+        surrenderConfirmOpen = false;
+        if (state == null || state.Status == "finished") { Render(); return; }
+        Dispatch(new GameCommand { Type = "concede", Seat = isNetworked ? localSeat : "south" });
     }
 
     // Dedicated sound-settings panel (opened from the game menu's "Sound" item):
@@ -6220,10 +6302,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // (single-scene design — mirror of MainMenuManager.StartVersusSelfFlow).
     public void ReturnToMenu()
     {
+        // Leaving a live networked match counts as a SURRENDER: concede first (while still connected)
+        // so it's recorded as a loss for us and — via the concede message, or the opponent's own
+        // disconnect fallback — a win for them. Skipped once the match is already finished (normal end,
+        // or we surrendered from the result screen) so it never double-fires or turns a win into a loss.
+        if (isNetworked && !isReplayMode && state != null && state.Status != "finished" && !opponentLeft)
+            Dispatch(new GameCommand { Type = "concede", Seat = localSeat });
         // Custom versus-self decks only apply to the match they were picked for;
         // leaving the board falls back to the ST01-vs-ST02 default next time.
         PendingSouthDeckId = null;
         PendingNorthDeckId = null;
+        // Release any lingering matchmaking proposal so a fast requeue starts a FRESH search
+        // instead of being handed this finished match's dead session id ("stuck on connecting").
+        // Server-side handleQueueJoin also clears it on re-join, but doing it here cleans up even
+        // when the player just returns to the menu without queuing again. Ranked/casual only —
+        // custom lobby matches never touch the queue.
+        if (isNetworked && (networkedMode == "ranked" || networkedMode == "casual"))
+            _ = RankedStore.QueueCancelAsync();
         // Tear down the networked match so the NEXT one can start a fresh Relay. Netcode's
         // NetworkManager stays connected after a match otherwise, and the Sessions SDK
         // refuses to start a new session on an already-connected NetworkManager, leaving
@@ -7000,9 +7095,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                         () => Dispatch(new GameCommand { Type = "attachDon", Seat = selectedSeat, Target = selectedId, Amount = freeDon }));
                 }
 
-                if (selDef.Type != "leader")
-                    AddButton(body, selected.Rested ? "Set Active" : "Rest",
-                        () => Dispatch(new GameCommand { Type = selected.Rested ? "unrest" : "rest", Seat = selectedSeat, Target = selectedId }));
+                // No manual rest/un-rest: a character only becomes rested as a consequence of a card
+                // effect (or its own attack), never by the player freely toggling it. Removed the
+                // debug-era "Rest / Set Active" button here.
 
                 bool hasRush = GameEngine.HasRush(state, selected);
                 if (hasRush && selected.PlayedOnTurn == state.TurnNumber)
@@ -7272,6 +7367,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             aiLastTurnSeen = state.TurnNumber;
             aiTriedThisTurn.Clear();
+            aiActivatedThisTurn.Clear();
             if (state.Status == "active" && state.ActiveSeat == aiSeat)
             {
                 aiNextActionAt = Time.unscaledTime + 2.9f;
@@ -7279,7 +7375,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             }
         }
 
-        var cmd = OnePieceTcg.Engine.Bot.Search.SearchBot.DecideOneCommand(state, aiSeat, aiTriedThisTurn);
+        // Advanced tier = the full validated contract (contract-v2, ported from Tools/Sim): IntermediateBot
+        // base, with the activation module on midrange main turns, the pressure module on control main turns,
+        // SearchBot's rollout on tactical/resolution branches, and greedy everywhere else. aiArchetype gates it.
+        var cmd = OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.Decide(
+            state, aiSeat, aiTriedThisTurn, aiActivatedThisTurn, aiArchetype);
         if (cmd == null) return false;
         object before = IntermediateBot.SnapshotFor(state, cmd);
         Dispatch(cmd);
@@ -8867,15 +8967,40 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 dim.SetAsLastSibling();
             }
 
-            // QoL: a small shield on an active [Blocker] that can currently redirect an attack.
-            if (!card.Rested && GameEngine.HasBlocker(state, card))
+            // A [Blocker] shield, centred on and straddling the card's top edge (half on / half off).
+            // Live blockers get a faint grey glow (like the soft card glow); a blocker whose ability
+            // is CANCELLED (Limejuice's cannotBlock) or that faces an incoming UNBLOCKABLE attack gets
+            // a red X and no glow instead. A fully effect-negated card (Teach) keeps its own "negated"
+            // treatment and shows no shield here.
+            if (!card.Rested && GameEngine.HasBlocker(state, card) && !GameEngine.IsEffectNegated(state, card))
             {
+                bool blockDisabled = GameEngine.IsBlockCancelled(state, card)
+                    || GameEngine.BlockBarredByCurrentAttack(state, card);
+                const float shieldSize = 34f;
+
+                // Faint grey glow behind the shield — only while the blocker can actually block.
+                if (!blockDisabled)
+                {
+                    var sglow = new GameObject("Blocker Shield Glow").AddComponent<RectTransform>();
+                    sglow.SetParent(holder, false);
+                    sglow.anchorMin = sglow.anchorMax = new Vector2(0.5f, 1f);   // top-centre of the card
+                    sglow.pivot = new Vector2(0.5f, 0.5f);                        // straddle the edge
+                    sglow.sizeDelta = new Vector2(shieldSize * 2.1f, shieldSize * 2.1f);
+                    sglow.anchoredPosition = Vector2.zero;
+                    var sgi = sglow.gameObject.AddComponent<RawImage>();
+                    sgi.texture = GetSoftGlowTexture(0.5f);
+                    sgi.color = new Color(0.82f, 0.85f, 0.90f, 0.42f);           // faint grey halo
+                    sgi.raycastTarget = false;
+                    sglow.SetAsLastSibling();
+                }
+
                 var art = LoadBlockerShieldSprite();
                 var shield = PanelObject("Blocker Shield", holder,
                     art != null ? Color.white : new Color(0.16f, 0.52f, 0.85f, 0.95f));
-                shield.anchorMin = new Vector2(0.03f, 0.79f);
-                shield.anchorMax = new Vector2(0.27f, 0.99f);
-                shield.offsetMin = Vector2.zero; shield.offsetMax = Vector2.zero;
+                shield.anchorMin = shield.anchorMax = new Vector2(0.5f, 1f);
+                shield.pivot = new Vector2(0.5f, 0.5f);
+                shield.sizeDelta = new Vector2(shieldSize, shieldSize);
+                shield.anchoredPosition = Vector2.zero;
                 var simg = shield.GetComponent<Image>();
                 simg.raycastTarget = false;
                 if (art != null)
@@ -8889,11 +9014,30 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     // Fallback until Assets/Resources/blocker_shield.png is present: drawn glyph badge.
                     Round(shield);
                     AddOutline(shield.gameObject, new Color(1f, 1f, 1f, 0.9f), 1f);
-                    var sg = TextObject("Shield Glyph", shield, "⛨", 13, Color.white, TextAnchor.MiddleCenter, titleFont);
+                    var sg = TextObject("Shield Glyph", shield, "⛨", 18, Color.white, TextAnchor.MiddleCenter, titleFont);
                     Stretch(sg.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
                     sg.raycastTarget = false;
                 }
+                if (blockDisabled) simg.color = new Color(simg.color.r, simg.color.g, simg.color.b, simg.color.a * 0.55f);
                 shield.SetAsLastSibling();
+
+                // Red X over the shield when its block is cancelled / an unblockable attack is incoming.
+                // Drawn as two crossed bars (no font-glyph dependency), each with a dark outline.
+                if (blockDisabled)
+                {
+                    foreach (float ang in new[] { 45f, -45f })
+                    {
+                        var bar = PanelObject("Shield X Bar", shield, new Color(0.96f, 0.24f, 0.24f, 1f));
+                        bar.anchorMin = bar.anchorMax = new Vector2(0.5f, 0.5f);
+                        bar.pivot = new Vector2(0.5f, 0.5f);
+                        bar.sizeDelta = new Vector2(shieldSize * 0.92f, shieldSize * 0.17f);
+                        bar.anchoredPosition = Vector2.zero;
+                        bar.localRotation = Quaternion.Euler(0f, 0f, ang);
+                        Round(bar);
+                        bar.GetComponent<Image>().raycastTarget = false;
+                        AddOutline(bar.gameObject, new Color(0f, 0f, 0f, 0.75f), 1f);
+                    }
+                }
             }
         }
     }

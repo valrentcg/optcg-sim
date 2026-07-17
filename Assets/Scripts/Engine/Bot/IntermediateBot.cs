@@ -224,14 +224,14 @@ namespace OnePieceTcg.Engine.Bot
                 return Try(blacklist, new GameCommand { Type = "resolveChoice", Seat = seat, Target = "B" });
             }
 
+            if (state.DeckLook != null && state.DeckLook.Seat != seat) return null;
+            if (state.DeckLook != null && state.DeckLook.Seat == seat)
+                return DecideDeckLook(state, seat, blacklist);
+
             var myEffect = state.PendingEffects.FirstOrDefault(e => e.Seat == seat);
             if (myEffect != null)
                 return DecideEffect(state, seat, myEffect, blacklist);
             if (state.PendingEffects.Count > 0) return null; // some other seat's effect is blocking everyone.
-
-            if (state.DeckLook != null && state.DeckLook.Seat != seat) return null;
-            if (state.DeckLook != null && state.DeckLook.Seat == seat)
-                return DecideDeckLook(state, seat, blacklist);
 
             if (state.Battle != null)
             {
