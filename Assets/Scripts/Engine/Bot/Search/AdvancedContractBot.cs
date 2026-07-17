@@ -29,7 +29,7 @@ namespace OnePieceTcg.Engine.Bot.Search
 
             bool cleanMain = state.ActiveSeat == seat && state.Phase == "main" && state.Battle == null
                 && state.PendingEffects.Count == 0 && state.ActiveChoice == null && state.DeckLook == null;
-            if (cleanMain && archetype == "midrange")
+            if (cleanMain && (archetype == "midrange" || archetype == "activation-engine"))
                 return AdvancedActivationPolicy.Decide(state, seat, blacklist, attemptedThisTurn);
             if (cleanMain && archetype == "control")
                 return AdvancedPressurePolicy.Decide(state, seat, blacklist);
@@ -43,6 +43,12 @@ namespace OnePieceTcg.Engine.Bot.Search
                 || (state.DeckLook != null && state.DeckLook.Seat == seat)
                 || state.PendingEffects.Any(e => e.Seat == seat)
                 || (state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger");
+            // Rollout search treats consuming a Trigger as a legal state change even when its
+            // optional payload has no target. Apply the same strict value gate as the incumbent
+            // before search, so Advanced cannot trash a useful Event from Life for a no-op.
+            if (state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger"
+                && !IntermediateBot.ShouldUseTrigger(state, seat))
+                return new GameCommand { Type = "passTrigger", Seat = seat };
             if (resolutionDecision)
                 return SearchBot.DecideOneCommand(state, seat, blacklist);
 
@@ -58,6 +64,10 @@ namespace OnePieceTcg.Engine.Bot.Search
         {
             if (deck?.List == null || deck.List.Count == 0) return "midrange";
             int n = 0; long costSum = 0; bool altWin = false;
+            bool leaderActivationEngine = false;
+            var leader = CardData.GetCard(deck.Leader);
+            if (leader?.Effect?.IndexOf("[Activate: Main]", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                leaderActivationEngine = true;
             foreach (var (cardId, qty) in deck.List)
             {
                 var d = CardData.GetCard(cardId);
@@ -66,6 +76,10 @@ namespace OnePieceTcg.Engine.Bot.Search
                 string t = ((d.Effect ?? "") + " " + (d.Trigger ?? "")).ToLowerInvariant();
                 if (t.Contains("win the game")) altWin = true;
             }
+            // A coarse curve label must not disable the card that makes the deck function. Enel and
+            // ST03 Crocodile both have cheap lists (historically labelled aggro) but their gameplans
+            // require a guarded once-per-turn Leader activation. Route the mechanic explicitly.
+            if (leaderActivationEngine) return "activation-engine";
             if (altWin) return "combo";
             double avg = n == 0 ? 0 : (double)costSum / n;
             if (avg < 3.5) return "aggro";

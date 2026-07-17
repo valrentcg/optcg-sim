@@ -681,6 +681,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             replaySaved = true;
             SaveFinishedMatchRecords();
         }
+        // Give the AI a visible beat before it answers a freshly-declared attack. When the bot has no
+        // blocker the engine auto-skips the block step, so its FIRST response is the counter — which
+        // otherwise fires on the very next frame (aiNextActionAt already elapsed), snapping the power
+        // up the instant the attack lands so the pre-counter matchup is never seen. Pushing the timer
+        // out here makes the counter read as a distinct action ("6k into 6k", pause, then the counter).
+        if (aiSeat != null && state.Battle != null && state.Battle.TargetSeat == aiSeat
+            && (state.Battle.Step == "block" || state.Battle.Step == "counter"))
+            aiNextActionAt = Mathf.Max(aiNextActionAt, Time.unscaledTime + 1.5f);
         if (isNetworked) MatchNetworkSync.SendCommand(command);
         Render();
     }
@@ -2556,6 +2564,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         state != null && state.Status == "finished" && !isReplayMode
         && finishedResultText == "YOU LOSE.";
 
+    // At the END of a match (win OR lose), reveal BOTH players' remaining hand + life so the result
+    // screen's "View Board" shows the full final position. Both sides simulate the same deterministic
+    // state, so every card is already in local state — this is a pure rendering flip, only once the
+    // match is decided. (RevealOnLoss covered only the opponent, and only on a loss.) Not in replays.
+    private bool RevealFinishedInfo() =>
+        state != null && state.Status == "finished" && !isReplayMode;
+
     // "YOU WIN!/YOU LOSE." modal for a finished ranked/casual match. Its Main Menu button
     // routes through ReturnToMenu, which tears down Netcode — the only intended exit.
     private void DrawMatchResultOverlay()
@@ -3188,11 +3203,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             return;
         }
         var dl = state.DeckLook;
-        // INFO PRIVACY (networked): the looked-at cards are private to the searching player. Both
-        // clients simulate the same deterministic state, so the opponent's client also holds these
-        // cards — we must NOT render them face-up here. The non-owner sees only a generic overlay.
-        // (The side action panel already shows a "waiting on opponent" note.)
-        if (isNetworked && dl.Seat != localSeat)
+        // INFO PRIVACY: the looked-at cards are private to the searching player, so hide them from the
+        // local viewer whenever the search belongs to someone ELSE — the networked opponent, OR the AI
+        // opponent in a solo match. Both sides are simulated locally (the cards are in state either
+        // way), so we must NOT render them face-up; the non-owner sees only a generic scrim. Hotseat /
+        // versus-self is exempt: one person controls both seats, so everything is already theirs.
+        bool searchIsOpponents = (isNetworked && dl.Seat != localSeat)
+            || (!isNetworked && aiSeat != null && dl.Seat == aiSeat);
+        if (searchIsOpponents)
         {
             var oScrim = PanelObject("Opp Search Scrim", canvas.transform, new Color(0f, 0f, 0f, 0.5f));
             Stretch(oScrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -5009,6 +5027,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // (The DON!! card row itself is created AFTER the leader zone below, so leader-attached
         // DON!! layer between the cost background and the cost-area DON!! cards.)
 
+        // STAGE zone BACKGROUND is created HERE — BEFORE the Leader zone — so DON!! attached to the
+        // Leader (a later sibling; its DON!! fan toward the Stage) render OVER the Stage panel instead
+        // of being clipped behind it. Field cards sit above the zone art. The Stage CARD is added below.
+        var stageMin = top ? new Vector2(0.31f, 0.36f) : new Vector2(0.58f, 0.34f);
+        var stageMax = top ? new Vector2(0.42f, 0.66f) : new Vector2(0.69f, 0.64f);
+        var stage = MatZone(half, "STAGE", stageMin, stageMax, new Color32(151, 179, 92, 220), top);
+
         var leaderMin = top ? new Vector2(0.445f, 0.36f) : new Vector2(0.445f, 0.34f);
         var leaderMax = top ? new Vector2(0.555f, 0.66f) : new Vector2(0.555f, 0.64f);
         var leader = MatZone(half, "LEADER", leaderMin, leaderMax, new Color32(217, 224, 210, 235), top);
@@ -5041,9 +5066,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var leaderSz = FittedCardSize(leader);
         SnugZone(leader, leaderMin, leaderMax, leaderSz.x * 1.06f, leaderSz.y * 1.06f);
 
-        var stageMin = top ? new Vector2(0.31f, 0.36f) : new Vector2(0.58f, 0.34f);
-        var stageMax = top ? new Vector2(0.42f, 0.66f) : new Vector2(0.69f, 0.64f);
-        var stage = MatZone(half, "STAGE", stageMin, stageMax, new Color32(151, 179, 92, 220), top);
+        // (STAGE zone background created above, before the Leader zone, for correct DON!! layering.)
         var stageDrop = stage.gameObject.AddComponent<StageDrop>();
         stageDrop.Init(this, seat);
         if (p.Stage != null) AddCardToZone(stage, p.Stage, seat, true, top);
@@ -5099,8 +5122,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var lifeMax = top ? new Vector2(0.98f, 0.60f) : new Vector2(0.15f, 0.97f);
         var life = MatZone(half, "LIFE", lifeMin, lifeMax, new Color32(226, 230, 216, 235), top);
         moveZoneAnchors["life:" + seat] = life;
-        // On a loss, reveal the opponent's (top) life cards face-up.
-        AddLifeStackToZone(life, p.Life.Count, top, seat, RevealOnLoss() && top ? p.Life : null);
+        // At the end of the match, reveal BOTH players' remaining Life cards face-up (View Board);
+        // during play they stay hidden.
+        AddLifeStackToZone(life, p.Life.Count, top, seat, RevealFinishedInfo() ? p.Life : null);
     }
 
     private void DrawExternalHand(PlayerState p, string seat, bool top)
@@ -8426,19 +8450,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Attached DON: a tight horizontal row (cost-area style) tucked under the character. The row
         // starts at the character's vertical middle and is centred; its left-to-right span is capped
         // to the character's width, so each added DON packs TIGHTER instead of spilling past the card.
-        int attachedShown = Mathf.Min(attachedDon, 8);
+        int attachedShown = Mathf.Min(attachedDon, 10);
         if (attachedShown > 0)
         {
-            // Attached DON render at the SAME size as a leader/character card (they're normal
-            // cards, just tucked behind); the row still packs within the character's width and
-            // peeks out below it.
+            // Attached DON render at the SAME size as a leader/character card (they're normal cards,
+            // just tucked behind). The fan NEVER exceeds the character's ON-SCREEN width: a rested
+            // character is rotated 90°, so its on-screen width is the card's HEIGHT — the DON get that
+            // much room and spread wider. A few DON stay bunched at a comfortable spacing; as the count
+            // climbs the spacing shrinks so they pack exactly to the edge instead of spilling past it.
             float donW = boardCardSize.x;
             float donH = boardCardSize.y;
-            float span = boardCardSize.x;                         // never exceed the character's width
-            float step = attachedShown > 1 ? (span - donW * 0.5f) / (attachedShown - 1) : 0f;
-            float total = donW + step * (attachedShown - 1);
+            float availWidth = card.Rested ? donH : donW;         // rested = rotated ⇒ wider on screen
+            float preferredStep = donW * 0.16f;                   // bunched look while there's room
+            float maxStep = attachedShown > 1 ? Mathf.Max(0f, (availWidth - donW) / (attachedShown - 1)) : 0f;
+            float step = Mathf.Min(preferredStep, maxStep);
+            float total = donW + step * (attachedShown - 1);      // guaranteed <= availWidth
             float startX = -total * 0.5f + donW * 0.5f;
-            float centerY = -donH * 0.30f;                        // ~30% of the DON peeks below the card
+            float centerY = (card.Rested ? donW : donH) * -0.30f; // ~30% of the DON peeks past the card
             for (int i = 0; i < attachedShown; i++)
             {
                 var don = new GameObject("Attached DON").AddComponent<RectTransform>();
@@ -8576,9 +8604,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // In a networked match the top-rendered hand is always the remote opponent's (see
                 // BottomSeat/TopSeat) - hide it as card backs, same as any other face-down pile.
                 // Hotseat/Versus Self is unaffected (isNetworked is false there).
-                // On a loss we reveal the opponent's hand (RevealOnLoss) — the local hand is
-                // already face-up, so this only flips the top one.
-                handFaceUp = RevealOnLoss() || !(top && (isNetworked || aiSeat == TopSeat));
+                // At the end of the match we reveal the opponent's hand (RevealFinishedInfo, win or
+                // lose) — the local hand is already face-up, so this only flips the top one.
+                handFaceUp = RevealFinishedInfo() || !(top && (isNetworked || aiSeat == TopSeat));
             }
             AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top && !IsReplayRotated, count - 1 - i);
             holders[i] = holder;
@@ -8977,19 +9005,24 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 bool blockDisabled = GameEngine.IsBlockCancelled(state, card)
                     || GameEngine.BlockBarredByCurrentAttack(state, card);
                 const float shieldSize = 34f;
+                // Put the shield on the CENTER-FACING edge of the card for both players: the near
+                // player's cards straddle their top edge, the far (opponent/bot) player's cards
+                // straddle their bottom edge — so every shield sits toward the middle of the board.
+                float edgeY = seat != BottomSeat ? 0f : 1f;
 
-                // Faint grey glow behind the shield — only while the blocker can actually block.
+                // Faint grey glow behind the shield — a tight radial halo that HUGS the shield (like
+                // the card glow hugs a card), not a big soft square. Only while the blocker is live.
                 if (!blockDisabled)
                 {
                     var sglow = new GameObject("Blocker Shield Glow").AddComponent<RectTransform>();
                     sglow.SetParent(holder, false);
-                    sglow.anchorMin = sglow.anchorMax = new Vector2(0.5f, 1f);   // top-centre of the card
+                    sglow.anchorMin = sglow.anchorMax = new Vector2(0.5f, edgeY);
                     sglow.pivot = new Vector2(0.5f, 0.5f);                        // straddle the edge
-                    sglow.sizeDelta = new Vector2(shieldSize * 2.1f, shieldSize * 2.1f);
+                    sglow.sizeDelta = new Vector2(shieldSize * 1.5f, shieldSize * 1.5f);
                     sglow.anchoredPosition = Vector2.zero;
                     var sgi = sglow.gameObject.AddComponent<RawImage>();
-                    sgi.texture = GetSoftGlowTexture(0.5f);
-                    sgi.color = new Color(0.82f, 0.85f, 0.90f, 0.42f);           // faint grey halo
+                    sgi.texture = GetGlowAuraTexture(0.12f, 2.4f);               // radial, hugs the icon
+                    sgi.color = new Color(0.82f, 0.85f, 0.90f, 0.55f);           // faint grey halo
                     sgi.raycastTarget = false;
                     sglow.SetAsLastSibling();
                 }
@@ -8997,7 +9030,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 var art = LoadBlockerShieldSprite();
                 var shield = PanelObject("Blocker Shield", holder,
                     art != null ? Color.white : new Color(0.16f, 0.52f, 0.85f, 0.95f));
-                shield.anchorMin = shield.anchorMax = new Vector2(0.5f, 1f);
+                shield.anchorMin = shield.anchorMax = new Vector2(0.5f, edgeY);
                 shield.pivot = new Vector2(0.5f, 0.5f);
                 shield.sizeDelta = new Vector2(shieldSize, shieldSize);
                 shield.anchoredPosition = Vector2.zero;

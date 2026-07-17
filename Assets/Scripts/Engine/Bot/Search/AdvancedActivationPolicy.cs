@@ -37,7 +37,8 @@ namespace OnePieceTcg.Engine.Bot.Search
             HashSet<string> attemptedThisTurn)
         {
             var greedy = IntermediateBot.DecideOneCommand(world, seat, blacklist);
-            if (greedy == null || (greedy.Type != "declareAttack" && greedy.Type != "endTurn")) return greedy;
+            if (greedy == null || (greedy.Type != "declareAttack" && greedy.Type != "attachDon"
+                && greedy.Type != "endTurn")) return greedy;
             Interlocked.Increment(ref _opportunities);
 
             var p = world.Players[seat];
@@ -79,7 +80,9 @@ namespace OnePieceTcg.Engine.Bot.Search
             if (e.Contains("trash this character")) return false;
             return e.Contains("draw ") || e.Contains("k.o.") || e.Contains("set up to") || e.Contains("rest up to")
                 || e.Contains("play up to") || e.Contains("add up to") || e.Contains("return up to")
-                || e.Contains("gains +") || e.Contains("look at");
+                || e.Contains("gains +") || e.Contains("look at")
+                // ST01-001 Luffy / ST01-007 Nami: turn rested DON!! into an extra attacker buff.
+                || (e.Contains("give") && e.Contains("rested don!!"));
         }
     }
 }

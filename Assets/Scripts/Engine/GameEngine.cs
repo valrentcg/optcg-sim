@@ -542,11 +542,22 @@ namespace OnePieceTcg.Engine
                                 colorOkA = false;
                         if (!colorOkA) continue;
                         if (ContainsAll(aText, "other than this Character") && aura.InstanceId == instance.InstanceId) continue;
-                        // Named filter(s): "All of your [A] (and [B]) cards …" — match ANY name.
+                        // Named filter(s): "All of your [A] (and [B]) cards …". A card name in [brackets]
+                        // means the EXACT card name (a card matches only if its name equals it, or it
+                        // has a "treat this card's name as [X]" ability — see NameMatches). The recipient
+                        // must be one of the named cards, and this applies to the aura's OWN source too:
+                        // e.g. ST30-001 "Luffy & Ace" must NOT buff the Leader with its "[Portgas.D.Ace]
+                        // and [Monkey.D.Luffy]" line — "Luffy & Ace" is neither exact name. (Previously
+                        // the source bypassed this check and wrongly self-buffed +3000.)
+                        // Enforce this ONLY when the line is purely name-scoped: if it ALSO scopes by
+                        // {type}/feature — an OR like "[Rosinante] and {Heart Pirates} type Characters" —
+                        // a card can qualify by type, so let the type filter below govern instead.
                         var nameFilts = System.Text.RegularExpressions.Regex.Matches(
                             System.Text.RegularExpressions.Regex.Match(aText, @"All of your [^.]*?(?:gain|cards)").Value,
                             @"\[([^\]]+)\]");
-                        if (nameFilts.Count > 0 && aura.InstanceId != instance.InstanceId)
+                        bool auraHasTypeScope = System.Text.RegularExpressions.Regex.IsMatch(aText, @"\{[^}]+\} type", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                            || ContainsAll(aText, "type including");
+                        if (nameFilts.Count > 0 && !auraHasTypeScope)
                         {
                             bool anyName = false;
                             foreach (System.Text.RegularExpressions.Match nf in nameFilts)
@@ -1273,7 +1284,22 @@ namespace OnePieceTcg.Engine
             // "until the end of your opponent's next turn" restrictions expire when the
             // CONTROLLER's next turn begins (they last through the opponent's whole turn).
             state.ActiveModifiers.RemoveAll(m => m.Duration == "untilNextTurn" && m.OwnerSeat == seat);
+            // "Until the end of your next turn" is not the same as "until the start". Carry
+            // those bonuses into this turn via the normal turn-scoped dictionary, then let the
+            // next player's start-of-turn cleanup remove them. This is the ST10-016 Kong Gatling
+            // Trigger bug: it previously lost its promised +1000 before the owner's turn began.
+            var carryThroughTurn = state.TimedPowerBonuses
+                .Where(tb => tb.OwnerSeat == seat && tb.Duration == "endOfNextTurn").ToList();
+            foreach (var tb in carryThroughTurn)
+            {
+                state.TemporaryPowerBonus.TryGetValue(tb.TargetInstanceId, out var existing);
+                state.TemporaryPowerBonus[tb.TargetInstanceId] = existing + tb.Delta;
+                var target = FindCardInstance(state, tb.TargetInstanceId);
+                CleanInstanceModifiers(target, "endOfNextTurnOf:" + seat);
+                RegisterPowerModifier(target, "carried timed effect", tb.Delta, "endOfTurn");
+            }
             state.TimedPowerBonuses.RemoveAll(tb => tb.OwnerSeat == seat);
+            ExpireInstanceModifiers(state, "startOfNextTurnOf:" + seat);
             ExpireInstanceModifiers(state, "untilNextTurnOf:" + seat);
             state.BasePowerOverrides.RemoveAll(bp =>
                 (bp.Duration == "untilNextTurn" && bp.OwnerSeat == seat) || bp.Duration == "thisTurn");
@@ -2892,6 +2918,13 @@ namespace OnePieceTcg.Engine
 
         // Effective-name match including printed aliases ("Also treat this card's name as
         // [X] (and [Y]) according to the rules." — static, unlike runtime NameOverrides).
+        // RULE: a card name written in [brackets] in card text refers to the EXACT card name. A card
+        // "is [X]" only if its (effective) name equals X, OR it has a "treat this card's name as [X]"
+        // ability granting it that name. It is NOT a substring/partial match — a combined-name card
+        // like "Luffy & Ace", "Kid & Killer", "Rosinante & Law" is its OWN distinct name and does NOT
+        // count as either component (e.g. "Luffy & Ace" is not [Monkey.D.Luffy]) unless it carries the
+        // explicit "treat this card's name as …" text. This is the single source of truth for every
+        // [Name] check in the engine (auras, search filters, conditions, …).
         public static bool NameMatches(GameState state, CardInstance card, string name)
         {
             if (card == null || string.IsNullOrEmpty(name)) return false;
@@ -6859,8 +6892,8 @@ namespace OnePieceTcg.Engine
                             }
                             else if (kwDur == "untilNextTurn")
                             {
-                                state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = t2.InstanceId, Delta = kwPower, OwnerSeat = effect.Seat });
-                                RegisterPowerModifier(t2, sourceName, kwPower, "permanent");
+                                state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = t2.InstanceId, Delta = kwPower, OwnerSeat = effect.Seat, Duration = "startOfNextTurn" });
+                                RegisterPowerModifier(t2, sourceName, kwPower, "startOfNextTurnOf:" + effect.Seat);
                             }
                             else
                             {
@@ -7035,8 +7068,8 @@ namespace OnePieceTcg.Engine
                         Log(state, effect.Seat, "That is not a valid target.");
                         return EffectResolution.WaitingForTarget;
                     }
-                    state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = tmT.InstanceId, Delta = -tmD, OwnerSeat = effect.Seat });
-                    RegisterPowerModifier(tmT, sourceName, -tmD, "permanent");
+                    state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = tmT.InstanceId, Delta = -tmD, OwnerSeat = effect.Seat, Duration = "startOfNextTurn" });
+                    RegisterPowerModifier(tmT, sourceName, -tmD, "startOfNextTurnOf:" + effect.Seat);
                     Log(state, effect.Seat, $"{sourceName} gives {NameId(GetCard(tmT))} -{tmD} power until your next turn.");
                     effect.SelectionsRemaining--;
                     if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
@@ -7684,6 +7717,10 @@ namespace OnePieceTcg.Engine
                 if (untilM.Success)
                 {
                     int uBonus = int.Parse(untilM.Groups[1].Value);
+                    bool throughOwnNextTurn = ContainsAll(text, "until the end of your next turn")
+                        && !ContainsAll(text, "opponent's next turn");
+                    string timedDuration = throughOwnNextTurn ? "endOfNextTurn" : "startOfNextTurn";
+                    string timedExpiry = (throughOwnNextTurn ? "endOfNextTurnOf:" : "startOfNextTurnOf:") + effect.Seat;
                     // Board-wide: "Your Leader and all of your Characters gain +N power …"
                     if (ContainsAll(text, "all of your Characters") || ContainsAll(text, "All of your"))
                     {
@@ -7694,8 +7731,8 @@ namespace OnePieceTcg.Engine
                             if (c != null && CardPassesFeatureFilter(text, GetCard(c))) uTargets.Add(c);
                         foreach (var t in uTargets)
                         {
-                            state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = t.InstanceId, Delta = uBonus, OwnerSeat = effect.Seat });
-                            RegisterPowerModifier(t, sourceName, uBonus, "permanent");
+                            state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = t.InstanceId, Delta = uBonus, OwnerSeat = effect.Seat, Duration = timedDuration });
+                            RegisterPowerModifier(t, sourceName, uBonus, timedExpiry);
                             uCount++;
                         }
                         Log(state, effect.Seat, $"{sourceName} gives +{uBonus} power to {uCount} card(s) until the start of your next turn.");
@@ -7725,8 +7762,8 @@ namespace OnePieceTcg.Engine
                         Log(state, effect.Seat, $"{sourceName} has left the field — the self-buff fizzles.");
                         return EffectResolution.Resolved;
                     }
-                    state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = uT.InstanceId, Delta = uBonus, OwnerSeat = effect.Seat });
-                    RegisterPowerModifier(uT, sourceName, uBonus, "permanent");
+                    state.TimedPowerBonuses.Add(new TimedPowerBonus { TargetInstanceId = uT.InstanceId, Delta = uBonus, OwnerSeat = effect.Seat, Duration = timedDuration });
+                    RegisterPowerModifier(uT, sourceName, uBonus, timedExpiry);
                     Log(state, effect.Seat, $"{sourceName} gives {NameId(GetCard(uT))} +{uBonus} power until the start of your next turn.");
                     return EffectResolution.Resolved;
                 }
@@ -9461,6 +9498,7 @@ namespace OnePieceTcg.Engine
             else if (p.Stage == card) p.Stage = null;
             card.Zone = "hand";
             card.PlayedOnTurn = null;
+            card.Rested = false;          // rest is a board state only — a card in hand is always upright
             card.Modifiers.Clear();
             p.Hand.Add(card);
             state.NameOverrides.Remove(card.InstanceId); // name overrides only apply while on field

@@ -270,13 +270,16 @@ namespace OnePieceTcg.Engine
         public string Duration;      // "thisTurn" | "untilNextTurn"
     }
 
-    /// <summary>A +/-power bonus lasting until OwnerSeat's next turn start.</summary>
+    /// <summary>A +/-power bonus spanning turn boundaries. Most expire when OwnerSeat's next
+    /// turn starts; "until the end of your next turn" bonuses are carried into that turn and
+    /// then use the ordinary end-of-turn cleanup.</summary>
     [System.Serializable]
     public sealed class TimedPowerBonus
     {
         public string TargetInstanceId;
         public int Delta;
         public string OwnerSeat;
+        public string Duration;      // "startOfNextTurn" (default) | "endOfNextTurn"
     }
 
     /// <summary>Mid-resolution state for a "look at top N cards" effect (e.g. Jewelry Bonney)

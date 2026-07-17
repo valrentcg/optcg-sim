@@ -270,6 +270,17 @@ namespace OnePieceTcg.Engine.Bot
                 .Where(c => GameEngine.IsValidEffectTarget(state, effect, c))
                 .ToList();
 
+            // "Return ... to the owner's hand" can legally select either board, but it is still a
+            // removal effect. The old scorer treated it as beneficial and therefore selected the
+            // highest-value friendly card (often a Boa Hancock blocker). Prefer an opposing target;
+            // when none exists, decline instead of damaging our own board.
+            if (IsOwnerAgnosticBounce(effect.Text))
+            {
+                candidates = candidates.Where(c => c.Owner != seat).ToList();
+                if (candidates.Count == 0)
+                    return new GameCommand { Type = "passEffect", Seat = seat, EffectId = effect.EffectId };
+            }
+
             bool negative = IsNegativeEffectText(effect.Text);
             var ranked = candidates
                 .Select(c =>
@@ -296,6 +307,13 @@ namespace OnePieceTcg.Engine.Bot
             return t.Contains("k.o.") || t.Contains("trash") || t.Contains("rest ") ||
                    t.Contains("cannot") || t.Contains("-1000") || t.Contains("−1000") ||
                    t.Contains("discard") || System.Text.RegularExpressions.Regex.IsMatch(t, @"[-−]\d");
+        }
+
+        private static bool IsOwnerAgnosticBounce(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return false;
+            return text.IndexOf("return", StringComparison.OrdinalIgnoreCase) >= 0
+                && text.IndexOf("owner's hand", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         private static IEnumerable<CardInstance> CandidatesForZone(GameState state, string seat, EffectTargetZone zone)
@@ -514,11 +532,66 @@ namespace OnePieceTcg.Engine.Bot
                     return new GameCommand { Type = "passCounter", Seat = seat };
                 }
                 case "trigger":
-                    return new GameCommand { Type = "useTrigger", Seat = seat };
+                    return new GameCommand { Type = ShouldUseTrigger(state, seat) ? "useTrigger" : "passTrigger", Seat = seat };
                 case "damage":
                 default:
                     return new GameCommand { Type = "resolveAttack", Seat = seat };
             }
+        }
+
+        // Declining a Trigger adds the Life card to hand. If that Trigger merely activates an
+        // owner-agnostic bounce Main effect (Sables) and the opponent has no legal Character target,
+        // firing it can only bounce our own board. Hold the Event instead.
+        internal static bool ShouldUseTrigger(GameState state, string seat)
+        {
+            var revealed = state.Battle?.RevealedLife;
+            var def = revealed == null ? null : GameEngine.GetCard(revealed);
+            if (def == null || string.IsNullOrEmpty(def.Trigger)) return false;
+            bool activatesMain = def.Trigger.IndexOf("Activate this card's [Main] effect", StringComparison.OrdinalIgnoreCase) >= 0;
+            string payload = activatesMain ? def.Effect : def.Trigger;
+
+            // A Trigger that plays its own Character is optional. With all five slots occupied it
+            // cannot create a body, so taking the card into hand is strictly better than revealing
+            // and attempting the no-op.
+            if (def.Type == "character"
+                && def.Trigger.IndexOf("Play this card", StringComparison.OrdinalIgnoreCase) >= 0
+                && !state.Players[seat].CharacterArea.Any(c => c == null))
+                return false;
+
+            // Optional target-dependent removal/debuff Triggers must have a legal opposing target.
+            // This covers direct Trigger text and "activate this card's Main" Events such as
+            // ST21-017 Gum-Gum Mole Pistol. Without the gate the bot trashed the Life card even
+            // when the entire effect resolved for zero value.
+            if (NeedsOpponentTarget(payload)
+                && !HasUsefulOpponentTarget(state, seat, revealed, def, payload))
+                return false;
+
+            if (!activatesMain || !IsOwnerAgnosticBounce(def.Effect)) return true;
+
+            return HasUsefulOpponentTarget(state, seat, revealed, def, def.Effect);
+        }
+
+        private static bool NeedsOpponentTarget(string text)
+        {
+            if (string.IsNullOrEmpty(text)
+                || text.IndexOf("opponent", StringComparison.OrdinalIgnoreCase) < 0) return false;
+            string t = text.ToLowerInvariant();
+            return t.Contains("k.o.") || t.Contains("return") || t.Contains("rest up to")
+                || t.Contains("trash up to") || t.Contains("cannot attack")
+                || System.Text.RegularExpressions.Regex.IsMatch(t, @"[-\u2212\u2013\u2011\u2012\u2014]\d{3,5}\s+power");
+        }
+
+        private static bool HasUsefulOpponentTarget(GameState state, string seat, CardInstance source,
+            CardDef def, string text)
+        {
+            var probe = new PendingEffect
+            {
+                Seat = seat, SourceCardId = def.Id, SourceInstanceId = source.InstanceId,
+                Text = text, TargetZone = EffectTargetZone.Play,
+            };
+            var opp = state.Players[GameEngine.OtherSeat(seat)];
+            if (opp.Leader != null && GameEngine.IsValidEffectTarget(state, probe, opp.Leader)) return true;
+            return opp.CharacterArea.Any(c => c != null && GameEngine.IsValidEffectTarget(state, probe, c));
         }
 
         // Maximum total counter power the defender can actually AFFORD this Counter step. Character
@@ -577,7 +650,8 @@ namespace OnePieceTcg.Engine.Bot
             if (e.Contains("trash this character")) return false;
             return e.Contains("draw ") || e.Contains("k.o.") || e.Contains("set up to") || e.Contains("rest up to")
                 || e.Contains("play up to") || e.Contains("add up to") || e.Contains("return up to")
-                || e.Contains("gains +") || e.Contains("look at");
+                || e.Contains("gains +") || e.Contains("look at")
+                || (e.Contains("give") && e.Contains("rested don!!"));
         }
 
         // ---- Main phase: deploy -> attach DON!! -> attack -> end turn -------------
@@ -590,7 +664,7 @@ namespace OnePieceTcg.Engine.Bot
             //    presence before combat math — matches the deploy-then-attach-then-attack
             //    ordering seen across the mined ranked-ladder replays).
             var playable = p.Hand.Where(c => GameEngine.CanPlayFromHand(state, seat, c))
-                .OrderByDescending(c => Value(state, c));
+                .OrderByDescending(c => MainPlayValue(state, seat, c));
             foreach (var c in playable)
             {
                 var cmd = Try(blacklist, new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
@@ -616,6 +690,7 @@ namespace OnePieceTcg.Engine.Bot
                 .ToList();
 
             int activeDon = GameEngine.ActiveDonCount(p);
+            int counterReserve = CounterEventReserve(p, activeDon);
 
             // Lethal/race read: if enough of my attackers can reach the opponent's Leader to cover
             // their Life (plus their active blockers), push face instead of trading. Approximate —
@@ -625,6 +700,30 @@ namespace OnePieceTcg.Engine.Bot
             int oppBlockers = opponent.CharacterArea.Count(c => c != null && !c.Rested && GameEngine.HasBlocker(state, c));
             bool race = opponent.Leader != null && opponent.Life.Count > 0
                         && leaderReachers >= opponent.Life.Count + oppBlockers;
+
+            // Commit every DON!! that has no concrete defensive job BEFORE the first attack.
+            // The previous sequence immediately swung every attacker that already connected, so
+            // once they were rested it could end the turn with 5+ active DON!! and no Counter Event.
+            // One-at-a-time, least-attached distribution avoids a single giant overcommit while
+            // guaranteeing that otherwise-stranded DON!! becomes pressure. A real [Counter] Event
+            // in hand is the only reason this baseline deliberately preserves active DON!!.
+            int spendableDon = Math.Max(0, activeDon - counterReserve);
+            if (spendableDon > 0)
+            {
+                var pressureTarget = attackers
+                    .Where(a => PlanAttack(state, seat, a, spendableDon, race) != null)
+                    .OrderBy(a => a.AttachedDonIds.Count)
+                    .ThenByDescending(a => GameEngine.GetPower(state, a))
+                    .FirstOrDefault();
+                if (pressureTarget != null)
+                {
+                    var commit = Try(blacklist, new GameCommand
+                    {
+                        Type = "attachDon", Seat = seat, Target = pressureTarget.InstanceId, Amount = 1,
+                    });
+                    if (commit != null) return commit;
+                }
+            }
 
             // Step A — declare any attacker that ALREADY connects (needs 0 more DON!!). This spends
             //          our cheapest hits first and leaves DON!! for the rest.
@@ -642,7 +741,7 @@ namespace OnePieceTcg.Engine.Bot
             CardInstance bestAtk = null; int bestDon = int.MaxValue; string bestTarget = null;
             foreach (var atk in attackers)
             {
-                var plan = PlanAttack(state, seat, atk, activeDon, race);
+                var plan = PlanAttack(state, seat, atk, Math.Max(0, activeDon - counterReserve), race);
                 if (plan == null || plan.Value.don < 1) continue;      // 0-DON ones handled in Step A
                 if (plan.Value.don < bestDon) { bestDon = plan.Value.don; bestAtk = atk; bestTarget = plan.Value.targetId; }
             }
@@ -654,6 +753,40 @@ namespace OnePieceTcg.Engine.Bot
 
             // No attacker can profitably connect (even with DON!!) — don't throw away swings; end turn.
             return Try(blacklist, new GameCommand { Type = "endTurn", Seat = seat });
+        }
+
+        private static int CounterEventReserve(PlayerState p, int activeDon)
+        {
+            // Preserve enough for the most expensive currently-payable [Counter] Event. This is
+            // deliberately evidence-based reserve: no such Event in hand means reserve zero.
+            return p.Hand
+                .Select(GameEngine.GetCard)
+                .Where(d => d != null && d.Type == "event" && d.Cost <= activeDon
+                    && (d.Effect ?? "").IndexOf("[Counter]", StringComparison.OrdinalIgnoreCase) >= 0)
+                .Select(d => d.Cost)
+                .DefaultIfEmpty(0)
+                .Max();
+        }
+
+        // Compare a removal Event by the tempo it creates, not only its printed cost. Previously a
+        // four-cost Sables always ranked below a three-cost Boa blocker (body + Blocker bonus), so the
+        // bot deployed Boa and stranded the bounce Event with an expensive enemy Character in play.
+        private static double MainPlayValue(GameState state, string seat, CardInstance card)
+        {
+            double score = Value(state, card);
+            var def = GameEngine.GetCard(card);
+            if (def == null || def.Type != "event" || !IsOwnerAgnosticBounce(def.Effect)) return score;
+
+            var probe = new PendingEffect
+            {
+                Seat = seat, SourceCardId = def.Id, SourceInstanceId = card.InstanceId,
+                Text = def.Effect, TargetZone = EffectTargetZone.Play,
+            };
+            var targets = state.Players[GameEngine.OtherSeat(seat)].CharacterArea
+                .Where(c => c != null && GameEngine.IsValidEffectTarget(state, probe, c))
+                .ToList();
+            if (targets.Count == 0) return -1_000_000;
+            return score + targets.Max(c => Value(state, c)) + 2500;
         }
     }
 }
