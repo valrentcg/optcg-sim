@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.13",
-  "buildNumber": 14,
+  "buildVersion": "1.0.14",
+  "buildNumber": 15,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Polish + fixes from live play. The Blocker shield's glow now hugs the icon (no more big square) and sits on the center-facing side of the board for both players. Attached DON!! group neatly within a character's width and spread out to fit when the character is rested. Field cards and their attached DON!! now render above the board zones. End-of-match 'View Board' now reveals BOTH players' remaining hand and Life. The AI now pauses before it counters, so the counter reads as a clear action instead of the power snapping up instantly. Bug fixes: the AI's card search no longer briefly flashes its cards to you; a rested character returned to hand now sits upright; and the Luffy & Ace Leader no longer wrongly gives ITSELF +3000 on the opponent's turn (that buff is for your Ace/Luffy Characters, not the Leader).",
+  "notes": "A big card-correctness pass plus a much smarter Advanced AI. Card effects: a sweep of all 2,636 cards fixed a large batch that did nothing or fired wrong - Trigger abilities that re-use a card's own [Counter]/[On Play]/[On K.O.] effect, Stage cards played from Life, 23 cards whose Trigger never fired, board wipes (Kaido, Birdcage), protections, [Rush: Character] and more; plus a 228-card fix where a Character used as a Counter wrongly fired its unrelated 'Then, ...' clause, buffs that lit up the opponent's cards as targets, and the ST14 Luffy/Franky effects. Smarter AI: the Advanced bot now understands the engines meta decks are built around - trash/mill recursion + sacrifice-to-recur, DON engines and DON-minus payment, cost-manipulation combos, removal fidelity (cost-KO vs power-KO vs -power vs freeze), threat-by-effect, restand/multi-attack, and DON opportunity cost. Multiplayer: fixed casual play hanging on 'Connecting to your opponent' on the second match of a session, and friends now persist. UI: blocker shield glow + hover popout + click-to-block, tighter DON groupings, end-of-match results button moved off the opponent's hand, summoning-sick cards faded, rested cards flip onto their right side, opponent hand-repositioning is now visible, and a themed update screen.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
