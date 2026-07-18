@@ -1,24 +1,25 @@
 # One Piece TCG Simulator - Velopack release publisher.
 #
-# Packages a Windows Standalone build with vpk and publishes it (+ delta patch,
-# if a previous version is cached in $OutputDir) to GitHub Releases.
+# Packages a Windows Standalone build with vpk and publishes it (+ delta patch, if a
+# previous version is cached in $OutputDir) to GitHub Releases via the gh CLI.
 #
 # Prereqs (one-time):
-#   - .NET SDK + `vpk` global tool installed (dotnet tool install -g vpk)
-#   - GITHUB_TOKEN env var set persistently:
-#       [System.Environment]::SetEnvironmentVariable('GITHUB_TOKEN','<token>','User')
-#     (fine-grained PAT scoped to this repo, Contents: Read and write)
-#   - A completed Windows Standalone build already sitting in $BuildDir, with the
-#     version already bumped in UpdateChecker.CurrentBuildNumber and
-#     ProjectSettings bundleVersion.
+#   - .NET SDK + `vpk` global tool  (dotnet tool install -g vpk)
+#   - GitHub CLI `gh` installed and authenticated (`gh auth login`). gh manages its own
+#     token - NO GITHUB_TOKEN env var is needed, and it runs fine under Claude Code's
+#     normal sandbox (unlike the old raw-REST path, which repeatedly 400'd on JSON).
+#   - A completed Windows Standalone build sitting in $BuildDir.
+#   - A Deploy/RELEASE_NOTES_<version>.md for the release body.
 #
 # Usage:
-#   .\Deploy\publish_release.ps1 -Version 1.0.2
+#   .\Deploy\publish_release.ps1 -Version 1.0.15
+#   .\Deploy\publish_release.ps1 -Version 1.0.15 -Target advanced-bot-search-knee   # tag the released commit
 #
-# If Claude Code is running this (not the user directly in their own terminal),
-# it must pass dangerouslyDisableSandbox: true - the default sandboxed execution
-# silently breaks the GitHub API's Authorization header. See
-# Deploy/RELEASE_ROADMAP.md and the project_optcg_sim_release_gotchas memory.
+# VERSIONING NOTE: desktop auto-update is driven by Velopack SEMVER (this -Version) vs the
+# latest GitHub release - NOT by UpdateChecker.CurrentBuildNumber (which is compiled into the
+# build). Keep version.json's buildNumber == the build's CurrentBuildNumber so a freshly-
+# updated client never sees a false "update available". Bump CurrentBuildNumber BEFORE building
+# if you want the build number to increment. (In practice a bare -Version bump ships fine.)
 
 param(
     [Parameter(Mandatory = $true)][string]$Version,
@@ -28,15 +29,15 @@ param(
     [string]$PackId = "OPTCGSim",
     [string]$MainExe = "One Piece TCG Simulator.exe",
     [string]$PackAuthors = "valrentcg",
-    [string]$PackTitle = "One Piece TCG Simulator"
+    [string]$PackTitle = "One Piece TCG Simulator",
+    [string]$Target = ""   # branch or commit the build came from; tags the release there (else gh defaults to main)
 )
 
 $ErrorActionPreference = "Stop"
 
-if (-not $env:GITHUB_TOKEN) {
-    Write-Error "GITHUB_TOKEN is not set in this session. Set it persistently once with:`n  [System.Environment]::SetEnvironmentVariable('GITHUB_TOKEN','<token>','User')`nthen open a fresh terminal/session."
-    exit 1
-}
+# Fail fast if gh isn't logged in (before spending a minute+ on vpk pack).
+gh auth status 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { Write-Error "gh CLI is not authenticated. Run 'gh auth login' first."; exit 1 }
 
 Write-Output "=== Packaging v$Version ==="
 vpk pack `
@@ -50,44 +51,30 @@ vpk pack `
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed" }
 
 Write-Output "=== Creating GitHub release v$Version ==="
-# Release body: use Deploy\RELEASE_NOTES_<version>.md if present (fallback to
-# generic text), so the GitHub release page describes what actually changed.
 $notesPath = Join-Path $PSScriptRoot "RELEASE_NOTES_$Version.md"
-$releaseBody = if (Test-Path $notesPath) { Get-Content $notesPath -Raw } else { "Automated release." }
-$headers = @{ Authorization = "Bearer $($env:GITHUB_TOKEN)"; Accept = "application/vnd.github+json"; "X-GitHub-Api-Version" = "2022-11-28" }
-$bodyJson = @{ tag_name = "v$Version"; name = "v$Version"; body = $releaseBody; draft = $false; prerelease = $false } | ConvertTo-Json
-$release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases" -Method Post -Headers $headers -Body $bodyJson -ContentType "application/json"
-Write-Output "Release created: $($release.html_url)"
+$notesArg = if (Test-Path $notesPath) { @('--notes-file', $notesPath) } else { @('--notes', 'Automated release.') }
+$targetArg = if ($Target) { @('--target', $Target) } else { @() }
 
-$uploadUrlBase = "https://uploads.github.com/repos/$Repo/releases/$($release.id)/assets"
-
-$candidates = @(
-  @{ Name = "$PackId-win-Setup.exe"; Type = "application/octet-stream" },
-  @{ Name = "$PackId-$Version-full.nupkg"; Type = "application/octet-stream" },
-  @{ Name = "$PackId-$Version-delta.nupkg"; Type = "application/octet-stream" },
-  @{ Name = "$PackId-win-Portable.zip"; Type = "application/zip" },
-  @{ Name = "RELEASES"; Type = "text/plain" },
-  @{ Name = "releases.win.json"; Type = "application/json" },
-  @{ Name = "assets.win.json"; Type = "application/json" }
+# Velopack asset set (matches every prior release). Skip any not present - the delta is
+# absent on a first release; Portable.zip is optional.
+$assetNames = @(
+  "$PackId-win-Setup.exe",
+  "$PackId-$Version-full.nupkg",
+  "$PackId-$Version-delta.nupkg",
+  "$PackId-win-Portable.zip",
+  "RELEASES",
+  "releases.win.json",
+  "assets.win.json"
 )
-
-foreach ($f in $candidates) {
-  $path = Join-Path $OutputDir $f.Name
-  if (-not (Test-Path $path)) {
-    Write-Output "Skipping $($f.Name) (not present - expected for delta on a first release)"
-    continue
-  }
-  $uploadUrl = "$uploadUrlBase`?name=$($f.Name)"
-  $uploadHeaders = $headers.Clone()
-  $uploadHeaders["Content-Type"] = $f.Type
-  Write-Output "Uploading $($f.Name) ($([math]::Round((Get-Item $path).Length/1MB,1)) MB)..."
-  try {
-    $result = Invoke-RestMethod -Uri $uploadUrl -Method Post -Headers $uploadHeaders -InFile $path
-    Write-Output "  OK: $($result.name)"
-  } catch {
-    Write-Output "  FAILED: $($_.Exception.Message)"
-    if ($_.ErrorDetails) { Write-Output "  $($_.ErrorDetails.Message)" }
-  }
+$assetPaths = @()
+foreach ($n in $assetNames) {
+  $p = Join-Path $OutputDir $n
+  if (Test-Path $p) { $assetPaths += $p } else { Write-Output "Skipping $n (not present)" }
 }
 
-Write-Output "=== Done. Release: $($release.html_url) ==="
+# gh CLI creates the release + uploads all assets in one call (a ~2 GB upload can take
+# minutes). Use gh - NOT Invoke-RestMethod, whose hand-built JSON 400'd repeatedly.
+gh release create "v$Version" --repo $Repo --title "v$Version" --latest @targetArg @notesArg @assetPaths
+if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+
+Write-Output "=== Done. Release: https://github.com/$Repo/releases/tag/v$Version ==="
