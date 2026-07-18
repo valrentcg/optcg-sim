@@ -69,6 +69,8 @@ public class MatchStartPayload
     public NetworkDeck north;   // guest's deck
     public bool ranked;         // true = a Ranked-queue match that counts toward the bounty ladder
     public string mode;         // "ranked" | "casual" | "custom" — the game type for stats/history
+    public bool forgiveness;    // custom lobby: enable the in-match rewind toggle (opponent-approved)
+    public BlitzConfig blitz;   // custom lobby: timed-match settings (null/Standard = untimed)
 }
 
 // Lightweight "what am I looking at" state each client streams to its opponent while
@@ -76,6 +78,23 @@ public class MatchStartPayload
 // which face-down hand cards are being lifted/inspected. Sent over an Unreliable
 // channel - it's pure fire-and-forget cosmetic state, so lost or stale packets are fine
 // (the next send overwrites). Serialized with JsonUtility like everything else here.
+// Forgiveness-mode rewind negotiation. The requester proposes rewinding to command index `cursor`
+// (kind = "action" | "turn", for the prompt wording); the opponent replies accept/decline. On
+// accept BOTH clients truncate their (identical) CommandHistory to `cursor` and resimulate.
+[Serializable]
+public class RewindRequestPayload
+{
+    public int cursor;
+    public string kind = "action";
+}
+
+[Serializable]
+public class RewindResponsePayload
+{
+    public bool accept;
+    public int cursor;
+}
+
 [Serializable]
 public class PresencePayload
 {
@@ -98,6 +117,8 @@ public static class MatchNetworkSync
     private const string PresenceMessage = "OptcgPresence";
     private const string RematchReqMessage = "OptcgRematchReq";   // "I want a rematch"
     private const string RematchGoMessage = "OptcgRematchGo";     // host: "rematch on, here's the seed"
+    private const string RewindReqMessage = "OptcgRewindReq";     // "can we rewind to cursor N?"
+    private const string RewindRespMessage = "OptcgRewindResp";   // "accept/decline your rewind"
 
     // Chat messages longer than this are truncated before sending (UI should enforce the
     // same cap on its input field; this is the transport-level backstop).
@@ -118,6 +139,8 @@ public static class MatchNetworkSync
     public static event Action<PresencePayload> PresenceReceived; // peer's hover/raised-hand state
     public static event Action RematchRequested;                 // peer clicked "Rematch" (custom match)
     public static event Action<string> RematchStartReceived;     // host published the rematch seed
+    public static event Action<RewindRequestPayload> RewindRequested;   // peer asked to rewind
+    public static event Action<RewindResponsePayload> RewindResponded;  // peer answered our rewind ask
 
     /// <summary>Call once, right after the NetworkManager singleton is created.</summary>
     public static void EnsureHandlersRegistered()
@@ -153,6 +176,8 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(PresenceMessage, OnPresenceMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RematchReqMessage, OnRematchReqMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RematchGoMessage, OnRematchGoMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindReqMessage, OnRewindReqMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindRespMessage, OnRewindRespMessage);
         handlersRegistered = true;
     }
 
@@ -299,7 +324,49 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.SendNamedMessage(RematchGoMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
     }
 
+    /// <summary>Ask the opponent to rewind to command index `cursor` (kind = "action"|"turn").</summary>
+    public static void SendRewindRequest(int cursor, string kind)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null) return;
+        var target = GetPeerClientId();
+        if (target == null) { Debug.LogWarning("MatchNetworkSync.SendRewindRequest: no peer - not sent."); return; }
+        string json = JsonUtility.ToJson(new RewindRequestPayload { cursor = cursor, kind = kind });
+        using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(json);
+        nm.CustomMessagingManager.SendNamedMessage(RewindReqMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
+    /// <summary>Answer the opponent's rewind ask. `cursor` echoes the request so both truncate to the same point.</summary>
+    public static void SendRewindResponse(bool accept, int cursor)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null) return;
+        var target = GetPeerClientId();
+        if (target == null) { Debug.LogWarning("MatchNetworkSync.SendRewindResponse: no peer - not sent."); return; }
+        string json = JsonUtility.ToJson(new RewindResponsePayload { accept = accept, cursor = cursor });
+        using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(json);
+        nm.CustomMessagingManager.SendNamedMessage(RewindRespMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
     // ---- Receiving ----
+
+    private static void OnRewindReqMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        RewindRequestPayload payload = null;
+        try { payload = JsonUtility.FromJson<RewindRequestPayload>(json); } catch { /* ignore malformed */ }
+        if (payload != null) RewindRequested?.Invoke(payload);
+    }
+
+    private static void OnRewindRespMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        RewindResponsePayload payload = null;
+        try { payload = JsonUtility.FromJson<RewindResponsePayload>(json); } catch { /* ignore malformed */ }
+        if (payload != null) RewindResponded?.Invoke(payload);
+    }
 
     private static void OnMatchStartMessage(ulong senderClientId, FastBufferReader reader)
     {

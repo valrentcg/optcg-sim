@@ -14,7 +14,7 @@ using UnityEngine.UI;
 using OnePieceTcg.Engine;
 using OnePieceTcg.Engine.Bot;
 
-public class GameManager : MonoBehaviour
+public partial class GameManager : MonoBehaviour
 {
     private const string AssetBase =
         @"C:\Users
@@ -110,6 +110,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     public static string PendingNetworkedSeat;
     public static bool PendingNetworkedRanked;   // set by the Ranked queue launch path only
     public static string PendingNetworkedMode;   // "ranked"|"casual"|"custom" for a networked match
+    public static bool PendingNetworkedForgiveness;   // custom lobby: in-match rewind toggle enabled
+    public static BlitzConfig PendingNetworkedBlitz;   // custom lobby: timed-match settings (null = untimed)
     // Deck picks for a networked match (from the lobby's SELECT DECK flow). Sent
     // inside the match-start payload so both clients hold both decks; either may
     // be null, in which case CreateMatch falls back to the ST01/ST02 defaults.
@@ -181,7 +183,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // "north" replay view mode swaps which seat renders at the bottom, so the classic
     // (non-rotated) single-perspective layout shows the match as if seated as North instead
     // of South — see replayViewMode/IsReplayRotated.
-    private string BottomSeat => (isReplayMode && replayViewMode == "north") ? "north" : (isNetworked ? localSeat : "south");
+    // Sandbox (see GameManager.Sandbox.cs) can flip which seat renders at the bottom so a single
+    // player can drive either side of the board directly. This override wins over the normal
+    // south/localSeat pick; replay's own north-view flip is unaffected because sandbox and replay
+    // are mutually exclusive modes.
+    private string BottomSeat => isSandbox ? sandboxViewSeat
+        : (isReplayMode && replayViewMode == "north") ? "north"
+        : isNetworked ? localSeat
+        : (povSeat ?? "south");   // povSeat: chosen perspective for a restored-from-code solo game
     private string TopSeat => BottomSeat == "south" ? "north" : "south";
     private string selectedId;
     private string selectedSeat;
@@ -204,6 +213,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private readonly Dictionary<string, RectTransform> deckLookCardRects = new Dictionary<string, RectTransform>();
     private readonly Dictionary<string, RectTransform> boardDeckPileRects = new Dictionary<string, RectTransform>();
     private readonly Dictionary<string, RectTransform> handCardRects = new Dictionary<string, RectTransform>();
+    private readonly Dictionary<string, RectTransform> stageZoneRects = new Dictionary<string, RectTransform>();  // per-seat Stage zone (for Blitz clock placement)
     private readonly Dictionary<string, RectTransform> cardTargetRects = new Dictionary<string, RectTransform>();
     private RectTransform southHandRow;
     private RectTransform northHandRow;
@@ -390,6 +400,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             PendingNetworkedSeat = null;
             EnterNetworkedMatch(seed, seat);
         }
+        else if (PendingSandbox)
+        {
+            PendingSandbox = false;
+            NewSandbox();
+        }
+        else if (!string.IsNullOrEmpty(PendingRestoreCode))
+        {
+            var code = PendingRestoreCode;
+            PendingRestoreCode = null;
+            BeginRestore(code);
+        }
         else
         {
             NewMatch();
@@ -403,6 +424,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         MatchNetworkSync.PresenceReceived -= OnNetworkPresenceReceived;
         MatchNetworkSync.RematchRequested -= OnRematchRequested;
         MatchNetworkSync.RematchStartReceived -= OnRematchStartReceived;
+        UnsubscribeRewind();
         var nm = Unity.Netcode.NetworkManager.Singleton;
         if (nm != null) nm.OnClientDisconnectCallback -= OnPeerDisconnected;
     }
@@ -425,6 +447,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         if (isReplayMode) ReplayAutoAdvanceTick();
+
+        // Blitz/timed match: drain the clock owner's clock + update the HUD digits every frame.
+        if (BlitzActive) { BlitzTick(); BlitzHudTick(); }
 
         // Bot: one action per think-tick whenever any decision belongs to the AI seat
         // (turn actions, effect targets, choices, battle responses). Difficulty picks which
@@ -672,6 +697,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         ClearDonSelection(false);
         finishedResultText = null;
         matchResultHidden = false;
+        BlitzInit(PendingBlitzConfig);   // timed-match clocks (null/Standard = untimed)
         Render();
     }
 
@@ -681,10 +707,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Networked match: block acting as the other seat (e.g. a stray click reaching a
         // handler before UI catches up) rather than auditing every call site individually.
         if (isNetworked && !string.IsNullOrEmpty(command.Seat) && command.Seat != localSeat) return;
+        // Sandbox: snapshot before each engine command so attacks/plays/end-turn are all undoable.
+        if (isSandbox) PushUndo();
         state = GameEngine.ApplyCommand(state, command);
+        // Blitz: grant increment after the engine commits a meaningful action (§5/§6/§7).
+        if (BlitzActive) BlitzOnCommandApplied(command, true);
         commandElapsedSeconds.Add(Time.realtimeSinceStartup - matchStartRealtime);
         NormalizeSelection();
-        if (state.Status == "finished" && !replaySaved)
+        // Sandbox / restored-position games never record stats/replays — they're scratch/hypothetical.
+        if (state.Status == "finished" && !replaySaved && !isSandbox && !isRestoredGame)
         {
             replaySaved = true;
             SaveFinishedMatchRecords();
@@ -752,6 +783,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void ResimulateReplayTo(int index)
     {
         if (loadedReplay == null) return;
+        restoreExportNote = null;   // clear the "position copied" toast on any navigation
         replayCursor = Mathf.Clamp(index, 0, loadedReplay.CommandHistory.Count);
         state = GameEngine.CreateMatch(currentMatchConfig);
         for (int i = 0; i < replayCursor; i++)
@@ -1020,7 +1052,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         PendingNetworkedRanked = false;
         networkedMode = PendingNetworkedMode;
         PendingNetworkedMode = null;
+        isForgiveness = PendingNetworkedForgiveness;
+        PendingNetworkedForgiveness = false;
         localSeat = seat;
+        BlitzInit(PendingNetworkedBlitz);
+        PendingNetworkedBlitz = null;
         // Capture now, while connected — these must survive a mid-match disconnect so a leave/
         // surrender can still be ranked-reported (see cachedRankedOppId).
         cachedRankedMatchId = LobbyManager.CurrentSession?.Id;
@@ -1071,6 +1107,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         MatchNetworkSync.RematchRequested += OnRematchRequested;
         MatchNetworkSync.RematchStartReceived -= OnRematchStartReceived;
         MatchNetworkSync.RematchStartReceived += OnRematchStartReceived;
+        if (isForgiveness) SubscribeRewind();
+        rewindWaiting = rewindPromptOpen = false;
+        rewindNote = null;
         rematchLocalRequested = rematchPeerRequested = rematchStarting = false;
         var nm = Unity.Netcode.NetworkManager.Singleton;
         if (nm != null)
@@ -1113,6 +1152,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             && state.Battle != null && state.Battle.RevealedLife != null)
             activatedTriggerCardId = state.Battle.RevealedLife.CardId;
         state = GameEngine.ApplyCommand(state, command);
+        // Blitz: award the opponent's increment on their committed action too, so both clients
+        // apply the same deterministic increments (decrement/flag-fall stay owner-authoritative).
+        if (BlitzActive) BlitzOnCommandApplied(command, true);
         commandElapsedSeconds.Add(Time.realtimeSinceStartup - matchStartRealtime);
         NormalizeSelection();
         if (state.Status == "finished" && !replaySaved)
@@ -1872,6 +1914,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (matchResultHidden) DrawMatchResultPeekChip();
             else DrawMatchResultOverlay();
         }
+        // Sandbox tools draw last so the editor button + panels overlay the normal board.
+        if (isSandbox) DrawSandbox();
+        // Restore-from-code POV picker overlays everything until the player chooses a perspective.
+        if (restorePickPending) DrawRestorePovOverlay();
+        // Forgiveness-mode rewind control + approve/decline overlays (networked custom lobbies).
+        DrawRewind();
+        // Blitz/Ranked timed-match clock HUD.
+        DrawBlitz();
         // Re-apply the opponent's hover/raised-hand presence to the freshly built board.
         ApplyOpponentPresence();
         // Snapshot positions and fly ghosts for any card whose zone changed this render.
@@ -2115,9 +2165,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void RedrawPhaseTracker()
     {
         if (sideRoot == null || state == null) return;
-        var old = sideRoot.Find("Phase Tracker");
-        if (old != null) Destroy(old.gameObject);
+        // Destroy ALL existing pill rows, not just Find's first — Destroy() is deferred to end-of-frame,
+        // so a stale (already-hidden) row can linger in the hierarchy and Find would grab THAT one,
+        // leaving the real active row alive alongside the new one (two active pills). SetActive(false)
+        // hides each immediately so none renders this frame.
+        for (int i = sideRoot.childCount - 1; i >= 0; i--)
+        {
+            var child = sideRoot.GetChild(i);
+            if (child.name == "Phase Tracker") { child.gameObject.SetActive(false); Destroy(child.gameObject); }
+        }
         DrawPhaseTracker();
+        // Keep any open game/sound menu above the freshly re-added pill row (else it hides behind it).
+        sideRoot.Find("Game Menu")?.SetAsLastSibling();
+        sideRoot.Find("Sound Menu")?.SetAsLastSibling();
     }
 
     private IEnumerator ShowTurnBanner(string label, Color accent)
@@ -2738,14 +2798,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // (still the only route to Main Menu — the in-match menu stays locked out).
     private void DrawMatchResultPeekChip()
     {
-        var chip = PanelObject("Result Peek Chip", boardRoot, (Color)new Color32(14, 30, 46, 240));
-        // Top-LEFT corner (mirroring the menu button's top-right) so it no longer covers the opponent's
-        // fanned hand across the top-center — you can inspect their final hand at match end.
-        Stretch(chip, new Vector2(0.02f, 0.93f), new Vector2(0.17f, 0.985f), Vector2.zero, Vector2.zero);
+        // Parent to the CANVAS (not boardRoot) and SetAsLastSibling so it sits above leftRoot/sideRoot —
+        // the previous top-left placement was drawn behind the left card-preview panel and unclickable.
+        // Top-CENTER, clearly visible; it's the only route back to the result screen + Main Menu.
+        var chip = PanelObject("Result Peek Chip", canvas.transform, (Color)new Color32(14, 30, 46, 245));
+        chip.anchorMin = chip.anchorMax = new Vector2(0.5f, 1f);
+        chip.pivot = new Vector2(0.5f, 1f);
+        chip.sizeDelta = new Vector2(200f, 42f);
+        chip.anchoredPosition = new Vector2(0f, -10f);
         Round(chip);
-        AddRoundedCardBorder(chip, Accent, 1f);
+        AddRoundedCardBorder(chip, Accent, 1.4f);
         chip.SetAsLastSibling();
-        var t = TextObject("Result Peek Text", chip, "SHOW RESULT", 12, Ink, TextAnchor.MiddleCenter, monoFont);
+        var t = TextObject("Result Peek Text", chip, "◂ SHOW RESULT", 13, Ink, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var btn = chip.gameObject.AddComponent<Button>();
@@ -3131,6 +3195,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         trHlg.spacing = 5f; trHlg.childAlignment = TextAnchor.MiddleLeft;
         trHlg.childControlWidth = false; trHlg.childControlHeight = false;
         trHlg.childForceExpandWidth = false; trHlg.childForceExpandHeight = false;
+        AddCompactPill(toolsRow, "Export Position", ExportReplayPosition);
         AddCompactPill(toolsRow, "Expand All", () => { replayCollapsedTurns.Clear(); Render(); });
         AddCompactPill(toolsRow, "Collapse All", () =>
         {
@@ -3151,6 +3216,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(closeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var closeButton = closeBtn.gameObject.AddComponent<Button>();
         closeButton.onClick.AddListener(() => { replayActionPanelCollapsed = true; SaveReplaySettings(); Render(); });
+
+        // "Position copied" confirmation toast (bottom-centre, screen-anchored). Cleared on the
+        // next replay navigation (ResimulateReplayTo).
+        if (!string.IsNullOrEmpty(restoreExportNote))
+        {
+            var toast = PanelObject("Export Toast", boardRoot, (Color)new Color32(14, 30, 46, 245));
+            toast.anchorMin = new Vector2(0.5f, 0f); toast.anchorMax = new Vector2(0.5f, 0f);
+            toast.pivot = new Vector2(0.5f, 0f);
+            toast.sizeDelta = new Vector2(560f, 34f);
+            toast.anchoredPosition = new Vector2(0f, 82f);
+            Round(toast);
+            AddRoundedCardBorder(toast, Accent, 1.2f);
+            toast.SetAsLastSibling();
+            var tt = TextObject("t", toast, restoreExportNote, 11, Accent2, TextAnchor.MiddleCenter, monoFont);
+            Stretch(tt.rectTransform, Vector2.zero, Vector2.one, new Vector2(10, 0), new Vector2(-10, 0));
+        }
 
         var listArea = PanelObject("List Area", panel, new Color(0, 0, 0, 0));
         Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(8f, 8f), new Vector2(-8f, -72f));
@@ -4670,7 +4751,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Hotseat courtesy note: whose turn to decide next.
         if (!isNetworked && !state.Players[OtherSeatLocal(seat)].MulliganDecided && seat == "south")
         {
-            var next = TextObject("Mulligan Next", dim, "North decides next", 11, Muted, TextAnchor.MiddleCenter, monoFont);
+            var next = TextObject("Mulligan Next", dim, DisplayName(OtherSeatLocal(seat)) + " decides next", 11, Muted, TextAnchor.MiddleCenter, monoFont);
             Stretch(next.rectTransform, new Vector2(0.35f, 0.012f), new Vector2(0.65f, 0.042f), Vector2.zero, Vector2.zero);
         }
     }
@@ -5392,14 +5473,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         DrawCombatLogPanel();
     }
 
+    // BRIGHT accent per kind (AddBadge derives a dark fill from it + uses it as the text colour).
     private static Color StatusBadgeColor(string kind)
     {
         switch (kind)
         {
-            case "buff":     return new Color32(20, 92, 46, 235);    // green
-            case "debuff":   return new Color32(110, 26, 26, 235);   // red
-            case "restrict": return new Color32(122, 84, 16, 235);   // amber
-            default:         return new Color32(26, 64, 118, 235);   // blue (info)
+            case "buff":     return new Color32(120, 235, 155, 255);   // bright green
+            case "debuff":   return new Color32(255, 140, 140, 255);   // bright red
+            case "restrict": return new Color32(255, 206, 122, 255);   // bright amber
+            default:         return new Color32(143, 195, 255, 255);   // bright blue (info)
         }
     }
 
@@ -5437,6 +5519,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     // Plain-text combat log the local viewer is allowed to see (same per-seat privacy as
     // DrawCombatLogPanel) — one "[Actor] message" line per visible event, for the Copy button.
+    // Relabel the engine's fixed seat names ("South"/"North") with the players' display names for
+    // anything shown to the user (esp. networked PvP — names come from PendingSouth/NorthName). Whole
+    // word only so card ids/text stay intact. The engine/bot/log-stores keep "South"/"North" as their
+    // stable identifiers; this is render-time only. See DisplayName().
+    private string HumanizeLog(string msg)
+    {
+        if (string.IsNullOrEmpty(msg)) return msg;
+        string s = DisplayName("south"), n = DisplayName("north");
+        if (!string.IsNullOrEmpty(s) && s != "South")
+            msg = System.Text.RegularExpressions.Regex.Replace(msg, @"\bSouth\b", _ => s);
+        if (!string.IsNullOrEmpty(n) && n != "North")
+            msg = System.Text.RegularExpressions.Regex.Replace(msg, @"\bNorth\b", _ => n);
+        return msg;
+    }
+
     private string BuildCombatLogText()
     {
         var sb = new System.Text.StringBuilder();
@@ -5449,10 +5546,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 if (string.IsNullOrEmpty(e.PublicMessage)) continue;
                 message = e.PublicMessage;
             }
+            message = HumanizeLog(message);
             string actorName = null;
             if (!string.IsNullOrEmpty(e.Actor) && e.Actor != "system" &&
                 state.Players.TryGetValue(e.Actor, out var actorP) && actorP != null)
-                actorName = actorP.Name;
+                actorName = DisplayName(e.Actor);
             if (!string.IsNullOrEmpty(actorName))
             {
                 if (message != null && message.StartsWith(actorName + " "))
@@ -5536,8 +5634,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             string actorName = null;
             if (!string.IsNullOrEmpty(e.Actor) && e.Actor != "system" &&
                 state.Players.TryGetValue(e.Actor, out var actorP) && actorP != null)
-                actorName = actorP.Name;
-            BuildLogEntry(content, actorName, message, width);
+                actorName = DisplayName(e.Actor);
+            BuildLogEntry(content, actorName, HumanizeLog(message), width);
         }
 
         // Snap to the most recent entry; the player scrolls up to review earlier turns.
@@ -6237,6 +6335,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         x += step;
 
         var stage = ZonePanel(root, "Stage", new Vector2(x, yMin), new Vector2(x + 0.076f, yMax));
+        stageZoneRects[seat] = stage;   // Blitz clock anchors beside this
         if (p.Stage != null) AddCardToZone(stage, p.Stage, seat, true);
         else AddCenteredText(stage, "Stage");
         x += step;
@@ -6363,17 +6462,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddRoundedCardBorder(menu, Accent, 1.3f);
         menu.SetAsLastSibling();
 
-        // In a live networked match the top slot is Surrender (New Match is a solo-only concept and
-        // makes no sense mid-PvP); everywhere else it stays New Match.
+        // Main Menu is the TOP slot; New Match / Surrender sits just below it.
         bool netActive = isNetworked && !isReplayMode && state != null && state.Status == "active" && !opponentLeft;
+        AddMenuItem(menu, "Main Menu", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
+            () => { menuOpen = false; ReturnToMenu(); });
         if (netActive)
-            AddMenuItem(menu, "Surrender", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
+            AddMenuItem(menu, "Surrender", new Vector2(0.07f, 0.545f), new Vector2(0.93f, 0.71f),
                 () => { menuOpen = false; surrenderConfirmOpen = true; Render(); });
         else
-            AddMenuItem(menu, "New Match", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
-                () => { menuOpen = false; NewMatch(); });
-        AddMenuItem(menu, "Main Menu", new Vector2(0.07f, 0.545f), new Vector2(0.93f, 0.71f),
-            () => { menuOpen = false; ReturnToMenu(); });
+            AddMenuItem(menu, isSandbox ? "New Sandbox" : "New Match", new Vector2(0.07f, 0.545f), new Vector2(0.93f, 0.71f),
+                () => { menuOpen = false; if (isSandbox) NewSandbox(); else NewMatch(); });
         AddMenuItem(menu, "Sound", new Vector2(0.07f, 0.30f), new Vector2(0.93f, 0.465f),
             () => { menuOpen = false; soundMenuOpen = true; Render(); });
         AddMenuItem(menu, "Close", new Vector2(0.07f, 0.045f), new Vector2(0.93f, 0.21f),
@@ -7112,8 +7210,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void DrawContextActions(RectTransform panel)
     {
+        // Counter step gets a FIXED footer (outside the scroll) holding Resolve Attack, so a big hand
+        // of counter cards doesn't force scrolling down to resolve. Reserve space at the bottom. Hidden
+        // while a counter EVENT's effect is resolving (a pending effect/choice/look pivots the panel).
+        bool counterFooter = CounterIsMine(state.Battle)
+            && state.DeckLook == null && state.PendingEffects.Count == 0 && state.ActiveChoice == null;
+        const float counterFooterH = 42f;
+
         var viewport = PanelObject("Action Viewport", panel, new Color(0, 0, 0, 0));
-        Stretch(viewport, new Vector2(0.0f, 0.0f), new Vector2(1.0f, 1.0f), Vector2.zero, Vector2.zero);
+        Stretch(viewport, new Vector2(0.0f, 0.0f), new Vector2(1.0f, 1.0f),
+            new Vector2(0f, counterFooter ? counterFooterH + 4f : 0f), Vector2.zero);
         viewport.gameObject.AddComponent<RectMask2D>();
 
         var body = new GameObject("Action Content").AddComponent<RectTransform>();
@@ -7139,6 +7245,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         scroll.movementType = ScrollRect.MovementType.Clamped;
         scroll.scrollSensitivity = 18f;
         AttachScrollbar(scroll);
+
+        // Fixed Resolve-Attack footer for the counter step (outside the scrolling card grid). It passes
+        // counters and resolves in one step, so the separate "damage" window never appears.
+        if (counterFooter)
+        {
+            var footer = PanelObject("Counter Footer", panel, new Color(0, 0, 0, 0));
+            Stretch(footer, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 0f), new Vector2(-8f, counterFooterH));
+            AddButton(footer, "Resolve Attack", ResolveCounterStep, true, false);
+        }
 
         if (state.DeckLook != null)
         {
@@ -7461,14 +7576,24 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         else if (b.Step == "counter")
         {
-            AddInfo(body, $"Counter total: +{b.CounterPower}");
-            AddInfo(body, "Click counter cards in the defending hand. Each click adds that card's counter value.");
-            AddButton(body, "Done Countering", () => Dispatch(new GameCommand { Type = "passCounter", Seat = b.TargetSeat }));
+            DrawCounterStep(body, b);
         }
         else if (b.Step == "damage")
         {
-            AddInfo(body, "Counter window closed. Resolve damage or battle result.");
-            AddButton(body, "Resolve Attack", () => Dispatch(new GameCommand { Type = "resolveAttack", Seat = b.TargetSeat }));
+            // Resolve Attack is folded into the counter window's footer now, so this step never gets its
+            // own window: auto-resolve it (deferred, once per battle, to avoid re-entrant dispatch during
+            // Render). The AI resolves its own damage via AiTick; the attacker's client just waits.
+            bool mineToResolve = (aiSeat == null || b.TargetSeat != aiSeat) && (!isNetworked || b.TargetSeat == localSeat);
+            if (mineToResolve)
+            {
+                AddInfo(body, "Resolving…");
+                if (autoResolvedDamageBattleId != b.Id)
+                {
+                    autoResolvedDamageBattleId = b.Id;
+                    Invoke(nameof(AutoResolveDamage), 0f);
+                }
+            }
+            else AddInfo(body, "Waiting on opponent…");
         }
         else if (b.Step == "trigger")
         {
@@ -7488,6 +7613,223 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (revealed != null && !string.IsNullOrWhiteSpace(revealed.Trigger)) AddInfo(body, "[Trigger] pending: " + revealed.Trigger);
             AddButton(body, "Resolve Trigger", () => Dispatch(new GameCommand { Type = "useTrigger", Seat = b.TargetSeat }));
             AddButton(body, "Pass Trigger", () => Dispatch(new GameCommand { Type = "passTrigger", Seat = b.TargetSeat }));
+        }
+    }
+
+    // Guards the damage-step auto-resolve so it fires once per battle (see the "damage" case above).
+    private string autoResolvedDamageBattleId;
+    private void AutoResolveDamage()
+    {
+        var b = state?.Battle;
+        if (b != null && b.Step == "damage")
+            Dispatch(new GameCommand { Type = "resolveAttack", Seat = b.TargetSeat });
+    }
+
+    // True when the local human is the one deciding this counter step (so it's safe to show the hand
+    // grid). Never reveal an AI defender's hand, and in a networked match only the priority seat.
+    private bool CounterIsMine(BattleState b) =>
+        b != null && b.Step == "counter"
+        && (aiSeat == null || b.TargetSeat != aiSeat)
+        && (!isNetworked || b.TargetSeat == localSeat);
+
+    // The fixed-footer button: pass any remaining counters and resolve in one go, so the separate
+    // "damage / Resolve Attack" window never appears.
+    private void ResolveCounterStep()
+    {
+        var b = state?.Battle;
+        if (b == null) return;
+        string seat = b.TargetSeat;
+        Dispatch(new GameCommand { Type = "passCounter", Seat = seat });
+        if (state?.Battle != null && state.Battle.Step == "damage")
+            Dispatch(new GameCommand { Type = "resolveAttack", Seat = state.Battle.TargetSeat });
+    }
+
+    // Counter step rendered right in the actions panel: a matchup line with mini card art + a compact
+    // grid of the defender's hand (counter-value cards highlighted + clickable, the rest dimmed).
+    // Hovering a tile floats the real card up in your hand and previews it. The Resolve Attack button
+    // is a fixed footer (see DrawContextActions), not in this scroll.
+    private void DrawCounterStep(RectTransform body, BattleState b)
+    {
+        if (!CounterIsMine(b))
+        {
+            AddInfo(body, aiSeat != null && b.TargetSeat == aiSeat ? "Opponent is countering…" : "Waiting on opponent…");
+            return;
+        }
+
+        string attackerSeat = OtherSeatLocal(b.TargetSeat);
+        var atkInst = FindAny(attackerSeat, b.AttackerId);
+        var tgtInst = FindAny(b.TargetSeat, b.TargetId);
+        var atkDef = atkInst != null ? GameEngine.GetCard(atkInst) : null;
+        var tgtDef = tgtInst != null ? GameEngine.GetCard(tgtInst) : null;
+        int atkPow = b.AttackPower;
+        int tgtBase = tgtInst != null ? GameEngine.GetPower(state, tgtInst) : b.DefensePower;
+        int total = tgtBase + b.CounterPower;   // defender's current effective power (grows as counters play)
+        bool hits = atkPow >= total;
+        bool leaderHit = tgtDef != null && tgtDef.Type == "leader";
+
+        AddCounterMatchup(body, atkInst, atkPow, tgtInst, total);
+        if (hits)
+        {
+            int need = (atkPow - total) / 1000 * 1000 + 1000;   // smallest 1000-step counter that exceeds the attack
+            string consequence = leaderHit ? "you'd lose 1 Life" : $"{(tgtDef != null ? tgtDef.Name : "your character")} would be K.O.'d";
+            AddCounterVerdict(body, false, $"Hits now — {consequence}. +{need} more counter to stop it.");
+        }
+        else AddCounterVerdict(body, true, "Safe — this attack is stopped.");
+
+        DrawCounterHand(body, b);
+    }
+
+    // "attacker × defender" matchup: a mini card with its power below (no name). Hovering a mini shows
+    // a big character preview just left of the panel.
+    private void AddCounterMatchup(RectTransform body, CardInstance atk, int atkPow, CardInstance tgt, int tgtPow)
+    {
+        var row = PanelObject("Matchup", body, new Color(0, 0, 0, 0));
+        row.gameObject.AddComponent<LayoutElement>().preferredHeight = 76f;
+        AddMatchupSide(row, atk, atkPow, new Color32(240, 150, 150, 255), 0.00f, 0.45f);
+        var x = TextObject("x", row, "×", 16, Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(x.rectTransform, new Vector2(0.45f, 0f), new Vector2(0.55f, 1f), Vector2.zero, Vector2.zero);
+        AddMatchupSide(row, tgt, tgtPow, new Color32(150, 215, 150, 255), 0.55f, 1.00f);
+    }
+
+    private void AddMatchupSide(RectTransform row, CardInstance ci, int pow, Color powCol, float xMin, float xMax)
+    {
+        var holder = PanelObject("side", row, new Color(0, 0, 0, 0));
+        Stretch(holder, new Vector2(xMin, 0f), new Vector2(xMax, 1f), Vector2.zero, Vector2.zero);
+        float ch = 52f, cw = ch * 0.714f;
+        if (ci != null)
+        {
+            var mini = PanelObject("mini", holder, new Color(0, 0, 0, 0));
+            mini.anchorMin = mini.anchorMax = new Vector2(0.5f, 1f);
+            mini.pivot = new Vector2(0.5f, 1f);
+            mini.sizeDelta = new Vector2(cw, ch);
+            mini.anchoredPosition = new Vector2(0f, -2f);
+            RoundedCardVisual("art", mini, GetCardSprite(ci.CardId), out _);
+            AddEffectGlow(mini);   // the "in action" glow hugs the mini card
+            mini.gameObject.AddComponent<CounterPreviewHover>().Init(this, ci);
+        }
+        var pt = TextObject("p", holder, pow.ToString(), 13, powCol, TextAnchor.UpperCenter, titleFont);
+        pt.fontStyle = FontStyle.Bold;
+        Stretch(pt.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0f, 2f), new Vector2(0f, 20f));
+    }
+
+    // Centered verdict line with a safe/danger icon.
+    private void AddCounterVerdict(RectTransform body, bool safe, string text)
+    {
+        var row = PanelObject("Verdict", body, new Color(0, 0, 0, 0));
+        row.gameObject.AddComponent<LayoutElement>().preferredHeight = 36f;
+        Color col = safe ? (Color)new Color32(120, 235, 155, 255) : (Color)new Color32(240, 150, 150, 255);
+        var t = TextObject("t", row, (safe ? "✓  " : "⚠  ") + text, 11, col, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        t.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(6f, 0f), new Vector2(-6f, 0f));
+    }
+
+    // Big character preview parked just LEFT of the actions/side panel, shown while hovering a matchup mini.
+    internal void CounterPreviewEnter(CardInstance ci) { ShowCounterSidePreview(ci); }
+    internal void CounterPreviewExit() { HideHandHoverPreview(); }
+    private void ShowCounterSidePreview(CardInstance ci)
+    {
+        HideHandHoverPreview();
+        if (ci == null || canvas == null) return;
+        handHoverRoot = PanelObject("Counter Side Preview", canvas.transform, new Color(0, 0, 0, 0));
+        handHoverRoot.anchorMin = handHoverRoot.anchorMax = new Vector2(0.82f, 0.5f);
+        handHoverRoot.pivot = new Vector2(1f, 0.5f);
+        handHoverRoot.sizeDelta = new Vector2(288f, 402f);   // same size as the normal hand hover preview
+        handHoverRoot.anchoredPosition = new Vector2(-8f, 0f);
+        var g = handHoverRoot.gameObject.AddComponent<CanvasGroup>(); g.blocksRaycasts = false; g.interactable = false;
+        AddMysticalCardOutline(handHoverRoot, true);   // gold glow, like the normal preview
+        RoundedCardVisual("art", handHoverRoot, GetCardSprite(ci.CardId), out var img);
+        if (img != null) img.raycastTarget = false;
+        handHoverRoot.SetAsLastSibling();
+    }
+
+    // Drive the real hand card's hover (lift + in-hand preview) from a counter tile in the actions panel.
+    private CardHover FindHandCardHover(string instanceId)
+    {
+        if (instanceId == null || !handCardRects.TryGetValue(instanceId, out var rt) || rt == null) return null;
+        return rt.GetComponentInChildren<CardHover>();
+    }
+
+    internal void CounterTileHoverEnter(CardInstance card)
+    {
+        if (card == null || isDraggingHandCard || isDraggingAttack) return;
+        var ch = FindHandCardHover(card.InstanceId);
+        if (ch != null) ch.OnPointerEnter(new PointerEventData(EventSystem.current));
+    }
+
+    internal void CounterTileHoverExit(CardInstance card)
+    {
+        if (card == null) return;
+        var ch = FindHandCardHover(card.InstanceId);
+        if (ch != null) ch.OnPointerExit(new PointerEventData(EventSystem.current));
+    }
+
+    // Grid of the defender's hand as small card tiles for the counter step.
+    private void DrawCounterHand(RectTransform body, BattleState b)
+    {
+        var p = state.Players.ContainsKey(b.TargetSeat) ? state.Players[b.TargetSeat] : null;
+        if (p == null || p.Hand == null || p.Hand.Count == 0)
+        {
+            AddInfo(body, "Your hand is empty — nothing to counter with.");
+            return;
+        }
+
+        const int cols = 3;
+        const float tileH = 92f, vSpacing = 8f, hSpacing = 6f;
+        float tileW = tileH * 0.714f;
+        int rows = (p.Hand.Count + cols - 1) / cols;
+
+        var container = PanelObject("Counter Hand", body, new Color(0, 0, 0, 0));
+        var le = container.gameObject.AddComponent<LayoutElement>();
+        le.preferredHeight = rows * tileH + (rows - 1) * vSpacing + 12f;
+
+        var grid = container.gameObject.AddComponent<GridLayoutGroup>();
+        grid.cellSize = new Vector2(tileW, tileH);
+        grid.spacing = new Vector2(hSpacing, vSpacing);
+        grid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+        grid.constraintCount = cols;
+        grid.childAlignment = TextAnchor.UpperCenter;
+        grid.padding = new RectOffset(2, 2, 4, 4);
+
+        foreach (var card in p.Hand)
+        {
+            var def = GameEngine.GetCard(card);
+            // Usable = engine-validated for the counter step: a counter-value card, OR an affordable
+            // [Counter] event (DON check inside). Unaffordable events / non-counters stay dimmed.
+            bool usable = GameEngine.CanCounterFromHand(state, b.TargetSeat, card);
+            // The "+X" power badge is only for counter-VALUE cards; counter EVENTS show green (usable)
+            // but no flat +power indicator (their boost is an effect, not the corner value).
+            bool showValueBadge = def != null && def.Type != "event" && def.Counter > 0;
+
+            var cell = PanelObject("Counter Tile " + card.InstanceId, container, new Color(0, 0, 0, 0));
+            RoundedCardVisual("art", cell, GetCardSprite(card.CardId), out var artImg);
+            if (artImg != null) artImg.color = usable ? Color.white : new Color(1f, 1f, 1f, 0.42f);   // dim unusable
+
+            if (usable) AddRoundedCardBorder(cell, new Color32(70, 220, 140, 255), 1.6f);
+            if (showValueBadge)
+            {
+                var badge = PanelObject("badge", cell, new Color32(16, 60, 40, 235));
+                badge.anchorMin = badge.anchorMax = new Vector2(0.5f, 0f);
+                badge.pivot = new Vector2(0.5f, 0f);
+                badge.sizeDelta = new Vector2(tileW - 6f, 16f);
+                badge.anchoredPosition = new Vector2(0f, 4f);
+                Round(badge);
+                var bt = TextObject("t", badge, "+" + def.Counter, 9, new Color32(120, 245, 175, 255), TextAnchor.MiddleCenter, monoFont);
+                bt.fontStyle = FontStyle.Bold;
+                bt.raycastTarget = false;
+                Stretch(bt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            }
+
+            cell.gameObject.AddComponent<PreviewOnHover>().Init(this, card);
+            if (usable)
+            {
+                var cardRef = card;
+                cell.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+                {
+                    CounterTileHoverExit(cardRef);
+                    Dispatch(new GameCommand { Type = "counterWithCard", Seat = b.TargetSeat, InstanceId = cardRef.InstanceId });
+                });
+            }
         }
     }
 
@@ -7881,6 +8223,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         // Lock the docked left card-preview onto whatever card was just clicked.
         if (card != null) previewLockCard = card;
+        // Sandbox edit mode: a click SELECTS the card for the editor's ops section rather than
+        // driving normal play (attach DON / declare attack / target an effect).
+        if (isSandbox && sandboxEditMode && card != null)
+        {
+            sandboxSelectedCard = card;
+            Render();
+            return;
+        }
         if (state.DeckLook != null)
         {
             // "select" is click-driven; "scry" clicks toggle a card in/out of the TOP set;
@@ -8572,7 +8922,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         if (faceUp)
         {
-            if (card.AttachedDonIds.Count > 0) AddBadge(cardBody, "+" + card.AttachedDonIds.Count, new Vector2(0.62f, 0.82f), new Vector2(0.98f, 0.98f), new Color32(13, 68, 34, 230));
+            if (card.AttachedDonIds.Count > 0) AddBadge(cardBody, "+" + card.AttachedDonIds.Count, new Vector2(0.62f, 0.82f), new Vector2(0.98f, 0.98f), new Color32(120, 235, 155, 255));
 
             // Status indicator chips — everything currently affecting this card (OPTCGSim-style
             // insight): power/cost changes, base overrides, keyword grants, restrictions
@@ -8594,7 +8944,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 if (statusBadges.Count > 5)
                     AddBadge(cardBody, "+" + (statusBadges.Count - 5) + " MORE",
                         new Vector2(0.02f, badgeY), new Vector2(0.80f, badgeY + 0.125f),
-                        new Color32(52, 58, 70, 235));
+                        new Color32(170, 182, 200, 255));
             }
 
             // Persistent GREEN glow on every card that is a VALID target for the pending effect
@@ -9190,9 +9540,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (!isReplayMode && seat == state.ActiveSeat && !card.Rested
                 && GameEngine.IsSummoningSick(state, card))
             {
-                // A cool-grey WASH (not a dark shadow) so a card played this turn without [Rush] reads as
-                // faded / greyed-out ("can't attack yet") rather than just darkened.
-                var dim = PanelObject("Summoning Sick Dim", holder, new Color(0.52f, 0.55f, 0.60f, 0.55f));
+                // A subtle cool-grey veil so a card played this turn without [Rush] reads as slightly
+                // greyed ("can't attack yet") — light enough that the art stays clearly visible.
+                var dim = PanelObject("Summoning Sick Dim", holder, new Color(0.40f, 0.43f, 0.48f, 0.30f));
                 Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
                 Round(dim);
                 dim.GetComponent<Image>().raycastTarget = false;
@@ -9312,12 +9662,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return _blockerShieldSprite;
     }
 
-    private void AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color bg)
+    // `accent` is the BRIGHT badge colour; the fill is a dark tint of it and the text is the accent —
+    // exactly the counter-step "+1000" pill language (dark green pill + bright green text).
+    private void AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color accent)
     {
-        var badge = PanelObject("Badge", parent, bg);
+        var badge = PanelObject("Badge", parent, new Color(accent.r * 0.22f, accent.g * 0.22f, accent.b * 0.22f, 0.92f));
         Stretch(badge, min, max, Vector2.zero, Vector2.zero);
-        var text = TextObject("Badge Text", badge, label, 11, Color.white, TextAnchor.MiddleCenter);
-        Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        Round(badge);
+        badge.GetComponent<Image>().raycastTarget = false;
+        var text = TextObject("Badge Text", badge, label, 11, accent, TextAnchor.MiddleCenter);
+        text.fontStyle = FontStyle.Bold;
+        text.raycastTarget = false;
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(3f, 0f), new Vector2(-3f, 0f));
     }
 
     private RectTransform PanelObject(string name, Transform parent, Color color)
@@ -10259,7 +10615,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void Clear(RectTransform root)
     {
         if (root == null) return;
-        for (int i = root.childCount - 1; i >= 0; i--) Destroy(root.GetChild(i).gameObject);
+        // Destroy() is deferred to end-of-frame, so a rebuilt row (e.g. the phase-pill tracker) would
+        // render on top of the OLD one for a frame — showing two active pills. SetActive(false) hides
+        // the old children immediately, before the rebuild renders.
+        for (int i = root.childCount - 1; i >= 0; i--)
+        {
+            var go = root.GetChild(i).gameObject;
+            go.SetActive(false);
+            Destroy(go);
+        }
     }
 
     private void ClearDragGhosts()
@@ -11624,6 +11988,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         { if (glow != null) glow.color = idleColor; if (manager != null) manager.HideBlockerPreview(); }
         public void OnPointerClick(PointerEventData eventData)
         { if (manager != null && card != null) manager.OnCardClick(card, seat); }
+    }
+
+    // Hover handler for counter-step tiles: instead of a popup beside the tile, it floats the ACTUAL
+    // card up in your hand and previews it there (exactly like hovering the card in hand). Nested so it
+    // can reach the private hover API.
+    private sealed class PreviewOnHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        private GameManager manager;
+        private CardInstance card;
+        public void Init(GameManager m, CardInstance c) { manager = m; card = c; }
+        public void OnPointerEnter(PointerEventData e) { if (manager != null) manager.CounterTileHoverEnter(card); }
+        public void OnPointerExit(PointerEventData e) { if (manager != null) manager.CounterTileHoverExit(card); }
+    }
+
+    // Hover on a counter-step matchup mini card → big character preview left of the panel.
+    private sealed class CounterPreviewHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        private GameManager manager;
+        private CardInstance card;
+        public void Init(GameManager m, CardInstance c) { manager = m; card = c; }
+        public void OnPointerEnter(PointerEventData e) { if (manager != null) manager.CounterPreviewEnter(card); }
+        public void OnPointerExit(PointerEventData e) { if (manager != null) manager.CounterPreviewExit(); }
     }
 
     private sealed class CardHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
