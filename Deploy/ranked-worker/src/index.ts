@@ -20,6 +20,10 @@ import {
 import {
   handleQueueJoin, handleQueuePoll, handleQueueReady, handleQueueHostReady, handleQueueCancel,
 } from "./matchmaking";
+import {
+  handleChatSend, handleChatHistory, handleChatRead, handleChatPoll,
+  handleInviteSend, handleInvitePoll, handleInviteRespond, handleInviteStatus, handleInviteCancel,
+} from "./social";
 
 export interface Env {
   DB: D1Database;
@@ -216,6 +220,29 @@ async function handleQueueRoute(req: Request, url: URL, env: Env): Promise<Respo
   }
 }
 
+// All /chat/* and /invite/* endpoints are authenticated (identity = token sub), like /queue/*.
+async function handleSocialRoute(req: Request, url: URL, env: Env): Promise<Response> {
+  let playerId: string;
+  try {
+    ({ playerId } = await verifyUnityToken(req.headers.get("Authorization")));
+  } catch (e: any) {
+    return json({ error: "unauthorized", detail: String(e?.message ?? e) }, 401);
+  }
+  const body = req.method === "POST" ? await req.json<any>().catch(() => ({})) : {};
+  switch (url.pathname) {
+    case "/chat/send":      return json(await handleChatSend(env, playerId, body));
+    case "/chat/history":   return json(await handleChatHistory(env, playerId, url));
+    case "/chat/read":      return json(await handleChatRead(env, playerId, body));
+    case "/chat/poll":      return json(await handleChatPoll(env, playerId));
+    case "/invite/send":    return json(await handleInviteSend(env, playerId, body));
+    case "/invite/poll":    return json(await handleInvitePoll(env, playerId));
+    case "/invite/respond": return json(await handleInviteRespond(env, playerId, body));
+    case "/invite/status":  return json(await handleInviteStatus(env, playerId, url));
+    case "/invite/cancel":  return json(await handleInviteCancel(env, playerId, body));
+    default:                return json({ error: "not found" }, 404);
+  }
+}
+
 async function handleLeaderboard(url: URL, env: Env): Promise<Response> {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "100", 10) || 100, 1), 200);
   const rows = await env.DB.prepare(
@@ -250,6 +277,8 @@ export default {
 
     try {
       if (url.pathname.startsWith("/queue/")) return await handleQueueRoute(req, url, env);
+      if (url.pathname.startsWith("/chat/") || url.pathname.startsWith("/invite/"))
+        return await handleSocialRoute(req, url, env);
       if (req.method === "POST" && url.pathname === "/report") return await handleReport(req, env);
       if (req.method === "GET" && url.pathname === "/profile") return await handleProfile(url, env);
       if (req.method === "GET" && url.pathname === "/leaderboard") return await handleLeaderboard(url, env);

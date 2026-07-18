@@ -102,6 +102,42 @@ public static class FriendsManager
         try { return AuthenticationService.Instance.PlayerId; } catch { return null; }
     }
 
+    // Drops the cached init task so the NEXT EnsureReadyAsync re-runs
+    // FriendsService.InitializeAsync(), which re-fetches the relationship graph from
+    // the server. This defeats a stale/disconnected client-side cache (e.g. if the
+    // Friends real-time socket dropped during a match and never re-synced) without
+    // waiting on a relationship/presence event. Safe to call repeatedly.
+    public static async Task ForceResyncAsync()
+    {
+        LogDiag("before ForceResync");
+        _friendsInitTask = null;
+        await EnsureReadyAsync();
+        LogDiag("after ForceResync");
+    }
+
+    // Diagnostic snapshot: the authenticated player id this client is currently acting
+    // as, plus the live relationship counts. If `friends` drops to 0 after a match while
+    // `player` is UNCHANGED, the cause is a stale client cache (ForceResyncAsync fixes it);
+    // if `player` CHANGES, the friend graph is being read under a different identity.
+    // Tagged so it's greppable in Player.log: search "[FriendsDiag]".
+    private static void LogDiag(string tag)
+    {
+        try
+        {
+            string pid = CurrentPlayerId() ?? "(none)";
+            int f = SafeCount(FriendsService.Instance.Friends);
+            int inc = SafeCount(FriendsService.Instance.IncomingFriendRequests);
+            int outg = SafeCount(FriendsService.Instance.OutgoingFriendRequests);
+            Debug.Log($"[FriendsDiag] {tag}: player={pid} friends={f} incoming={inc} outgoing={outg}");
+        }
+        catch (Exception ex) { Debug.Log($"[FriendsDiag] {tag}: (state unavailable: {ex.Message})"); }
+    }
+
+    private static int SafeCount(IEnumerable<Relationship> src)
+    {
+        try { return src == null ? -1 : src.Count(); } catch { return -1; }
+    }
+
     private static async Task InitializeAndSubscribeAsync()
     {
         // InitializeAsync is safe to call again after an auth player change; it rebinds the service to the
@@ -109,6 +145,7 @@ public static class FriendsManager
         // doesn't abort the whole flow.
         try { await FriendsService.Instance.InitializeAsync(); }
         catch (Exception ex) { Debug.LogWarning($"FriendsManager: FriendsService.InitializeAsync ({ex.Message}) — continuing."); }
+        LogDiag("post-Initialize");
         if (_friendsHandlersHooked) { await PublishOnlineAsync(); return; }
         _friendsHandlersHooked = true;
         FriendsService.Instance.RelationshipAdded += _ => FriendsChanged?.Invoke();
@@ -155,7 +192,10 @@ public static class FriendsManager
         if (ownerId == AuthenticationService.Instance.PlayerId)
             return FriendActionResult.Fail(FriendActionFailureReason.SelfAdd, "You can't add yourself.");
 
-        return await AddFriendRawAsync(ownerId);
+        LogDiag($"before AddFriend '{username}'");
+        var result = await AddFriendRawAsync(ownerId);
+        LogDiag($"after AddFriend '{username}' (ok={result.Ok})");
+        return result;
     }
 
     // Accepting an incoming request IS adding them back - the Friends service auto-resolves
@@ -165,6 +205,28 @@ public static class FriendsManager
 
     private static Task<FriendActionResult> AddFriendRawAsync(string playerId) =>
         RunAsync(() => FriendsService.Instance.AddFriendAsync(playerId));
+
+    // Add a friend directly by UGS player id — used by the end-of-match "Add Friend" on
+    // your opponent, where we already hold their id and don't need a username lookup.
+    public static Task<FriendActionResult> AddFriendByIdAsync(string playerId) => AddFriendRawAsync(playerId);
+
+    // True if this id is already a confirmed (mutual) friend. Best-effort read of the live
+    // Friends cache after ensuring the service is ready; false on any error.
+    public static async Task<bool> IsFriendAsync(string playerId)
+    {
+        if (string.IsNullOrEmpty(playerId)) return false;
+        await EnsureReadyAsync();
+        try { return FriendsService.Instance.Friends.Any(r => r.Member != null && r.Member.Id == playerId); }
+        catch { return false; }
+    }
+
+    // Cheap incoming-request count (no network / no username resolution), so a poller can do
+    // the expensive GetIncomingRequestsAsync resolve ONLY when the count actually changes.
+    public static int IncomingRequestCount()
+    {
+        try { return FriendsService.Instance.IncomingFriendRequests?.Count ?? 0; }
+        catch { return 0; }
+    }
 
     public static Task<FriendActionResult> DeclineRequestAsync(string requesterPlayerId) =>
         RunAsync(() => FriendsService.Instance.DeleteIncomingFriendRequestAsync(requesterPlayerId));
@@ -204,6 +266,7 @@ public static class FriendsManager
     public static async Task<List<FriendEntry>> GetFriendsAsync()
     {
         await EnsureReadyAsync();
+        LogDiag("GetFriends");
         return await ResolveEntriesAsync(FriendsService.Instance.Friends);
     }
 

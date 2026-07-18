@@ -152,6 +152,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private string chatDraft = "";
     private InputField chatInputField;
     private bool ChatInputFocused => chatInputField != null && chatInputField.isFocused;
+    // ---- End-of-match: add the networked opponent as a friend (result overlay) ----
+    private string addFriendState = "idle";   // idle | sending | sent | error | alreadyFriend
+    private bool addFriendChecked;             // whether the "already a friend?" check has run for this result
     // ---- Presence (networked only): what WE are hovering, and the opponent's last payload ----
     private string presenceHoverCardId;
     private int presenceRaisedHandIndex = -1;
@@ -1052,6 +1055,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         chatOpen = false;
         chatUnread = false;
         chatMessages.Clear();
+        addFriendState = "idle";
+        addFriendChecked = false;
         opponentPresence = null;
         presenceHoverCardId = null;
         presenceRaisedHandIndex = -1;
@@ -2643,7 +2648,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         bool solo = !isNetworked;
         bool custom = isNetworked && networkedMode == "custom";
-        bool extraButtons = solo || custom;   // wider panel for the 3–4-button layouts
+        // Offer to friend the opponent after any networked match (unless already friends / guest).
+        bool canAddOpp = isNetworked && !AccountManager.IsGuest
+            && !string.IsNullOrEmpty(cachedRankedOppId) && addFriendState != "alreadyFriend";
+        bool extraButtons = solo || custom || canAddOpp;   // wider panel for the 3–4-button layouts
 
         var panel = PanelObject("Match Result Panel", boardRoot, (Color)new Color32(14, 30, 46, 250));
         Stretch(panel, new Vector2(extraButtons ? 0.26f : 0.33f, 0.36f), new Vector2(extraButtons ? 0.74f : 0.67f, 0.64f), Vector2.zero, Vector2.zero);
@@ -2677,7 +2685,53 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         AddButton(buttons, "MAIN MENU", ReturnToMenu);
         if (custom) AddButton(buttons, "CHANGE DECK", ReturnToLobby);   // back to lobby (swap deck + restart)
+        if (canAddOpp)
+        {
+            // Kick off the "are we already friends?" check once; it flips addFriendState and re-renders.
+            if (!addFriendChecked) { addFriendChecked = true; CheckOpponentFriendship(); }
+            string addLabel = addFriendState == "sending" ? "SENDING…"
+                : addFriendState == "sent" ? "REQUEST SENT"
+                : addFriendState == "error" ? "RETRY ADD FRIEND"
+                : "ADD FRIEND";
+            AddButton(buttons, addLabel, AddOpponentFriendClicked,
+                addFriendState != "sending" && addFriendState != "sent");
+        }
         AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); });
+    }
+
+    // Async check run once when the result overlay first appears: if the opponent is already a
+    // confirmed friend, hide the "Add Friend" button (flip state + re-render).
+    private async void CheckOpponentFriendship()
+    {
+        string oppId = cachedRankedOppId;
+        if (string.IsNullOrEmpty(oppId) || AccountManager.IsGuest) return;
+        try
+        {
+            bool isFriend = await FriendsManager.IsFriendAsync(oppId);
+            if (this == null) return;
+            if (isFriend && addFriendState == "idle")
+            {
+                addFriendState = "alreadyFriend";
+                if (finishedResultText != null && !matchResultHidden) Render();
+            }
+        }
+        catch { /* offline — leave the button shown; the send handles duplicates */ }
+    }
+
+    private async void AddOpponentFriendClicked()
+    {
+        string oppId = cachedRankedOppId;
+        if (string.IsNullOrEmpty(oppId) || addFriendState == "sending" || addFriendState == "sent") return;
+        addFriendState = "sending";
+        Render();
+        try
+        {
+            var result = await FriendsManager.AddFriendByIdAsync(oppId);
+            if (this == null) return;
+            addFriendState = result.Ok ? "sent" : "error";
+        }
+        catch { if (this != null) addFriendState = "error"; }
+        if (this != null && finishedResultText != null && !matchResultHidden) Render();
     }
 
     // Shown instead of the modal after "View Board": a small chip to bring the result back
@@ -5366,10 +5420,64 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private static readonly System.Text.RegularExpressions.Regex LogCardIdRx =
         new System.Text.RegularExpressions.Regex(@"\[[A-Za-z0-9]{1,6}-\d{1,4}\]");
 
+    // Compact clipboard button for the combat-log / match-chat label bands. Text is built
+    // lazily on click (captures latest state) and written to the OS clipboard.
+    private void AddCopyChip(RectTransform parent, string label, System.Func<string> textProvider, Vector2 anchorMin, Vector2 anchorMax)
+    {
+        var chip = PanelObject("Copy Chip", parent, new Color32(34, 58, 78, 235));
+        Stretch(chip, anchorMin, anchorMax, Vector2.zero, Vector2.zero);
+        Round(chip);
+        AddRoundedCardBorder(chip, MenuB, 1f);
+        var t = TextObject("Copy Chip Text", chip, label, 9, Ink, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = chip.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { GUIUtility.systemCopyBuffer = textProvider() ?? string.Empty; });
+    }
+
+    // Plain-text combat log the local viewer is allowed to see (same per-seat privacy as
+    // DrawCombatLogPanel) — one "[Actor] message" line per visible event, for the Copy button.
+    private string BuildCombatLogText()
+    {
+        var sb = new System.Text.StringBuilder();
+        if (state?.EventLog == null) return "";
+        foreach (var e in state.EventLog)
+        {
+            string message = e.Message;
+            if (!string.IsNullOrEmpty(e.PrivateSeat) && e.PrivateSeat != BottomSeat)
+            {
+                if (string.IsNullOrEmpty(e.PublicMessage)) continue;
+                message = e.PublicMessage;
+            }
+            string actorName = null;
+            if (!string.IsNullOrEmpty(e.Actor) && e.Actor != "system" &&
+                state.Players.TryGetValue(e.Actor, out var actorP) && actorP != null)
+                actorName = actorP.Name;
+            if (!string.IsNullOrEmpty(actorName))
+            {
+                if (message != null && message.StartsWith(actorName + " "))
+                    message = message.Substring(actorName.Length + 1);
+                sb.Append('[').Append(actorName).Append("] ").AppendLine(message);
+            }
+            else sb.AppendLine(message);
+        }
+        return sb.ToString();
+    }
+
+    // Plain-text match chat for the Copy button (the input itself supports native paste).
+    private string BuildChatText()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var m in chatMessages) sb.Append(m.Sender).Append(": ").AppendLine(m.Text);
+        return sb.ToString();
+    }
+
     private void DrawCombatLogPanel()
     {
         var logLabel = TextObject("Combat Log Label", leftRoot, "COMBAT LOG", 9, Muted, TextAnchor.LowerLeft, monoFont);
         Stretch(logLabel.rectTransform, new Vector2(0.06f, 0.425f), new Vector2(0.94f, 0.443f), Vector2.zero, Vector2.zero);
+        // Copy the full combat history to the clipboard (right end of the label band).
+        AddCopyChip(leftRoot, "Copy", BuildCombatLogText, new Vector2(0.80f, 0.421f), new Vector2(0.94f, 0.447f));
 
         var logPanel = PanelObject("Table Combat Log", leftRoot, LogBgDark);
         Stretch(logPanel, new Vector2(0.06f, 0.02f), new Vector2(0.94f, 0.418f), Vector2.zero, Vector2.zero);
@@ -6822,6 +6930,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         var title = TextObject("Match Chat Title", panel, "MATCH CHAT", 10, Muted, TextAnchor.MiddleLeft, monoFont);
         Stretch(title.rectTransform, new Vector2(0.05f, 0.93f), new Vector2(0.95f, 0.99f), Vector2.zero, Vector2.zero);
+        // Copy the whole conversation to the clipboard (the input itself already supports
+        // native Ctrl+C/V paste; this covers copying the received messages/history).
+        AddCopyChip(panel, "Copy", BuildChatText, new Vector2(0.70f, 0.925f), new Vector2(0.95f, 0.99f));
 
         // Scrollable message list (same viewport/ScrollRect pattern as the combat log).
         var viewport = PanelObject("Match Chat Viewport", panel, new Color(0, 0, 0, 0));

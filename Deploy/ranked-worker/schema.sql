@@ -65,3 +65,34 @@ CREATE TABLE IF NOT EXISTS proposals (
   state      TEXT NOT NULL DEFAULT 'pending',  -- pending | accepted | matched | declined | expired
   match_id   TEXT                              -- UGS session id the host created; guest joins by id
 );
+
+-- ── Social: direct messages (persistent friend chat) ──
+-- One row per message. History is a single indexed query per conversation; unread
+-- badges are a grouped count of read_at IS NULL. Friendship is enforced client-side
+-- (the graph lives in UGS Friends, not here) — the worker just stores/relays.
+CREATE TABLE IF NOT EXISTS dm_messages (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_id    TEXT    NOT NULL,   -- authenticated token sub of the sender
+  to_id      TEXT    NOT NULL,
+  body       TEXT    NOT NULL,
+  created_at INTEGER NOT NULL,
+  read_at    INTEGER             -- NULL until the recipient has read it
+);
+CREATE INDEX IF NOT EXISTS idx_dm_pair   ON dm_messages (from_id, to_id, id);
+CREATE INDEX IF NOT EXISTS idx_dm_unread ON dm_messages (to_id, read_at);
+
+-- ── Social: quick game invites (invite a friend into a custom lobby) ──
+-- The inviter hosts a UGS custom session, then rows its id here; the invitee polls,
+-- accepts, and JoinByIdAsync's it — the exact "host publishes session id, guest joins
+-- by id" handshake the ranked matchmaker already uses. Short-lived (INVITE_TTL_MS).
+CREATE TABLE IF NOT EXISTS game_invites (
+  id         TEXT    PRIMARY KEY,  -- uuid
+  from_id    TEXT    NOT NULL,
+  from_name  TEXT,                 -- inviter's display name (for the popup)
+  to_id      TEXT    NOT NULL,
+  session_id TEXT    NOT NULL,     -- UGS session id the invitee JoinByIdAsync's
+  lobby_name TEXT,
+  created_at INTEGER NOT NULL,
+  status     TEXT    NOT NULL DEFAULT 'pending'  -- pending | accepted | declined | cancelled | expired
+);
+CREATE INDEX IF NOT EXISTS idx_invite_to ON game_invites (to_id, status, created_at);
