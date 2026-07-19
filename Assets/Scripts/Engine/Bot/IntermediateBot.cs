@@ -855,7 +855,28 @@ namespace OnePieceTcg.Engine.Bot
                 .OrderByDescending(c => MainPlayValue(state, seat, c));
             foreach (var c in playable)
             {
-                var cmd = Try(blacklist, new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
+                var d = CardData.GetCard(c.CardId);
+                GameCommand cmd;
+                if (d != null && d.Type == "character" && !p.CharacterArea.Any(s => s == null))
+                {
+                    // Full board → 6th-Character rule: play over the WEAKEST existing Character (trashing
+                    // it). Supply the slot, else the engine rejects with "No open character slot". Only do
+                    // it when the incoming body is clearly bigger, so we don't churn into a worse board.
+                    int weakest = -1, weakestPow = int.MaxValue;
+                    for (int s = 0; s < p.CharacterArea.Count; s++)
+                    {
+                        var occ = p.CharacterArea[s];
+                        if (occ == null) continue;
+                        int pw = GameEngine.GetPower(state, occ);
+                        if (pw < weakestPow) { weakestPow = pw; weakest = s; }
+                    }
+                    if (weakest < 0 || d.Power <= weakestPow) continue;   // not worth trashing a stronger body
+                    cmd = Try(blacklist, new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId, SlotIndex = weakest });
+                }
+                else
+                {
+                    cmd = Try(blacklist, new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
+                }
                 if (cmd != null) return cmd;
             }
 

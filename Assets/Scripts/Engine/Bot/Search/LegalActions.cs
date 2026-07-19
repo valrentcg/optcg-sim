@@ -79,8 +79,28 @@ namespace OnePieceTcg.Engine.Bot.Search
                 foreach (var c in me.Hand)
                 {
                     var d = CardData.GetCard(c.CardId);
-                    if (d != null && d.Type != "leader" && GameEngine.GetCost(state, c) <= don)
+                    if (d == null || d.Type == "leader" || GameEngine.GetCost(state, c) > don) continue;
+                    if (d.Type == "character" && !me.CharacterArea.Any(s => s == null))
+                    {
+                        // Full board: the 6th-Character rule lets you play over an existing Character,
+                        // trashing it. Emit a replace of the WEAKEST current Character (bounded branching);
+                        // the search decides whether it's worth it. Without a SlotIndex the engine would
+                        // just reject the play ("No open character slot") — the source of the log spam.
+                        int weakest = -1, weakestPow = int.MaxValue;
+                        for (int s = 0; s < me.CharacterArea.Count; s++)
+                        {
+                            var occ = me.CharacterArea[s];
+                            if (occ == null) continue;
+                            int pw = GameEngine.GetPower(state, occ);
+                            if (pw < weakestPow) { weakestPow = pw; weakest = s; }
+                        }
+                        if (weakest >= 0)
+                            list.Add(new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId, SlotIndex = weakest });
+                    }
+                    else
+                    {
                         list.Add(new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
+                    }
                 }
                 if (don > 0)
                     foreach (var c in Board(me))

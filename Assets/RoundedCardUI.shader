@@ -13,6 +13,7 @@ Shader "UI/RoundedCard"
         _Color ("Tint", Color) = (1,1,1,1)
         _Size ("Rect size (px)", Vector) = (100,140,0,0)
         _Radius ("Corner radius (px)", Float) = 5
+        _Saturation ("Saturation", Range(0,1)) = 1
 
         _StencilComp ("Stencil Comparison", Float) = 8
         _Stencil ("Stencil ID", Float) = 0
@@ -78,6 +79,7 @@ Shader "UI/RoundedCard"
             float4 _MainTex_ST;
             float4 _Size;
             float  _Radius;
+            float  _Saturation;
 
             v2f vert (appdata_t v)
             {
@@ -106,6 +108,9 @@ Shader "UI/RoundedCard"
             fixed4 frag (v2f IN) : SV_Target
             {
                 half4 color = (tex2D(_MainTex, IN.texcoord) + _TextureSampleAdd) * IN.color;
+                // Optional colour drain (summoning-sick cards): lerp RGB toward luminance grey.
+                half gray = dot(color.rgb, half3(0.299, 0.587, 0.114));
+                color.rgb = lerp(half3(gray, gray, gray), color.rgb, _Saturation);
                 color.a *= roundedAlpha(IN.texcoord);
 
                 #ifdef UNITY_UI_CLIP_RECT

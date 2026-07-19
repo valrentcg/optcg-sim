@@ -40,7 +40,7 @@ public static class UpdateChecker
 
     // Bump this every release. Must match "buildNumber" in the deployed
     // version.json for that release.
-    public const int CurrentBuildNumber = 16;
+    public const int CurrentBuildNumber = 17;
     // -----------------------------------------------------------------------
 
     [Serializable]

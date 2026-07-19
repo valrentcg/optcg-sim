@@ -1007,12 +1007,13 @@ namespace OnePieceTcg.Engine
         private static bool AutoPayOrAwaitDonMinus(GameState state, PendingEffect effect, int donMinus)
         {
             var payer = Player(state, effect.Seat);
-            bool hasActive = payer.CostArea.Exists(d => !d.Rested);
-            bool hasRested = payer.CostArea.Exists(d => d.Rested);
-            if (hasActive && hasRested && payer.CostArea.Count > donMinus)
+            // The player has a meaningful choice of WHICH DON!! to return (cost-area active vs rested,
+            // or an ATTACHED DON!! whose return also weakens a character) whenever there are more DON!!
+            // on the field than the cost requires. In that case, await per-DON!! clicks.
+            if (TotalFieldDon(payer) > donMinus)
             {
                 effect.DonPaymentRemaining = donMinus;
-                Log(state, effect.Seat, $"Click {donMinus} of your DON!! to return for {NameId(CardData.GetCard(effect.SourceCardId))} (active or rested — your choice).");
+                Log(state, effect.Seat, $"Click {donMinus} of your DON!! to return for {NameId(CardData.GetCard(effect.SourceCardId))} (cost-area or attached — your choice).");
                 return false;
             }
             PayDonMinus(state, effect.Seat, donMinus);
@@ -1020,23 +1021,70 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
-        // Pay a DON!! −N cost: return N DON!! cards from the cost area (rested first, since
-        // that's strictly best for the player) to the DON!! deck. Returns false if the player
-        // doesn't have N DON!! on their field.
+        // Every card on a player's field that can hold attached DON!! (Leader, Characters, Stage).
+        private static System.Collections.Generic.IEnumerable<CardInstance> FieldCards(PlayerState p)
+        {
+            if (p.Leader != null) yield return p.Leader;
+            foreach (var c in p.CharacterArea) if (c != null) yield return c;
+            if (p.Stage != null) yield return p.Stage;
+        }
+
+        // Return one specific DON!! (identified by instance id) from a player's FIELD — cost area OR
+        // attached to a Leader/Character/Stage — to the DON!! deck. A "DON!! −N" cost may return either.
+        private static bool ReturnFieldDon(GameState state, PlayerState p, string donId, out string kind)
+        {
+            kind = null;
+            int di = p.CostArea.FindIndex(d => d.InstanceId == donId);
+            if (di >= 0)
+            {
+                kind = p.CostArea[di].Rested ? "rested" : "active";
+                p.CostArea.RemoveAt(di);
+                p.DonDeck += 1;
+                return true;
+            }
+            foreach (var host in FieldCards(p))
+            {
+                int ai = host.AttachedDonIds.IndexOf(donId);
+                if (ai >= 0)
+                {
+                    host.AttachedDonIds.RemoveAt(ai);
+                    p.DonDeck += 1;
+                    kind = "attached";
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Pay a DON!! −N cost by auto-returning N DON!! from the field: cost area first (rested first,
+        // strictly best for the player), then attached DON!!. Used only when there's no choice to make;
+        // the interactive per-click path lets the player pick which DON!! (incl. attached). Returns
+        // false if the player doesn't have N DON!! on their field.
         private static bool PayDonMinus(GameState state, string seat, int amount)
         {
             var p = Player(state, seat);
-            if (p.CostArea.Count < amount) return false;
-            for (int i = 0; i < amount; i++)
+            if (TotalFieldDon(p) < amount) return false;
+            int returned = 0;
+            while (returned < amount && p.CostArea.Count > 0)
             {
                 int idx = p.CostArea.FindIndex(d => d.Rested);
                 if (idx < 0) idx = p.CostArea.Count - 1;
                 p.CostArea.RemoveAt(idx);
+                returned++;
             }
-            p.DonDeck += amount;
-            Log(state, seat, $"{p.Name} returns {amount} DON!! to the DON!! deck.");
-            NotifyDonReturned(state, seat, amount);
-            return true;
+            foreach (var host in FieldCards(p))
+            {
+                while (returned < amount && host.AttachedDonIds.Count > 0)
+                {
+                    host.AttachedDonIds.RemoveAt(host.AttachedDonIds.Count - 1);
+                    returned++;
+                }
+                if (returned >= amount) break;
+            }
+            p.DonDeck += returned;
+            Log(state, seat, $"{p.Name} returns {returned} DON!! to the DON!! deck.");
+            NotifyDonReturned(state, seat, returned);
+            return returned >= amount;
         }
 
         // Trafalgar Law (ST10-001): "Place up to 1 … at the bottom of the owner's deck, AND play
@@ -3449,22 +3497,18 @@ namespace OnePieceTcg.Engine
                 // field — checking against the full donMinus would fizzle a -N cost paid one
                 // DON!! at a time once the count drops below N (e.g. exactly N DON!! on field).
                 int stillNeed = effect.DonPaymentRemaining > 0 ? effect.DonPaymentRemaining : donMinus;
-                if (payer.CostArea.Count < stillNeed)
+                if (TotalFieldDon(payer) < stillNeed)
                 {
                     state.PendingEffects.Remove(effect);
                     Log(state, effect.Seat, $"Not enough DON!! on the field (need {donMinus}) — {NameId(CardData.GetCard(effect.SourceCardId))} effect fizzles.");
                     return;
                 }
-                // A specific cost-area DON!! was clicked — return exactly that one.
+                // A specific DON!! was clicked — return exactly that one (cost-area OR attached).
                 if (!string.IsNullOrEmpty(targetId))
                 {
-                    int di = payer.CostArea.FindIndex(d => d.InstanceId == targetId);
-                    if (di >= 0)
+                    if (ReturnFieldDon(state, payer, targetId, out string donKind))
                     {
-                        bool wasRested = payer.CostArea[di].Rested;
-                        payer.CostArea.RemoveAt(di);
-                        payer.DonDeck += 1;
-                        Log(state, effect.Seat, $"{payer.Name} returns 1 {(wasRested ? "rested" : "active")} DON!! to the DON!! deck.");
+                        Log(state, effect.Seat, $"{payer.Name} returns 1 {donKind} DON!! to the DON!! deck.");
                         int rem = (effect.DonPaymentRemaining > 0 ? effect.DonPaymentRemaining : donMinus) - 1;
                         effect.DonPaymentRemaining = rem;
                         if (rem > 0) return;   // more DON!! clicks needed
@@ -3476,7 +3520,7 @@ namespace OnePieceTcg.Engine
                     }
                     else if (effect.DonPaymentRemaining > 0)
                     {
-                        return;                // mid-payment: ignore clicks that aren't cost-area DON!!
+                        return;                // mid-payment: ignore clicks that aren't a DON!! on the field
                     }
                     else
                     {

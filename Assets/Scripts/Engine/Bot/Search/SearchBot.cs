@@ -40,10 +40,19 @@ namespace OnePieceTcg.Engine.Bot.Search
             if (Shortlist > 0 && legal.Count > Shortlist)
                 toScore = legal.OrderByDescending(x => Evaluation.Score(x.Value, seat)).Take(Shortlist).ToList();
 
+            // For effect-TARGET choices, the multi-turn rollout washes out the immediate board impact of
+            // WHICH body was removed (both lines play on for many turns), so removing a chip can tie
+            // removing the Blocker that was actually stopping lethal — and the wrong target gets picked.
+            // Blend in the immediate post-resolution eval as a reliable tiebreak toward the higher-value
+            // removal. Terminal win/loss rollouts return ±1e6 and stay dominant, so genuine lethal lines
+            // (e.g. clear the Blocker, then swing for game) still win outright.
+            bool effectTarget = state.PendingEffects.Any(e => e.Seat == seat) && state.DeckLook == null;
+
             GameCommand best = null; double bestScore = double.NegativeInfinity;
             foreach (var kv in toScore)
             {
                 double sc = ScoreByRollout(kv.Value, seat);
+                if (effectTarget && sc > -1e5 && sc < 1e5) sc += Evaluation.Score(kv.Value, seat);
                 if (sc > bestScore) { bestScore = sc; best = kv.Key; }
             }
             return best;

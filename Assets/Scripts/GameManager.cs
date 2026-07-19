@@ -266,7 +266,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // After every Render, card positions are snapshotted; any card whose ZONE changed
     // since the previous snapshot gets a ghost flight from old to new position (event use
     // flares, counters fly hand→trash, life→hand, board→life, DON!! attaches, ...).
-    private sealed class CardPose { public Vector3 pos; public Vector2 size; public string zone; public bool don; public string cardId; public string owner; public RectTransform rt; }
+    private sealed class CardPose { public Vector3 pos; public Vector2 size; public string zone; public bool don; public string cardId; public string owner; public RectTransform rt; public RectTransform faceRt; public Quaternion rot; }
     private readonly Dictionary<string, CardPose> lastCardPoses = new Dictionary<string, CardPose>();
     private readonly HashSet<string> suppressMoveAnim = new HashSet<string>();   // ids the LOCAL player just drag-placed (their drag was the animation)
     private int activeMoveGhosts;             // in-flight zone-move ghosts (bot waits on these)
@@ -277,6 +277,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // ── SFX ──────────────────────────────────────────────────────────────────
     private AudioSource sfxSource;
     private AudioClip cardDrawClip;
+    private AudioClip attackClip;
     private bool sfxLoadStarted;
     public static float SfxVolume
     {
@@ -307,6 +308,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private Font font;
     private Font monoFont;
     private Font titleFont;
+    private Font jpFont;   // Japanese-capable (for the ドン!! DON badge)
     private Image southHandPanelImage;
     private Image northHandPanelImage;
 
@@ -379,6 +381,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // through common Windows fonts; if none exist these stay null and TextObject uses the default.
         try { monoFont = Font.CreateDynamicFontFromOSFont(new[] { "JetBrains Mono", "Consolas", "Cascadia Mono", "Courier New" }, 14); } catch { monoFont = null; }
         try { titleFont = Font.CreateDynamicFontFromOSFont(new[] { "Chakra Petch", "Bahnschrift", "Eurostile", "Segoe UI Semibold", "Segoe UI" }, 16); } catch { titleFont = null; }
+        // Japanese-capable face for the ドン!! DON badge (legacy Text won't render katakana from Arial).
+        try { jpFont = Font.CreateDynamicFontFromOSFont(new[] { "Yu Gothic UI", "Yu Gothic", "Meiryo", "MS Gothic", "Segoe UI" }, 16); } catch { jpFont = null; }
         EnsureEventSystem();
         BuildShell();
     }
@@ -712,6 +716,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         state = GameEngine.ApplyCommand(state, command);
         // Blitz: grant increment after the engine commits a meaningful action (§5/§6/§7).
         if (BlitzActive) BlitzOnCommandApplied(command, true);
+        if (command.Type == "declareAttack" && state.Battle != null) PlayAttackSfx();
         commandElapsedSeconds.Add(Time.realtimeSinceStartup - matchStartRealtime);
         NormalizeSelection();
         // Sandbox / restored-position games never record stats/replays — they're scratch/hypothetical.
@@ -1155,6 +1160,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Blitz: award the opponent's increment on their committed action too, so both clients
         // apply the same deterministic increments (decrement/flag-fall stay owner-authoritative).
         if (BlitzActive) BlitzOnCommandApplied(command, true);
+        if (command.Type == "declareAttack" && state.Battle != null) PlayAttackSfx();
         commandElapsedSeconds.Add(Time.realtimeSinceStartup - matchStartRealtime);
         NormalizeSelection();
         if (state.Status == "finished" && !replaySaved)
@@ -1305,6 +1311,35 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private bool IsDonSelected(string instanceId)
     {
         return !string.IsNullOrEmpty(instanceId) && selectedDonIds.Contains(instanceId);
+    }
+
+    // True while THIS seat is mid-way through paying a "DON!! −N" cost by clicking DON!! (so both
+    // cost-area and attached DON!! should be highlighted + clickable to return).
+    private bool DonMinusPaymentActive(string seat)
+    {
+        if (state == null || state.PendingEffects.Count == 0) return false;
+        var pe = state.PendingEffects[0];
+        return pe.DonPaymentRemaining > 0 && pe.Seat == seat && (!isNetworked || seat == localSeat);
+    }
+
+    // Return a specific ATTACHED DON!! to the deck as one step of a DON!! −N payment (the engine
+    // detaches it — attached DON!! on your field are valid targets for the return).
+    private void ReturnAttachedDon(string seat, string donId)
+    {
+        if (!DonMinusPaymentActive(seat) || string.IsNullOrEmpty(donId)) return;
+        var pe = state.PendingEffects[0];
+        Dispatch(new GameCommand { Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId, Target = donId });
+    }
+
+    // First attached DON!! id on a player's field (Leader, then Characters, then Stage), or null —
+    // used by the AI to pay a DON!! −N cost from attached DON!! when the cost area is empty.
+    private static string FirstAttachedDonId(PlayerState p)
+    {
+        if (p.Leader?.AttachedDonIds != null && p.Leader.AttachedDonIds.Count > 0) return p.Leader.AttachedDonIds[0];
+        foreach (var c in p.CharacterArea)
+            if (c?.AttachedDonIds != null && c.AttachedDonIds.Count > 0) return c.AttachedDonIds[0];
+        if (p.Stage?.AttachedDonIds != null && p.Stage.AttachedDonIds.Count > 0) return p.Stage.AttachedDonIds[0];
+        return null;
     }
 
     private void SelectDon(string seat, string instanceId, int index, bool shift, bool render = true)
@@ -1606,10 +1641,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         if (clusterCards.Count == 0) return;
 
+        // DON at full board-card size (no height clamp to the inset DON-row band); the horizontal
+        // fit-scale below still prevents spilling past the cost-area width.
         float cardW = boardCardSize.x > 1f ? boardCardSize.x : 70f;
         float cardH = boardCardSize.y > 1f ? boardCardSize.y : cardW / CardAspect;
-        float maxH = parent.rect.height > 1f ? parent.rect.height * 0.96f : cardH;
-        if (cardH > maxH) { cardH = maxH; cardW = cardH * CardAspect; }
         float availW = parent.rect.width > 1f ? parent.rect.width : (boardRoot != null ? boardRoot.rect.width * 0.55f : 600f);
         float intra = cardW * 0.34f;
         int nClusters = clusterCards.Count;
@@ -1927,7 +1962,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Snapshot positions and fly ghosts for any card whose zone changed this render.
         CaptureAndAnimateCardMoves();
         MaybeShowTurnBanner();
-        DrawTurnFuse();
+        // (Roaming rim sparkles removed — the push/pull bar's active-half glow is the turn cue now.)
     }
 
     // Subtle ambient sparks in the ACTIVE player's board colour — cool blue for
@@ -2337,7 +2372,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             sfxLoadStarted = true;
             StartCoroutine(LoadSfxClip("card_draw", clip => cardDrawClip = clip));
+            StartCoroutine(LoadSfxClip("attack", clip => attackClip = clip));
         }
+    }
+
+    private void PlayAttackSfx()
+    {
+        EnsureSfx();
+        if (attackClip != null && sfxSource != null) sfxSource.PlayOneShot(attackClip, SfxVolume);
     }
 
     private IEnumerator LoadSfxClip(string name, System.Action<AudioClip> assign)
@@ -2440,7 +2482,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             System.Action<string, string, string, RectTransform, bool> addPose = (id, cardId, zone, rt, don) =>
             {
                 if (rt == null || string.IsNullOrEmpty(id)) return;
-                now[id] = new CardPose { pos = rt.position, size = rt.rect.size, zone = zone, don = don, cardId = cardId, owner = seatKey, rt = rt };
+                // The "Card Face" child carries the rest/tap rotation (kept off the root so attached DON
+                // stay upright); capture it so FLIP can animate a card resting/un-resting in place.
+                var faceRt = rt.Find("Card Face") as RectTransform;
+                now[id] = new CardPose
+                {
+                    pos = rt.position, size = rt.rect.size, zone = zone, don = don, cardId = cardId,
+                    owner = seatKey, rt = rt, faceRt = faceRt, rot = faceRt != null ? faceRt.rotation : rt.rotation
+                };
             };
             System.Func<string, RectTransform> anchor = k => moveZoneAnchors.TryGetValue(k, out var a) ? a : null;
 
@@ -2546,12 +2595,98 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 bool showFace = !kv.Value.don &&
                     (kv.Value.zone == "board" || kv.Value.zone.StartsWith("trash:") || old.zone == "board" || old.zone.StartsWith("trash:")
                      || (kv.Value.zone.StartsWith("hand:") && kv.Value.owner == BottomSeat && (!isNetworked || kv.Value.owner == localSeat)));
-                StartCoroutine(AnimateCardMoveGhost(old, kv.Value, kv.Value.don ? null : kv.Value.cardId, showFace, flare, HideForFlight(kv.Value), moveDelay));
+                // Grey the flight if it's landing as a summoning-sick character (matches the static board),
+                // so a freshly-played character doesn't fly in full colour and then turn grey on landing.
+                bool ghostDesat = false;
+                if (showFace && !kv.Value.don && kv.Value.zone == "board" && kv.Value.owner == state.ActiveSeat
+                    && state.Players.TryGetValue(kv.Value.owner, out var owP))
+                {
+                    var ci = owP.CharacterArea.FirstOrDefault(c => c != null && c.InstanceId == kv.Key);
+                    ghostDesat = ci != null && !ci.Rested && GameEngine.IsSummoningSick(state, ci);
+                }
+                // NOTE: zone changes (hand↔board plays, draws, discards, life, DON) keep the ghost — a
+                // top-level object that renders above the hand fan and animates size. FLIP-ing the real
+                // board card here would let the hand layer occlude it mid-flight, so it's intentionally
+                // NOT converted. Same-zone reflow/rest is handled by the FLIP pass below.
+                StartCoroutine(AnimateCardMoveGhost(old, kv.Value, kv.Value.don ? null : kv.Value.cardId, showFace, flare, HideForFlight(kv.Value), moveDelay, ghostDesat));
+            }
+
+            // FLIP pass — persistent-identity glide for cards that STAY in the same zone but shift
+            // position or rotate (character-row reflow when a card leaves/enters; a card resting/
+            // un-resting in place). The real card is snapped back to its previous on-screen pose, then
+            // eased to its new one — no ghost, no pop. (Zone changes still use the ghost pass above.)
+            // Skipped during hand-deal/mulligan renders, which drive their own hand-card flights.
+            if (!suppressNonLife)
+            foreach (var kv in now)
+            {
+                if (!lastCardPoses.TryGetValue(kv.Key, out var old)) continue;
+                if (old.zone != kv.Value.zone) continue;                              // zone changes -> ghost
+                if (kv.Value.don) continue;                                           // Pass 1: cards only
+                var rt = kv.Value.rt;
+                if (rt == null || IsMoveAnchorRect(rt) || kv.Value.zone.StartsWith("don@")) continue;  // need a real card
+                if (suppressMoveAnim.Contains(kv.Key)) continue;
+                bool posChanged = (old.pos - kv.Value.pos).sqrMagnitude > 4f;
+                bool rotChanged = kv.Value.faceRt != null && old.faceRt != null
+                    && Quaternion.Angle(old.rot, kv.Value.rot) > 1.5f;
+                if (!posChanged && !rotChanged) continue;
+                // Move the holder (card + summoning-sick veil + blocker shield) as a unit for board
+                // characters, so overlays don't get left behind; the root alone for hand cards.
+                var moveRt = FlipUnit(rt);
+                var flip = moveRt.gameObject.AddComponent<CardFlip>();
+                if (posChanged) flip.InitPos(moveRt, old.pos, moveRt.position);
+                if (rotChanged) flip.InitRot(kv.Value.faceRt, old.rot, kv.Value.rot);
             }
         }
         lastCardPoses.Clear();
         foreach (var kv in now) lastCardPoses[kv.Key] = kv.Value;
         suppressMoveAnim.Clear();
+    }
+
+    // The rect a FLIP should move: for a board character, its "Character Holder" (so the summoning-sick
+    // veil + blocker shield ride along instead of being stranded at the slot); otherwise the card root
+    // itself — hand cards and leader/stage have no such overlays, and a hand card's parent is a shared
+    // row we must not move.
+    private RectTransform FlipUnit(RectTransform cardRoot)
+    {
+        var parent = cardRoot != null ? cardRoot.parent as RectTransform : null;
+        return (parent != null && parent.name == "Character Holder") ? parent : cardRoot;
+    }
+
+    // FLIP glide for a real card: snapped to its previous on-screen pose, then eased to its new one, so
+    // a same-zone position/rotation change reads as continuous motion instead of a pop. Ease-out cubic;
+    // the card is the actual rendered object (art, badges, DON, rest rotation all intact), not a ghost.
+    private sealed class CardFlip : MonoBehaviour
+    {
+        private RectTransform posRt; private Vector3 posStart, posTarget; private bool doPos;
+        private RectTransform rotRt; private Quaternion rotStart, rotTarget; private bool doRot;
+        private float t;
+        private const float Dur = 0.22f;
+
+        public void InitPos(RectTransform rt, Vector3 start, Vector3 target)
+        {
+            posRt = rt; posStart = start; posTarget = target; doPos = true;
+            if (posRt != null) posRt.position = start;   // invert now, so there's no 1-frame flash at target
+        }
+        public void InitRot(RectTransform rt, Quaternion start, Quaternion target)
+        {
+            rotRt = rt; rotStart = start; rotTarget = target; doRot = true;
+            if (rotRt != null) rotRt.rotation = start;
+        }
+
+        private void Update()
+        {
+            t += Time.unscaledDeltaTime;
+            float k = Mathf.Clamp01(t / Dur);
+            float e = 1f - Mathf.Pow(1f - k, 3f);   // ease-out cubic
+            if (doPos && posRt != null) posRt.position = Vector3.LerpUnclamped(posStart, posTarget, e);
+            if (doRot && rotRt != null) rotRt.rotation = Quaternion.SlerpUnclamped(rotStart, rotTarget, e);
+            if (k >= 1f)
+            {
+                if (doPos && posRt != null) posRt.position = posTarget;
+                if (doRot && rotRt != null) rotRt.rotation = rotTarget;
+                Destroy(this);
+            }
+        }
     }
 
     // Hides the freshly rendered destination card so it doesn't sit there while its own
@@ -2577,7 +2712,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     // One ghost flight from a card's previous on-screen spot to its new one. `flare`
     // (event/counter use from hand) adds a gold outline + a stronger scale pulse.
-    private IEnumerator AnimateCardMoveGhost(CardPose from, CardPose to, string cardId, bool showFace, bool flare, RectTransform reveal = null, float delay = 0f)
+    private IEnumerator AnimateCardMoveGhost(CardPose from, CardPose to, string cardId, bool showFace, bool flare, RectTransform reveal = null, float delay = 0f, bool desaturate = false)
     {
         activeMoveGhosts++;
         try {
@@ -2611,6 +2746,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Sprite sprite = cardId != null ? (showFace ? GetCardSprite(cardId) : GetBackSprite()) : GetDonSprite();
         var art = AddRoundedCardImage(ghost, "Art", sprite);
         art.raycastTarget = false;
+        // Fly DARKENED if it's landing as a summoning-sick character (colours kept, just dimmed — matches
+        // the static board), so it doesn't pop dim→bright on landing. Multiplying the art colour ≈ card*0.30.
+        if (desaturate) art.color = new Color(0.30f, 0.30f, 0.30f, 1f);
         var grp = ghost.gameObject.AddComponent<CanvasGroup>();
         grp.blocksRaycasts = false;
         grp.interactable = false;
@@ -4983,16 +5121,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddBoardCancel(south);
 
         // Everything below is confined to the centered play column (x 0.17-0.83 of the window).
-        // Soft center brightening (radial felt lift).
-        var glow = new GameObject("Table Center Glow").AddComponent<RectTransform>();
-        glow.SetParent(boardRoot, false);
-        glow.anchorMin = new Vector2(0.20f, 0.06f);
-        glow.anchorMax = new Vector2(0.80f, 0.94f);
-        glow.offsetMin = Vector2.zero; glow.offsetMax = Vector2.zero;
-        var glowImg = glow.gameObject.AddComponent<RawImage>();
-        glowImg.texture = GetSoftGlowTexture(0.5f);
-        glowImg.color = new Color(0.35f, 0.55f, 0.66f, 0.12f);
-        glowImg.raycastTarget = false;
+        // (Center brightening glow removed — the push/pull bar is the center focal element now,
+        //  and the soft radial lift was reading as a hazy band around the bar.)
 
         // (Active-side glow removed - the active player's empty-slot placement indicators are the
         // whose-turn cue now.)
@@ -5008,78 +5138,554 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             RotateFullForReplay(crestParent, boardRoot);
         }
 
-        // Soft cyan glow behind the centre pill (the mock's box-shadow halo).
-        var crestGlow = new GameObject("Crest Glow").AddComponent<RectTransform>();
-        crestGlow.SetParent(crestParent, false);
-        crestGlow.anchorMin = crestGlow.anchorMax = new Vector2(0.5f, 0.5f);
-        crestGlow.pivot = new Vector2(0.5f, 0.5f);
-        crestGlow.sizeDelta = new Vector2(250f, 64f);
-        crestGlow.anchoredPosition = Vector2.zero;
-        var crestGlowImg = crestGlow.gameObject.AddComponent<RawImage>();
-        crestGlowImg.texture = GetSoftGlowTexture(0.5f);
-        crestGlowImg.color = new Color(Accent.r, Accent.g, Accent.b, 0.10f);
-        crestGlowImg.raycastTarget = false;
-
-        // Center crest pill: dark, rounded, cyan-bordered (not a filled cyan bar).
-        // Match the other text-block backgrounds (LogBgDark rgb) but keep full alpha so the seam
-        // behind the pill stays masked.
-        var crest = PanelObject("Center Crest", crestParent, (Color)new Color32(14, 30, 46, 255));
-        turnCrestRect = crest;   // rim particles hide while passing behind this block
-        crest.anchorMin = crest.anchorMax = new Vector2(0.5f, 0.5f);
-        crest.pivot = new Vector2(0.5f, 0.5f);
-        crest.sizeDelta = new Vector2(196f, 24f);
-        crest.anchoredPosition = Vector2.zero;
-        Round(crest);
-        AddRoundedCardBorder(crest, Accent, 1.2f);
-        // Center turn indicator shows the players' DISPLAY names (account/lobby names), not
-        // the engine's seat names ("South"/"North").
-        string activeName = DisplayName(state.ActiveSeat);
-        var crestText = TextObject("Center Crest Text", crest,
-            $"TURN {state.TurnNumber}    ·    {activeName.ToUpper()}'S TURN", 10, Ink, TextAnchor.MiddleCenter, monoFont);
-        Stretch(crestText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-
-        // Scale the pill (and its glow) to the player-name length; the centre pivot keeps it
-        // locked to the middle of the playmat regardless of width.
-        float crestW = Mathf.Max(160f, crestText.preferredWidth + 34f);
-        crest.sizeDelta = new Vector2(crestW, 24f);
-        crestGlow.sizeDelta = new Vector2(crestW + 54f, 64f);
-
-        // Center seam: two cyan segments that taper to transparent toward the outer ends and are
-        // brightest toward the centre. Each runs ALL the way to the board centre (behind the pill);
-        // the opaque pill is then drawn on top and masks the inner overlap, so the visible line
-        // always meets the box edge exactly - no fixed offset to tune, snaps to any pill width.
-        var seamCol = new Color(Accent.r, Accent.g, Accent.b, 0.55f);
-
-        var seamL = new GameObject("Center Seam L").AddComponent<RectTransform>();
-        seamL.SetParent(crestParent, false);
-        seamL.anchorMin = new Vector2(0.208f, 0.4988f);
-        seamL.anchorMax = new Vector2(0.5f, 0.5012f);
-        seamL.offsetMin = Vector2.zero; seamL.offsetMax = Vector2.zero;
-        var seamLImg = seamL.gameObject.AddComponent<RawImage>();
-        seamLImg.texture = GetHGradientTexture();        // alpha 0 (left/outer) -> 1 (right/centre)
-        seamLImg.color = seamCol;
-        seamLImg.raycastTarget = false;
-
-        var seamR = new GameObject("Center Seam R").AddComponent<RectTransform>();
-        seamR.SetParent(crestParent, false);
-        seamR.anchorMin = new Vector2(0.5f, 0.4988f);
-        seamR.anchorMax = new Vector2(0.792f, 0.5012f);
-        seamR.offsetMin = Vector2.zero; seamR.offsetMax = Vector2.zero;
-        var seamRImg = seamR.gameObject.AddComponent<RawImage>();
-        seamRImg.texture = GetHGradientTexture();
-        seamRImg.uvRect = new Rect(1f, 0f, -1f, 1f);     // flip: alpha 1 (left/centre) -> 0 (right/outer)
-        seamRImg.color = seamCol;
-        seamRImg.raycastTarget = false;
-
-        // Pill (and its label) render above the seam and mask the inner overlap so the line meets the
-        // box edge precisely at any width. The glow is intentionally NOT raised - it stays in creation
-        // order (before playRoot) so it sits underneath the character areas.
-        crest.SetAsLastSibling();
+        // Push/Pull life bar across the center seam — a tug-of-war between each player's deck colours,
+        // with a gold seam at the life balance point. Replaces the old center "TURN · X'S TURN" pill
+        // (the turn wording still lives in the right side panel). Stays on boardRoot so it draws ABOVE
+        // the mat felt (parenting into playRoot buried it behind the later-drawn character-area panels).
+        turnCrestRect = DrawPushPullBar(crestParent);
 
         // Field corner brackets (cyan L's) at the four extreme corners of the whole play space. The arms
         // hug the outer perimeter (top/bottom + side edges) rather than cutting through the middle of the
         // board, and taper inward like the centre seam.
         // (Corner vertical lines removed - visual clutter.)
+    }
+
+    // ── Push/Pull life bar (center of the board) ──────────────────────────────
+    // Deck-colour hexes (verbatim from the deck palette): a tug-of-war bar where each player's half is
+    // painted in their leader's colour(s) and a gold seam sits at the life balance point.
+    private static readonly Dictionary<string, Color32> PushPullDeckColors = new Dictionary<string, Color32>(System.StringComparer.OrdinalIgnoreCase)
+    {
+        { "Red", new Color32(214, 68, 68, 255) },   { "Green", new Color32(70, 180, 110, 255) },
+        { "Blue", new Color32(70, 140, 220, 255) },  { "Purple", new Color32(160, 110, 210, 255) },
+        { "Black", new Color32(90, 100, 120, 255) }, { "Yellow", new Color32(230, 200, 90, 255) },
+    };
+
+    private List<Color> PushPullColorsFor(string seat)
+    {
+        var list = new List<Color>();
+        if (state != null && state.Players.TryGetValue(seat, out var p) && p.Leader != null)
+        {
+            var def = GameEngine.GetCard(p.Leader);
+            foreach (var part in (def?.Color ?? "").Split('/'))
+                if (PushPullDeckColors.TryGetValue(part.Trim(), out var c)) list.Add(c);
+        }
+        if (list.Count == 0) list.Add(new Color32(90, 100, 120, 255));
+        return list;
+    }
+
+    private readonly Dictionary<string, Texture2D> _pushPullFillCache = new Dictionary<string, Texture2D>();
+    private Texture2D PushPullFillTexture(List<Color> colors)
+    {
+        string key = string.Join(",", colors.ConvertAll(c => ColorUtility.ToHtmlStringRGB(c)));
+        if (_pushPullFillCache.TryGetValue(key, out var cached) && cached != null) return cached;
+        const int w = 96;
+        var tex = new Texture2D(w, 1, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+        for (int x = 0; x < w; x++)
+        {
+            float t = colors.Count <= 1 ? 0f : (float)x / (w - 1) * (colors.Count - 1);
+            int i = Mathf.Clamp(Mathf.FloorToInt(t), 0, colors.Count - 1);
+            int j = Mathf.Min(i + 1, colors.Count - 1);
+            tex.SetPixel(x, 0, Color.Lerp(colors[i], colors[j], t - i));
+        }
+        tex.Apply();
+        _pushPullFillCache[key] = tex;
+        return tex;
+    }
+
+    private Texture2D _pushPullGlossTex;
+    private Texture2D PushPullGlossTexture()
+    {
+        if (_pushPullGlossTex != null) return _pushPullGlossTex;
+        const int h = 32;
+        var tex = new Texture2D(1, h, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+        for (int y = 0; y < h; y++)
+        {
+            float v = (float)y / (h - 1);   // 0 bottom, 1 top
+            Color c = v > 0.55f
+                ? new Color(1f, 1f, 1f, Mathf.Lerp(0f, 0.14f, (v - 0.55f) / 0.45f))
+                : new Color(0f, 0f, 0f, Mathf.Lerp(0.20f, 0f, v / 0.55f));
+            tex.SetPixel(0, y, c);
+        }
+        tex.Apply();
+        _pushPullGlossTex = tex;
+        return tex;
+    }
+
+    private float _pushPullShownFrac = -1f;   // animating balance point, persisted across renders
+
+    private RectTransform DrawPushPullBar(RectTransform parent)
+    {
+        int myLife = state.Players.TryGetValue(BottomSeat, out var mp) ? mp.Life.Count : 0;
+        int oppLife = state.Players.TryGetValue(TopSeat, out var op) ? op.Life.Count : 0;
+        int total = myLife + oppLife;
+        float target = total == 0 ? 0.5f : (float)myLife / total;
+        target = Mathf.Clamp(target, 0.02f, 0.98f);
+        if (_pushPullShownFrac < 0f) _pushPullShownFrac = target;
+        float frac = _pushPullShownFrac;   // build at the currently-shown value; a driver eases it to target
+        var myColors = PushPullColorsFor(BottomSeat);
+        var oppColors = PushPullColorsFor(TopSeat);
+        bool myTurn = state.ActiveSeat == BottomSeat;
+
+        var bar = new GameObject("Push Pull Bar").AddComponent<RectTransform>();
+        bar.SetParent(parent, false);
+        // Align the span to the character-area outer edges. Those zones are playRoot fractions
+        // (north char left = 0.02, south char right = 0.98); playRoot occupies boardRoot x 0.17-0.83,
+        // so playRoot-x f maps to boardRoot-x (0.17 + 0.66f) → 0.02→0.183, 0.98→0.817.
+        bar.anchorMin = new Vector2(0.183f, 0.5f);
+        bar.anchorMax = new Vector2(0.817f, 0.5f);
+        bar.pivot = new Vector2(0.5f, 0.5f);
+        bar.offsetMin = new Vector2(0f, -16f);
+        bar.offsetMax = new Vector2(0f, 16f);
+        bar.SetAsLastSibling();
+        // (The quiet fade lives on the track subtree below — NOT the whole bar — so the diamond/chevron
+        //  knob can stay more opaque than the semi-transparent fills.)
+
+        // Small life totals centred in the gutter at each end (my life left, opponent's right), deck-
+        // colour gradient. Parented to `parent` so they carry their own softer fade, not the bar's.
+        AddPushPullEndNumber(parent, 0.177f, myLife, myColors);
+        AddPushPullEndNumber(parent, 0.823f, oppLife, oppColors);
+
+        // Exact life is shown by the life-pile badges + side panel; the bar just conveys the balance,
+        // so no numbers here (they'd overlap the life/deck piles at the bar's ends anyway).
+        const float sideInset = 0f, trackH = 10f;
+
+        var track = PanelObject("Bar Track", bar, (Color)new Color32(8, 17, 32, 120));   // semi-transparent groove (no group fade now)
+        track.anchorMin = new Vector2(0f, 0.5f); track.anchorMax = new Vector2(1f, 0.5f);
+        track.pivot = new Vector2(0.5f, 0.5f);
+        track.offsetMin = new Vector2(sideInset, -trackH * 0.5f);
+        track.offsetMax = new Vector2(-sideInset, trackH * 0.5f);
+        // Capsule ends: a Mask over a rounded sprite clips the square-cornered fills to a rounded
+        // pill (the RoundedCard shader's radius tracks the *min* dimension, so a thin bar barely
+        // rounds — the stencil Mask gives proper rounded caps regardless of thinness).
+        Round(track);
+        var trackMask = track.gameObject.AddComponent<Mask>();
+        trackMask.showMaskGraphic = true;
+        // Fade the FILLS directly (via their own colour alpha) rather than a CanvasGroup on the whole
+        // track — a group would also crush the active-turn glow. This way the fills stay quiet but the
+        // glow layers (children of the half) render at full strength.
+        Color activeFill = new Color(1f, 1f, 1f, 0.44f);
+        Color idleFill = new Color(0.60f, 0.60f, 0.66f, 0.30f);
+
+        var myHalf = new GameObject("My Territory").AddComponent<RectTransform>();
+        myHalf.SetParent(track, false);
+        myHalf.anchorMin = new Vector2(0f, 0f); myHalf.anchorMax = new Vector2(frac, 1f);
+        myHalf.offsetMin = Vector2.zero; myHalf.offsetMax = Vector2.zero;
+        var myImg = myHalf.gameObject.AddComponent<RawImage>();
+        myImg.texture = PushPullFillTexture(myColors);
+        myImg.color = myTurn ? activeFill : idleFill;
+        myImg.raycastTarget = false;
+
+        var oppHalf = new GameObject("Opp Territory").AddComponent<RectTransform>();
+        oppHalf.SetParent(track, false);
+        oppHalf.anchorMin = new Vector2(frac, 0f); oppHalf.anchorMax = new Vector2(1f, 1f);
+        oppHalf.offsetMin = Vector2.zero; oppHalf.offsetMax = Vector2.zero;
+        var oppImg = oppHalf.gameObject.AddComponent<RawImage>();
+        oppImg.texture = PushPullFillTexture(oppColors);
+        oppImg.color = !myTurn ? activeFill : idleFill;
+        oppImg.raycastTarget = false;
+
+        // Living turn glow on the active half — a colour glow hugging the long edges with a slow
+        // smoky shimmer drifting within.
+        var activeHalf = myTurn ? myHalf : oppHalf;
+        AddPushPullTurnGlow(activeHalf, myTurn ? myColors : oppColors, seamOnLeft: !myTurn);
+
+        var gloss = new GameObject("Gloss").AddComponent<RectTransform>();
+        gloss.SetParent(track, false);
+        gloss.anchorMin = Vector2.zero; gloss.anchorMax = Vector2.one;
+        gloss.offsetMin = Vector2.zero; gloss.offsetMax = Vector2.zero;
+        var glossImg = gloss.gameObject.AddComponent<RawImage>();
+        glossImg.texture = PushPullGlossTexture();
+        glossImg.color = new Color(1f, 1f, 1f, 0.2f);   // fills no longer group-faded, so set directly
+        glossImg.raycastTarget = false;
+
+        // (No gold seam line — the colour boundary + diamond mark the balance point; a line through
+        // the diamond read as clutter.)
+
+        // Small diamond knob at the balance point (no big round glow — it read as a distracting gold
+        // block). Lives OUTSIDE the track as a bar child, pinned to frac by a tiny driver.
+        var knob = new GameObject("Seam Knob").AddComponent<RectTransform>();
+        knob.SetParent(bar, false);
+        knob.anchorMin = knob.anchorMax = new Vector2(0.5f, 0.5f);
+        knob.pivot = new Vector2(0.5f, 0.5f);
+        knob.sizeDelta = new Vector2(12f, 12f);
+        var knobAnchor = knob.gameObject.AddComponent<PushPullSeamAnchor>();
+        knobAnchor.Init(bar, frac, sideInset);
+        // Mostly opaque so the fill colours don't show through the diamond/chevron.
+        var knobGroup = knob.gameObject.AddComponent<CanvasGroup>();
+        knobGroup.alpha = 0.9f;
+        knobGroup.blocksRaycasts = false;
+        knobGroup.interactable = false;
+
+        // Diamond as an UN-ROTATED sprite (rhombus baked into the texture) — NOT a rotated square. A
+        // rotated quad snaps to the pixel grid differently than the un-rotated chevron, so at some
+        // sub-pixel knob positions (after the bar animates) the two would stagger. Both un-rotated Images
+        // snap identically, so they stay locked together at every position.
+        var diamondImg = ImageObject("Seam Diamond", knob, GetDiamondSprite());
+        diamondImg.color = new Color32(255, 240, 200, 255);
+        diamondImg.raycastTarget = false;
+        var drt = diamondImg.rectTransform;
+        drt.anchorMin = drt.anchorMax = new Vector2(0.5f, 0.5f);
+        drt.pivot = new Vector2(0.5f, 0.5f);
+        drt.sizeDelta = new Vector2(9f, 9f);
+        drt.anchoredPosition = Vector2.zero;
+
+        // Small turn chevron riding with the diamond, pointing toward the active player's side of the
+        // board (down = my/bottom turn, up = opponent/top turn). Tucked close — its wide end may overlap
+        // the bar as long as the point clearly aims at the active side. Symmetric gap either way.
+        AddPushPullChevron(knob, myTurn, myTurn ? -6.5f : 6.5f, (Color)new Color32(255, 240, 200, 255));
+
+        // Smoothly ease the halves/knob from the shown value to the true balance point.
+        bar.gameObject.AddComponent<PushPullFracAnim>().Init(this, myHalf, oppHalf, null, knobAnchor, target, frac);
+
+        return track;   // rim particles mask behind the center bar
+    }
+
+    // Living per-turn glow for the active half: soft colour that HUGS the bar's long edges (like a
+    // card's border glow) with a slow smoky shimmer drifting within. Children of `activeHalf`, so the
+    // capsule Mask clips it to the bar.
+    private void AddPushPullTurnGlow(RectTransform activeHalf, List<Color> colors, bool seamOnLeft)
+    {
+        Color baseCol = Color.Lerp(colors[0], Color.white, 0.5f);   // brighter, whiter active-turn tint
+
+        // Smoky shimmer: three tileable-noise layers drifting in different directions/speeds.
+        var smokeA = AddPushPullSmoke(activeHalf, baseCol, 0.34f, new Rect(0f, 0f, 3.5f, 2.2f));
+        var smokeB = AddPushPullSmoke(activeHalf, baseCol, 0.26f, new Rect(0.5f, 0.3f, 2.4f, 3.1f));
+        var smokeC = AddPushPullSmoke(activeHalf, baseCol, 0.20f, new Rect(0.2f, 0.7f, 4.4f, 1.7f));
+
+        // Border hug: brightest along the top & bottom edges, fading to the centre.
+        var edge = new GameObject("Turn Edge Glow").AddComponent<RectTransform>();
+        edge.SetParent(activeHalf, false);
+        edge.anchorMin = Vector2.zero; edge.anchorMax = Vector2.one;
+        edge.offsetMin = Vector2.zero; edge.offsetMax = Vector2.zero;
+        var edgeImg = edge.gameObject.AddComponent<RawImage>();
+        edgeImg.texture = GetEdgeGlowVTexture();
+        edgeImg.color = new Color(baseCol.r, baseCol.g, baseCol.b, 0.62f);
+        edgeImg.raycastTarget = false;
+
+        activeHalf.gameObject.AddComponent<PushPullTurnGlow>().Init(edgeImg,
+            new[] { smokeA, smokeB, smokeC },
+            new[] { new Vector2(0.07f, 0.04f), new Vector2(-0.05f, 0.07f), new Vector2(0.09f, -0.03f) });
+    }
+
+    // A small even-thickness chevron pointing up or down. Uses two SEPARATE native sprites (apex-bottom
+    // and apex-top), each drawn symmetric about its centre-line, with NO RectTransform rotation — so the
+    // up and down variants render through the exact same un-rotated path and share any residual offset.
+    // Both are plain Images (like the diamond) so their pixel-snapping matches it.
+    private const float PushPullChevronNudgeX = 0f;   // single tunable if a constant offset remains
+
+    private void AddPushPullChevron(RectTransform parent, bool pointDown, float yOffset, Color color)
+    {
+        var img = ImageObject("Turn Chevron", parent, GetTurnChevronSprite(pointDown));
+        img.color = color;
+        img.raycastTarget = false;
+        var rt = img.rectTransform;
+        rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = new Vector2(11f, 6.5f);
+        rt.anchoredPosition = new Vector2(PushPullChevronNudgeX, yOffset);
+    }
+
+    // Native chevron sprite, apex at bottom (down) or top (up), even thickness via distance-to-two-
+    // segments, drawn perfectly symmetric about x = W/2. FullRect mesh so no tight-bounds trimming.
+    private Sprite _turnChevronDown, _turnChevronUp;
+    private Sprite GetTurnChevronSprite(bool down)
+    {
+        if (down && _turnChevronDown != null) return _turnChevronDown;
+        if (!down && _turnChevronUp != null) return _turnChevronUp;
+
+        const int W = 48, H = 28;
+        const float half = 3.0f;   // stroke half-thickness (supersampled px; texture y=0 is the bottom row)
+        var apex = new Vector2(W * 0.5f, down ? H * 0.20f : H * 0.80f);
+        var pL = new Vector2(W * 0.16f, down ? H * 0.76f : H * 0.24f);
+        var pR = new Vector2(W * 0.84f, down ? H * 0.76f : H * 0.24f);
+        var tex = new Texture2D(W, H, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[W * H];
+        for (int y = 0; y < H; y++)
+            for (int x = 0; x < W; x++)
+            {
+                var p = new Vector2(x + 0.5f, y + 0.5f);
+                float d = Mathf.Min(SegDist(p, pL, apex), SegDist(p, pR, apex));
+                float a = Mathf.Clamp01(half + 0.5f - d);
+                px[y * W + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+            }
+        tex.SetPixels32(px); tex.Apply();
+        var sp = Sprite.Create(tex, new Rect(0, 0, W, H), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect);
+        if (down) _turnChevronDown = sp; else _turnChevronUp = sp;
+        return sp;
+    }
+
+    private static float SegDist(Vector2 p, Vector2 a, Vector2 b)
+    {
+        Vector2 ab = b - a, ap = p - a;
+        float t = Mathf.Clamp01(Vector2.Dot(ap, ab) / Mathf.Max(1e-4f, Vector2.Dot(ab, ab)));
+        return Vector2.Distance(p, a + ab * t);
+    }
+
+    // Filled diamond (rhombus) baked into a texture so it renders as an UN-ROTATED Image — matching the
+    // chevron's snapping so the two never stagger as the bar animates. |x|+|y| (L1) gives the diamond.
+    private Sprite _diamondSprite;
+    private Sprite GetDiamondSprite()
+    {
+        if (_diamondSprite != null) return _diamondSprite;
+        const int S = 32;
+        float c = (S - 1) * 0.5f;
+        float r = S * 0.44f;
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[S * S];
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float d = Mathf.Abs(x - c) + Mathf.Abs(y - c);   // L1 distance -> diamond
+                float a = Mathf.Clamp01(r - d + 0.5f);           // ~1px AA edge
+                px[y * S + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+            }
+        tex.SetPixels32(px); tex.Apply();
+        _diamondSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect);
+        return _diamondSprite;
+    }
+
+    // Soft-blurred rounded-rect silhouette for card drop shadows. Solid core inset by `feather`, alpha
+    // feathering smoothly to 0 over that band; 9-sliced (border = feather+corner) so it stretches to any
+    // card size without distorting the soft edge.
+    private Sprite _cardShadowSprite;
+    private Sprite GetCardShadowSprite()
+    {
+        if (_cardShadowSprite != null) return _cardShadowSprite;
+        const int S = 48;
+        const float feather = 9f, cornerR = 8f;
+        float half = (S - 1) * 0.5f;
+        float bHalf = half - feather;   // half-extent of the solid core
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear, wrapMode = TextureWrapMode.Clamp };
+        var px = new Color32[S * S];
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float qx = Mathf.Abs(x - half) - bHalf + cornerR;
+                float qy = Mathf.Abs(y - half) - bHalf + cornerR;
+                float d = Mathf.Min(Mathf.Max(qx, qy), 0f)
+                    + Mathf.Sqrt(Mathf.Max(qx, 0f) * Mathf.Max(qx, 0f) + Mathf.Max(qy, 0f) * Mathf.Max(qy, 0f)) - cornerR;
+                float a = Mathf.Clamp01(1f - d / feather);   // 1 inside, fades over the feather band
+                a = a * a * (3f - 2f * a);                   // smootherstep softness
+                px[y * S + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+            }
+        tex.SetPixels32(px); tex.Apply();
+        float border = feather + cornerR;
+        _cardShadowSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f), 100f, 0,
+            SpriteMeshType.FullRect, new Vector4(border, border, border, border));
+        return _cardShadowSprite;
+    }
+
+    // A small life total centred in the narrow gutter between the bar's end and the play-area edge,
+    // painted with the deck's colour(s) as a vertical gradient (top lighter -> bottom deck colour,
+    // or colour[0] -> colour[last] for multicolour).
+    private void AddPushPullEndNumber(RectTransform parent, float anchorX, int life, List<Color> colors)
+    {
+        var t = TextObject("Life End Num", parent, life.ToString(), 12, Color.white, TextAnchor.MiddleCenter, titleFont);
+        t.fontStyle = FontStyle.Bold;
+        t.horizontalOverflow = HorizontalWrapMode.Overflow;
+        var rt = t.rectTransform;
+        rt.anchorMin = rt.anchorMax = new Vector2(anchorX, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.sizeDelta = new Vector2(20f, 18f);
+        rt.anchoredPosition = Vector2.zero;
+
+        var grad = t.gameObject.AddComponent<TextGradient>();
+        grad.top = Color.Lerp(colors[0], Color.white, 0.5f);
+        grad.bottom = colors[colors.Count - 1];
+
+        var cg = t.gameObject.AddComponent<CanvasGroup>();
+        cg.alpha = 0.7f;
+        cg.blocksRaycasts = false;
+    }
+
+    // Vertical colour gradient across any UGUI Text/Graphic mesh (top -> bottom).
+    private sealed class TextGradient : BaseMeshEffect
+    {
+        public Color top = Color.white, bottom = Color.white;
+        private static readonly List<UIVertex> _verts = new List<UIVertex>();
+        public override void ModifyMesh(VertexHelper vh)
+        {
+            if (!IsActive()) return;
+            vh.GetUIVertexStream(_verts);
+            float minY = float.MaxValue, maxY = float.MinValue;
+            for (int i = 0; i < _verts.Count; i++)
+            {
+                minY = Mathf.Min(minY, _verts[i].position.y);
+                maxY = Mathf.Max(maxY, _verts[i].position.y);
+            }
+            float h = Mathf.Max(0.0001f, maxY - minY);
+            for (int i = 0; i < _verts.Count; i++)
+            {
+                var v = _verts[i];
+                float f = (v.position.y - minY) / h;
+                v.color = Color.Lerp(bottom, top, f) * (Color)v.color;
+                _verts[i] = v;
+            }
+            vh.Clear();
+            vh.AddUIVertexTriangleStream(_verts);
+        }
+    }
+
+    private RawImage AddPushPullSmoke(RectTransform parent, Color col, float alpha, Rect uv)
+    {
+        var go = new GameObject("Turn Smoke").AddComponent<RectTransform>();
+        go.SetParent(parent, false);
+        go.anchorMin = Vector2.zero; go.anchorMax = Vector2.one;
+        go.offsetMin = Vector2.zero; go.offsetMax = Vector2.zero;
+        var img = go.gameObject.AddComponent<RawImage>();
+        img.texture = GetSmokeNoiseTexture();
+        img.color = new Color(col.r, col.g, col.b, alpha);
+        img.raycastTarget = false;
+        img.uvRect = uv;
+        return img;
+    }
+
+    // Vertical gradient bright at both long edges, dark in the middle (border-hug glow).
+    private static Texture2D _edgeGlowVTex;
+    private static Texture2D GetEdgeGlowVTexture()
+    {
+        if (_edgeGlowVTex != null) return _edgeGlowVTex;
+        const int h = 32;
+        var tex = new Texture2D(1, h, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp, filterMode = FilterMode.Bilinear };
+        for (int y = 0; y < h; y++)
+        {
+            float v = (float)y / (h - 1);
+            float d = Mathf.Min(v, 1f - v) / 0.5f;      // 0 at edges, 1 at centre
+            tex.SetPixel(0, y, new Color(1f, 1f, 1f, Mathf.Pow(1f - d, 2.2f)));
+        }
+        tex.Apply();
+        _edgeGlowVTex = tex;
+        return tex;
+    }
+
+    // Tileable smoky value-noise (sum of integer-frequency sines -> seamless when scrolled/repeated).
+    private static Texture2D _smokeNoiseTex;
+    private static Texture2D GetSmokeNoiseTexture()
+    {
+        if (_smokeNoiseTex != null) return _smokeNoiseTex;
+        const int S = 64;
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Repeat, filterMode = FilterMode.Bilinear };
+        var px = new Color32[S * S];
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float u = (float)x / S, v = (float)y / S;
+                float n = 0.5f
+                    + 0.30f * Mathf.Sin((2f * u + 1f * v) * 2f * Mathf.PI)
+                    + 0.22f * Mathf.Sin((1f * u - 3f * v) * 2f * Mathf.PI + 1.3f)
+                    + 0.16f * Mathf.Sin((4f * u + 2f * v) * 2f * Mathf.PI + 2.1f)
+                    + 0.12f * Mathf.Sin((3f * u - 1f * v) * 2f * Mathf.PI + 3.7f);
+                n = Mathf.Clamp01(n);
+                n *= n;   // sharpen into wispier clumps
+                px[y * S + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(n * 255f));
+            }
+        tex.SetPixels32(px); tex.Apply();
+        _smokeNoiseTex = tex;
+        return tex;
+    }
+
+
+    // Gentle alpha pulse for the gold seam glow (~2.6s loop).
+    private sealed class PushPullPulse : MonoBehaviour
+    {
+        private RawImage img; private float baseA; private float t;
+        public void Init(RawImage image) { img = image; baseA = image.color.a; }
+        private void Update()
+        {
+            if (img == null) return;
+            t += Time.unscaledDeltaTime;
+            float k = 0.5f + 0.5f * Mathf.Sin(t / 2.6f * 2f * Mathf.PI);
+            var c = img.color; c.a = Mathf.Lerp(baseA * 0.7f, baseA * 1.3f, k); img.color = c;
+        }
+    }
+
+    // Pins a child of the bar to the balance point (frac). The track is inset from the bar edges by
+    // `sideInset` on each side, so the seam's local X within the bar depends on the live bar width.
+    private sealed class PushPullSeamAnchor : MonoBehaviour
+    {
+        private RectTransform self, bar; private float frac, sideInset;
+        public void Init(RectTransform barRt, float f, float inset)
+        { self = (RectTransform)transform; bar = barRt; frac = f; sideInset = inset; }
+        public void SetFrac(float f) { frac = f; }
+        private void Update()
+        {
+            if (bar == null) return;
+            float w = bar.rect.width;
+            if (w <= 1f) return;
+            float trackW = w - 2f * sideInset;
+            self.anchoredPosition = new Vector2(-w * 0.5f + sideInset + frac * trackW, 0f);
+        }
+    }
+
+    // Eases the halves/seam/knob from the shown balance point toward the true one, so life changes
+    // slide smoothly instead of snapping. Persists progress back onto the owner across rebuilds.
+    private sealed class PushPullFracAnim : MonoBehaviour
+    {
+        private GameManager owner;
+        private RectTransform myHalf, oppHalf, seam;
+        private PushPullSeamAnchor knob;
+        private float target, shown;
+
+        public void Init(GameManager o, RectTransform my, RectTransform opp, RectTransform sm,
+            PushPullSeamAnchor kn, float tgt, float start)
+        { owner = o; myHalf = my; oppHalf = opp; seam = sm; knob = kn; target = tgt; shown = start; }
+
+        private void Apply()
+        {
+            if (myHalf != null) myHalf.anchorMax = new Vector2(shown, 1f);
+            if (oppHalf != null) oppHalf.anchorMin = new Vector2(shown, 0f);
+            if (seam != null) { seam.anchorMin = new Vector2(shown, 0f); seam.anchorMax = new Vector2(shown, 1f); }
+            if (knob != null) knob.SetFrac(shown);
+        }
+
+        private void Update()
+        {
+            if (Mathf.Abs(shown - target) > 0.0004f)
+            {
+                shown = Mathf.Lerp(shown, target, 1f - Mathf.Exp(-Time.unscaledDeltaTime * 2.6f));
+                Apply();
+            }
+            if (owner != null) owner._pushPullShownFrac = shown;
+        }
+    }
+
+    // Living per-turn glow: breathes the border-hug edge glow and drifts the smoky noise layers.
+    private sealed class PushPullTurnGlow : MonoBehaviour
+    {
+        private RawImage edge; private float edgeBaseA;
+        private RawImage[] smoke; private Vector2[] vel; private float[] smokeBaseA;
+        private float t;
+
+        public void Init(RawImage edgeImg, RawImage[] smokeImgs, Vector2[] velocities)
+        {
+            edge = edgeImg; edgeBaseA = edgeImg.color.a;
+            smoke = smokeImgs; vel = velocities;
+            smokeBaseA = new float[smokeImgs.Length];
+            for (int i = 0; i < smokeBaseA.Length; i++) smokeBaseA[i] = smokeImgs[i].color.a;
+        }
+
+        private void Update()
+        {
+            t += Time.unscaledDeltaTime;
+
+            if (edge != null)
+            {
+                float k = 0.5f + 0.5f * Mathf.Sin(t * 1.0f);
+                var c = edge.color; c.a = Mathf.Lerp(edgeBaseA * 0.55f, edgeBaseA, k); edge.color = c;
+            }
+
+            if (smoke == null) return;
+            for (int i = 0; i < smoke.Length; i++)
+            {
+                if (smoke[i] == null) continue;
+                var r = smoke[i].uvRect;
+                r.x += vel[i].x * Time.unscaledDeltaTime;
+                r.y += vel[i].y * Time.unscaledDeltaTime;
+                smoke[i].uvRect = r;
+                float k = 0.5f + 0.5f * Mathf.Sin(t * 0.8f + i * 1.7f);
+                var c = smoke[i].color; c.a = Mathf.Lerp(smokeBaseA[i] * 0.5f, smokeBaseA[i], k); smoke[i].color = c;
+            }
+        }
     }
 
     // A single vertical corner line anchored at a normalized board point (which corner via left/topSide).
@@ -5466,9 +6072,30 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(effBox, new Vector2(0.06f, 0.45f), new Vector2(0.94f, 0.552f), Vector2.zero, Vector2.zero);
         RoundBig(effBox);
         AddRoundedCardBorder(effBox, MenuB, 1f);
-        var eff = TextObject("Preview Effect Text", effBox, def != null && !string.IsNullOrEmpty(def.Effect) ? def.Effect : "", 11, Ink, TextAnchor.UpperLeft);
-        eff.horizontalOverflow = HorizontalWrapMode.Wrap; eff.verticalOverflow = VerticalWrapMode.Truncate;
-        Stretch(eff.rectTransform, new Vector2(0.07f, 0.06f), new Vector2(0.93f, 0.94f), Vector2.zero, Vector2.zero);
+
+        // Scrollable effect text (same viewport/content/ScrollRect pattern as the combat log), so cards
+        // with a lot of rules text get a scrollbar instead of truncating.
+        var effVp = PanelObject("Preview Effect Viewport", effBox, new Color(0, 0, 0, 0));
+        Stretch(effVp, new Vector2(0.07f, 0.06f), new Vector2(0.93f, 0.94f), Vector2.zero, Vector2.zero);
+        effVp.gameObject.AddComponent<RectMask2D>();
+
+        var eff = TextObject("Preview Effect Text", effVp, def != null && !string.IsNullOrEmpty(def.Effect) ? def.Effect : "", 11, Ink, TextAnchor.UpperLeft);
+        var effRt = eff.rectTransform;
+        effRt.anchorMin = new Vector2(0f, 1f); effRt.anchorMax = new Vector2(1f, 1f);
+        effRt.pivot = new Vector2(0.5f, 1f);
+        effRt.sizeDelta = Vector2.zero; effRt.anchoredPosition = Vector2.zero;
+        eff.horizontalOverflow = HorizontalWrapMode.Wrap;
+        eff.verticalOverflow = VerticalWrapMode.Overflow;   // grow to full height; the ScrollRect scrolls it
+        eff.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        var effScroll = effVp.gameObject.AddComponent<ScrollRect>();
+        effScroll.content = effRt;
+        effScroll.viewport = effVp;
+        effScroll.horizontal = false;
+        effScroll.vertical = true;
+        effScroll.movementType = ScrollRect.MovementType.Clamped;
+        effScroll.scrollSensitivity = 16f;
+        AttachScrollbar(effScroll);
 
         DrawCombatLogPanel();
     }
@@ -8024,9 +8651,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (pe.Seat != aiSeat) return false;
             if (pe.DonPaymentRemaining > 0)
             {
-                if (p.CostArea.Count > 0)
+                // Pay a DON!! −N by returning cost-area DON!! first (preserves board power), then falling
+                // back to ATTACHED DON!! — both are valid on-field targets for the return.
+                string donToReturn = p.CostArea.Count > 0 ? p.CostArea[0].InstanceId : FirstAttachedDonId(p);
+                if (!string.IsNullOrEmpty(donToReturn))
                 {
-                    Dispatch(new GameCommand { Type = "resolveEffect", Seat = aiSeat, EffectId = pe.EffectId, Target = p.CostArea[0].InstanceId });
+                    Dispatch(new GameCommand { Type = "resolveEffect", Seat = aiSeat, EffectId = pe.EffectId, Target = donToReturn });
                     return true;
                 }
                 Dispatch(new GameCommand { Type = "passEffect", Seat = aiSeat, EffectId = pe.EffectId });
@@ -8123,23 +8753,45 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             int activeDon = GameEngine.ActiveDonCount(p);
 
-            // a. Play the biggest affordable character into a free slot (then stage).
+            // a. Play the biggest affordable character (into a free slot, or — on a full board — over the
+            //    weakest existing character if the new body is bigger, per the 6th-character rule), then stage.
             CardInstance bestPlay = null;
             int bestCost = -1;
+            int bestReplaceSlot = -1;   // >=0 => play over this occupied slot (full board)
             bool haveSlot = p.CharacterArea.Exists(c => c == null);
+            int weakestSlot = -1, weakestPow = int.MaxValue;
+            for (int s = 0; s < p.CharacterArea.Count; s++)
+            {
+                var occ = p.CharacterArea[s];
+                if (occ == null) continue;
+                int pw = GameEngine.GetPower(state, occ);
+                if (pw < weakestPow) { weakestPow = pw; weakestSlot = s; }
+            }
             foreach (var c in p.Hand)
             {
                 if (aiTriedThisTurn.Contains("play:" + c.InstanceId)) continue;
                 var d = GameEngine.GetCard(c);
                 int cost = GameEngine.GetCost(state, c);
                 if (cost > activeDon) continue;
-                if (d.Type == "character" && haveSlot && cost > bestCost) { bestPlay = c; bestCost = cost; }
-                else if (d.Type == "stage" && p.Stage == null && cost > bestCost) { bestPlay = c; bestCost = cost; }
+                if (d.Type == "character")
+                {
+                    if (haveSlot)
+                    {
+                        if (cost > bestCost) { bestPlay = c; bestCost = cost; bestReplaceSlot = -1; }
+                    }
+                    else if (weakestSlot >= 0 && d.Power > weakestPow && cost > bestCost)
+                    {
+                        bestPlay = c; bestCost = cost; bestReplaceSlot = weakestSlot;
+                    }
+                }
+                else if (d.Type == "stage" && p.Stage == null && cost > bestCost) { bestPlay = c; bestCost = cost; bestReplaceSlot = -1; }
             }
             if (bestPlay != null)
             {
                 aiTriedThisTurn.Add("play:" + bestPlay.InstanceId);
-                Dispatch(new GameCommand { Type = "playCard", Seat = aiSeat, InstanceId = bestPlay.InstanceId });
+                var playCmd = new GameCommand { Type = "playCard", Seat = aiSeat, InstanceId = bestPlay.InstanceId };
+                if (bestReplaceSlot >= 0) playCmd.SlotIndex = bestReplaceSlot;
+                Dispatch(playCmd);
                 return true;
             }
 
@@ -8214,9 +8866,38 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var oppP = state.Players[GameEngine.OtherSeat(aiSeat)];
         candidates.AddRange(oppP.Hand);
         candidates.AddRange(oppP.Trash);
+
+        // Rank valid targets instead of grabbing the first legal one by slot order (which happily K.O.'d a
+        // 1-cost body over the 4-cost Blocker that was actually stopping lethal). A removal/debuff wants the
+        // opponent's BIGGEST threat — Blockers first, then cost+power; a buff wants your own biggest body.
+        string oppSeat = GameEngine.OtherSeat(aiSeat);
+        bool negative = AiEffectIsNegative(pe.Text);
+        CardInstance best = null;
+        double bestScore = double.NegativeInfinity;
         foreach (var c in candidates)
-            if (GameEngine.IsValidEffectTarget(state, pe, c)) return c.InstanceId;
-        return null;
+        {
+            if (!GameEngine.IsValidEffectTarget(state, pe, c)) continue;
+            bool opp = c.Owner == oppSeat;
+            double val = GameEngine.GetCost(state, c) * 1000.0 + GameEngine.GetPower(state, c);
+            if (opp && GameEngine.HasBlocker(state, c)) val += 4000.0;   // walls are the priority removal
+            // Want the biggest OPPONENT body for a removal; the biggest OWN body for a buff. An
+            // ownership mismatch (e.g. a removal that can only hit your own board) is worst.
+            double score = negative
+                ? (opp ? val : -val - 1e6)
+                : (opp ? -val - 1e6 : val);
+            if (score > bestScore) { bestScore = score; best = c; }
+        }
+        return best?.InstanceId;
+    }
+
+    // Cheap "is this a removal/debuff" test for the basic bot's target ranking (KO/trash/rest/bounce/−stat).
+    private static bool AiEffectIsNegative(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return false;
+        string t = text.ToLowerInvariant();
+        return t.Contains("k.o.") || t.Contains("trash") || t.Contains("rest ") || t.Contains("cannot")
+            || t.Contains("return") || t.Contains("discard")
+            || System.Text.RegularExpressions.Regex.IsMatch(t, @"[-−]\d");
     }
 
     private void OnCardClick(CardInstance card, string seat)
@@ -8910,6 +9591,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var cardBody = PanelObject("Card Face", root, new Color(0, 0, 0, 0));
         Stretch(cardBody, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
+        // Soft drop shadow for depth (Rift-Atlas style): a blurred rounded silhouette slightly larger
+        // than the card and nudged down, behind the art so it peeks out around the edges. First child of
+        // cardBody, so it rides along when the card rests/taps.
+        var shadow = ImageObject("Card Shadow", cardBody, GetCardShadowSprite());
+        shadow.type = Image.Type.Sliced;
+        shadow.color = new Color(0f, 0f, 0f, 0.52f);
+        shadow.raycastTarget = false;
+        var shRt = shadow.rectTransform;
+        shRt.anchorMin = Vector2.zero; shRt.anchorMax = Vector2.one;
+        shRt.offsetMin = new Vector2(-9f, -17f);   // expand sideways, extend + drop below
+        shRt.offsetMax = new Vector2(9f, -3f);
+        shRt.SetAsFirstSibling();
+
         RoundedCardVisual("Art", cardBody, faceUp ? GetCardSprite(card.CardId) : GetBackSprite(), out var image);
 
         if (card.Rested)
@@ -8922,7 +9616,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         if (faceUp)
         {
-            if (card.AttachedDonIds.Count > 0) AddBadge(cardBody, "+" + card.AttachedDonIds.Count, new Vector2(0.62f, 0.82f), new Vector2(0.98f, 0.98f), new Color32(120, 235, 155, 255));
+            // Attached DON!! shown the OP way: ドン!!×N (katakana for DON!!), so it reads distinctly
+            // from stat/cost pills (e.g. "+1 COST").
+            if (card.AttachedDonIds.Count > 0) AddBadge(cardBody, "ドン!!×" + card.AttachedDonIds.Count, new Vector2(0.40f, 0.80f), new Vector2(0.98f, 0.99f), new Color32(120, 235, 155, 255), jpFont);
 
             // Status indicator chips — everything currently affecting this card (OPTCGSim-style
             // insight): power/cost changes, base overrides, keyword grants, restrictions
@@ -9012,13 +9708,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // climbs the spacing shrinks so they pack exactly to the edge instead of spilling past it.
             float donW = boardCardSize.x;
             float donH = boardCardSize.y;
-            float availWidth = card.Rested ? donH : donW;         // rested = rotated ⇒ wider on screen
+            // Stack DON the SAME way whether or not the character is rested — the row is always sized to
+            // the card's portrait width and dropped by the portrait height, so resting a character doesn't
+            // change how its DON tuck underneath.
+            float availWidth = donW;
             float preferredStep = donW * 0.16f;                   // bunched look while there's room
             float maxStep = attachedShown > 1 ? Mathf.Max(0f, (availWidth - donW) / (attachedShown - 1)) : 0f;
             float step = Mathf.Min(preferredStep, maxStep);
             float total = donW + step * (attachedShown - 1);      // guaranteed <= availWidth
             float startX = -total * 0.5f + donW * 0.5f;
-            float centerY = (card.Rested ? donW : donH) * -0.30f; // ~30% of the DON peeks past the card
+            float centerY = donH * -0.30f;                        // ~30% of the DON peeks past the card
+            bool donMinusPick = faceUp && DonMinusPaymentActive(seat);
             for (int i = 0; i < attachedShown; i++)
             {
                 var don = new GameObject("Attached DON").AddComponent<RectTransform>();
@@ -9029,6 +9729,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 don.sizeDelta = new Vector2(donW, donH);
                 don.anchoredPosition = new Vector2(startX + i * step, centerY);
                 AddDonCardVisual(don, false, true);
+
+                // During a "DON!! −N" payment, attached DON!! are returnable — bring them to the front,
+                // highlight them, and let a click return that specific DON!! (engine detaches it).
+                if (donMinusPick && i < card.AttachedDonIds.Count)
+                {
+                    string donId = card.AttachedDonIds[i];
+                    don.SetAsLastSibling();
+                    AddUsableGlow(don);
+                    don.gameObject.AddComponent<Button>().onClick.AddListener(() => ReturnAttachedDon(seat, donId));
+                }
             }
         }
     }
@@ -9189,11 +9899,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // DON tuck under each other in a condensed, centred row (matches the reference mat): uniform
         // card size, overlapping, staying tucked even when rested/used. Step shrinks to fit the band.
         int n = donCards.Count;
+        // DON render at the SAME size as board cards (they ARE cards) — no height clamp to the (inset)
+        // DON-row band, which was shrinking them ~12%. Full-size DON still fit within the cost ZONE.
         float cardW = boardCardSize.x > 1f ? boardCardSize.x : 70f;
         float cardH = boardCardSize.y > 1f ? boardCardSize.y : cardW / CardAspect;
         float availW = parent.rect.width > 1f ? parent.rect.width : (boardRoot != null ? boardRoot.rect.width * 0.55f : 600f);
-        float maxH = parent.rect.height > 1f ? parent.rect.height * 0.96f : cardH;
-        if (cardH > maxH) { cardH = maxH; cardW = cardH * CardAspect; }
         float donStep = cardW * 0.34f;
         if (cardW + (n - 1) * donStep > availW) donStep = (availW - cardW) / Mathf.Max(1, n - 1);
         float donStart = -((n - 1) * donStep) * 0.5f;
@@ -9540,9 +10250,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (!isReplayMode && seat == state.ActiveSeat && !card.Rested
                 && GameEngine.IsSummoningSick(state, card))
             {
-                // A subtle cool-grey veil so a card played this turn without [Rush] reads as slightly
-                // greyed ("can't attack yet") — light enough that the art stays clearly visible.
-                var dim = PanelObject("Summoning Sick Dim", holder, new Color(0.40f, 0.43f, 0.48f, 0.30f));
+                // Official-app style: KEEP the card's colours but DARKEN it. A near-black veil at ~0.70
+                // alpha is a pure multiply (card * ~0.30), so hue/saturation are preserved — it just dims,
+                // rather than draining to greyscale.
+                var dim = PanelObject("Summoning Sick Dim", holder, new Color(0.02f, 0.03f, 0.05f, 0.70f));
                 Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
                 Round(dim);
                 dim.GetComponent<Image>().raycastTarget = false;
@@ -9664,13 +10375,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     // `accent` is the BRIGHT badge colour; the fill is a dark tint of it and the text is the accent —
     // exactly the counter-step "+1000" pill language (dark green pill + bright green text).
-    private void AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color accent)
+    private void AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color accent, Font labelFont = null)
     {
         var badge = PanelObject("Badge", parent, new Color(accent.r * 0.22f, accent.g * 0.22f, accent.b * 0.22f, 0.92f));
         Stretch(badge, min, max, Vector2.zero, Vector2.zero);
         Round(badge);
         badge.GetComponent<Image>().raycastTarget = false;
-        var text = TextObject("Badge Text", badge, label, 11, accent, TextAnchor.MiddleCenter);
+        var text = TextObject("Badge Text", badge, label, 11, accent, TextAnchor.MiddleCenter, labelFont);
         text.fontStyle = FontStyle.Bold;
         text.raycastTarget = false;
         Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(3f, 0f), new Vector2(-3f, 0f));
@@ -9740,6 +10451,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         private static readonly int SizeID = Shader.PropertyToID("_Size");
         private static readonly int RadiusID = Shader.PropertyToID("_Radius");
+        private static readonly int SaturationID = Shader.PropertyToID("_Saturation");
         private Material mat;
         private RectTransform rt;
         private float fraction;
@@ -9751,6 +10463,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             graphic.material = mat;
             fraction = radiusFraction;
         }
+
+        // 1 = full colour, 0 = greyscale (used to grey out summoning-sick cards).
+        public void SetSaturation(float s) { if (mat != null) mat.SetFloat(SaturationID, s); }
 
         private void Update()
         {
