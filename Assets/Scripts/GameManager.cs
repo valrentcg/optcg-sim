@@ -459,18 +459,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // (turn actions, effect targets, choices, battle responses). Difficulty picks which
         // decision core drives that single action. Three tiers, produced by the out-of-ship
         // discovery platform (Tools/Sim):
-        //   "beginner"     — Engine/Bot/IntermediateBot.cs (the original ported bot).
-        //   "intermediate" — Engine/Bot/ChampionBot.cs (Elo-tournament champion; beats Beginner ~54%).
-        //   "advanced"     — Engine/Bot/Search/AdvancedContractBot.cs: the validated advanced contract
-        //                    (contract-v2) — IntermediateBot base + activation (midrange) + pressure (control)
-        //                    + SearchBot rollout on tactical branches, gated by AI-deck archetype. Runs on
-        //                    this thread; see AdvancedAiTick.
+        //   All three tiers share the SAME strong decision core (Engine/Bot/IntermediateBot.cs, which carries
+        //   every validated playtest win) so difficulty is a smooth progression, not different bots:
+        //   "advanced"     — IntermediateBot core + SearchBot rollout on tactical branches, gated by AI-deck
+        //                    archetype (Engine/Bot/Search/AdvancedContractBot.cs; see AdvancedAiTick).
+        //   "intermediate" — IntermediateBot core at FULL strength (all wins), no search.
+        //   "beginner"     — IntermediateBot core but with the resource-discipline habits reverted (see
+        //                    ApplyBotDifficultyKnobs): it still pressures Life (the main lesson) but plays DON!!
+        //                    and counters sloppily, so it is clearly beatable while never looking brain-dead.
+        //   (ChampionBot.cs is retired from the ladder — it predates the wins and now loses to the core.)
         if (aiSeat != null && !isReplayMode && state != null && state.Status != "finished"
             && Time.unscaledTime >= aiNextActionAt)
         {
-            bool acted = aiDifficulty == "beginner" ? IntermediateAiTick()
-                       : aiDifficulty == "advanced" ? AdvancedAiTick()
-                       : ChampionAiTick();
+            ApplyBotDifficultyKnobs();
+            bool acted = aiDifficulty == "advanced" ? AdvancedAiTick()
+                       : IntermediateAiTick();
             if (acted) aiNextActionAt = Time.unscaledTime + 2.0f;                          // thinking pause
             else aiNextActionAt = Mathf.Max(aiNextActionAt, Time.unscaledTime + 0.25f);    // respect delays the tick set
         }
@@ -1322,6 +1325,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return pe.DonPaymentRemaining > 0 && pe.Seat == seat && (!isNetworked || seat == localSeat);
     }
 
+    // True while THIS seat is choosing which rested DON!! to GIVE to their Leader (Nami-class
+    // "Give up to N rested DON!! card to your Leader"). Rested cost-area DON!! glow + are clickable.
+    private bool DonGivePickActive(string seat)
+    {
+        if (state == null || state.PendingEffects.Count == 0) return false;
+        var pe = state.PendingEffects[0];
+        if (pe.Seat != seat || (isNetworked && seat != localSeat)) return false;
+        if (aiSeat != null && seat == aiSeat) return false;
+        string t = pe.Text ?? "";
+        return t.IndexOf("rested DON!!", System.StringComparison.OrdinalIgnoreCase) >= 0
+            && t.IndexOf("Give", System.StringComparison.OrdinalIgnoreCase) >= 0
+            && t.IndexOf("Leader", System.StringComparison.OrdinalIgnoreCase) >= 0
+            && t.IndexOf("Characters", System.StringComparison.OrdinalIgnoreCase) < 0;
+    }
+
     // Return a specific ATTACHED DON!! to the deck as one step of a DON!! −N payment (the engine
     // detaches it — attached DON!! on your field are valid targets for the return).
     private void ReturnAttachedDon(string seat, string donId)
@@ -1355,6 +1373,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             var peDon = state.PendingEffects[0];
             if (peDon.DonPaymentRemaining > 0 && peDon.Seat == seat)
+            {
+                Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId, Target = instanceId });
+                return;
+            }
+            // A "give rested DON!! to your Leader" effect — clicking a rested DON!! gives THAT one.
+            if (don.Rested && DonGivePickActive(seat))
             {
                 Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId, Target = instanceId });
                 return;
@@ -1425,7 +1449,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void CancelDonSelectionFromBoardClick()
     {
-        if (selectedDonIds.Count > 0) ClearDonSelection();
+        bool changed = false;
+        if (selectedDonIds.Count > 0) { ClearDonSelection(false); changed = true; }
+        // Clicking empty board space also deselects a selected board card (e.g. a character you
+        // clicked to activate its ability) — clicking off it cancels the selection.
+        if (!string.IsNullOrEmpty(selectedId) || !string.IsNullOrEmpty(selectedSeat))
+        {
+            selectedId = null; selectedSeat = null; changed = true;
+        }
+        if (changed) Render();
     }
 
     // ============ DON grouping (in-place: right-click to split, drag to move) ============
@@ -1589,6 +1621,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             // Valid pick for a pending DON!! -N payment — highlight green.
             AddOutline(holder.gameObject, new Color32(96, 240, 150, 230), 2.6f);
+        }
+        else if (don.Rested && DonGivePickActive(seat))
+        {
+            // Valid pick for a "give rested DON!! to your Leader" effect — standard GREEN rim glow
+            // (AddUsableGlow), matching every other valid target, not the gold selection outline.
+            AddUsableGlow(holder);
+            holder.SetAsLastSibling();
         }
         if (don.Rested) holder.localRotation = Quaternion.Euler(0, 0, inverted ? 270f : 90f);
         else if (inverted) holder.localRotation = Quaternion.Euler(0, 0, 180f);
@@ -2552,6 +2591,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             int donSeq = 0;
             int moves = 0;
             int lifeDealt = 0;
+            int handDrawSeq = 0;   // staggers multi-card draws so each flies + sounds one at a time
             foreach (var kv in now)
             {
                 if (!lastCardPoses.TryGetValue(kv.Key, out var old))
@@ -2578,12 +2618,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 if (++moves > 24) break;   // mass reshuffles: skip the ghost flood
                 // Life setup (deck → Life): deal bottom-of-Life first, staggered upward.
                 float moveDelay = 0f;
+                bool isHandDraw = old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("hand:");
                 if (isLifeDeal)
                 {
                     var lifeOwner = state.Players[kv.Value.owner];
                     int li = lifeOwner.Life.FindIndex(c => c.InstanceId == kv.Key);
                     moveDelay = 0.20f * Mathf.Max(0, li);   // ≥ SFX length: one full sound per card
                     lifeDealt++;
+                }
+                else if (isHandDraw)
+                {
+                    // Multi-card draws (Galdino/Baby 5 "draw 2", any effect draw) fly and sound ONE
+                    // card at a time — 0.22s ≥ the draw SFX length so each gets its own distinct sound.
+                    moveDelay = 0.22f * handDrawSeq;
+                    handDrawSeq++;
                 }
                 bool flare = old.zone.StartsWith("hand:") && kv.Value.zone.StartsWith("trash:");
                 // Card-draw sound: deck → hand, Life → hand (damage/effects) and the
@@ -5926,7 +5974,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         moveZoneAnchors["life:" + seat] = life;
         // At the end of the match, reveal BOTH players' remaining Life cards face-up (View Board);
         // during play they stay hidden.
-        AddLifeStackToZone(life, p.Life.Count, top, seat, RevealFinishedInfo() ? p.Life : null);
+        AddLifeStackToZone(life, p.Life.Count, top, seat, p.Life, RevealFinishedInfo());
+        // "Add from the top or bottom of your Life" effects (Zeus OP11-106): overlay this Life zone
+        // with clickable TOP / BOTTOM halves so the player picks the card right on the board.
+        MaybeAddLifeTargetPicker(life, p, seat);
     }
 
     private void DrawExternalHand(PlayerState p, string seat, bool top)
@@ -6848,7 +6899,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
     private void AddLifeStackToZone(RectTransform zone, int count, bool top, string seat = null,
-        IList<CardInstance> revealCards = null)
+        IList<CardInstance> lifeCards = null, bool revealAll = false)
     {
         int visible = Mathf.Min(count, 5);
         // Sideways cards stacked vertically. No per-card border or divider - hovering a card shows the
@@ -6861,9 +6912,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             FitCardAspect(zone, card);
             card.localRotation = Quaternion.Euler(0, 0, top ? 270f : 90f);
             card.anchoredPosition += new Vector2(0f, (i - (visible - 1) * 0.5f) * gap);
-            // Face-down normally; on a loss the opponent's life is revealed (revealCards),
-            // falling back to the back sprite if the face isn't loaded yet.
-            Sprite lifeFace = revealCards != null && i < revealCards.Count ? GetCardSprite(revealCards[i].CardId) : null;
+            // Face-down normally. Show the FACE for a card an effect turned face-up (CardInstance
+            // .FaceUp — e.g. Nami's [On K.O.] "turn 1 Life card face-up" cost) or when the whole Life
+            // is revealed at end of match; fall back to the back sprite if the face isn't loaded yet.
+            bool faceUp = lifeCards != null && i < lifeCards.Count && (revealAll || lifeCards[i].FaceUp);
+            Sprite lifeFace = faceUp ? GetCardSprite(lifeCards[i].CardId) : null;
             RoundedCardVisual(lifeFace != null ? "Life Face" : "Life Back", card, lifeFace ?? GetBackSprite(), out var img);
             img.raycastTarget = false;
             card.gameObject.AddComponent<BackHover>().Init(this);
@@ -6971,7 +7024,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         x += step;
         AddPile(root, "DON!! Deck", p.DonDeck, new Vector2(x, yMin), new Vector2(x + 0.076f, yMax), false);
         x += step;
-        AddPile(root, "Life", p.Life.Count, new Vector2(x, yMin), new Vector2(x + 0.076f, yMax), true);
+        var lifePile = AddPile(root, "Life", p.Life.Count, new Vector2(x, yMin), new Vector2(x + 0.076f, yMax), true);
+        MaybeAddLifeTargetPicker(lifePile, p, seat);
         x += step;
         AddPile(root, "Trash", p.Trash.Count, new Vector2(x, yMin), new Vector2(x + 0.076f, yMax), p.Trash.Count > 0);
     }
@@ -8034,19 +8088,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 if (selDef.Effect.Contains("[Activate: Main]"))
                 {
                     bool abilUsed = state.Players[selectedSeat].AbilityUsedThisTurn.Contains(selected.InstanceId);
+                    // Deciding whether to use the ability: show the glowing card preview + write the
+                    // [Activate: Main] ability out, so it reads as a real pending decision (not a bare
+                    // button), OPTCGSim-style.
+                    AddEffectCardVisual(body, selected.CardId);
+                    string mainClause = CleanEffectText(ExtractActivateMainClause(selDef.Effect));
+                    if (!string.IsNullOrEmpty(mainClause)) AddScaledInfo(body, mainClause);
                     AddButton(body, abilUsed ? "Activate: Main (used)" : "Activate: Main",
                         () => Dispatch(new GameCommand { Type = "activateMain", Seat = selectedSeat, Target = selectedId }),
                         !abilUsed);
                 }
 
-                int freeDon = GameEngine.ActiveDonCount(state.Players[selectedSeat]);
-                if (freeDon > 0)
-                {
-                    AddButton(body, "Attach 1 DON!!",
-                        () => Dispatch(new GameCommand { Type = "attachDon", Seat = selectedSeat, Target = selectedId, Amount = 1 }));
-                    AddButton(body, $"Attach All DON!! ({freeDon})",
-                        () => Dispatch(new GameCommand { Type = "attachDon", Seat = selectedSeat, Target = selectedId, Amount = freeDon }));
-                }
+                // DON!! are attached by DRAGGING them onto a card, not from the action window — the
+                // "Attach 1 / Attach All DON!!" buttons were removed here per design.
 
                 // No manual rest/un-rest: a character only becomes rested as a consequence of a card
                 // effect (or its own attack), never by the player freely toggling it. Removed the
@@ -8077,37 +8131,88 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         var effect = state.PendingEffects[0];
         var source = CardData.GetCard(effect.SourceCardId);
-        // Only the seat whose effect this is gets buttons; the other client sees a passive
-        // status line (buttons only for the seat whose decision it is).
-        if (isNetworked && effect.Seat != localSeat)
-        {
-            AddEffectCardVisual(body, effect.SourceCardId);
-            AddInfo(body, source.Name + " - " + EffectTimingLabel(effect.Timing));
-            AddInfo(body, "Waiting on opponent...");
-            return;
-        }
+
+        // Glowing pending card + timing header + the effect text written out — shown to BOTH
+        // players, so the waiting side can read exactly what decision is being made (and, once
+        // task B lands, watch the green progress fill). The card is the anchor; the panel just
+        // explains it, OPTCGSim-style.
         AddEffectCardVisual(body, effect.SourceCardId);
         AddInfo(body, source.Name + " — " + EffectTimingLabel(effect.Timing));
-        AddScaledInfo(body, effect.Text);
-        if (effect.SelectionsRemaining > 1)
-            AddInfo(body, $"Choose {effect.SelectionsRemaining} more target(s) — or skip to stop early.");
+        AddEffectProgressText(body, effect);
 
-        string targetHint;
-        if (effect.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand)
-            targetHint = "Click a card in your hand as the target.";
-        else if (effect.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash)
-            targetHint = "Click a card in your trash as the target.";
-        else if (effect.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
-            targetHint = "Click a target card on the board or in your hand.";
+        // Not my decision — the opponent's (networked) or the bot's (solo vs AI). Passive pending
+        // state, no action bubbles; the deciding side resolves it (AiTick drives the bot).
+        bool notMyDecision = (aiSeat != null && effect.Seat == aiSeat) || (isNetworked && effect.Seat != localSeat);
+        if (notMyDecision)
+        {
+            AddInfo(body, "◦  Pending opponent's decision…");
+            return;
+        }
+
+        // Multi-pick progress ("choose up to N").
+        // Show the remaining-pick count whenever a multi-select still has picks left (was `> 1`,
+        // which made the hint vanish at the LAST pick instead of showing "1 more").
+        if (effect.SelectionsRemaining > 0)
+            AddInfo(body, $"Choose up to {effect.SelectionsRemaining} more, or Skip to stop early.");
+
+        // Does the CURRENT clause need a board/hand/trash pick? If so, the board itself is the
+        // affordance (OPTCGSim-style): a short prompt + a single Skip, and clicking a highlighted
+        // target resolves the step — no separate wall-of-text "Resolve" bubble. If not, it's a
+        // plain use/skip decision.
+        bool donGive = DonGivePickActive(effect.Seat);
+        if (EffectHasValidTarget(effect) || donGive)
+        {
+            AddInfo(body, donGive ? "Click a rested DON!! to give to your Leader." : EffectTargetPrompt(effect));
+            if (effect.Optional)
+                AddButton(body, "Skip", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), true);
+        }
         else
-            targetHint = "Click a valid target on the board if the effect needs one.";
-        AddInfo(body, targetHint);
+        {
+            AddButton(body, "Use Effect", () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
+            AddButton(body, "Skip", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional);
+        }
+    }
 
-        // Trash-targeting effects open the trash popup over the play area (DrawTrashOverlay);
-        // the player clicks a card there directly, with hover previews.
+    // True if any card in play/hand/trash is a legal target for the effect's CURRENT clause.
+    // Drives whether the pending-effect panel shows a board prompt (pick on the board) or a
+    // simple Use/Skip decision. IsValidEffectTarget already enforces zone/ownership/clause
+    // rules, so scanning a superset of zones is safe (invalid cards return false).
+    private bool EffectHasValidTarget(PendingEffect effect)
+    {
+        if (state?.Players == null || effect == null) return false;
+        foreach (var kv in state.Players)
+        {
+            var p = kv.Value;
+            if (p == null) continue;
+            if (p.Leader != null && GameEngine.IsValidEffectTarget(state, effect, p.Leader)) return true;
+            if (p.CharacterArea != null)
+                foreach (var c in p.CharacterArea)
+                    if (c != null && GameEngine.IsValidEffectTarget(state, effect, c)) return true;
+            if (p.Hand != null)
+                foreach (var c in p.Hand)
+                    if (c != null && GameEngine.IsValidEffectTarget(state, effect, c)) return true;
+            if (p.Trash != null)
+                foreach (var c in p.Trash)
+                    if (c != null && GameEngine.IsValidEffectTarget(state, effect, c)) return true;
+            if (p.Life != null)
+                foreach (var c in p.Life)
+                    if (c != null && GameEngine.IsValidEffectTarget(state, effect, c)) return true;
+        }
+        return false;
+    }
 
-        AddButton(body, ResolveEffectLabel(effect), () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
-        AddButton(body, "SKIP", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional);
+    // Short, board-anchored prompt for a targeting step (no verbatim card text).
+    private string EffectTargetPrompt(PendingEffect effect)
+    {
+        if ((effect.Text ?? "").IndexOf("top or bottom of your Life", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            return "Click the top or bottom of your Life pile.";
+        switch (effect.TargetZone)
+        {
+            case OnePieceTcg.Engine.EffectTargetZone.Hand:  return "Select a card in your hand.";
+            case OnePieceTcg.Engine.EffectTargetZone.Trash: return "Select a card in your trash.";
+            case OnePieceTcg.Engine.EffectTargetZone.Any:   return "Select a highlighted target on the board or in your hand.";
+            default:                                        return "Select a highlighted target on the board.";
+        }
     }
 
     // Button label for the resolve button: the card's effect text VERBATIM (players
@@ -8458,6 +8563,27 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 });
             }
         }
+    }
+
+    // ── Difficulty ladder: one strong core, degraded per tier ────────────────
+    // All three tiers share Engine/Bot/IntermediateBot.cs (which carries every validated playtest win). This
+    // sets that core's per-seat degradation knobs for the CURRENT difficulty, and MUST run before every AI
+    // tick (Advanced included, since AdvancedContractBot also drives the IntermediateBot core internally) so a
+    // Beginner match never leaks its sloppiness into a later Intermediate/Advanced match.
+    //   Beginner  → revert the resource-DISCIPLINE wins (DON!! sequencing, hold-counter, no-over-counter,
+    //               smart mulligan): it still pressures Life (the headline lesson) but wastes DON!! and
+    //               over-counters, so it is clearly beatable without ever looking brain-dead.
+    //   Intermediate / Advanced → all knobs null = full-strength core (Advanced adds search on top).
+    // Static fields are safe here: one match at a time on Unity's main thread. Tune the gap by adding/removing
+    // reverts (e.g. also set AltFloorSeat/AltFloor to partially undo Life-pressure for an even weaker Beginner).
+    private void ApplyBotDifficultyKnobs()
+    {
+        string s = aiSeat != null && aiDifficulty == "beginner" ? aiSeat : null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyDonSeat = s;               // front-load DON!! (waste it)
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldCounterVariantSeat = s;      // don't hold big counters
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackCharCounterSeat = s;  // over-counter Characters
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackLeaderCounterSeat = s;// over-counter the Leader
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyMulliganSeat = s;          // cruder mulligan
     }
 
     // ── Intermediate Bot decision core ───────────────────────────────────────
@@ -9708,10 +9834,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // climbs the spacing shrinks so they pack exactly to the edge instead of spilling past it.
             float donW = boardCardSize.x;
             float donH = boardCardSize.y;
-            // Stack DON the SAME way whether or not the character is rested — the row is always sized to
-            // the card's portrait width and dropped by the portrait height, so resting a character doesn't
-            // change how its DON tuck underneath.
-            float availWidth = donW;
+            // Fan the attached DON out behind the card, up to the card's RESTED horizontal extent
+            // (its portrait HEIGHT), so several DON spread into a fan instead of stacking on one spot
+            // (availWidth == donW made the step 0 → every DON overlapped, looking like a single one).
+            // Applies to both active and rested characters.
+            float availWidth = Mathf.Max(donW, donH);
             float preferredStep = donW * 0.16f;                   // bunched look while there's room
             float maxStep = attachedShown > 1 ? Mathf.Max(0f, (availWidth - donW) / (attachedShown - 1)) : 0f;
             float step = Mathf.Min(preferredStep, maxStep);
@@ -10007,6 +10134,45 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddCard(holder, topCard, topCard.Owner, true, Vector2.zero, true);
     }
 
+    // When an "add … from the top or bottom of your Life …" effect is pending for this local seat,
+    // overlay the Life pile with two glowing, clickable halves (TOP / BOTTOM) so the player picks
+    // the Life card right on the board (no A/B modal). Each dispatches resolveEffect with the top /
+    // bottom Life instance id — validated by the engine's IsValidEffectTarget.
+    private void MaybeAddLifeTargetPicker(RectTransform lifeZone, PlayerState p, string seat)
+    {
+        if (lifeZone == null || state == null || state.PendingEffects.Count == 0 || p.Life.Count == 0) return;
+        var pe = state.PendingEffects[0];
+        if (pe.Seat != seat || (isNetworked && seat != localSeat)) return;
+        if (aiSeat != null && seat == aiSeat) return;
+        if ((pe.Text ?? "").IndexOf("top or bottom of your Life", System.StringComparison.OrdinalIgnoreCase) < 0) return;
+
+        // Snap the glow to the ACTUAL top and bottom Life card rects (AddLifeStackToZone stores
+        // them in lifeMoveRects[seat], card index i == Life[i]), rather than splitting the zone in
+        // half. So the rim glow hugs the real card, like any other targetable card.
+        if (!lifeMoveRects.TryGetValue(seat, out var lifeRects) || lifeRects == null || lifeRects.Count == 0) return;
+        int visible = Mathf.Min(p.Life.Count, lifeRects.Count);
+        string topId = p.Life[p.Life.Count - 1].InstanceId;   // engine top = end of the list
+        string botId = p.Life[0].InstanceId;                  // engine bottom = index 0
+
+        void GlowCard(int idx, string lifeId)
+        {
+            if (idx < 0 || idx >= lifeRects.Count || lifeRects[idx] == null) return;
+            var card = lifeRects[idx];
+            AddUsableGlow(card);
+            // Transparent, card-sized click catcher on top (the Life card art itself is not
+            // raycastable), routing the pick to resolveEffect.
+            var pick = PanelObject("Life Pick", card, new Color(0f, 0f, 0f, 0f));
+            Stretch(pick, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            var pimg = pick.GetComponent<Image>(); if (pimg != null) pimg.raycastTarget = true;
+            pick.SetAsLastSibling();
+            pick.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+                Dispatch(new GameCommand { Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId, Target = lifeId }));
+        }
+
+        GlowCard(visible - 1, topId);                     // top-most visible card = top of Life
+        if (p.Life.Count > 1) GlowCard(0, botId);         // index 0 = bottom of Life
+    }
+
     private RectTransform AddPile(RectTransform root, string label, int count, Vector2 min, Vector2 max, bool cardBack)
     {
         var zone = ZonePanel(root, label, min, max);
@@ -10190,6 +10356,151 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         var text = TextObject("Empty", parent, message, 13, Muted, TextAnchor.MiddleCenter);
         Stretch(text.rectTransform, new Vector2(0.05f, 0.08f), new Vector2(0.95f, 0.72f), Vector2.zero, Vector2.zero);
+    }
+
+    // Per-(source card + timing) animated fill fraction, so the green/red sweep continues smoothly
+    // across re-renders and across the "Then," continuation chain (EffectId changes; source+timing
+    // stay stable). Keyed so only the currently-shown effect's phase is retained.
+    private readonly Dictionary<string, float> _effectProgressShown = new Dictionary<string, float>();
+
+    // The effect text written out under the glowing card, with resolved clauses filled GREEN and
+    // skipped / criteria-not-met clauses filled RED, sweeping in TypeRacer-style (task B). Shown to
+    // BOTH players — the ledger rides the networked state, so the watcher sees the same fill as the
+    // deciding player. Pending text stays the neutral colour.
+    private void AddEffectProgressText(RectTransform parent, PendingEffect effect)
+    {
+        string full = CleanEffectText(!string.IsNullOrEmpty(effect.OriginalText) ? effect.OriginalText : effect.Text);
+        if (string.IsNullOrEmpty(full)) return;
+        int size = full.Length <= 140 ? 10 : full.Length <= 240 ? 9 : 8;
+        if (full.Length > 340) full = full.Substring(0, 337).TrimEnd() + "…";
+
+        // Locate each resolved (green=1) / skipped (red=2) clause in the full text; both resolve
+        // front-to-back, so sort by position and paint a per-character colour map.
+        var located = new List<(int idx, int len, int code)>();
+        if (effect.DoneParts != null)
+            foreach (var d in effect.DoneParts) AddLocatedPart(full, d, 1, located);
+        if (effect.SkippedParts != null)
+            foreach (var sp in effect.SkippedParts) AddLocatedPart(full, sp, 2, located);
+        located.Sort((a, b) => a.idx.CompareTo(b.idx));
+
+        int[] colorIdx = new int[full.Length];
+        int completedEnd = 0;
+        foreach (var p in located)
+        {
+            for (int i = p.idx; i < p.idx + p.len && i < full.Length; i++) colorIdx[i] = p.code;
+            if (p.idx + p.len > completedEnd) completedEnd = Mathf.Min(p.idx + p.len, full.Length);
+        }
+        float target = full.Length > 0 ? (float)completedEnd / full.Length : 0f;
+
+        var text = TextObject("Progress", parent, full, size, Muted, TextAnchor.UpperLeft);
+        text.horizontalOverflow = HorizontalWrapMode.Wrap;
+        text.verticalOverflow = VerticalWrapMode.Overflow;
+        text.lineSpacing = 0.9f;
+        text.supportRichText = true;
+
+        string key = (effect.SourceInstanceId ?? "") + "|" + (effect.Timing ?? "");
+        // Keep only the current key so a card re-triggering the same timing later re-reveals fresh.
+        if (_effectProgressShown.Count > 0)
+        {
+            var stale = new List<string>();
+            foreach (var k in _effectProgressShown.Keys) if (k != key) stale.Add(k);
+            foreach (var k in stale) _effectProgressShown.Remove(k);
+        }
+        float start = _effectProgressShown.TryGetValue(key, out var prev) ? Mathf.Min(prev, target) : 0f;
+        _effectProgressShown[key] = start;
+
+        var comp = text.gameObject.AddComponent<EffectProgressText>();
+        comp.Init(text, full, colorIdx, target, start, v => _effectProgressShown[key] = v);
+    }
+
+    private void AddLocatedPart(string full, string rawPart, int code, List<(int idx, int len, int code)> into)
+    {
+        string part = CleanEffectText(rawPart);
+        if (string.IsNullOrEmpty(part)) return;
+        int idx = full.IndexOf(part, System.StringComparison.OrdinalIgnoreCase);
+        if (idx >= 0) into.Add((idx, part.Length, code));
+    }
+
+    // Strip leading timing tags (already in the panel header) and the boilerplate DON!!-return
+    // reminder, and collapse whitespace — so the written-out text is clean and clause lookups line
+    // up. Mirrors ResolveEffectLabel's cleaning (kept separate so it does not upper-case).
+    // The single ability line containing "[Activate: Main]" (whole text if not found), so the
+    // selected-card panel can write out just that ability.
+    private static string ExtractActivateMainClause(string effect)
+    {
+        if (string.IsNullOrEmpty(effect)) return "";
+        foreach (var line in effect.Split('\n'))
+            if (line.IndexOf("[Activate: Main]", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                return line;
+        return effect;
+    }
+
+    private static string CleanEffectText(string text)
+    {
+        text = text ?? "";
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]*\]\s*/?\s*)+", "").Trim();
+        text = System.Text.RegularExpressions.Regex.Replace(text,
+            @"\(You may return the specified number of DON!! cards from your field to your DON!! deck\.?\)", "");
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        return text;
+    }
+
+    // Drives the TypeRacer-style fill: a shown fraction eases toward the resolved fraction each
+    // frame, and characters below the cutoff render in their clause colour (green = done, red =
+    // skipped) while the rest stay the base colour. Re-seeded from GameManager's per-key store so
+    // the sweep resumes smoothly when the panel is rebuilt.
+    private sealed class EffectProgressText : MonoBehaviour
+    {
+        private const string Green = "<color=#4FD08A>";
+        private const string Red   = "<color=#E65454>";
+        private const float  Speed = 2.4f;   // fraction per second
+
+        private Text label;
+        private string raw;
+        private int[] colorIdx;   // per char: 0 base, 1 green, 2 red
+        private float target;
+        private float shown;
+        private System.Action<float> writeBack;
+
+        public void Init(Text label, string raw, int[] colorIdx, float target, float start, System.Action<float> writeBack)
+        {
+            this.label = label; this.raw = raw ?? ""; this.colorIdx = colorIdx;
+            this.target = Mathf.Clamp01(target);
+            this.shown = Mathf.Clamp01(start);
+            this.writeBack = writeBack;
+            if (label != null) label.supportRichText = true;
+            Apply();
+        }
+
+        private void Update()
+        {
+            if (Mathf.Approximately(shown, target)) return;
+            shown = Mathf.MoveTowards(shown, target, Speed * Time.deltaTime);
+            writeBack?.Invoke(shown);
+            Apply();
+        }
+
+        private void Apply()
+        {
+            if (label == null || raw.Length == 0) return;
+            int cut = Mathf.Clamp(Mathf.RoundToInt(shown * raw.Length), 0, raw.Length);
+            var sb = new System.Text.StringBuilder(raw.Length + 32);
+            int cur = 0;   // 0 base, 1 green, 2 red
+            for (int i = 0; i < raw.Length; i++)
+            {
+                int c = (i < cut && colorIdx != null && i < colorIdx.Length) ? colorIdx[i] : 0;
+                if (c != cur)
+                {
+                    if (cur != 0) sb.Append("</color>");
+                    if (c == 1) sb.Append(Green);
+                    else if (c == 2) sb.Append(Red);
+                    cur = c;
+                }
+                sb.Append(raw[i]);
+            }
+            if (cur != 0) sb.Append("</color>");
+            label.text = sb.ToString();
+        }
     }
 
     private void AddEmptySlot(RectTransform parent, string label, Vector2 size)

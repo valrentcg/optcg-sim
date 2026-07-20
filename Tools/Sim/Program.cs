@@ -711,6 +711,1524 @@ switch (mode)
         return 0;
     }
 
+    case "donab":
+    {
+        // Head-to-head A/B: both seats run the baseline (Intermediate) bot, but one seat uses the
+        // OLD "front-load all DON!! before attacking" policy (LegacyDonSeat) and the other the NEW
+        // "one attacker at a time" policy. Alternate which seat is NEW + who goes first to cancel
+        // seat / first-player bias. Reports the NEW policy's win rate vs the OLD.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 600;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int newWins = 0, done = 0;
+        var rng = new System.Random(11);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsNew = i % 2 == 0;
+            string newSeat = southIsNew ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyDonSeat = southIsNew ? "north" : "south";
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"donab:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == newSeat) newWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyDonSeat = null;
+        double pct = done > 0 ? 100.0 * newWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"NEW interleaved-DON vs OLD front-load: {newWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "counterab":
+    {
+        // A/B: one seat over-loads Leader swings to +2000 (force two counters) vs baseline "just
+        // enough to connect". Alternate which seat is the variant + first player to cancel bias.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 5000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(13);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.ForceCounterPressureSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"cab:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.ForceCounterPressureSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Force-2-counters (Leader +2000) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "defab":
+    {
+        // A/B: one seat starts defending its Leader (countering) at a DIFFERENT Life threshold
+        // (arg 2, default 2) vs the baseline's 3. Alternate variant seat + first player.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 5000;
+        int thr = args.Length > 2 && int.TryParse(args[2], out var tt) ? tt : 2;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(17);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseLifeThreshold = thr;
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"dab:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseLifeThreshold = 3;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Leader-defense threshold {thr} vs baseline 3: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "blockab":
+    {
+        // A/B: one seat DECLINES to block a Leader hit while Life > threshold (arg 2, default 2) —
+        // taking the hit for the Life->hand refill + keeping the Blocker active — vs the baseline
+        // that always blocks with a surviving Blocker. Alternate variant seat + first player.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 5000;
+        int thr = args.Length > 2 && int.TryParse(args[2], out var tt) ? tt : 2;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(19);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        OnePieceTcg.Engine.Bot.IntermediateBot.BlockLifeThreshold = thr;
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.BlockVariantSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"bab:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.BlockVariantSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.BlockLifeThreshold = 2;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Take-Leader-hit-above-Life-{thr} vs always-block: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "chardefab":
+    {
+        // A/B: one seat uses a different min Character cost worth saving with counters (arg 2,
+        // default 3) vs baseline 5. Leader Life threshold stays at baseline 3.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 5000;
+        int cost = args.Length > 2 && int.TryParse(args[2], out var cc) ? cc : 3;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(23);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        OnePieceTcg.Engine.Bot.IntermediateBot.CharDefenseCostThreshold = cost;
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"cd:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.CharDefenseCostThreshold = 5;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Char-save cost>={cost} vs baseline>=5: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "holdab":
+    {
+        // A/B: one seat holds a big-counter (>=2000) Character in hand once its board is developed
+        // (>=3 Characters) vs the baseline that always deploys. Alternate variant seat + first player.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(29);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.HoldCounterVariantSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"hold:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldCounterVariantSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Hold big-counter char (board>=3) vs always-deploy: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "holdtuneab":
+    {
+        // A/B: one seat uses tuned hold thresholds (arg2 board size, arg3 counter value) vs the
+        // shipped 3 / 2000. Both seats still HOLD (this measures the tuning, not hold-vs-deploy).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        int bthr = args.Length > 2 && int.TryParse(args[2], out var bb) ? bb : 2;
+        int cthr = args.Length > 3 && int.TryParse(args[3], out var cc) ? cc : 2000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(31);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldBoardThreshold = bthr;
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldCounterThreshold = cthr;
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.HoldTuneSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"ht:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldTuneSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldBoardThreshold = 3;
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldCounterThreshold = 2000;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Hold-tune board>={bthr}/cp>={cthr} vs shipped 3/2000: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "attackorderab":
+    {
+        // A/B: one seat sequences attackers WEAKEST-relevant first (drain counters, save the big hitter)
+        // vs the shipped strongest-first.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(53);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.WeakestFirstSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"ao:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.WeakestFirstSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Weakest-first attack order vs strongest-first: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "attackkofloorab":
+    {
+        // A/B: varSeat uses the SHIPPED Life-pressure floor (optional arg2 overrides it); the OTHER seat
+        // reverts to legacy KO-everything (floor 0). Reports the shipped seat's win% vs the legacy seat.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        if (args.Length > 2 && int.TryParse(args[2], out var ff)) OnePieceTcg.Engine.Bot.IntermediateBot.KoValueFloor = ff;
+        int floor = OnePieceTcg.Engine.Bot.IntermediateBot.KoValueFloor;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(67);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyKoSeat = southIsVar ? "north" : "south";  // the OTHER seat is legacy
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"kf:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyKoSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.KoValueFloor = 25000;   // shipped default (iter 19 raise)
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"SHIPPED Life-pressure floor {floor} vs legacy KO-everything: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "beginnerhandicapab":
+    {
+        // Verify the difficulty ladder: BEGINNER seat (resource-discipline wins reverted, keeps Life-pressure)
+        // vs INTERMEDIATE seat (full-strength core). Beginner should win clearly < 50% (Intermediate stronger).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int begWins = 0, done = 0;
+        var rng = new System.Random(271);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsBeg = i % 2 == 0;
+            string begSeat = southIsBeg ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyDonSeat = begSeat;
+            OnePieceTcg.Engine.Bot.IntermediateBot.HoldCounterVariantSeat = begSeat;
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackCharCounterSeat = begSeat;
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackLeaderCounterSeat = begSeat;
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyMulliganSeat = begSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"bh:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == begSeat) begWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyDonSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldCounterVariantSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackCharCounterSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackLeaderCounterSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyMulliganSeat = null;
+        double pct = done > 0 ? 100.0 * begWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"BEGINNER (handicapped) vs INTERMEDIATE (full core): beginner wins {begWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  => Intermediate {100-pct:F1}%.  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "smartmulliganab":
+    {
+        // GLOBAL A/B: user's richer mulligan (position curve-coverage + searcher forgiveness).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(269);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyMulliganSeat = southIsVar ? "north" : "south";  // OTHER seat = old rule
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"sm:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyMulliganSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Smart mulligan (position curve + searcher) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "positionmulliganab":
+    {
+        // GLOBAL A/B: one seat uses a position-aware mulligan (tighter on the play, looser on the draw).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(263);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.PositionMulliganSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"pm:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.PositionMulliganSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Position-aware mulligan vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "savecounterforleaderab":
+    {
+        // GLOBAL A/B: one seat won't counter to save Characters while at Life <= 3 (saves counters for Leader).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(257);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.SaveCounterForLeaderSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"sc:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.SaveCounterForLeaderSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Save-counter-for-Leader (no char counter at Life<=3) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "blockleaderonlyab":
+    {
+        // GLOBAL A/B: one seat only blocks Leader attacks (saves the Blocker; Characters take the hit).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(251);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.BlockLeaderOnlySeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"bl:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.BlockLeaderOnlySeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Block-Leader-only (save blocker, char takes hit) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "leaderdeflifeab":
+    {
+        // GLOBAL A/B (post-no-stack): varSeat defends its Leader only at Life <= arg2 (take the hit above that
+        // for the card); baseline uses shipped 3. Char-defense held at shipped 4 to isolate the Leader threshold.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        int thr = args.Length > 2 && int.TryParse(args[2], out var tt) ? tt : 2;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(241);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = varSeat;
+            OnePieceTcg.Engine.Bot.IntermediateBot.DefenseLifeThreshold = thr;
+            OnePieceTcg.Engine.Bot.IntermediateBot.CharDefenseCostThreshold = 4;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"ld:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseLifeThreshold = 3;
+        OnePieceTcg.Engine.Bot.IntermediateBot.CharDefenseCostThreshold = 5;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Leader-defense Life<={thr} (take hits above) vs shipped 3: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "cheapcountercharab":
+    {
+        // GLOBAL A/B: one seat saves a Character only with a +1000 counter (never a premium +2000).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(239);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.CheapCounterCharOnlySeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"cc:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.CheapCounterCharOnlySeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Cheap-counter-char-only (+1000 or pass) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "nostackleadercounterab":
+    {
+        // GLOBAL A/B: one seat won't stack 2+ counters to save the Leader while Life >= 2 (buffer).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 12000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(233);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackLeaderCounterSeat = southIsVar ? "north" : "south";  // OTHER seat = old always-stack
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"nl:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackLeaderCounterSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"No-stack Leader counter (Life>=2) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "nostackcharcounterab":
+    {
+        // GLOBAL A/B: one seat won't stack 2+ counters to save a Character (single-counter or pass).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(229);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackCharCounterSeat = southIsVar ? "north" : "south";  // OTHER seat = old always-stack
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"nc:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStackCharCounterSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"No-stack char counter (single or pass) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "attackfirstab":
+    {
+        // GLOBAL A/B: one seat attacks with its existing board BEFORE deploying new Characters.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(227);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.AttackFirstSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"af:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.AttackFirstSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Attack-first (swing before deploy) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  [completed {done}/{games}]  {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "activatemainsickab":
+    {
+        // GLOBAL A/B: fire beneficial OPT [Activate: Main] ONLY on summoning-sick Characters (pure upside).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(223);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.ActivateMainSickOnlySeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"as:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.ActivateMainSickOnlySeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Activate:Main on SUMMONING-SICK only vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  [completed {done}/{games}]  {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "enableactivatemainab":
+    {
+        // GLOBAL A/B: one seat unlocks beneficial [Once Per Turn] Character [Activate: Main] abilities.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(211);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.EnableActivateMainSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"am:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.EnableActivateMainSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Enable [Activate:Main] (beneficial OPT) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  [completed {done}/{games}]  {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "baitblockerab":
+    {
+        // GLOBAL A/B (valid): one seat orders attackers weakest-first when the opponent has an active Blocker.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(199);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.BaitBlockerSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"bb:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.BaitBlockerSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Bait-blocker (weakest-first vs active Blocker) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "holdblockersab":
+    {
+        // GLOBAL A/B (valid, symmetric): one seat holds non-Leader Blockers back from attacking vs baseline.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(197);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.HoldBlockersSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"hb:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.HoldBlockersSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Hold Blockers back (don't attack) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "nullsegdiag":
+    {
+        // REVIEWER DIAGNOSTIC: run the segmented harness with NO lever (both seats identical). Every bucket
+        // MUST read ~50% by symmetry; anything else is a harness/bucketing bias that invalidates the segmented
+        // A/B results. Uses the SAME seed/assignment scheme as the byarch modes.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 9000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        double AvgCost(string id)
+        {
+            var d = reg.Resolve(id);
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        var avg = pool.ToDictionary(id => id, id => AvgCost(id));
+        var wins = new int[3]; var tot = new int[3];
+        var rng = new System.Random(193);   // SAME seed as racedropbyarchab
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            string varDeck = southIsVar ? dA : dB;
+            // NO toggle set — both seats are the plain shipped bot.
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"rd:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner == null) continue;
+            double a = avg[varDeck];
+            int b = a < 3.3 ? 0 : (a <= 4.3 ? 1 : 2);
+            tot[b]++; if (rec.winner == varSeat) wins[b]++;
+        }
+        string[] names = { "aggro(<3.3)", "mid(3.3-4.3)", "control(>4.3)" };
+        int gW = wins[0] + wins[1] + wins[2], gT = tot[0] + tot[1] + tot[2];
+        Console.WriteLine($"NULL lever (both seats identical), by variant archetype ({sw.Elapsed.TotalSeconds:F0}s) — expect ~50% everywhere:");
+        for (int b = 0; b < 3; b++)
+        {
+            double pct = tot[b] > 0 ? 100.0 * wins[b] / tot[b] : 0;
+            double se = tot[b] > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / tot[b]) : 0;
+            Console.WriteLine($"  {names[b],-16} {wins[b]}/{tot[b]} = {pct:F1}%  (±{1.96 * se:F1})");
+        }
+        Console.WriteLine($"  GLOBAL           {gW}/{gT} = {(gT>0?100.0*gW/gT:0):F1}%");
+        return 0;
+    }
+
+    case "deckavgdiag":
+    {
+        // REVIEWER DIAGNOSTIC: for each meta deck, compare the bot's runtime MyDeckAvgCost (on the fresh
+        // match state) to the Sim's decklist avg cost. At match start they MUST match; any gap is a bug.
+        var reg = BuildRegistry(out _);
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        double AvgCost(OnePieceTcg.Engine.DeckDef d)
+        {
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        int misAsControl = 0, midCount = 0; double maxGap = 0;
+        Console.WriteLine("deck                       sim-avg  bot-avg   gap  simBucket botCtrl?");
+        foreach (var id in pool)
+        {
+            var d = reg.Resolve(id);
+            double simAvg = AvgCost(d);
+            var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig
+            { SouthDeckDef = d, NorthDeckDef = reg.Resolve(pool[0]), Seed = "diag" });
+            double botAvg = OnePieceTcg.Engine.Bot.IntermediateBot.MyDeckAvgCost(st.Players["south"]);
+            double gap = botAvg - simAvg;
+            if (System.Math.Abs(gap) > maxGap) maxGap = System.Math.Abs(gap);
+            string simB = simAvg < 3.3 ? "aggro" : (simAvg <= 4.3 ? "mid" : "control");
+            bool botCtrl = botAvg > 4.3;
+            if (simB == "mid") { midCount++; if (botCtrl) misAsControl++; }
+            Console.WriteLine($"{id,-26} {simAvg,6:F2}  {botAvg,6:F2}  {gap,5:F2}  {simB,-8} {botCtrl}");
+        }
+        Console.WriteLine($"\nmax |gap| = {maxGap:F2}   mid decks misclassified as control: {misAsControl}/{midCount}");
+        return 0;
+    }
+
+    case "racedropbyarchab":
+    {
+        // Segmented+global A/B: varSeat drops the counter-reserve when it has lethal in reach (race) vs baseline.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 9000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        double AvgCost(string id)
+        {
+            var d = reg.Resolve(id);
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        var avg = pool.ToDictionary(id => id, id => AvgCost(id));
+        var wins = new int[3]; var tot = new int[3];
+        var rng = new System.Random(193);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            string varDeck = southIsVar ? dA : dB;
+            OnePieceTcg.Engine.Bot.IntermediateBot.RaceDropReserveSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"rd:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner == null) continue;
+            double a = avg[varDeck];
+            int b = a < 3.3 ? 0 : (a <= 4.3 ? 1 : 2);
+            tot[b]++; if (rec.winner == varSeat) wins[b]++;
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.RaceDropReserveSeat = null;
+        string[] names = { "aggro(<3.3)", "mid(3.3-4.3)", "control(>4.3)" };
+        int gW = wins[0] + wins[1] + wins[2], gT = tot[0] + tot[1] + tot[2];
+        Console.WriteLine($"Race-drop-reserve vs baseline, by variant archetype ({sw.Elapsed.TotalSeconds:F0}s):");
+        for (int b = 0; b < 3; b++)
+        {
+            double pct = tot[b] > 0 ? 100.0 * wins[b] / tot[b] : 0;
+            double se = tot[b] > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / tot[b]) : 0;
+            Console.WriteLine($"  {names[b],-16} {wins[b]}/{tot[b]} = {pct:F1}%  (±{1.96 * se:F1})");
+        }
+        Console.WriteLine($"  GLOBAL           {gW}/{gT} = {(gT>0?100.0*gW/gT:0):F1}%  (±{(gT>0?1.96*100.0*System.Math.Sqrt((100.0*gW/gT)/100*(1-(100.0*gW/gT)/100)/gT):0):F1})");
+        return 0;
+    }
+
+    case "surplusoverloadbyarchab":
+    {
+        // Segmented A/B: varSeat overloads a Leader swing by +2 DON ONLY with surplus DON (>= arg2 beyond the
+        // connect cost) vs baseline. Goal: keep the control forcing win, drop the aggro/mid DON-waste loss.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 9000;
+        if (args.Length > 2 && int.TryParse(args[2], out var sm)) OnePieceTcg.Engine.Bot.IntermediateBot.SurplusOverloadMin = sm;
+        int smin = OnePieceTcg.Engine.Bot.IntermediateBot.SurplusOverloadMin;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        double AvgCost(string id)
+        {
+            var d = reg.Resolve(id);
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        var avg = pool.ToDictionary(id => id, id => AvgCost(id));
+        var wins = new int[3]; var tot = new int[3];
+        var rng = new System.Random(191);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            string varDeck = southIsVar ? dA : dB;
+            OnePieceTcg.Engine.Bot.IntermediateBot.SurplusOverloadSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"so:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner == null) continue;
+            double a = avg[varDeck];
+            int b = a < 3.3 ? 0 : (a <= 4.3 ? 1 : 2);
+            tot[b]++; if (rec.winner == varSeat) wins[b]++;
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.SurplusOverloadSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.SurplusOverloadMin = 3;
+        string[] names = { "aggro(<3.3)", "mid(3.3-4.3)", "control(>4.3)" };
+        int gW = wins[0] + wins[1] + wins[2], gT = tot[0] + tot[1] + tot[2];
+        Console.WriteLine($"Surplus-overload (min {smin}) vs baseline, by variant archetype ({sw.Elapsed.TotalSeconds:F0}s):");
+        for (int b = 0; b < 3; b++)
+        {
+            double pct = tot[b] > 0 ? 100.0 * wins[b] / tot[b] : 0;
+            double se = tot[b] > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / tot[b]) : 0;
+            Console.WriteLine($"  {names[b],-16} {wins[b]}/{tot[b]} = {pct:F1}%  (±{1.96 * se:F1})");
+        }
+        Console.WriteLine($"  GLOBAL           {gW}/{gT} = {(gT>0?100.0*gW/gT:0):F1}%  (±{(gT>0?1.96*100.0*System.Math.Sqrt((100.0*gW/gT)/100*(1-(100.0*gW/gT)/100)/gT):0):F1})");
+        return 0;
+    }
+
+    case "forcecounterbyarchab":
+    {
+        // Segmented A/B: varSeat overloads a Leader swing by +2 DON (force a 2nd counter) vs baseline.
+        // Reports win% split by variant deck archetype — looking for a positive-somewhere/neutral-elsewhere
+        // pattern that would ship as a GLOBAL change (per the iter-19/20 lesson).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 9000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        double AvgCost(string id)
+        {
+            var d = reg.Resolve(id);
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        var avg = pool.ToDictionary(id => id, id => AvgCost(id));
+        var wins = new int[3]; var tot = new int[3];
+        var rng = new System.Random(181);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            string varDeck = southIsVar ? dA : dB;
+            OnePieceTcg.Engine.Bot.IntermediateBot.ForceCounterPressureSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"fc:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner == null) continue;
+            double a = avg[varDeck];
+            int b = a < 3.3 ? 0 : (a <= 4.3 ? 1 : 2);
+            tot[b]++; if (rec.winner == varSeat) wins[b]++;
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.ForceCounterPressureSeat = null;
+        string[] names = { "aggro(<3.3)", "mid(3.3-4.3)", "control(>4.3)" };
+        Console.WriteLine($"Force-counter +2 overload vs baseline, by variant archetype ({sw.Elapsed.TotalSeconds:F0}s):");
+        for (int b = 0; b < 3; b++)
+        {
+            double pct = tot[b] > 0 ? 100.0 * wins[b] / tot[b] : 0;
+            double se = tot[b] > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / tot[b]) : 0;
+            Console.WriteLine($"  {names[b],-16} {wins[b]}/{tot[b]} = {pct:F1}%  (±{1.96 * se:F1})");
+        }
+        return 0;
+    }
+
+    case "condefconfirmab":
+    {
+        // Confirm the SHIPPED conditional leader-defense: varSeat uses the conditional default (control→4,
+        // else 3 via MyDeckAvgCost); the OTHER seat is forced to flat-3 (old behavior). Both hold charDef=4.
+        // Reports varSeat win% by archetype — expect control ~+3pp, mid/aggro ~neutral.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 9000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        double AvgCost(string id)
+        {
+            var d = reg.Resolve(id);
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        var avg = pool.ToDictionary(id => id, id => AvgCost(id));
+        if (args.Length > 2 && double.TryParse(args[2], out var ct)) OnePieceTcg.Engine.Bot.IntermediateBot.ControlAvgCostThreshold = ct;
+        double cthr = OnePieceTcg.Engine.Bot.IntermediateBot.ControlAvgCostThreshold;
+        // Clean setup: varSeat uses the conditional (via its own toggle); the OTHER seat is the plain shipped
+        // default (flat Life<=3). Nothing else forced. Also logs MyDeckAvgCost distribution by SIM archetype.
+        var botAvgSum = new double[3]; var botAvgN = new int[3];
+        var wins = new int[3]; var tot = new int[3];
+        var rng = new System.Random(179);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            string varDeck = southIsVar ? dA : dB;
+            OnePieceTcg.Engine.Bot.IntermediateBot.ConditionalLeaderDefSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"cd:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner == null) continue;
+            double a = avg[varDeck];
+            int b = a < 3.3 ? 0 : (a <= 4.3 ? 1 : 2);
+            tot[b]++; if (rec.winner == varSeat) wins[b]++;
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.ConditionalLeaderDefSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.ControlAvgCostThreshold = 4.3;
+        string[] names = { "aggro(<3.3)", "mid(3.3-4.3)", "control(>4.3)" };
+        Console.WriteLine($"Conditional leader-def (bot control-thr {cthr}) vs flat-3, by SIM-archetype ({sw.Elapsed.TotalSeconds:F0}s):");
+        for (int b = 0; b < 3; b++)
+        {
+            double pct = tot[b] > 0 ? 100.0 * wins[b] / tot[b] : 0;
+            double se = tot[b] > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / tot[b]) : 0;
+            Console.WriteLine($"  {names[b],-16} {wins[b]}/{tot[b]} = {pct:F1}%  (±{1.96 * se:F1})");
+        }
+        return 0;
+    }
+
+    case "defbyarchab":
+    {
+        // Segmented A/B: varSeat counters to save its Leader at Life <= arg2 (vs shipped 3); char-defense held
+        // at the shipped 4 to isolate the LEADER threshold. Reports win% split by variant deck archetype.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 9000;
+        int thr = args.Length > 2 && int.TryParse(args[2], out var tt) ? tt : 5;
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseLifeThreshold = thr;
+        OnePieceTcg.Engine.Bot.IntermediateBot.CharDefenseCostThreshold = 4;   // = shipped baseline, isolate leader
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        double AvgCost(string id)
+        {
+            var d = reg.Resolve(id);
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        var avg = pool.ToDictionary(id => id, id => AvgCost(id));
+        var wins = new int[3]; var tot = new int[3];
+        var rng = new System.Random(173);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            string varDeck = southIsVar ? dA : dB;
+            OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"db:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner == null) continue;
+            double a = avg[varDeck];
+            int b = a < 3.3 ? 0 : (a <= 4.3 ? 1 : 2);
+            tot[b]++; if (rec.winner == varSeat) wins[b]++;
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseVariantSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.DefenseLifeThreshold = 3;
+        OnePieceTcg.Engine.Bot.IntermediateBot.CharDefenseCostThreshold = 5;
+        string[] names = { "aggro(<3.3)", "mid(3.3-4.3)", "control(>4.3)" };
+        Console.WriteLine($"Leader-defense Life<={thr} vs shipped 3, by variant deck archetype ({sw.Elapsed.TotalSeconds:F0}s):");
+        for (int b = 0; b < 3; b++)
+        {
+            double pct = tot[b] > 0 ? 100.0 * wins[b] / tot[b] : 0;
+            double se = tot[b] > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / tot[b]) : 0;
+            Console.WriteLine($"  {names[b],-16} {wins[b]}/{tot[b]} = {pct:F1}%  (±{1.96 * se:F1})");
+        }
+        return 0;
+    }
+
+    case "kofloorbyarchab":
+    {
+        // Segmented A/B: varSeat uses an alternative KO floor (arg2, default 3000 = trade more); baseline seat
+        // keeps the shipped 15000. Reports the variant's win% SPLIT by the variant deck's avg cost bucket
+        // (aggro <3.3 / mid 3.3-4.3 / control >4.3) to surface an archetype-conditional optimum the full-pool
+        // aggregate hides.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 9000;
+        if (args.Length > 2 && int.TryParse(args[2], out var af)) OnePieceTcg.Engine.Bot.IntermediateBot.AltFloor = af;
+        int altFloor = OnePieceTcg.Engine.Bot.IntermediateBot.AltFloor;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        // avg cost per deck (characters+events, excl. leader), weighted by copies
+        double AvgCost(string id)
+        {
+            var d = reg.Resolve(id);
+            double sum = 0; int n = 0;
+            foreach (var e in d.List.Where(e => e.cardId != d.Leader))
+            { var cd = OnePieceTcg.Engine.CardData.GetCard(e.cardId); if (cd == null || cd.Type == "leader") continue; sum += cd.Cost * e.qty; n += e.qty; }
+            return n > 0 ? sum / n : 0;
+        }
+        var avg = pool.ToDictionary(id => id, id => AvgCost(id));
+        // buckets: 0 aggro, 1 mid, 2 control
+        var wins = new int[3]; var tot = new int[3];
+        var rng = new System.Random(167);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            string varDeck = southIsVar ? dA : dB;
+            OnePieceTcg.Engine.Bot.IntermediateBot.AltFloorSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"ka:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner == null) continue;
+            double a = avg[varDeck];
+            int b = a < 3.3 ? 0 : (a <= 4.3 ? 1 : 2);
+            tot[b]++; if (rec.winner == varSeat) wins[b]++;
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.AltFloorSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.AltFloor = 3000;
+        string[] names = { "aggro(<3.3)", "mid(3.3-4.3)", "control(>4.3)" };
+        Console.WriteLine($"KO floor {altFloor} vs shipped 15000, by variant deck archetype ({sw.Elapsed.TotalSeconds:F0}s):");
+        for (int b = 0; b < 3; b++)
+        {
+            double pct = tot[b] > 0 ? 100.0 * wins[b] / tot[b] : 0;
+            double se = tot[b] > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / tot[b]) : 0;
+            Console.WriteLine($"  {names[b],-16} {wins[b]}/{tot[b]} = {pct:F1}%  (±{1.96 * se:F1})");
+        }
+        return 0;
+    }
+
+    case "donaccelfirstab":
+    {
+        // A/B: one seat plays a DON!!-accel card first (extra DON can fund another play this turn).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(163);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.DonAccelFirstSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"df:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.DonAccelFirstSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"DON-accel-first vs value-first: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "raceawarefloorab":
+    {
+        // A/B: one seat drops the KO floor to arg2 when BEHIND on Life (trade to stabilize); ahead/even keeps
+        // the shipped 15000.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        if (args.Length > 2 && int.TryParse(args[2], out var bf)) OnePieceTcg.Engine.Bot.IntermediateBot.RaceBehindFloor = bf;
+        int behind = OnePieceTcg.Engine.Bot.IntermediateBot.RaceBehindFloor;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(157);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.RaceAwareFloorSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"ra:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.RaceAwareFloorSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.RaceBehindFloor = 5000;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Race-aware floor (behind→{behind}) vs static 15000: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "triggerbankab":
+    {
+        // A/B: one seat declines buff-only Triggers to bank the Life card into hand instead.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(151);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.TriggerBankBuffsSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"tb:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.TriggerBankBuffsSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Trigger-bank buffs (decline pump, keep card) vs use-any: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "mulliganab":
+    {
+        // A/B: one seat uses a curve-aware mulligan (require >=minEarly cost<=3 cards, avg<=maxAvg).
+        // args: <games> <minEarly> <maxAvg>
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        if (args.Length > 2 && int.TryParse(args[2], out var me2)) OnePieceTcg.Engine.Bot.IntermediateBot.MulliganMinEarly = me2;
+        if (args.Length > 3 && double.TryParse(args[3], out var ma)) OnePieceTcg.Engine.Bot.IntermediateBot.MulliganMaxAvg = ma;
+        int minE = OnePieceTcg.Engine.Bot.IntermediateBot.MulliganMinEarly;
+        double maxA = OnePieceTcg.Engine.Bot.IntermediateBot.MulliganMaxAvg;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(149);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.MulliganVariantSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"mu:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.MulliganVariantSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.MulliganMinEarly = 2;
+        OnePieceTcg.Engine.Bot.IntermediateBot.MulliganMaxAvg = 4.5;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Curve-aware mulligan (>={minE} cost<=3, avg<={maxA}) vs baseline: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "doubleattackfirstab":
+    {
+        // A/B: one seat prioritizes spreading DON!! to ready a Double Attacker aimed at the Leader (2 Life)
+        // over the cheapest attacker.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(137);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.DoubleAttackFirstSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"da:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.DoubleAttackFirstSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"DON-to-Double-Attacker-first vs cheapest-first: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "onkoaversionlegacyab":
+    {
+        // Confirmatory: BOTH seats trade heavily (legacy KO-everything); the variant ALSO avoids [On K.O.]
+        // targets. Isolates the On-KO downside in the regime where the bot actually KOs a lot.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(131);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            // Both seats legacy KO-everything; only the variant also avoids [On K.O.] targets.
+            OnePieceTcg.Engine.Bot.IntermediateBot.LegacyKoSeat = "both";   // sentinel handled below
+            OnePieceTcg.Engine.Bot.IntermediateBot.OnKoAversionSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"okl:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LegacyKoSeat = null;
+        OnePieceTcg.Engine.Bot.IntermediateBot.OnKoAversionSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"On-KO aversion WITHIN legacy KO-everything: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "onkoaversionab":
+    {
+        // A/B: one seat avoids KO'ing opponents with an [On K.O.] trigger (routes to Life) vs baseline.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(127);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.OnKoAversionSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"ok:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.OnKoAversionSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"On-KO aversion (route to Life) vs KO-anyway: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "richthreatab":
+    {
+        // A/B: one seat also ALWAYS answers recurring effect-engines (like Blockers) under the iter-8 floor.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(113);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.RichThreatSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"rt:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.RichThreatSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Rich-threat (always answer engines) vs iter-8 floor only: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "richdeployab":
+    {
+        // A/B: one seat enriches deployment value with [On Play] ETB impact + [DON!! x_] scaling.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(109);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.RichDeployValueSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"rd:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.RichDeployValueSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Rich deploy value ([On Play]+[DON!! x]) vs plain: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "widedeployab":
+    {
+        // A/B: one seat deploys cheapest-first (go wide) vs baseline highest-value-first (go tall).
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(103);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.WideDeploySeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"wd:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.WideDeploySeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Wide deploy (cheapest-first) vs tall (value-first): {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "zerocounterreserveab":
+    {
+        // A/B: one seat holds NO DON!! back for a defensive [Counter] Event (attaches everything to attackers)
+        // vs the baseline evidence-based reserve.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(97);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.ZeroCounterReserveSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"zc:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.ZeroCounterReserveSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Zero counter-reserve (attach all) vs evidence-based reserve: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
+    case "lethalpivotab":
+    {
+        // A/B: one seat enables the desperation lethal pivot (swing all-in at the Leader when DyingNextTurn),
+        // re-measured now that the damage model is connect-aware. Baseline (null) never pivots.
+        var reg = BuildRegistry(out _);
+        int games = args.Length > 1 && int.TryParse(args[1], out var gg) ? gg : 6000;
+        var metaIds = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i)).ToList();
+        var pool = metaIds.Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        int varWins = 0, done = 0;
+        var rng = new System.Random(89);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < games; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            bool southIsVar = i % 2 == 0;
+            string varSeat = southIsVar ? "south" : "north";
+            OnePieceTcg.Engine.Bot.IntermediateBot.LethalPivotSeat = varSeat;
+            string first = (i / 2) % 2 == 0 ? "south" : "north";
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                reg.Resolve(dA), reg.Resolve(dB), $"lp:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+            if (rec.winner != null) { done++; if (rec.winner == varSeat) varWins++; }
+        }
+        OnePieceTcg.Engine.Bot.IntermediateBot.LethalPivotSeat = null;
+        double pct = done > 0 ? 100.0 * varWins / done : 0;
+        double se = done > 0 ? 100.0 * System.Math.Sqrt(pct / 100 * (1 - pct / 100) / done) : 0;
+        Console.WriteLine($"Lethal pivot (connect-aware) vs never-pivot: {varWins}/{done} = {pct:F1}%  (95% CI ±{1.96 * se:F1})  {pool.Count} meta decks, {sw.Elapsed.TotalSeconds:F0}s");
+        return 0;
+    }
+
     case "enumtest":
     {
         var reg = BuildRegistry(out _);

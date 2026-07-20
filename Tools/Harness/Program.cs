@@ -207,17 +207,44 @@ class Program
         S.Hand.Clear();
         for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
         S.CostArea.Clear();
-        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"pcd{i}", Rested = false });
-        S.DonDeck = 0;
+        // For DON!!-ramp cards ("… from your DON!! deck …") leave headroom under the 10-DON cap and stock the
+        // DON!! deck, so the add actually resolves and can be verified; other probes keep the full 10 active.
+        bool donRamp = (def?.Effect ?? "").IndexOf("DON!! deck", StringComparison.OrdinalIgnoreCase) >= 0;
+        int startDon = donRamp ? 8 : 10;   // 8 = 6 active after 2 pre-rested (enough to play), +2 headroom to add
+        for (int i = 0; i < startDon; i++) S.CostArea.Add(new DonInstance { InstanceId = $"pcd{i}", Rested = false });
+        // Pre-rest 2 so "give rested DON!!" effects have material — but NOT for DON-ramp cards, which need the
+        // active DON to pay their (often high) cost and create their own rested DON via the add.
+        if (!donRamp) { S.CostArea[0].Rested = true; S.CostArea[1].Rested = true; }
+        S.DonDeck = donRamp ? 4 : 0;
         N.CharacterArea[0] = new CardInstance { InstanceId = "n-target", CardId = "ST01-006", Owner = "north", Zone = "character", Rested = false };
+        N.CharacterArea[1] = new CardInstance { InstanceId = "n-target2", CardId = "ST01-006", Owner = "north", Zone = "character", Rested = false };
+        if (S.Life.Count == 0)
+            for (int i = 0; i < 4; i++) S.Life.Add(new CardInstance { InstanceId = $"life{i}", CardId = "ST01-006", Owner = "south", Zone = "life" });
         // Fill the hand with recognizable, playable cheap Characters so trash/play steps have targets.
         for (int i = 0; i < 5; i++)
             S.Hand.Add(new CardInstance { InstanceId = $"hand{i}", CardId = "ST01-006", Owner = "south", Zone = "hand" });
-        var src = new CardInstance { InstanceId = "SRC", CardId = cardId, Owner = "south", Zone = "hand" };
-        S.Hand.Add(src);
-        Console.WriteLine($"BEFORE: hand={S.Hand.Count} board={S.CharacterArea.Count(c => c != null)} trash={S.Trash.Count} deck={S.Deck.Count}\n");
-        int mark = st.EventLog.Count;
-        GameEngine.ApplyCommand(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = src.InstanceId, SlotIndex = 0 });
+        // Activate: Main cards (no On Play) are placed in play and activated; everything else is
+        // played from hand to fire its [On Play].
+        bool isActivate = (def?.Effect ?? "").Contains("[Activate: Main]") && !(def?.Effect ?? "").Contains("[On Play]");
+        CardInstance src;
+        int mark;
+        if (isActivate)
+        {
+            bool isStage = (def?.Type ?? "") == "stage";
+            src = new CardInstance { InstanceId = "SRC", CardId = cardId, Owner = "south", Zone = isStage ? "stage" : "character", Rested = false, PlayedOnTurn = 0 };
+            if (isStage) S.Stage = src; else S.CharacterArea[1] = src;
+            Console.WriteLine($"BEFORE: hand={S.Hand.Count} board={S.CharacterArea.Count(c => c != null)} trash={S.Trash.Count} deck={S.Deck.Count}\n");
+            mark = st.EventLog.Count;
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "activateMain", Seat = "south", Target = src.InstanceId });
+        }
+        else
+        {
+            src = new CardInstance { InstanceId = "SRC", CardId = cardId, Owner = "south", Zone = "hand" };
+            S.Hand.Add(src);
+            Console.WriteLine($"BEFORE: hand={S.Hand.Count} board={S.CharacterArea.Count(c => c != null)} trash={S.Trash.Count} deck={S.Deck.Count}\n");
+            mark = st.EventLog.Count;
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = src.InstanceId, SlotIndex = 0 });
+        }
 
         // Step through prompts: at each step print the active pending effect (button text/zone), then
         // supply the FIRST hand card as a target (so trash/play steps actually consume a card).
@@ -248,10 +275,28 @@ class Program
             if (pe == null) break;
             Console.WriteLine($"PROMPT #{guard}: zone={pe.TargetZone} sel={pe.SelectionsRemaining} optional={pe.Optional}");
             Console.WriteLine($"    text='{(pe.Text ?? "").Replace("\n", " / ")}'");
-            string pick = S.Hand.FirstOrDefault(c => c.InstanceId != "SRC")?.InstanceId;
-            var before = (S.Hand.Count, S.CharacterArea.Count(c => c != null), S.Trash.Count);
+            Console.WriteLine($"    original='{(pe.OriginalText ?? "").Replace("\n", " / ")}'");
+            Console.WriteLine($"    done=[{string.Join(" | ", pe.DoneParts ?? new System.Collections.Generic.List<string>())}]  skipped=[{string.Join(" | ", pe.SkippedParts ?? new System.Collections.Generic.List<string>())}]");
+            Console.WriteLine($"    validTargets: {DumpValidTargets(st, pe)}");
+            // "give rested DON!! to your Leader" wants a rested DON!! id; otherwise prefer an opponent
+            // Character (removal / can't-attack), else a hand card.
+            string peText = pe.Text ?? "";
+            string pick;
+            if (peText.IndexOf("rested DON!!", StringComparison.OrdinalIgnoreCase) >= 0 && peText.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0)
+                pick = S.CostArea.FirstOrDefault(d => d.Rested)?.InstanceId;
+            else if (peText.IndexOf("top or bottom of your Life", StringComparison.OrdinalIgnoreCase) >= 0)
+                pick = S.Life.LastOrDefault()?.InstanceId;   // top of Life = end of the list
+            else
+                pick = st.Players["north"].CharacterArea.FirstOrDefault(c => c != null)?.InstanceId
+                       ?? S.Hand.FirstOrDefault(c => c.InstanceId != "SRC")?.InstanceId;
+            // Progress signature spanning BOTH players' zones + the effect's own selection counter,
+            // so a move that only touches the opponent's board (e.g. Gravity Blade placing an enemy
+            // Character at the bottom of THEIR deck) still reads as progress and isn't falsely skipped.
+            long Sig() => st.Players.Values.Sum(pl => pl.Hand.Count + pl.Trash.Count + pl.Deck.Count
+                          + pl.CharacterArea.Count(c => c != null)) * 100 + pe.SelectionsRemaining;
+            long before = Sig();
             GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = pick });
-            var after = (S.Hand.Count, S.CharacterArea.Count(c => c != null), S.Trash.Count);
+            long after = st.PendingEffects.Contains(pe) ? Sig() : -1;
             if (before == after && st.PendingEffects.Contains(pe))
             {   // target rejected — try passing/skipping so we don't spin
                 GameEngine.ApplyCommand(st, new GameCommand { Type = "passEffect", Seat = "south", EffectId = pe.EffectId });
@@ -260,6 +305,28 @@ class Program
         Console.WriteLine($"\nAFTER: hand={S.Hand.Count} board={S.CharacterArea.Count(c => c != null)} trash={S.Trash.Count} deck={S.Deck.Count}");
         Console.WriteLine("\n--- resolution log ---");
         foreach (var l in st.EventLog.Skip(mark)) Console.WriteLine("  " + l.Message);
+    }
+
+    // Which cards in play/hand/trash/Life the client would glow green for this pending step.
+    static string DumpValidTargets(GameState st, PendingEffect pe)
+    {
+        var outp = new System.Collections.Generic.List<string>();
+        foreach (var seat in new[] { "south", "north" })
+        {
+            var p = st.Players[seat];
+            void Chk(CardInstance c, string where)
+            {
+                if (c != null && GameEngine.IsValidEffectTarget(st, pe, c))
+                    outp.Add($"{where}:{CardData.GetCard(c.CardId)?.Name}");
+            }
+            Chk(p.Leader, seat + "/leader");
+            foreach (var c in p.CharacterArea) Chk(c, seat + "/char");
+            foreach (var c in p.Hand) Chk(c, seat + "/hand");
+            foreach (var c in p.Trash) Chk(c, seat + "/trash");
+            foreach (var c in p.Life) Chk(c, seat + "/life");
+            if (p.Stage != null) Chk(p.Stage, seat + "/stage");
+        }
+        return outp.Count == 0 ? "(none)" : string.Join(", ", outp);
     }
 
     static void Diag(string sd, string nd, int seed)

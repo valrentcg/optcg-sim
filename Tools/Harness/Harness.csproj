@@ -20,5 +20,13 @@
     <Compile Include="..\..\Assets\Scripts\Engine\GameState.cs" Link="Engine\GameState.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\CardData.cs" Link="Engine\CardData.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\Bot\IntermediateBot.cs" Link="Engine\Bot\IntermediateBot.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\ChampionBot.cs" Link="Engine\Bot\ChampionBot.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\GameClone.cs" Link="Engine\Bot\Search\GameClone.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\Evaluation.cs" Link="Engine\Bot\Search\Evaluation.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\LegalActions.cs" Link="Engine\Bot\Search\LegalActions.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\SearchBot.cs" Link="Engine\Bot\Search\SearchBot.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\TriggerUtilityPolicy.cs" Link="Engine\Bot\Search\TriggerUtilityPolicy.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\RemovalModel.cs" Link="Engine\Bot\Search\RemovalModel.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\DonOpportunityModel.cs" Link="Engine\Bot\Search\DonOpportunityModel.cs" />
   </ItemGroup>
 </Project>

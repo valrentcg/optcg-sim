@@ -77,6 +77,10 @@ namespace OnePieceTcg.Engine.Bot.Search
             Timing = e.Timing, Text = e.Text, Optional = e.Optional, Scope = e.Scope, TargetZone = e.TargetZone,
             DonPaymentRemaining = e.DonPaymentRemaining, SelectionsRemaining = e.SelectionsRemaining,
             RemainingBudget = e.RemainingBudget, FirstPickId = e.FirstPickId, PendingContinuation = e.PendingContinuation,
+            OriginalText = e.OriginalText,
+            DoneParts = e.DoneParts != null ? new System.Collections.Generic.List<string>(e.DoneParts) : new System.Collections.Generic.List<string>(),
+            SkippedParts = e.SkippedParts != null ? new System.Collections.Generic.List<string>(e.SkippedParts) : new System.Collections.Generic.List<string>(),
+            OnceKey = e.OnceKey,
         };
 
         private static CardModifier CloneCM(CardModifier m) => new CardModifier

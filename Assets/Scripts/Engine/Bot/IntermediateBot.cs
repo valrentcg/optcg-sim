@@ -73,6 +73,43 @@ namespace OnePieceTcg.Engine.Bot
         /// gated for refinement (a connect-aware damage model + a margin) before it can ship on.</summary>
         public static bool LethalPivotEnabled = false;
 
+        /// <summary>Sim-only A/B knob: enable the desperation lethal pivot for just this seat (to re-measure it
+        /// now that <see cref="DyingNextTurn"/> is connect-aware — the refinement its OFF-by-default note asked
+        /// for). OR'd with <see cref="LethalPivotEnabled"/>.</summary>
+        public static string LethalPivotSeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, hold back NO DON!! for a [Counter] Event on defense — attach
+        /// everything to attackers. Tests whether the evidence-based counter reserve is too defensive given that
+        /// Life pressure so strongly out-performs trading (iter 8). Baseline reserves the priciest payable counter.</summary>
+        public static string ZeroCounterReserveSeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, deploy CHEAPEST-first (go wide — more bodies, spend DON!!
+        /// fully) instead of the baseline highest-value-first (go tall — biggest body, may strand DON!!). A
+        /// directional probe of board width vs board quality for the greedy deployer.</summary>
+        public static string WideDeploySeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, enrich DEPLOYMENT value with [On Play] ETB impact and
+        /// [DON!! x_] continuous scaling — the value a Character has when YOU play it (an On-Play removal/draw
+        /// body is a premium play, not a vanilla). Kept out of KO-target Value (a spent ETB is worthless to
+        /// remove). Baseline deploy value = cost·power·keyword·EffectThreat only.</summary>
+        public static string RichDeployValueSeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, ALWAYS answer a recurring effect-engine (a low-printed-value
+        /// body whose [Activate: Main]/[DON!! x_] ability compounds every turn) even under the iter-8 Life-pressure
+        /// floor — the same way Blockers are always answered. Tests the "effects raise the OPPONENT's value beyond
+        /// printed stats" thesis for KO-targeting. Baseline: only Blockers + Value≥floor bodies are answered.</summary>
+        public static string RichThreatSeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, AVOID K.O.'ing an opponent Character with an [On K.O.]
+        /// trigger — killing it hands its owner the reward (draw / recur from trash / etc.). Route that swing to
+        /// Life pressure instead. Blockers are still always answered (they must be removed to attack at all).</summary>
+        public static string OnKoAversionSeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, when spreading DON!! to ready an attacker (Step B), prefer
+        /// readying a Double Attacker aimed at the Leader — a DON!! that connects it buys 2 Life vs 1 for a
+        /// vanilla, the fastest clock in the iter-8 Life race. Baseline readies the cheapest attacker.</summary>
+        public static string DoubleAttackFirstSeat = null;
+
         /// <summary>A/B toggle for the restand engine (Zoro et al.): load the Leader's [DON!! xN] "set this
         /// Leader as active" gate, have it attack a Character to satisfy the "battled a Character" condition,
         /// then <see cref="OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy"/> restands it for a second
@@ -83,6 +120,54 @@ namespace OnePieceTcg.Engine.Bot
         /// when-attacking payoffs), not just stats — so a small body with a per-turn engine is correctly
         /// prioritised for removal over a vanilla bigger body. Feeds all target selection via Value().</summary>
         public static bool ThreatModelEnabled = true;
+
+        /// <summary>Sim-only A/B knob: a seat name here uses the OLD "front-load all DON!! before attacking"
+        /// policy; null (default, and always in the shipped game) uses the new one-attacker-at-a-time policy.</summary>
+        public static string LegacyDonSeat = null;
+
+        /// <summary>Sim-only A/B knob: a seat name here over-loads Leader swings to +2000 past the Leader so a
+        /// single counter can't stop it (forces TWO counter cards) — a high-level DON!! efficiency line under
+        /// test. null (default) keeps the "exactly enough to connect" allocation.</summary>
+        public static string ForceCounterPressureSeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, start countering to protect the Leader at this Life count
+        /// (baseline elsewhere is 3). Lower = trade more Life early; higher = defend earlier.</summary>
+        public static string DefenseVariantSeat = null;
+        public static int DefenseLifeThreshold = 3;
+        /// <summary>Sim-only A/B knob (gated by DefenseVariantSeat): min Character cost worth spending counters to
+        /// save (baseline 5). Higher = let more Characters die and hoard counters for the Leader.</summary>
+        public static int CharDefenseCostThreshold = 5;
+
+        /// <summary>Sim-only A/B knob: for this seat, once the board is developed, HOLD a big-counter Character in
+        /// hand for defence instead of deploying it as another body. null (default) always deploys.</summary>
+        public static string HoldCounterVariantSeat = null;
+
+        /// <summary>Sim-only A/B knob: for this seat, use these board-size / counter-value thresholds for the
+        /// hold-for-counter rule instead of the shipped 3 / 2000, to tune it.</summary>
+        public static string HoldTuneSeat = null;
+        public static int HoldBoardThreshold = 3;
+        public static int HoldCounterThreshold = 2000;
+
+        /// <summary>Sim-only A/B knob: for this seat, DON'T block a Leader attack while Life is above this count —
+        /// take the hit for the Life→hand card refill and keep the Blocker active. Baseline (null) always blocks
+        /// with a surviving Blocker.</summary>
+        public static string BlockVariantSeat = null;
+        public static int BlockLifeThreshold = 2;
+
+        /// <summary>Sim-only A/B knob: for this seat, sequence attackers WEAKEST-relevant first (the documented
+        /// high-level habit — bait/drain the opponent's counters on small swings, then send the biggest hitter
+        /// into a depleted defense). Baseline (null) attacks strongest-first.</summary>
+        public static string WeakestFirstSeat = null;
+
+        /// <summary>SHIPPED ("Life is the clock"): when a Leader swing is available, pressure the Leader instead
+        /// of spending DON to KO a rested Character whose Value is below this floor — but ALWAYS answer a Blocker
+        /// (it walls Life pressure) and never idle an attacker that can't reach the Leader.
+        /// Floor RAISED 15000→25000 (iter 19): archetype-segmented A/B showed the 15000 cap cost CONTROL decks
+        /// −5.7pp (they were trading into 6–8-cost bodies instead of racing) while neutral for aggro/mid; at
+        /// 25000 only true 10-cost+ giants (and always Blockers) are answered. <see cref="LegacyKoSeat"/>
+        /// reverts a seat to the old KO-everything (floor 0) for measurement.</summary>
+        public static int KoValueFloor = 25000;
+        public static string LegacyKoSeat = null;
 
         /// <summary>If the Leader has an UNUSED "set this Leader as active" [Activate: Main], its [DON!! xN]
         /// gate (0 if ungated); -1 if there is no such ability or it is already used this turn.</summary>
@@ -323,7 +408,7 @@ namespace OnePieceTcg.Engine.Bot
             {
                 var p = state.Players[seat];
                 if (p.MulliganDecided) return null;
-                return Try(blacklist, new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = ShouldMulligan(p) });
+                return Try(blacklist, new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = ShouldMulligan(state, p, seat) });
             }
 
             if (state.Status != "active") return null;
@@ -375,13 +460,53 @@ namespace OnePieceTcg.Engine.Bot
 
         // ---- Setup ------------------------------------------------------------
 
-        private static bool ShouldMulligan(PlayerState p)
+        // A/B: curve-aware mulligan — require at least MulliganMinEarly cards costing <=3 (a real early curve,
+        // not just one cheap card) and cap the average cost. Baseline keeps any hand with >=1 cost<=2 card and
+        // avgCost<=4.5. Mulliganing is card-neutral (draw 5 fresh), so tossing a hand that can't develop is ~free.
+        public static string MulliganVariantSeat = null;
+        public static int MulliganMinEarly = 2;
+        public static double MulliganMaxAvg = 4.5;
+
+        private static bool ShouldMulligan(GameState state, PlayerState p, string seat = null)
         {
             if (p.Hand.Count == 0) return false;
-            int cheapPlays = p.Hand.Count(c => (CardData.GetCard(c.CardId)?.Cost ?? 99) <= 2);
-            double avgCost = p.Hand.Average(c => CardData.GetCard(c.CardId)?.Cost ?? 5);
-            // No early plays at all, or a hand that's generally too expensive to develop from.
-            return cheapPlays == 0 || avgCost > 4.5;
+            if (MulliganVariantSeat == seat)
+            {
+                int early = p.Hand.Count(c => (CardData.GetCard(c.CardId)?.Cost ?? 99) <= 3);
+                double avg = p.Hand.Average(c => CardData.GetCard(c.CardId)?.Cost ?? 5);
+                return early < MulliganMinEarly || avg > MulliganMaxAvg;
+            }
+            // A/B (research position-aware): on the PLAY (first, no turn-1 draw) demand a tempo hand (tighter
+            // avg cap); on the DRAW (second, extra cards/DON) tolerate a slower hand (looser cap).
+            if (PositionMulliganSeat == seat)
+            {
+                int cheap = p.Hand.Count(c => (CardData.GetCard(c.CardId)?.Cost ?? 99) <= 2);
+                double av = p.Hand.Average(c => CardData.GetCard(c.CardId)?.Cost ?? 5);
+                bool onPlay = state.FirstPlayer == seat;
+                return cheap == 0 || av > (onPlay ? 4.0 : 5.0);
+            }
+            // A/B (user's richer mulligan): keep a hand that can EXECUTE ITS CURVE for the position, and forgive
+            // a mediocre curve if a SEARCHER can fix it. On the play (no T1 draw) demand a turn-1/2 tempo play;
+            // on the draw (extra card/DON) a turn-2/3 play is enough. Mull a too-expensive hand only when no
+            // searcher can dig toward the missing curve pieces.
+            if (LegacyMulliganSeat == seat)
+            {
+                // OLD simple rule (kept for A/B): no cheap play, or a generally too-expensive hand.
+                int cheapPlays = p.Hand.Count(c => (CardData.GetCard(c.CardId)?.Cost ?? 99) <= 2);
+                double avgCost = p.Hand.Average(c => CardData.GetCard(c.CardId)?.Cost ?? 5);
+                return cheapPlays == 0 || avgCost > 4.5;
+            }
+            // SHIPPED (user's richer mulligan, win-neutral but strategically correct): keep a hand that can
+            // START its curve for the position, and forgive a top-heavy curve when a SEARCHER can dig toward
+            // the missing pieces. On the play (no T1 draw) demand a turn-1/2 tempo play; on the draw a turn-2/3.
+            int dCheap = p.Hand.Count(c => (CardData.GetCard(c.CardId)?.Cost ?? 99) <= 2);
+            int dEarly = p.Hand.Count(c => (CardData.GetCard(c.CardId)?.Cost ?? 99) <= 3);
+            double dAvg = p.Hand.Average(c => CardData.GetCard(c.CardId)?.Cost ?? 5);
+            bool dOnPlay = state.FirstPlayer == seat;
+            bool dHasSearcher = p.Hand.Any(c => IsSearcher(CardData.GetCard(c.CardId)));
+            if (dOnPlay ? dCheap == 0 : dEarly == 0) return true;        // no on-curve tempo start for the position
+            double dCap = dOnPlay ? 4.3 : 4.8;                           // the draw tolerates a slower curve
+            return dAvg > dCap && !dHasSearcher;                         // too top-heavy AND no searcher to fix it
         }
 
         // ---- Pending effect / choice resolution --------------------------------
@@ -541,20 +666,53 @@ namespace OnePieceTcg.Engine.Bot
         private static (string targetId, int don)? PlanAttack(GameState s, string seat, CardInstance atk, int budget, bool race)
         {
             var opp = s.Players[GameEngine.OtherSeat(seat)];
+            (string id, int don)? leaderPick = null;
+            if (opp.Leader != null)
+            {
+                int need = DonToReach(s, atk, GameEngine.GetPower(s, opp.Leader));
+                if (need <= budget)
+                {
+                    int load = need;
+                    // Counter-pressure variant (under A/B test): over-load the Leader swing by +2000 so
+                    // one counter can't stop it, forcing the opponent to spend two — when the DON is spare.
+                    if (ForceCounterPressureSeat == seat) load = Math.Min(budget, need + 2);
+                    // Surplus-gated overload: only force the 2nd counter when there's real spare DON!! (>= min
+                    // beyond the connect cost) — captures the control-deck forcing win without wasting aggro/mid
+                    // DON!!. Game-state gate, not archetype (reliable at runtime).
+                    else if (SurplusOverloadSeat == seat && budget - need >= SurplusOverloadMin)
+                        load = Math.Min(budget, need + 2);
+                    leaderPick = (opp.Leader.InstanceId, load);
+                }
+            }
             (string id, int don, double val)? koPick = null;
             foreach (var t in opp.CharacterArea)
             {
                 if (t == null || !t.Rested) continue;                 // can only attack rested Characters
                 int need = DonToReach(s, atk, GameEngine.GetPower(s, t));
                 if (need > budget) continue;
+                // SHIPPED "Life is the clock": pressure the Leader over spending DON to remove a spent
+                // low-value body. Skip a KO only when its Value is below the floor AND we actually have a
+                // Leader to hit instead — but ALWAYS answer a Blocker (it walls Life pressure, so removing
+                // it IS Life pressure) and never idle an attacker that can't reach the Leader (leaderPick ==
+                // null ⇒ trade rather than do nothing). LegacyKoSeat reverts a seat to floor 0 (KO all).
+                int koFloor = (LegacyKoSeat == seat || LegacyKoSeat == "both") ? 0 : KoValueFloor;
+                if (AltFloorSeat == seat) koFloor = AltFloor;   // per-seat override (archetype-segmented A/B)
+                // Race-aware (A/B): when BEHIND on the Life race, drop the floor so the bot trades more to
+                // stabilize instead of racing a race it's losing; when ahead/even, keep pressuring (iter-8 floor).
+                if (RaceAwareFloorSeat == seat
+                    && s.Players[seat].Life.Count < s.Players[GameEngine.OtherSeat(seat)].Life.Count)
+                    koFloor = RaceBehindFloor;
+                // Always answer a Blocker (walls Life pressure) and — for the RichThreat variant — a recurring
+                // effect-engine (compounds every turn), regardless of printed Value.
+                bool alwaysAnswer = GameEngine.HasBlocker(s, t)
+                    || (RichThreatSeat == seat && ExtraThreat(GameEngine.GetCard(t)) >= 3000);
+                // On-KO aversion (A/B): killing a body with an [On K.O.] trigger rewards its owner — route to
+                // Life pressure instead (unless it's a Blocker we must remove to attack).
+                bool avoidOnKo = OnKoAversionSeat == seat && !GameEngine.HasBlocker(s, t)
+                    && (GameEngine.GetCard(t)?.Effect ?? "").IndexOf("[On K.O.]", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (leaderPick != null && (Value(s, t) < koFloor || avoidOnKo) && !alwaysAnswer) continue;
                 double val = Value(s, t) - need * 250;                 // favour high value, low DON!! spend
                 if (koPick == null || val > koPick.Value.val) koPick = (t.InstanceId, need, val);
-            }
-            (string id, int don)? leaderPick = null;
-            if (opp.Leader != null)
-            {
-                int need = DonToReach(s, atk, GameEngine.GetPower(s, opp.Leader));
-                if (need <= budget) leaderPick = (opp.Leader.InstanceId, need);
             }
             if (race && leaderPick != null) return (leaderPick.Value.id, leaderPick.Value.don);
             if (koPick != null) return (koPick.Value.id, koPick.Value.don);
@@ -626,6 +784,27 @@ namespace OnePieceTcg.Engine.Bot
 
         // ---- Defense (block / counter / trigger / resolve) ------------------------
 
+        /// <summary>The bot's own deck's average card cost (Characters + Events, excluding the Leader), summed
+        /// across ALL its zones (deck+hand+trash+board+Life) so it's stable all game — the same signal the Sim
+        /// buckets decks by. Used to detect a CONTROL deck (avg > 4.3) for archetype-conditional heuristics.</summary>
+        internal static double MyDeckAvgCost(PlayerState p)
+        {
+            double sum = 0; int n = 0;
+            void Acc(IEnumerable<CardInstance> zone)
+            {
+                if (zone == null) return;
+                foreach (var c in zone)
+                {
+                    if (c == null) continue;
+                    var d = CardData.GetCard(c.CardId);
+                    if (d == null || d.Type == "leader") continue;
+                    sum += d.Cost; n++;
+                }
+            }
+            Acc(p.Hand); Acc(p.Deck); Acc(p.Trash); Acc(p.CharacterArea); Acc(p.Life);
+            return n > 0 ? sum / n : 4.0;
+        }
+
         private static GameCommand DecideDefense(GameState state, string seat, HashSet<string> blacklist)
         {
             var battle = state.Battle;
@@ -643,7 +822,18 @@ namespace OnePieceTcg.Engine.Bot
                     if (blockers.Count == 0)
                         return new GameCommand { Type = "passBlock", Seat = seat };
 
+                    bool targetLeaderNow = battle.TargetId == me.Leader?.InstanceId;
+                    // Life-aware blocking variant (A/B): while Life is still high, TAKE a Leader hit —
+                    // it refills the hand (Life→hand) and keeps the Blocker active to swing — instead of
+                    // blocking. Only blocks Leader hits once Life has dropped to the threshold.
+                    if (BlockVariantSeat == seat && targetLeaderNow && me.Life.Count > BlockLifeThreshold)
+                        return new GameCommand { Type = "passBlock", Seat = seat };
+
                     bool leaderLethalRisk = battle.TargetId == me.Leader?.InstanceId && me.Life.Count == 0;
+                    // A/B: don't spend the Blocker (its once-per-turn block) on a CHARACTER attack — keep it
+                    // active for a Leader hit later this turn; let the Character take the hit.
+                    if (BlockLeaderOnlySeat == seat && !targetLeaderNow)
+                        return new GameCommand { Type = "passBlock", Seat = seat };
                     // A blocker survives only if its power EXCEEDS the attack (a tie loses — attacker
                     // wins on >=). Block with the smallest survivor to keep the bigger blockers back.
                     var surviving = blockers.Where(b => GameEngine.GetPower(state, b) > attackPower)
@@ -676,9 +866,22 @@ namespace OnePieceTcg.Engine.Bot
                     // Worth defending? Protect the Leader when Life is getting low (or it's lethal);
                     // for a Character, only save a genuinely valuable one — otherwise let it die and
                     // keep the counters for the Leader.
+                    // Shipped default: flat Life<=3. A CONTROL deck defending one Life earlier (Life<=4) is
+                    // +3.0pp segmented, but runtime archetype-gating (ConditionalLeaderDefSeat) is DORMANT until
+                    // it captures that cleanly — see scoreboard memory. DefenseVariantSeat is the flat A/B override.
+                    int leaderDefLife = (DefenseVariantSeat == seat) ? DefenseLifeThreshold
+                        : (ConditionalLeaderDefSeat == seat && MyDeckAvgCost(me) > ControlAvgCostThreshold ? 4 : 3);
+                    // Counter to save a Character costing >= 4 (was 5). A/B across 37 meta decks: saving
+                    // cost-4 Characters too is +3.3pp (53.3% vs 50%); the old 5 hoarded counters and let
+                    // valuable 4-cost bodies die. cost>=2/3/4 all tie, so 4 captures the full gain.
+                    int charDefCost = (DefenseVariantSeat == seat) ? CharDefenseCostThreshold : 4;
                     bool worthDefending = targetIsLeader
-                        ? (me.Life.Count <= 3 || me.Life.Count == 0)
-                        : (target != null && (GameEngine.GetCard(target)?.Cost ?? 0) >= 5);
+                        ? (me.Life.Count <= leaderDefLife || me.Life.Count == 0)
+                        : (target != null && (GameEngine.GetCard(target)?.Cost ?? 0) >= charDefCost);
+                    // A/B (counter-prioritization): at low Life the Leader is the target that matters — don't
+                    // spend survival counters on a Character; save them for the Leader.
+                    if (SaveCounterForLeaderSeat == seat && !targetIsLeader && me.Life.Count <= 3)
+                        worthDefending = false;
                     if (!worthDefending) return new GameCommand { Type = "passCounter", Seat = seat };
 
                     // AWARENESS: only commit counters if the AI can AFFORD to reach `need`. A
@@ -695,6 +898,20 @@ namespace OnePieceTcg.Engine.Bot
                     // If one counter alone suffices, use the SMALLEST such (don't overspend a big
                     // counter on a small need); otherwise stack largest-first to reach `need`.
                     var single = usable.Where(x => x.cp >= need).OrderBy(x => x.cp).ToList();
+                    // SHIPPED ("don't over-counter"): to save a CHARACTER, only spend a SINGLE counter card —
+                    // never trade 2+ cards for one body (card disadvantage). The Leader may still stack (survival).
+                    // LegacyStackCharCounterSeat reverts to the old always-stack behavior for A/B.
+                    if (LegacyStackCharCounterSeat != seat && !targetIsLeader && single.Count == 0)
+                        return new GameCommand { Type = "passCounter", Seat = seat };
+                    // A/B: save a Character only with a small (+1000) counter — never burn a premium (+2000) on
+                    // a body; keep premiums for the Leader.
+                    if (CheapCounterCharOnlySeat == seat && !targetIsLeader
+                        && (single.Count == 0 || single[0].cp > 1000))
+                        return new GameCommand { Type = "passCounter", Seat = seat };
+                    // SHIPPED: same for the Leader, but only while a Life buffer remains (Life >= 2); at Life <= 1
+                    // survival justifies stacking. LegacyStackLeaderCounterSeat reverts to old always-stack.
+                    if (LegacyStackLeaderCounterSeat != seat && targetIsLeader && me.Life.Count >= 2 && single.Count == 0)
+                        return new GameCommand { Type = "passCounter", Seat = seat };
                     var plan = single.Count > 0 ? new List<(CardInstance card, int cp)> { single[0] } : usable;
                     foreach (var x in plan)
                     {
@@ -714,6 +931,143 @@ namespace OnePieceTcg.Engine.Bot
         // Declining a Trigger adds the Life card to hand. If that Trigger merely activates an
         // owner-agnostic bounce Main effect (Sables) and the opponent has no legal Character target,
         // firing it can only bounce our own board. Hold the Event instead.
+        /// <summary>Sim-only A/B knob: for this seat, play a DON!!-acceleration card ("add 1 DON!! from your
+        /// DON!! deck") FIRST — the extra active DON!! it makes can enable another play THIS turn, which its low
+        /// printed Value otherwise defers to last. Unlike deploy re-ordering (iter 12a), this changes what is
+        /// AFFORDABLE, not just the sequence.</summary>
+        public static string DonAccelFirstSeat = null;
+
+        /// <summary>Deck avg-cost above which the bot treats itself as CONTROL (defends its Leader one Life
+        /// earlier). See <see cref="MyDeckAvgCost"/>.</summary>
+        public static double ControlAvgCostThreshold = 4.3;
+
+        /// <summary>A/B knob (NOT shipped — dormant by default): this seat defends its Leader one Life earlier
+        /// (Life≤4) when its deck is CONTROL (<see cref="MyDeckAvgCost"/> &gt; <see cref="ControlAvgCostThreshold"/>).
+        /// Kept gated because runtime archetype classification did not cleanly capture the segmented +3pp control
+        /// gain without a mid penalty — see the heuristic scoreboard memory.</summary>
+        public static string ConditionalLeaderDefSeat = null;
+
+        /// <summary>A/B knob: overload a Leader swing by +2 DON!! (force a 2nd counter) ONLY when there is real
+        /// SURPLUS DON!! — at least <see cref="SurplusOverloadMin"/> beyond what the swing needs to connect.
+        /// A game-state gate (spare DON!!), not a deck-archetype gate: control decks with idle DON!! get the
+        /// forcing pressure, aggro/mid don't waste scarce DON!!. Reliable at runtime (the bot knows its DON!!).</summary>
+        public static string SurplusOverloadSeat = null;
+        public static int SurplusOverloadMin = 3;
+
+        /// <summary>A/B knob: when the bot has lethal in reach this turn (the `race` flag — enough attackers to
+        /// cover the opponent's Life past their Blockers), spend the counter-reserve DON!! on the kill too. If
+        /// you win this turn, holding defensive DON!! back is pure waste. Game-state gated (fires whenever
+        /// lethal is on), not archetype — so it self-targets any deck that reaches a kill.</summary>
+        public static string RaceDropReserveSeat = null;
+
+        /// <summary>A/B knob (research: "don't attack with your Blocker"): hold non-Leader Blockers back from
+        /// attacking so they stay active to block next turn — the chip damage is usually worth less than a
+        /// guaranteed block. Card-property gated (has Blocker), so it self-targets Blocker-running decks.</summary>
+        public static string HoldBlockersSeat = null;
+
+        /// <summary>A/B knob (research "bait the blocker"): order attackers weakest-first ONLY when the opponent
+        /// has an active Blocker, baiting the block onto a cheap attacker so the big hitter gets through. The
+        /// unconditional iter-7 weakest-first was null; this isolates the blocker-present case.</summary>
+        public static string BaitBlockerSeat = null;
+
+        /// <summary>A/B knob: UNLOCK the otherwise-disabled Character [Activate: Main] action class — proactively
+        /// fire beneficial (<see cref="BeneficialActivateMain"/>) abilities. Restricted to [Once Per Turn] ones
+        /// so the engine's AbilityUsedThisTurn guard prevents the infinite re-fire the disable note warned about.</summary>
+        public static string EnableActivateMainSeat = null;
+
+        /// <summary>A/B knob: like <see cref="EnableActivateMainSeat"/> but ONLY on SUMMONING-SICK Characters —
+        /// they can't attack this turn anyway, so firing their beneficial [Once Per Turn] ability is pure upside
+        /// (no attack pressure sacrificed). Common pattern: play a value engine and use it the turn it lands.</summary>
+        public static string ActivateMainSickOnlySeat = null;
+
+        /// <summary>A/B knob (research "swing first, then play"): attack with the existing board BEFORE deploying
+        /// new Characters. New bodies are summoning-sick so they can't attack this turn anyway; attacking first
+        /// commits DON!! to making attacks CONNECT (Life pressure, iter 8) before board development spends it.</summary>
+        public static string AttackFirstSeat = null;
+
+        /// <summary>SHIPPED (research "don't over-counter", global +0.7pp @12k, borderline but strategically
+        /// sound): to save a Character, spend at most ONE counter card — pass rather than stack 2+ cards for a
+        /// single body (card disadvantage). The Leader may still stack (survival). This seat REVERTS to the old
+        /// always-stack behavior for A/B measurement.</summary>
+        public static string LegacyStackCharCounterSeat = null;
+
+        /// <summary>SHIPPED (extend "don't over-counter" to the Leader, global +0.9pp @12k, ~97.5% one-sided):
+        /// only single-counter a Leader hit while you still have a Life buffer (Life >= 2) — passing costs 1 Life
+        /// (a card to hand anyway), cheaper than stacking 2+ cards. Still stacks at Life <= 1 (survival). This
+        /// seat REVERTS to the old always-stack behavior for A/B measurement.</summary>
+        public static string LegacyStackLeaderCounterSeat = null;
+
+        /// <summary>A/B knob (card-QUALITY discipline): save a Character only when a small (+1000) counter
+        /// suffices — never spend a premium (+2000) counter on a body; those are your best Leader defense.
+        /// Let a Character that needs a +2000 die and keep the premium for the Leader.</summary>
+        public static string CheapCounterCharOnlySeat = null;
+
+        /// <summary>A/B knob (blocker-tempo discipline): don't block a CHARACTER attack — save the Blocker active
+        /// to block a Leader hit later this turn (a Blocker only blocks once per turn). Let the minor Character
+        /// take the hit. Leader attacks and lethal still block normally.</summary>
+        public static string BlockLeaderOnlySeat = null;
+
+        /// <summary>A/B knob (counter-prioritization): while at low Life (&lt;=3, Leader-defense range), don't
+        /// spend counters to save a Character — they're survival resources; save them for the Leader.</summary>
+        public static string SaveCounterForLeaderSeat = null;
+
+        /// <summary>A/B knob (research position-aware mulligan): tighter avg-cost cap on the PLAY (need tempo,
+        /// no turn-1 draw), looser cap on the DRAW (extra cards/DON tolerate a slower hand).</summary>
+        public static string PositionMulliganSeat = null;
+
+        /// <summary>SHIPPED: the richer mulligan (position curve-coverage + searcher-forgiveness) is now the
+        /// DEFAULT. This seat REVERTS to the OLD simple rule (no-cheap-play OR avg>4.5) for A/B measurement.</summary>
+        public static string LegacyMulliganSeat = null;
+
+        /// <summary>A card that DIGS to fix the curve — looks at the top of the deck and adds a card to hand
+        /// (reveal/search), so a mediocre opening can be repaired rather than mulliganed.</summary>
+        private static bool IsSearcher(CardDef def)
+        {
+            string e = (def?.Effect ?? "").ToLowerInvariant();
+            if (e.Length == 0) return false;
+            return (e.Contains("look at") || e.Contains("reveal") || e.Contains("search"))
+                && e.Contains("add") && e.Contains("hand") && e.Contains("deck");
+        }
+
+        /// <summary>Is there a ready attacker with a profitable attack right now? Mirrors the attack block's
+        /// attacker selection + budget so <see cref="AttackFirstSeat"/> can defer deploys only while attacks
+        /// remain (and correctly fall through to deploy once they're exhausted).</summary>
+        private static bool HasProfitableAttack(GameState state, string seat)
+        {
+            var p = state.Players[seat];
+            if (p.TurnsStarted <= 1) return false;
+            int activeDon = GameEngine.ActiveDonCount(p);
+            int reserve = ZeroCounterReserveSeat == seat ? 0 : CounterEventReserve(p, activeDon);
+            int budget = Math.Max(0, activeDon - reserve);
+            var atks = new List<CardInstance>();
+            if (p.Leader != null && !p.Leader.Rested) atks.Add(p.Leader);
+            atks.AddRange(p.CharacterArea.Where(c => c != null && !c.Rested));
+            foreach (var a in atks)
+            {
+                if (GameEngine.HasModifier(state, a, "cannotAttack")) continue;
+                if (a.PlayedOnTurn == state.TurnNumber && !GameEngine.HasRush(state, a)) continue;
+                if (PlanAttack(state, seat, a, budget, false) != null) return true;
+            }
+            return false;
+        }
+
+        /// <summary>Sim-only A/B knob: make the iter-8 KO floor RACE-AWARE for this seat — when behind on Life,
+        /// drop it to <see cref="RaceBehindFloor"/> (trade more to stabilize) instead of racing a losing race.
+        /// Ahead/even keeps the shipped floor (pressure Life).</summary>
+        public static string RaceAwareFloorSeat = null;
+        public static int RaceBehindFloor = 5000;
+
+        /// <summary>Sim-only A/B knob: force this seat's KO floor to <see cref="AltFloor"/> (per-seat override of
+        /// the shipped 15000) — used to measure an alternative floor SEGMENTED by deck archetype.</summary>
+        public static string AltFloorSeat = null;
+        public static int AltFloor = 3000;
+
+        /// <summary>Sim-only A/B knob: for this seat, DECLINE a buff-only Trigger (a power-pump with no removal /
+        /// card-draw / play-a-body / life-gain) and bank the Life card into hand instead — using the Trigger
+        /// consumes the card, and a marginal +power rarely beats a card in hand (it can't even affect the current
+        /// Leader-damage battle). Baseline uses any valid Trigger.</summary>
+        public static string TriggerBankBuffsSeat = null;
+
         internal static bool ShouldUseTrigger(GameState state, string seat)
         {
             var revealed = state.Battle?.RevealedLife;
@@ -721,6 +1075,17 @@ namespace OnePieceTcg.Engine.Bot
             if (def == null || string.IsNullOrEmpty(def.Trigger)) return false;
             bool activatesMain = def.Trigger.IndexOf("Activate this card's [Main] effect", StringComparison.OrdinalIgnoreCase) >= 0;
             string payload = activatesMain ? def.Effect : def.Trigger;
+
+            // A/B: bank the card rather than spend the Trigger on a pure power-pump.
+            if (TriggerBankBuffsSeat == seat && def.Type != "character")
+            {
+                string pl = (payload ?? "").ToLowerInvariant();
+                bool buff = pl.Contains("power") && (pl.Contains("gain") || pl.Contains("+"));
+                bool substantive = pl.Contains("k.o.") || pl.Contains("return") || pl.Contains("trash")
+                    || pl.Contains("rest") || pl.Contains("draw") || pl.Contains("play")
+                    || (pl.Contains("add") && pl.Contains("hand")) || pl.Contains("life") || pl.Contains("don!!");
+                if (buff && !substantive) return false;
+            }
 
             // A Trigger that plays its own Character is optional. With all five slots occupied it
             // cannot create a body, so taking the card into hand is strictly better than revealing
@@ -844,6 +1209,33 @@ namespace OnePieceTcg.Engine.Bot
             return OnePieceTcg.Engine.Bot.Search.DonOpportunityModel.ShouldUseMain(state, seat, c);
         }
 
+        // SHIPPED: once the board is developed (>=3 Characters), hold a big-counter (>=2000) Character
+        // in hand for defence rather than deploying yet another body. A/B across 37 meta decks: +1.7pp
+        // (51.7% vs always-deploy). HoldCounterVariantSeat is now a DISABLE gate (that seat reverts to
+        // the old always-deploy) so the A/B can still measure new-vs-old.
+        private static bool ShouldHoldForCounter(GameState state, string seat, CardInstance c)
+        {
+            if (HoldCounterVariantSeat == seat) return false;   // A/B: this seat keeps the OLD always-deploy
+            var def = GameEngine.GetCard(c);
+            if (def == null || def.Type != "character") return false;
+            int board = state.Players[seat].CharacterArea.Count(x => x != null);
+            // Shipped: board>=1 / counter>=2000 — hold a big-counter Character from the moment you have
+            // any board (deploy the first body, then keep big counters). A/B tuning: (1,2000) is +2.8pp
+            // over the first-shipped (3,2000); holding SMALL (>=1000) counters early instead tanks (47%),
+            // so only big counters are held.
+            int boardThr = (HoldTuneSeat == seat) ? HoldBoardThreshold : 1;
+            int cpThr = (HoldTuneSeat == seat) ? HoldCounterThreshold : 2000;
+            return board >= boardThr && GameEngine.GetCounterPower(c) >= cpThr;
+        }
+
+        /// <summary>A card that ramps DON!! — "add up to N DON!! card(s) from your DON!! deck" (usually set
+        /// active). Playing it early frees DON!! for the rest of the turn.</summary>
+        private static bool IsDonAccel(CardDef def)
+        {
+            string e = (def?.Effect ?? "").ToLowerInvariant();
+            return e.Contains("don!!") && e.Contains("add") && e.Contains("don!! deck");
+        }
+
         private static GameCommand DecideMainPhase(GameState state, string seat, HashSet<string> blacklist)
         {
             var p = state.Players[seat];
@@ -851,8 +1243,23 @@ namespace OnePieceTcg.Engine.Bot
             // 1) Deploy the highest-value affordable card first (spends DON!! on board
             //    presence before combat math — matches the deploy-then-attach-then-attack
             //    ordering seen across the mined ranked-ladder replays).
-            var playable = p.Hand.Where(c => GameEngine.CanPlayFromHand(state, seat, c) && ShouldPlayNow(state, seat, c))
-                .OrderByDescending(c => MainPlayValue(state, seat, c));
+            var playableSet = p.Hand.Where(c => GameEngine.CanPlayFromHand(state, seat, c) && ShouldPlayNow(state, seat, c)
+                    && !ShouldHoldForCounter(state, seat, c));
+            // Baseline: highest-value (≈ biggest body) first — go tall. A/B (WideDeploySeat): cheapest first —
+            // go wide, developing more bodies and spending DON!! more fully. A/B (DonAccelFirstSeat): a
+            // DON!!-accel card first, so its extra DON!! can fund another play this turn.
+            IOrderedEnumerable<CardInstance> playable;
+            if (DonAccelFirstSeat == seat)
+                playable = playableSet.OrderByDescending(c => IsDonAccel(GameEngine.GetCard(c)) ? 1 : 0)
+                    .ThenByDescending(c => MainPlayValue(state, seat, c));
+            else if (WideDeploySeat == seat)
+                playable = playableSet.OrderBy(c => MainPlayValue(state, seat, c));
+            else
+                playable = playableSet.OrderByDescending(c => MainPlayValue(state, seat, c));
+            // A/B (AttackFirstSeat): defer deploying while a profitable attack is still available — swing the
+            // existing board first, then play new Characters with whatever DON!! remains.
+            bool deferDeploy = AttackFirstSeat == seat && HasProfitableAttack(state, seat);
+            if (!deferDeploy)
             foreach (var c in playable)
             {
                 var d = CardData.GetCard(c.CardId);
@@ -880,9 +1287,24 @@ namespace OnePieceTcg.Engine.Bot
                 if (cmd != null) return cmd;
             }
 
-            // 2) [Activate: Main] usage is DISABLED for now — a repeatable (non-Once-Per-Turn)
-            //    activation whose success-check saw state change every tick could re-fire forever
-            //    and stall the game. Re-enable with a per-turn "already activated" guard on the card.
+            // 2) [Activate: Main] usage. DISABLED by default (a repeatable non-OPT activation could re-fire
+            //    forever and stall). A/B (EnableActivateMainSeat): fire beneficial [Once Per Turn] abilities —
+            //    the engine's AbilityUsedThisTurn guard (set only for OPT) makes these safe from re-fire.
+            if (EnableActivateMainSeat == seat || ActivateMainSickOnlySeat == seat)
+            {
+                bool sickOnly = ActivateMainSickOnlySeat == seat;
+                foreach (var c in p.CharacterArea)
+                {
+                    if (c == null || p.AbilityUsedThisTurn.Contains(c.InstanceId)) continue;
+                    if (sickOnly && !GameEngine.IsSummoningSick(state, c)) continue;   // free value only
+                    var adef = GameEngine.GetCard(c);
+                    if (adef == null || adef.Effect == null
+                        || adef.Effect.IndexOf("[Once Per Turn]", StringComparison.OrdinalIgnoreCase) < 0
+                        || !BeneficialActivateMain(adef.Effect)) continue;
+                    var act = Try(blacklist, new GameCommand { Type = "activateMain", Seat = seat, Target = c.InstanceId });
+                    if (act != null) return act;
+                }
+            }
 
             // 3) Attack planning. No attacks on your very first turn (summoning sickness — Rush is
             //    handled per-attacker below).
@@ -895,11 +1317,27 @@ namespace OnePieceTcg.Engine.Bot
             attackers = attackers
                 .Where(a => !GameEngine.HasModifier(state, a, "cannotAttack"))
                 .Where(a => a.PlayedOnTurn != state.TurnNumber || GameEngine.HasRush(state, a))
-                .OrderByDescending(a => GameEngine.GetPower(state, a))
+                .ToList();
+            // A/B (research "don't attack with your Blocker"): hold non-Leader Blockers back to stay active for
+            // defense — but ONLY when actually under pressure (low Life). A blanket hold tanks (−7.6pp) because
+            // Life pressure is king (iter 8); the block is only worth the chip when you need to survive.
+            if (HoldBlockersSeat == seat && p.Life.Count <= 2)
+                attackers = attackers.Where(a => a == p.Leader || !GameEngine.HasBlocker(state, a)).ToList();
+            // Attack sequencing. Default: strongest-first. A/B (WeakestFirstSeat): weakest-relevant first,
+            // the documented habit of draining the opponent's counters on small swings before the big hitter.
+            // A/B (BaitBlockerSeat): weakest-first ONLY when the opponent has an active Blocker — bait the block
+            // onto a cheap attacker, then push the big hitter through the cleared lane (research habit; the
+            // unconditional iter-7 weakest-first was null, this isolates the blocker-bait case).
+            bool oppHasActiveBlocker = opponent.CharacterArea.Any(c => c != null && !c.Rested && GameEngine.HasBlocker(state, c));
+            bool weakestFirst = WeakestFirstSeat == seat || (BaitBlockerSeat == seat && oppHasActiveBlocker);
+            attackers = (weakestFirst
+                    ? attackers.OrderBy(a => GameEngine.GetPower(state, a))
+                    : attackers.OrderByDescending(a => GameEngine.GetPower(state, a)))
                 .ToList();
 
             int activeDon = GameEngine.ActiveDonCount(p);
             int counterReserve = CounterEventReserve(p, activeDon);
+            if (ZeroCounterReserveSeat == seat) counterReserve = 0;   // A/B: attach everything, no defensive holdback
 
             // Lethal/race read: if enough of my attackers can reach the opponent's Leader to cover
             // their Life (plus their active blockers), push face instead of trading. Approximate —
@@ -909,12 +1347,14 @@ namespace OnePieceTcg.Engine.Bot
             int oppBlockers = opponent.CharacterArea.Count(c => c != null && !c.Rested && GameEngine.HasBlocker(state, c));
             bool race = opponent.Leader != null && opponent.Life.Count > 0
                         && leaderReachers >= opponent.Life.Count + oppBlockers;
+            // A/B: going for a legit lethal — don't hold defensive DON!! back, push the kill with everything.
+            if (RaceDropReserveSeat == seat && race) counterReserve = 0;
 
             // Lethal/desperation pivot: if I lose next turn even after holding everything back, conservative
             // play only guarantees the loss. Abandon the Counter reserve and swing face — disperse every
             // attack at the Leader to force the opponent to have all the answers, and take the best shot at
             // closing now. (Only fires when death is near-certain; see DyingNextTurn.)
-            if (LethalPivotEnabled && DyingNextTurn(state, seat))
+            if ((LethalPivotEnabled || LethalPivotSeat == seat) && DyingNextTurn(state, seat))
             {
                 race = true;
                 counterReserve = 0;
@@ -967,27 +1407,32 @@ namespace OnePieceTcg.Engine.Bot
                 }
             }
 
-            // Commit every DON!! that has no concrete defensive job BEFORE the first attack.
-            // The previous sequence immediately swung every attacker that already connected, so
-            // once they were rested it could end the turn with 5+ active DON!! and no Counter Event.
-            // One-at-a-time, least-attached distribution avoids a single giant overcommit while
-            // guaranteeing that otherwise-stranded DON!! becomes pressure. A real [Counter] Event
-            // in hand is the only reason this baseline deliberately preserves active DON!!.
-            int spendableDon = Math.Max(0, activeDon - counterReserve);
-            if (spendableDon > 0)
+            // DON!! is committed one ATTACKER at a time, interleaved with the attacks themselves
+            // (Step A swings a ready attacker; Step B loads the next one just enough, which Step A
+            // then swings on the following tick). This defers each DON!! commitment until right
+            // before that attacker swings, so a defender's response to an earlier attack (e.g. a
+            // Leader power-up on [On Your Opponent's Attack]) doesn't strand DON!! already spread
+            // across attackers that no longer connect. (Removed the old "commit every DON!! before
+            // the first attack" pre-load, which over-committed the whole pool up front.)
+
+            // A/B toggle (sim only): for a seat flagged as "legacy", restore the OLD front-load so a
+            // head-to-head run can measure the new interleaved policy's win-rate impact. null (the
+            // default, and always the case in the shipped game) = the new behaviour.
+            if (LegacyDonSeat != null && seat == LegacyDonSeat)
             {
-                var pressureTarget = attackers
-                    .Where(a => PlanAttack(state, seat, a, spendableDon, race) != null)
-                    .OrderBy(a => a.AttachedDonIds.Count)
-                    .ThenByDescending(a => GameEngine.GetPower(state, a))
-                    .FirstOrDefault();
-                if (pressureTarget != null)
+                int legacySpendable = Math.Max(0, activeDon - counterReserve);
+                if (legacySpendable > 0)
                 {
-                    var commit = Try(blacklist, new GameCommand
+                    var pre = attackers
+                        .Where(a => PlanAttack(state, seat, a, legacySpendable, race) != null)
+                        .OrderBy(a => a.AttachedDonIds.Count)
+                        .ThenByDescending(a => GameEngine.GetPower(state, a))
+                        .FirstOrDefault();
+                    if (pre != null)
                     {
-                        Type = "attachDon", Seat = seat, Target = pressureTarget.InstanceId, Amount = 1,
-                    });
-                    if (commit != null) return commit;
+                        var commit = Try(blacklist, new GameCommand { Type = "attachDon", Seat = seat, Target = pre.InstanceId, Amount = 1 });
+                        if (commit != null) return commit;
+                    }
                 }
             }
 
@@ -1005,11 +1450,17 @@ namespace OnePieceTcg.Engine.Bot
             //          connect (never dump the whole pool on one card), maximizing the number of
             //          connecting hits. Next tick, Step A declares that now-ready attacker.
             CardInstance bestAtk = null; int bestDon = int.MaxValue; string bestTarget = null;
+            double bestScore = double.MinValue;
             foreach (var atk in attackers)
             {
                 var plan = PlanAttack(state, seat, atk, Math.Max(0, activeDon - counterReserve), race);
                 if (plan == null || plan.Value.don < 1) continue;      // 0-DON ones handled in Step A
-                if (plan.Value.don < bestDon) { bestDon = plan.Value.don; bestAtk = atk; bestTarget = plan.Value.targetId; }
+                // Baseline: readied cheapest-first (score = -don). A/B: bias toward a Double Attacker aimed at
+                // the Leader (buys 2 Life per connect), tie-broken by lower DON!! cost.
+                bool daFace = DoubleAttackFirstSeat == seat && GameEngine.HasDoubleAttack(state, atk)
+                    && plan.Value.targetId == opponent.Leader?.InstanceId;
+                double score = (daFace ? 1000 : 0) - plan.Value.don;
+                if (score > bestScore) { bestScore = score; bestDon = plan.Value.don; bestAtk = atk; bestTarget = plan.Value.targetId; }
             }
             if (bestAtk != null)
             {
@@ -1037,10 +1488,50 @@ namespace OnePieceTcg.Engine.Bot
         // Compare a removal Event by the tempo it creates, not only its printed cost. Previously a
         // four-cost Sables always ranked below a three-cost Boa blocker (body + Blocker bonus), so the
         // bot deployed Boa and stranded the bounce Event with an expensive enemy Character in play.
+        /// <summary>Effect value a Character has specifically when DEPLOYED (the player's own perspective) — the
+        /// part <see cref="EffectThreat"/> omits because it prices a body as a REMOVAL TARGET. An [On Play] ETB
+        /// is a big reason to play a card but is spent once resolved, so it belongs here (deploy value) and NOT
+        /// in Value (KO-target value). Text-driven, no card ids.</summary>
+        internal static double DeployEffectBonus(CardDef def)
+        {
+            string e = (def?.Effect ?? "").ToLowerInvariant();
+            if (e.Length == 0) return 0;
+            double t = 0;
+            if (e.Contains("[on play]"))
+            {
+                if (e.Contains("k.o.") || e.Contains("return") || e.Contains("trash")
+                    || (e.Contains("rest") && e.Contains("opponent"))) t += 3000;   // removal/disruption ETB
+                if (e.Contains("draw") || e.Contains("look at") || e.Contains("search")
+                    || (e.Contains("add") && e.Contains("hand"))) t += 2000;         // card-advantage ETB
+                if (e.Contains("gain") || e.Contains("+1000") || e.Contains("+2000") || e.Contains("+3000")) t += 1000;
+                if (t == 0) t += 1000;   // any [On Play] is worth more than a vanilla of the same stats
+            }
+            if (e.Contains("[don!! x")) t += 1000;   // continuous DON!!-scaling threat that compounds each turn
+            return t;
+        }
+
+        /// <summary>Recurring, compounding threat a Character keeps presenting every turn it lives — an
+        /// [Activate: Main] engine (per-turn removal / card advantage) or a [DON!! x_] scaler. Unlike an
+        /// [On Play] ETB (spent once), these keep paying off, so they are worth removing even when their
+        /// printed Value is small. Used to decide "always answer this body" in KO-targeting.</summary>
+        internal static double ExtraThreat(CardDef def)
+        {
+            string e = (def?.Effect ?? "").ToLowerInvariant();
+            if (e.Length == 0) return 0;
+            double t = 0;
+            if (e.Contains("[activate: main]") && (e.Contains("k.o.") || e.Contains("return")
+                || e.Contains("rest") || e.Contains("draw") || e.Contains("search")
+                || (e.Contains("add") && e.Contains("hand")))) t += 3000;   // recurring engine
+            if (e.Contains("[don!! x")) t += 3000;                            // continuous scaler
+            return t;
+        }
+
         private static double MainPlayValue(GameState state, string seat, CardInstance card)
         {
             double score = Value(state, card);
             var def = GameEngine.GetCard(card);
+            if (RichDeployValueSeat == seat && def != null && def.Type == "character")
+                score += DeployEffectBonus(def);
             if (def == null || def.Type != "event" || !IsOwnerAgnosticBounce(def.Effect)) return score;
 
             var probe = new PendingEffect

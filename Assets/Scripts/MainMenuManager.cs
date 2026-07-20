@@ -280,12 +280,20 @@ public partial class MainMenuManager : MonoBehaviour
     // updates), the same way browsedLobbies caches LobbyManager's results.
     private bool showingFriends;
     private bool showingPatchNotes;
+    private int selectedPatchIndex; // which version is expanded in the Patch Notes stage
     private string addFriendUsernameInput = "";
     private bool friendsBusy;
     private string friendsError;
     private List<FriendEntry> friendsList = new List<FriendEntry>();
     private List<FriendEntry> incomingRequests = new List<FriendEntry>();
     private List<FriendEntry> outgoingRequests = new List<FriendEntry>();
+    // Blocked-players view: the right friends panel swaps to a "BLOCKED" list (with Unblock
+    // chips) when this is on. blockConfirmId is the friend whose Block chip is one click from
+    // firing — Block is a two-step confirm so a stray tap can't silently block a friend.
+    private List<FriendEntry> blockedList = new List<FriendEntry>();
+    private bool showingBlockedList;
+    private bool blockedLoading;
+    private string blockConfirmId;
 
     // ── Friend chat (persistent DMs via ChatStore → Cloudflare worker) ──
     // A conversation opens as a modal over the whole menu; while it's open a 2s poll tails
@@ -1068,108 +1076,463 @@ public partial class MainMenuManager : MonoBehaviour
     }
 
     // ── Patch Notes (nav row "Patch Notes") ──────────────────────────────────
-    private static readonly (string version, string date, string[] notes)[] PatchNotesData =
+    // Newest first. Only versions from v1.0.4 onward are listed — earlier builds
+    // were automated placeholder releases with no real notes. Kept in sync with
+    // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
+    private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
-        ("v1.0.15 — Friends get social", "Jul 18, 2026", new[]
+        ("v1.0.18", "Smarter bots + a smooth difficulty curve", "Jul 19, 2026", new (string, string[])[]
         {
-            "Friend chat with server-side message history, plus game invitations and friend-request notifications.",
-            "Add friends after a match; friends-list refresh button.",
-            "Copy buttons for chat and combat log; fixed the installer completion dialog.",
+            ("Difficulty curve", new[]
+            {
+                "Beginner, Intermediate and Advanced now step up smoothly — all three share one strong brain, with the lower tiers playing looser on purpose.",
+                "Beginner still races your life so it never feels brain-dead, but it's sloppier with DON and counters; Intermediate plays disciplined; Advanced adds tactical search on top.",
+            }),
+            ("Smarter AI", new[]
+            {
+                "Pressures your life instead of making pointless trades — it treats life as the clock, the way strong players do.",
+                "Stops over-spending counters: it won't burn two cards to save one, and takes small hits to keep resources.",
+                "Holds big counter cards back for defense instead of always deploying them.",
+                "Commits DON one attacker at a time instead of front-loading, so less is wasted.",
+                "Mulligans with more nuance — weighs going first vs second, and keeps a rough hand when a searcher can fix its curve.",
+            }),
+            ("Card fixes", new[]
+            {
+                "Fixed a class of two-part effects joined by \"…, and …\" that were silently dropping their second half.",
+                "Punk Vise, Lim, White Snake and Gum-Gum Giant Sumo Slap now resolve their full effects (rest + DON, DON + play, counter + draw, counter + K.O.).",
+            }),
+            ("Friends", new[]
+            {
+                "Friend-row buttons are now compact so the whole strip fits on screen (the Block chip used to run off the edge).",
+                "Block is now a two-step confirm — one tap arms it (\"Sure?\"), a second tap blocks — so a stray click can't block a friend.",
+                "New Blocked list (toggle at the top of the Friends screen) where you can see everyone you've blocked and Unblock them.",
+            }),
         }),
-        ("v1.0.14 — Card-correctness pass + smarter AI", "Jul 18, 2026", new[]
+        ("v1.0.17", "Board feel: push/pull life bar, shadows, smoother motion", "Jul 19, 2026", new (string, string[])[]
         {
-            "Audited all 2,636 cards: fixed triggers, stage-from-Life, 23 silent-failing cards, removal effects, and board wipes.",
-            "Counter usage no longer fires unrelated clauses (228 cards affected).",
-            "Advanced AI now understands trash recursion, DON engines, cost manipulation, removal fidelity, and threat assessment.",
-            "Fixed matchmaking hangs and friend-persistence issues.",
+            ("Push / Pull life bar", new[]
+            {
+                "A tug-of-war bar across the middle of the board, each half painted in that player's deck colours.",
+                "A gold balance point slides toward whoever is behind on life; deck-coloured life totals sit at each end.",
+                "The active player's side carries a living glow and smoky shimmer; the idle side sits back.",
+                "Replaces the old center turn pill.",
+            }),
+            ("Card presentation", new[]
+            {
+                "Drop shadows under every card for real depth off the board.",
+                "Characters glide when the row re-centres, and tap/untap rotation animates instead of snapping.",
+                "Rested / summoning-sick characters darken while keeping their colours, matching the official app.",
+            }),
+            ("DON polish", new[]
+            {
+                "DON in the cost area render at full card size (they were shrinking slightly).",
+                "DON tuck under rested characters the same way as un-rested ones.",
+            }),
+            ("Quality of life", new[]
+            {
+                "The left card preview scrolls for cards with lots of rules text.",
+                "Attacks now play a declaration sound.",
+            }),
+            ("Bot fixes", new[]
+            {
+                "The bot uses the 6th-character rule: when its board is full it plays over its weakest Character instead of stalling.",
+                "Smarter removal targeting — it prioritises real threats (Blockers / bigger bodies) to clear the wall stopping lethal.",
+            }),
+            ("Rules fix", new[]
+            {
+                "DON -N effects (e.g. R/P Law's -3) can now return attached DON as valid targets.",
+            }),
         }),
-        ("v1.0.13 — Polish & fixes from live play", "Jul 17, 2026", new[]
+        ("v1.0.16", "Timed play, Sandbox, and a counter-step redesign", "Jul 18, 2026", new (string, string[])[]
         {
-            "Blocker shield redesigned with a centered glow; attached-DON grouping improved.",
-            "Field cards render above board zones; end-of-match reveals both players' remaining cards.",
-            "AI pauses before countering; card search hidden from opponent; rested characters return upright.",
-            "Luffy & Ace leader effect corrected.",
+            ("Blitz — timed play", new[]
+            {
+                "Personal chess clocks for each player, with +5 seconds banked at the end of every turn.",
+                "Presets (Bullet 5:00, Blitz 7:30, Rapid 12:00) or fully custom timing in the Custom Room.",
+                "A Ranked timing option: a single shared match clock with rulebook-style overtime.",
+                "Response-window countdowns for defender decisions (block / counter / trigger).",
+            }),
+            ("Sandbox — free-form testing board", new[]
+            {
+                "Boot a blank active board and spawn or edit any card in any zone for either seat.",
+                "Attach DON, buff power, grant keywords, set Life, and force the phase or active seat.",
+                "Undo/redo plus save/load board snapshots, and a deck-builder-style card picker with search.",
+            }),
+            ("Restore Code", new[]
+            {
+                "Export a position from a replay as a shareable code and play it out yourself from that exact spot.",
+            }),
+            ("Counter step — redesigned", new[]
+            {
+                "Pick counters right in the actions panel from a grid of your hand — usable cards highlighted, the rest dimmed.",
+                "A matchup read-out with a clear Safe / Hits line telling you exactly how much more counter you need.",
+                "Resolve the attack in one step — the separate damage window is gone.",
+            }),
+            ("Polish & fixes", new[]
+            {
+                "Card power / cost / status indicators restyled as sleek colour-coded pills.",
+                "Multiplayer shows player names instead of North/South throughout the match.",
+                "New Patch Notes tab on the main menu; the win/lose screen is always reachable again.",
+            }),
         }),
-        ("v1.0.12 — Pick your AI difficulty", "Jul 17, 2026", new[]
+        ("v1.0.15", "Friends get social", "Jul 18, 2026", new (string, string[])[]
         {
-            "Beginner / Intermediate / Advanced difficulty selector for solo matches, with better Advanced planning.",
-            "Surrender button added to the in-match menu.",
-            "Blocker shield shows a red X for cancelled blocks; fixed cost-reducers like Uta; block-cancel no longer disables other effects.",
+            ("Friends & social", new[]
+            {
+                "Chat with your friends — messages are saved server-side, so you can scroll back through anything sent offline.",
+                "Invite an online friend straight into a private room; they get an Accept pop-up.",
+                "Friend-request pop-ups slide in on the side: Accept, Decline, or Ignore without opening the Friends page.",
+                "Add your opponent after a match, and a Refresh button re-pulls your friends list.",
+            }),
+            ("In-match chat & combat log", new[]
+            {
+                "Copy buttons on the match chat and combat log put the full conversation / history on your clipboard.",
+            }),
+            ("Installer", new[]
+            {
+                "Fixed the scary Install Partially Succeeded dialog — setup now finishes cleanly.",
+            }),
         }),
-        ("v1.0.11 — AI overhaul + card fixes", "Jul 14, 2026", new[]
+        ("v1.0.14", "Card-correctness pass + smarter AI", "Jul 18, 2026", new (string, string[])[]
         {
-            "Bot stops whiffing attacks, spreads DON across attackers, counters intelligently, and checks lethal/race.",
-            "Crocodile & Mihawk multi-step resolution; Sabo/Ace/Luffy reveal-and-play timing; 19 attribute icons restored.",
-            "Multi-step effects show sequentially; DON threshold + condition evaluation corrected.",
+            ("Card effects", new[]
+            {
+                "Audited all 2,636 cards for effects that did nothing or fired wrong — fixed generally, by card text.",
+                "Trigger abilities re-using a card's own effect, stage-from-Life plays, and 23 silent-failing Triggers now work.",
+                "Board wipes and one-offs (Kaido, Birdcage, Nico Robin, Zoro, and more) now resolve.",
+                "The big one: using a Character as a Counter no longer fires its unrelated On Play / Main clause (228 cards).",
+            }),
+            ("A much smarter Advanced AI", new[]
+            {
+                "Understands trash / mill recursion and runs the sacrifice-to-recur line (+27% in Yamato's best matchup).",
+                "Reasons about DON engines and cost-manipulation combos instead of misreading -cost as a weak debuff.",
+                "Removal fidelity: tells cost-K.O. vs power-K.O. vs -power vs rest/freeze apart, and values engines as threats.",
+            }),
+            ("Multiplayer & friends", new[]
+            {
+                "Fixed casual play hanging on Connecting — a stale message handler was dropping the second match's messages.",
+                "Friends now persist: the service re-syncs to your account on sign-in.",
+            }),
+            ("Board & UI polish", new[]
+            {
+                "Blocker shield reworked; DON groupings stay tight; end-of-match results moved off the opponent's hand.",
+                "Themed update screen shows a progress bar, your current-to-new version, and these patch notes.",
+            }),
         }),
-        ("v1.0.10 — Gameplay fixes + match flow", "Jul 13, 2026", new[]
+        ("v1.0.13", "Polish & fixes from live play", "Jul 17, 2026", new (string, string[])[]
         {
-            "Win/lose result screens, clean connection teardown, opponent hand/life revealed on loss.",
-            "Double Attack deals 2 Life in one hit; counter events usable again; several leader effects enabled; battle hangs fixed.",
-            "Summoning-sick characters greyed; blocker shield added; deck searches hidden from opponent.",
+            ("Board & visuals", new[]
+            {
+                "Blocker shield glow now hugs the icon and sits on the center-facing side for both players.",
+                "Attached DON group neatly within a character's width and spread when the character is rested.",
+                "Field cards and their DON render above the board zones; View Board reveals both players' hand and Life.",
+            }),
+            ("Gameplay feel", new[]
+            {
+                "The AI pauses before it counters, so the counter reads as a clear, distinct action.",
+            }),
+            ("Bug fixes", new[]
+            {
+                "The AI's card search no longer briefly flashes its cards to you.",
+                "A rested character returned to hand now sits upright.",
+                "The Luffy & Ace Leader no longer wrongly buffs itself on the opponent's turn.",
+            }),
         }),
-        ("v1.0.9 — Matchmaking fixes", "Jul 12, 2026", new[]
+        ("v1.0.12", "Pick your AI difficulty", "Jul 17, 2026", new (string, string[])[]
         {
-            "Ranked & Casual matchmaking now works end-to-end (fixed server auth that rejected every token).",
-            "Added missing /queue/* routes and matchmaking tables.",
-            "Fixed a host/guest race that hung the guest at match start; better errors for an unreachable server.",
+            ("New: pick your AI difficulty", new[]
+            {
+                "Solo matches get a Beginner / Intermediate / Advanced selector (your choice is remembered).",
+                "Advanced runs a much stronger planning bot that plays full turns and applies real pressure.",
+            }),
+            ("Ranked & match fixes", new[]
+            {
+                "Fixed getting stuck on Connecting when you requeue right after a match — rooms now close properly.",
+                "Added a Surrender button; leaving to the main menu mid-match now counts as a surrender.",
+                "Blocker shield redesigned: bigger, centered, with a red X when a block is cancelled or an attack is unblockable.",
+            }),
+            ("Card fixes", new[]
+            {
+                "Cost-in-hand discount cards (e.g. Uta) now actually get their discount, handled generally.",
+                "Block-cancel no longer switches off the rest of a character's effects; manual rest removed.",
+            }),
+        }),
+        ("v1.0.11", "AI overhaul + card fixes", "Jul 14, 2026", new (string, string[])[]
+        {
+            ("Smarter AI opponent", new[]
+            {
+                "No more whiffing — it only attacks when the hit connects, and spreads DON across attackers.",
+                "Counters intelligently: only when it can fully stop the attack and actually afford the Counter.",
+                "Blocks/counters must exceed, not tie; added a lethal / race read and fixed a turn stall.",
+            }),
+            ("Card & effect fixes", new[]
+            {
+                "Crocodile & Mihawk resolve in order; Sabo/Ace/Luffy only grant +2000 when a card is actually played.",
+                "Multi-step effects show one part at a time; DON x2 thresholds, attribute icons, and replacement effects fixed.",
+                "Restored missing attribute icons on 19 cards.",
+            }),
+            ("Visual", new[]
+            {
+                "The Blocker shield badge now renders on active (un-rested) Blockers.",
+            }),
+        }),
+        ("v1.0.10", "Gameplay fixes + match flow", "Jul 13, 2026", new (string, string[])[]
+        {
+            ("Match flow", new[]
+            {
+                "Win / Lose result screen at the end of Ranked & Casual matches, with a clean connection teardown.",
+                "Back-to-back matches connect; on a loss the opponent's hand and Life are revealed.",
+            }),
+            ("Card / rules fixes", new[]
+            {
+                "Double Attack deals 2 Life in one hit; counter events can be used to counter again.",
+                "Several leader effects (Black Luffy, Shanks) now fire; battle-effect hangs fixed.",
+                "Battle K.O.-immunity respects attribute / condition qualifiers instead of blanket immunity.",
+            }),
+            ("Quality of life", new[]
+            {
+                "Summoning-sick characters are greyed; a shield marks active Blockers.",
+                "Play a 6th character over an existing one to trash it; deck searches hidden from your opponent.",
+            }),
+        }),
+        ("v1.0.9", "Matchmaking fixes", "Jul 12, 2026", new (string, string[])[]
+        {
+            ("Fixes", new[]
+            {
+                "Queues now pair you up — fixed a server-side auth failure that silently blocked all matchmaking.",
+                "Redeployed the worker with the /queue/* routes and matchmaking tables missing in production.",
+                "Opponent no longer gets stuck on Connecting — fixed a host/guest race at match start.",
+            }),
+            ("Quality of life", new[]
+            {
+                "Matchmaking now warns when it can't reach the server instead of spinning forever.",
+            }),
+        }),
+        ("v1.0.8", "Ranked & Casual matchmaking", "Jul 12, 2026", new (string, string[])[]
+        {
+            ("Matchmaking", new[]
+            {
+                "Ranked and Casual are their own auto-queues — pick a deck, hit Queue Match, and get paired near your skill.",
+                "A League-style Accept/Decline ready check when a match is found; Ranked moves your bounty, Casual doesn't.",
+            }),
+            ("The Bounty ladder", new[]
+            {
+                "A themed 9-tier ladder from Apprentice to Yonko, with Pirate King reserved for the very top.",
+                "A hidden skill rating matches you; win-streak Rampage bonuses and a Vivre Card can save a demotion.",
+                "Results are settled server-side so they can't be faked.",
+            }),
+            ("Profile & Match History", new[]
+            {
+                "Overview shows your real bounty & tier, with win rate excluding bot games.",
+                "Matches are tagged Ranked / Casual / Custom / Bot and are clickable into full detail.",
+                "Hover a card in a decklist to preview it, or Save Deck straight into a slot.",
+            }),
+        }),
+        ("v1.0.7", "Replay Viewer & cloud match sharing", "Jul 12, 2026", new (string, string[])[]
+        {
+            ("New features", new[]
+            {
+                "Full Replay Viewer: watch any match turn-by-turn or action-by-action, with a match timeline and three camera views.",
+                "Adjustable speed (0.25x-4x), a scrubbable marker timeline, and a hand show/hide toggle.",
+                "Local Replays screen to browse, watch, delete, or import replays.",
+                "Cloud match sharing — every finished match uploads, so you can search a player and download their replays.",
+                "Windowed / Fullscreen toggle in Settings; early ST-31 card data (Luffy and Sanji) added.",
+            }),
+            ("Fixes", new[]
+            {
+                "Settings: the Audio volume slider no longer overlaps the Sign Out button.",
+            }),
+        }),
+        ("v1.0.6", "Versus A.I., attack animations & sound", "Jul 10, 2026", new (string, string[])[]
+        {
+            ("New features", new[]
+            {
+                "Versus A.I. is live — play solo against Basic Bot, which curves out, spends DON, and trades profitably.",
+                "Sound effects for draws and DON placement, with a volume slider in the pause and account menus.",
+                "Animated card movement between every zone, a turn-start banner, and a phase tracker.",
+                "The targeting arrow now shows while dragging characters and events, with slot-snap highlighting.",
+            }),
+            ("Fixes", new[]
+            {
+                "Block step auto-skips when you have no legal Blocker.",
+                "A Character or Stage triggered from Life now correctly goes to hand; last-selected game mode is remembered.",
+                "Mandatory If / up-to-N effects auto-resolve instead of stalling.",
+            }),
+        }),
+        ("v1.0.5", "100% card automation + trash/mulligan/DON overhaul", "Jul 9, 2026", new (string, string[])[]
+        {
+            ("Card engine", new[]
+            {
+                "Every card ability now auto-resolves — a full sweep took coverage from ~56% to 100% of the 4,572-card library.",
+                "Verified by a 316-game fuzz test across every matchup: zero crashes, zero stuck effects, zero deadlocks.",
+                "New [On Block] and [On Your Opponent's Attack] timing hooks; soft-locks and dropped Choose-one text fixed.",
+            }),
+            ("New features", new[]
+            {
+                "Searchable, scrollable, reorderable Trash viewer; animated, drag-to-reorder mulligan.",
+                "DON grouping on your own field (synced live).",
+                "Deck picking moved into the Duel portal, with your last-used decks remembered per account.",
+            }),
+            ("Visual polish", new[]
+            {
+                "Consistent rounded card corners everywhere; smoother opponent-presence indicators.",
+            }),
+        }),
+        ("v1.0.4", "First playtest update", "Jul 8, 2026", new (string, string[])[]
+        {
+            ("Card effects & rules engine", new[]
+            {
+                "[When Attacking] leader effects now resolve, fixing the same class of bug across all starter leaders.",
+                "Cost-reduction and on-play play-from-hand effects now genuinely apply and find their targets.",
+                "Active cost/power modifiers show badges, and valid effect targets highlight in green.",
+            }),
+            ("Duel flow", new[]
+            {
+                "The defender owns the battle — block, counter, and resolution are the defender's decisions.",
+                "Trigger privacy, no dead buttons, and a new animated mulligan flow.",
+                "Descriptive effect buttons tell you what they do (e.g. UTA: +2000 POWER).",
+            }),
+            ("Multiplayer", new[]
+            {
+                "In-match chat, live opponent presence, win-on-disconnect, and friends online status.",
+            }),
         }),
     };
 
+    // Master/detail: a clickable list of versions on the left, the selected
+    // version's full notes on the right.
     private void BuildPatchNotesStage(RectTransform stage)
     {
         var title = TextObject("Title", stage, "Patch Notes", 27, Ink, TextAnchor.UpperLeft);
         title.fontStyle = FontStyle.Bold;
         Stretch(title.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -44f), new Vector2(-4f, -6f));
-        var sub = TextObject("Sub", stage, "What's new in the simulator", 12, Muted, TextAnchor.UpperLeft, monoFont);
+        var sub = TextObject("Sub", stage, "Select a version to read its notes", 12, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(sub.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, -66f), new Vector2(-4f, -46f));
 
-        var viewport = PanelObject("PN Viewport", stage, new Color(0, 0, 0, 0));
-        Stretch(viewport, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -76f));
-        viewport.gameObject.AddComponent<RectMask2D>();
-        var content = new GameObject("PN Content").AddComponent<RectTransform>();
-        content.SetParent(viewport, false);
+        if (PatchNotesData.Length == 0) return;
+        selectedPatchIndex = Mathf.Clamp(selectedPatchIndex, 0, PatchNotesData.Length - 1);
+
+        const float ListW = 190f;
+
+        // ── Left: version picker ──────────────────────────────────────────
+        var listVp = PanelObject("PN List Viewport", stage, new Color(0, 0, 0, 0));
+        Stretch(listVp, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0f), new Vector2(ListW, -76f));
+        listVp.gameObject.AddComponent<RectMask2D>();
+        var listContent = new GameObject("PN List Content").AddComponent<RectTransform>();
+        listContent.SetParent(listVp, false);
+        listContent.anchorMin = new Vector2(0f, 1f); listContent.anchorMax = new Vector2(1f, 1f);
+        listContent.pivot = new Vector2(0.5f, 1f); listContent.sizeDelta = Vector2.zero; listContent.anchoredPosition = Vector2.zero;
+        var lvlg = listContent.gameObject.AddComponent<VerticalLayoutGroup>();
+        lvlg.spacing = 6; lvlg.padding = new RectOffset(2, 8, 2, 8);
+        lvlg.childControlWidth = true; lvlg.childControlHeight = true;
+        lvlg.childForceExpandWidth = true; lvlg.childForceExpandHeight = false;
+        lvlg.childAlignment = TextAnchor.UpperLeft;
+        listContent.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        var lscroll = listVp.gameObject.AddComponent<ScrollRect>();
+        lscroll.content = listContent; lscroll.viewport = listVp;
+        lscroll.horizontal = false; lscroll.vertical = true;
+        lscroll.movementType = ScrollRect.MovementType.Clamped; lscroll.scrollSensitivity = 24f;
+
+        for (int i = 0; i < PatchNotesData.Length; i++)
+            BuildPatchListButton(listContent, i, PatchNotesData[i], i == selectedPatchIndex);
+
+        // ── Right: selected version's notes ───────────────────────────────
+        var detailVp = PanelObject("PN Detail Viewport", stage, new Color(0, 0, 0, 0));
+        Stretch(detailVp, Vector2.zero, Vector2.one, new Vector2(ListW + 12f, 0f), new Vector2(0f, -76f));
+        detailVp.gameObject.AddComponent<RectMask2D>();
+        var content = new GameObject("PN Detail Content").AddComponent<RectTransform>();
+        content.SetParent(detailVp, false);
         content.anchorMin = new Vector2(0f, 1f); content.anchorMax = new Vector2(1f, 1f);
         content.pivot = new Vector2(0.5f, 1f); content.sizeDelta = Vector2.zero; content.anchoredPosition = Vector2.zero;
         var vlg = content.gameObject.AddComponent<VerticalLayoutGroup>();
-        vlg.spacing = 8; vlg.padding = new RectOffset(2, 12, 2, 8);
+        vlg.spacing = 8; vlg.padding = new RectOffset(6, 14, 2, 10);
         vlg.childControlWidth = true; vlg.childControlHeight = true;
         vlg.childForceExpandWidth = true; vlg.childForceExpandHeight = false;
         vlg.childAlignment = TextAnchor.UpperLeft;
         content.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
-        var scroll = viewport.gameObject.AddComponent<ScrollRect>();
-        scroll.content = content; scroll.viewport = viewport;
+        var scroll = detailVp.gameObject.AddComponent<ScrollRect>();
+        scroll.content = content; scroll.viewport = detailVp;
         scroll.horizontal = false; scroll.vertical = true;
         scroll.movementType = ScrollRect.MovementType.Clamped; scroll.scrollSensitivity = 24f;
 
-        foreach (var entry in PatchNotesData)
-            BuildPatchNotesEntry(content, entry.version, entry.date, entry.notes);
+        BuildPatchDetail(content, PatchNotesData[selectedPatchIndex]);
     }
 
-    private void BuildPatchNotesEntry(RectTransform parent, string version, string date, string[] notes)
+    // A single version row in the left-hand picker.
+    private void BuildPatchListButton(RectTransform parent, int index,
+        (string ver, string title, string date, (string head, string[] items)[] sections) e, bool selected)
     {
-        var card = PanelObject(version + " Card", parent, new Color32(14, 22, 32, 200));
-        Round(card);
-        AddRoundedCardBorder(card, MenuB, 1f);
-        var cv = card.gameObject.AddComponent<VerticalLayoutGroup>();
-        cv.padding = new RectOffset(14, 14, 10, 12); cv.spacing = 4;
-        cv.childControlWidth = true; cv.childControlHeight = true;
-        cv.childForceExpandWidth = true; cv.childForceExpandHeight = false;
-        cv.childAlignment = TextAnchor.UpperLeft;
-        card.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        var rowColor = selected
+            ? new Color(Accent.r, Accent.g, Accent.b, 0.16f)
+            : (Color)new Color32(14, 22, 32, 150);
+        var row = PanelObject(e.ver + " Btn", parent, rowColor);
+        var le = row.gameObject.AddComponent<LayoutElement>();
+        le.preferredHeight = 46f; le.minHeight = 46f;
+        Round(row);
+        AddRoundedCardBorder(row,
+            selected ? new Color(Accent.r, Accent.g, Accent.b, 0.5f) : MenuB,
+            selected ? 1.5f : 1f);
 
-        var head = TextObject("h", card, version, 15, Ink, TextAnchor.UpperLeft);
-        head.fontStyle = FontStyle.Bold;
-        head.gameObject.AddComponent<LayoutElement>().preferredHeight = 22f;
-        var dt = TextObject("d", card, date, 10, Muted, TextAnchor.UpperLeft, monoFont);
-        dt.gameObject.AddComponent<LayoutElement>().preferredHeight = 14f;
-
-        foreach (var n in notes)
+        if (selected)
         {
-            var bt = TextObject("b", card, "•  " + n, 11, new Color(Ink.r, Ink.g, Ink.b, 0.88f), TextAnchor.UpperLeft, monoFont);
-            bt.horizontalOverflow = HorizontalWrapMode.Wrap;
-            bt.verticalOverflow = VerticalWrapMode.Overflow;
-            bt.gameObject.AddComponent<LayoutElement>().preferredHeight = Mathf.Ceil(n.Length / 52f + 0.999f) * 16f;
+            var bar = PanelObject("Sel Bar", row, Accent);
+            bar.anchorMin = new Vector2(0f, 0.22f); bar.anchorMax = new Vector2(0f, 0.78f);
+            bar.pivot = new Vector2(0f, 0.5f); bar.sizeDelta = new Vector2(3f, 0f); bar.anchoredPosition = Vector2.zero;
+        }
+
+        var verT = TextObject("v", row, e.ver, 14,
+            selected ? Ink : (Color)new Color32(198, 211, 220, 255), TextAnchor.LowerLeft);
+        verT.fontStyle = selected ? FontStyle.Bold : FontStyle.Normal;
+        Stretch(verT.rectTransform, new Vector2(0f, 0.5f), Vector2.one, new Vector2(14f, 0f), new Vector2(-8f, -3f));
+        var dateT = TextObject("d", row, e.date, 9,
+            selected ? Muted : (Color)new Color32(111, 134, 150, 255), TextAnchor.UpperLeft, monoFont);
+        Stretch(dateT.rectTransform, Vector2.zero, new Vector2(1f, 0.5f), new Vector2(14f, 3f), new Vector2(-8f, 0f));
+
+        int captured = index;
+        row.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+        {
+            selectedPatchIndex = captured;
+            RenderMenu();
+        });
+    }
+
+    // The expanded notes for the selected version — grouped into typed sections
+    // (New features / Fixes / …) the way the GitHub release pages are.
+    private void BuildPatchDetail(RectTransform parent,
+        (string ver, string title, string date, (string head, string[] items)[] sections) e)
+    {
+        var head = TextObject("h", parent,
+            string.IsNullOrEmpty(e.title) ? e.ver : e.ver + " — " + e.title,
+            21, Ink, TextAnchor.UpperLeft);
+        head.fontStyle = FontStyle.Bold;
+        head.horizontalOverflow = HorizontalWrapMode.Wrap;
+        head.verticalOverflow = VerticalWrapMode.Overflow;
+
+        var dt = TextObject("d", parent, e.date, 11, Muted, TextAnchor.UpperLeft, monoFont);
+        dt.gameObject.AddComponent<LayoutElement>().preferredHeight = 16f;
+
+        var sep = PanelObject("sep", parent, MenuB);
+        sep.gameObject.AddComponent<LayoutElement>().preferredHeight = 1f;
+
+        foreach (var sec in e.sections)
+        {
+            // A little breathing room above each section heading.
+            var gap = PanelObject("gap", parent, new Color(0, 0, 0, 0));
+            gap.gameObject.AddComponent<LayoutElement>().preferredHeight = 8f;
+
+            var sh = TextObject("sh", parent, (sec.head ?? "").ToUpperInvariant(), 12,
+                Accent2, TextAnchor.UpperLeft, monoFont);
+            sh.fontStyle = FontStyle.Bold;
+            sh.horizontalOverflow = HorizontalWrapMode.Wrap;
+            sh.verticalOverflow = VerticalWrapMode.Overflow;
+
+            foreach (var n in sec.items)
+            {
+                var bt = TextObject("b", parent, "•  " + n, 12,
+                    new Color(Ink.r, Ink.g, Ink.b, 0.9f), TextAnchor.UpperLeft, monoFont);
+                bt.horizontalOverflow = HorizontalWrapMode.Wrap;
+                bt.verticalOverflow = VerticalWrapMode.Overflow;
+            }
         }
     }
 
@@ -3738,6 +4101,7 @@ public partial class MainMenuManager : MonoBehaviour
         showingLocalReplays = false;
         showingProfile = false; showingLeaderboard = false; showingPatchNotes = false;
         showingFriends = true;
+        showingBlockedList = false; blockConfirmId = null;   // always open on the friends list
         friendsError = null;
         RenderMenu();
         // Force a fresh server re-fetch on open (not just read the live cache), so a
@@ -3791,17 +4155,20 @@ public partial class MainMenuManager : MonoBehaviour
 
         var titleRow = PanelObject("Friends Title Row", stage, new Color(0, 0, 0, 0));
         Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
-        var titleText = TextObject("Title", titleRow, "Friends", 26, Ink, TextAnchor.MiddleLeft);
+        var titleText = TextObject("Title", titleRow, showingBlockedList ? "Blocked" : "Friends", 26, Ink, TextAnchor.MiddleLeft);
         titleText.fontStyle = FontStyle.Bold;
-        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
+        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.42f, 1f), new Vector2(4f, 0f), Vector2.zero);
 
         var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
-        Stretch(backHolder, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        Stretch(backHolder, new Vector2(0.42f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
         var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
         backHlg.childAlignment = TextAnchor.MiddleRight;
         backHlg.childControlWidth = false;
         backHlg.childControlHeight = false;
         backHlg.spacing = 8f;
+        // Toggle between the friends list and the Blocked list (where you can Unblock someone).
+        if (!AccountManager.IsGuest)
+            AddButton(backHolder, showingBlockedList ? "Friends" : "Blocked", ToggleBlockedList, !friendsBusy, false);
         // Manual re-sync: re-fetches the friend graph from the server (defensive against a
         // list that went stale after a match). Disabled for guests (no relationships).
         if (!AccountManager.IsGuest)
@@ -3838,7 +4205,109 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(friendsPanel, new Vector2(0.46f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
         Round(friendsPanel);
         AddRoundedCardBorder(friendsPanel, MenuB, 1f);
-        BuildFriendsListPanel(friendsPanel);
+        if (showingBlockedList) BuildBlockedListPanel(friendsPanel);
+        else BuildFriendsListPanel(friendsPanel);
+    }
+
+    // Flip the right panel to the Blocked list (lazy-loading the block list the first time),
+    // or back to the friends list.
+    private async void ToggleBlockedList()
+    {
+        showingBlockedList = !showingBlockedList;
+        blockConfirmId = null;
+        friendsError = null;
+        RenderMenu();
+        if (showingBlockedList)
+        {
+            blockedLoading = true; RenderMenu();
+            try { blockedList = await FriendsManager.GetBlockedAsync(); }
+            catch (Exception ex) { if (this != null && menuRoot != null) friendsError = $"Couldn't load blocked list: {ex.Message}"; }
+            finally { if (this != null && menuRoot != null) { blockedLoading = false; RenderMenu(); } }
+        }
+    }
+
+    // The Blocked list: every player this account has blocked, each with an Unblock chip. This is
+    // the only way to reverse a block (blocking removes the friendship, so they leave the friends list).
+    private void BuildBlockedListPanel(RectTransform panel)
+    {
+        var header = TextObject("Blocked Header", panel, "BLOCKED PLAYERS", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+
+        if (!string.IsNullOrEmpty(friendsError))
+        {
+            var err = TextObject("Blocked Error", panel, friendsError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -58f), new Vector2(-16f, -38f));
+        }
+
+        var listArea = PanelObject("Blocked List Area", panel, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(0f, 0f), new Vector2(0f, -46f));
+
+        if (blockedLoading)
+        {
+            var loading = TextObject("Blocked Loading", listArea, "Loading blocked players…", 12, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(loading.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -24f), new Vector2(-16f, 0f));
+            return;
+        }
+        if (blockedList == null || blockedList.Count == 0)
+        {
+            var empty = TextObject("Blocked Empty", listArea,
+                "You haven't blocked anyone.\n\nBlocked players show up here — tap Unblock to reverse it.",
+                12, Muted, TextAnchor.UpperLeft, monoFont);
+            empty.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -40f), new Vector2(-16f, 0f));
+            return;
+        }
+
+        const float rowH = 48f, gap = 8f;
+        var content = MakeMenuScroll(listArea, blockedList.Count * (rowH + gap) - gap + 12f);
+        for (int i = 0; i < blockedList.Count; i++)
+        {
+            var e = blockedList[i];
+            var row = PanelObject("Blocked Row " + i, content, new Color32(14, 22, 32, 180));
+            row.anchorMin = new Vector2(0f, 1f); row.anchorMax = new Vector2(1f, 1f); row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(0f, rowH);
+            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
+            Round(row);
+            AddRoundedCardBorder(row, MenuB, 1f);
+
+            var nm = TextObject("Blocked Name", row, e.Username, 13, Ink, TextAnchor.MiddleLeft);
+            nm.raycastTarget = false; nm.horizontalOverflow = HorizontalWrapMode.Overflow;
+            Stretch(nm.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 1f), new Vector2(16f, 0f), Vector2.zero);
+
+            var holder = PanelObject("Blocked Buttons", row, new Color(0, 0, 0, 0));
+            Stretch(holder, new Vector2(0.6f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-12f, 0f));
+            var hlg2 = holder.gameObject.AddComponent<HorizontalLayoutGroup>();
+            hlg2.childAlignment = TextAnchor.MiddleRight; hlg2.childControlWidth = false; hlg2.childControlHeight = false;
+            string pid = e.PlayerId;
+            AddButton(holder, "Unblock", () => UnblockClicked(pid), !friendsBusy, false, false, 92f);
+        }
+    }
+
+    private async void UnblockClicked(string playerId)
+    {
+        friendsBusy = true; friendsError = null; RenderMenu();
+        try
+        {
+            var result = await FriendsManager.UnblockAsync(playerId);
+            if (this == null || menuRoot == null) return;
+            if (result.Ok)
+            {
+                blockedList = await FriendsManager.GetBlockedAsync();
+                await RefreshFriendsListsAwaited();   // they may reappear as a normal (non-friend) contact
+            }
+            else friendsError = result.Message;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            friendsError = $"Couldn't reach the server: {ex.Message}";
+        }
+        finally
+        {
+            if (this != null && menuRoot != null) { friendsBusy = false; RenderMenu(); }
+        }
     }
 
     private void BuildFriendRequestsPanel(RectTransform panel)
@@ -3983,7 +4452,8 @@ public partial class MainMenuManager : MonoBehaviour
 
         var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.LowerLeft);
         name.raycastTarget = false;
-        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.6f, 1f), new Vector2(28f, 0f), new Vector2(0f, -6f));
+        name.horizontalOverflow = HorizontalWrapMode.Overflow;
+        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.45f, 1f), new Vector2(28f, 0f), new Vector2(0f, -6f));
 
         // Presence line, with an unread-chat hint appended (accent-coloured) when this
         // friend has sent messages the player hasn't read yet.
@@ -3993,22 +4463,35 @@ public partial class MainMenuManager : MonoBehaviour
         var status = TextObject("Presence Label", row, presenceStr, 10,
             unread > 0 ? Accent : (entry.Online ? GoodGreen : Muted), TextAnchor.UpperLeft, monoFont);
         status.raycastTarget = false;
-        Stretch(status.rectTransform, Vector2.zero, new Vector2(0.6f, 0.5f), new Vector2(28f, 6f), Vector2.zero);
+        Stretch(status.rectTransform, Vector2.zero, new Vector2(0.45f, 0.5f), new Vector2(28f, 6f), Vector2.zero);
 
+        // Compact action chips on the right. Fixed 118px chips (×4) overflowed the row off the
+        // screen edge — a friend once clipped the far-right Block chip by accident. These are narrow
+        // (66px, no accent dot) and the holder is widened, so the whole strip fits with margin.
         var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
-        Stretch(btnHolder, new Vector2(0.55f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
+        Stretch(btnHolder, new Vector2(0.46f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
         var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        hlg.spacing = 6f;
+        hlg.spacing = 5f;
         hlg.childAlignment = TextAnchor.MiddleRight;
         hlg.childControlWidth = false;
         hlg.childControlHeight = false;
-        // Chat opens by clicking the row itself (rowBtn above); an explicit chip would
-        // overcrowd the strip. Quick-invite to a custom game — only for an online friend.
+        const float chipW = 66f;
+        // Chat opens by clicking the row itself (rowBtn above). Quick-invite only for an online friend.
         if (entry.Online)
-            AddButton(btnHolder, "Invite", () => InviteFriendClicked(entry.PlayerId, entry.Username), !inviteBusy && !lobbyBusy, false);
-        AddButton(btnHolder, "Matches", () => OpenCloudMatches(entry.Username), true, false);
-        AddButton(btnHolder, "Remove", () => RemoveFriendClicked(entry.PlayerId), !friendsBusy, false);
-        AddButton(btnHolder, "Block", () => BlockFriendClicked(entry.PlayerId), !friendsBusy, false);
+            AddButton(btnHolder, "Invite", () => InviteFriendClicked(entry.PlayerId, entry.Username), !inviteBusy && !lobbyBusy, false, false, chipW);
+        AddButton(btnHolder, "Matches", () => OpenCloudMatches(entry.Username), true, false, false, chipW);
+        AddButton(btnHolder, "Remove", () => RemoveFriendClicked(entry.PlayerId), !friendsBusy, false, false, chipW);
+        // Block is a TWO-STEP confirm: first tap arms it (chip reads "Sure?"), second tap blocks.
+        bool arming = blockConfirmId == entry.PlayerId;
+        AddButton(btnHolder, arming ? "Sure?" : "Block", () => BlockChipClicked(entry.PlayerId), !friendsBusy, false, false, chipW);
+    }
+
+    // Two-step guard on Block so a stray click can't instantly block a friend: the first click just
+    // arms the chip ("Sure?"), a second click on the armed chip actually blocks.
+    private void BlockChipClicked(string playerId)
+    {
+        if (blockConfirmId == playerId) { blockConfirmId = null; BlockFriendClicked(playerId); }
+        else { blockConfirmId = playerId; RenderMenu(); }
     }
 
     private async void AddFriendClicked()
@@ -6901,7 +7384,8 @@ public partial class MainMenuManager : MonoBehaviour
     }
 
     private void AddButton(RectTransform parent, string label,
-        UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true, bool fill = false)
+        UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true, bool fill = false,
+        float width = 0f, float height = 0f)
     {
         var root = PanelObject(label + " Button", parent,
             enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
@@ -6913,8 +7397,10 @@ public partial class MainMenuManager : MonoBehaviour
         }
         else
         {
-            SetPreferred(root, new Vector2(118, 34));
-            root.sizeDelta = new Vector2(118, 34);
+            float w = width > 0f ? width : 118f;
+            float h = height > 0f ? height : 34f;
+            SetPreferred(root, new Vector2(w, h));
+            root.sizeDelta = new Vector2(w, h);
         }
         Round(root);
         AddRoundedCardBorder(root,

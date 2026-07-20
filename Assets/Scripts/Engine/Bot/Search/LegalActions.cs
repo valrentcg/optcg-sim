@@ -102,15 +102,17 @@ namespace OnePieceTcg.Engine.Bot.Search
                         list.Add(new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
                     }
                 }
+                // Only offer to attach DON!! to cards that can actually ATTACK this turn — attaching
+                // to a summoning-sick Character (that can't swing) just wastes the DON's power boost.
                 if (don > 0)
-                    foreach (var c in Board(me))
+                    foreach (var c in Board(me).Where(c => !c.Rested && !GameEngine.IsSummoningSick(state, c)))
                         list.Add(new GameCommand { Type = "attachDon", Seat = seat, Target = c.InstanceId, Amount = 1 });
                 foreach (var c in Board(me))
                     list.Add(new GameCommand { Type = "activateMain", Seat = seat, Target = c.InstanceId });
                 var targets = new List<string>();
                 if (opp.Leader != null) targets.Add(opp.Leader.InstanceId);
                 targets.AddRange(opp.CharacterArea.Where(c => c != null && c.Rested).Select(c => c.InstanceId));
-                foreach (var atk in Board(me).Where(c => !c.Rested))
+                foreach (var atk in Board(me).Where(c => !c.Rested && !GameEngine.IsSummoningSick(state, c)))
                     foreach (var tgt in targets)
                         list.Add(new GameCommand { Type = "declareAttack", Seat = seat, Attacker = atk.InstanceId, Target = tgt });
             }

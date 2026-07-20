@@ -276,6 +276,15 @@ public static class FriendsManager
         return await ResolveEntriesAsync(FriendsService.Instance.IncomingFriendRequests);
     }
 
+    // Players this account has blocked. Blocking removes the friendship, so these won't
+    // appear in GetFriendsAsync — the Blocked list UI is the only way to see (and undo) them.
+    public static async Task<List<FriendEntry>> GetBlockedAsync()
+    {
+        await EnsureReadyAsync();
+        LogDiag("GetBlocked");
+        return await ResolveEntriesAsync(FriendsService.Instance.Blocks);
+    }
+
     public static async Task<List<FriendEntry>> GetOutgoingRequestsAsync()
     {
         await EnsureReadyAsync();

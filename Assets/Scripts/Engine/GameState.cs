@@ -159,6 +159,19 @@ namespace OnePieceTcg.Engine
         // the action button shows only that step; when A finishes, `Text` advances to this and the
         // button updates to the next step. Empty = no pending continuation.
         public string PendingContinuation;
+        // Progress ledger for the pending-effect panel's animated green/red text (task B).
+        // OriginalText is the FULL clause captured at queue time (before truncation / auto-resolve).
+        // DoneParts = sub-clauses that executed (shown GREEN); SkippedParts = sub-clauses skipped or
+        // whose criteria weren't met (shown RED), both in resolution order. Threaded across the
+        // "Then," continuation chain so the whole original text fills progressively on both clients.
+        public string OriginalText;
+        public List<string> DoneParts = new List<string>();
+        public List<string> SkippedParts = new List<string>();
+        // For a [Once Per Turn] triggered effect (e.g. Nami OP11-041's [On Your Opponent's Attack]):
+        // the AbilityUsedThisTurn key to set ONLY when the effect actually resolves. Declining/skip
+        // must NOT consume the once-per-turn, so it re-prompts on the next attack until used. Null =
+        // no once-per-turn tracking.
+        public string OnceKey;
     }
 
     /// <summary>A serializable player action. Optional fields are used per command type.</summary>
@@ -245,6 +258,10 @@ namespace OnePieceTcg.Engine
         // Per-seat highest base cost of an Event that seat activated this turn (for "if you have
         // activated an Event with a base cost of N or more during this turn" — OP15-002).
         public Dictionary<string, int> HighestEventCostThisTurn = new Dictionary<string, int>();
+        // Instance-ids of cards (Leaders/Characters) that BATTLED an opponent's Character this turn — i.e.
+        // reached the damage step of an attack whose (final) target was a Character. For "If this Leader has
+        // battled your opponent's Character during this turn" (OP12-020 Zoro restand). Cleared each turn.
+        public HashSet<string> BattledOppCharThisTurn = new HashSet<string>();
 
         // Alternate name overrides: instanceId → effective name string.
         // Set by "This card's name is also treated as [X]" effects. Cleared when card leaves play.
