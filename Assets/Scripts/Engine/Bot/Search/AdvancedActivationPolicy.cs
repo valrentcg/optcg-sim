@@ -16,9 +16,9 @@ namespace OnePieceTcg.Engine.Bot.Search
     /// an activation that is illegal or does nothing falls through to the greedy incumbent.
     ///
     /// This is the ACTIVATION-FIRST landing of the validated advanced contract. It does not yet include the
-    /// control pressure module or the tactical rollout module; those are separate follow-ups. Unlike the
-    /// research build it runs directly on the real game state (a shipped AI opponent is allowed full
-    /// information, exactly as the previous SearchBot was), so no determinization is involved.
+    /// control pressure module or the tactical rollout module; those are separate follow-ups. It reads only
+    /// PUBLIC information and its own hand, and its caller (<see cref="AdvancedContractBot"/>) hands it a
+    /// fair-information <see cref="BotDeterminizer.FairView"/> of the state, so it never sees hidden cards.
     /// </summary>
     public static class AdvancedActivationPolicy
     {
@@ -62,6 +62,16 @@ namespace OnePieceTcg.Engine.Bot.Search
                 if (restand != null) return restand;
             }
 
+            // Proactive "trash 1 from hand: negate your opponent's [On Play] effects" (Blackbeard OP09-081).
+            // BeneficialActivateMain rejects every trash-from-hand ability (avoids marginal card loss), which
+            // also disabled this preventative leader. Fire it only when the opponent actually holds an
+            // impactful [On Play] Character to deny AND we can spare the card — full-info, so it's real value.
+            if (OnPlayNegateEnabled)
+            {
+                var negate = OnPlayNegateSetup(world, seat, blacklist, attemptedThisTurn);
+                if (negate != null) return negate;
+            }
+
             foreach (var card in BoardCards(p))
             {
                 if (card == null || attemptedThisTurn.Contains(card.InstanceId)
@@ -85,7 +95,15 @@ namespace OnePieceTcg.Engine.Bot.Search
                 // if the position actually changed — so it never mutates the live game and never plays a no-op.
                 attemptedThisTurn.Add(card.InstanceId);
                 var activation = new GameCommand { Type = "activateMain", Seat = seat, Target = card.InstanceId };
-                if (LegalActions.Validate(world, seat, new List<GameCommand> { activation }).Count == 0) continue;
+                var validated = LegalActions.Validate(world, seat, new List<GameCommand> { activation });
+                if (validated.Count == 0) continue;
+                // VALUE GATE (iter 10): only fire if the activation doesn't WORSEN the position. Otherwise this
+                // fires ANY whitelisted ability that merely CHANGES state — the oracle showed it over-firing
+                // harmful [Activate: Main] abilities (e.g. OP10-082 → 0% win when attacking was 60%). Compare the
+                // resulting position's eval to the current; skip a clear value loss. Off by default (A/B).
+                if ((ActivationValueGate || ActivationValueGateSeat == seat || ActivationValueGateSeat == "both")
+                    && Evaluation.Score(validated[0].Value, seat) < Evaluation.Score(world, seat) - ValueGateMargin)
+                    continue;
 
                 Interlocked.Increment(ref _activations);
                 return activation;
@@ -109,6 +127,16 @@ namespace OnePieceTcg.Engine.Bot.Search
         /// The recur bodies chain naturally: each copy is a distinct instance, so multiple sacrifice-recurs
         /// fire in the same turn, producing the multi-attacker overwhelm turn the archetype is built around.</summary>
         public static bool SacrificeRecurEnabled = true;
+
+        /// <summary>A/B (iter 10): gate every inserted [Activate: Main] on a value check — skip it if the
+        /// resulting position evaluates WORSE than not acting (by <see cref="ValueGateMargin"/>). Targets the
+        /// oracle-found over-firing of harmful activations (OP10-082 etc.) in activation-engine/Blackbeard decks.</summary>
+        /// <summary>Seat-scoped so a CANDIDATE (this gate ON) can face the CHAMPION (gate off) head-to-head in
+        /// the same game (the champion-gauntlet A/B). null = off for both; a seat name = on for that seat;
+        /// "both" = on for both (the ship-it setting). </summary>
+        public static string ActivationValueGateSeat = null;
+        public static bool ActivationValueGate = false;   // legacy global (OR'd in); prefer the seat-scoped field
+        public static double ValueGateMargin = 0.0;
 
         /// <summary>True when an [Activate: Main] ability trashes THIS Character to deploy a card FROM THE TRASH
         /// whose cost is an upgrade (≥ this card's own cost) — or, when no target cost is printed, when this
@@ -231,11 +259,87 @@ namespace OnePieceTcg.Engine.Bot.Search
             return null;
         }
 
+        /// <summary>A/B toggle: proactively fire a "[Activate: Main] you may trash 1 from your hand: negate
+        /// your opponent's [On Play] effects" ability (Blackbeard OP09-081). Off = keep it disabled.
+        /// IMPORTANT — fair information: this AI is meant to see only what a PLAYER sees (its own hand, the
+        /// board, both trashes, revealed Life, and the opponent's pre-match decklist), NEVER the opponent's
+        /// hand contents. So the decision keys off the opponent's hand SIZE (public), their DON (public), and
+        /// the fact that they've already REVEALED [On Play] Characters (in trash / on board — public) — the
+        /// evidence a human uses to judge their deck runs impactful on-plays. It never peeks at held cards, so
+        /// the timing is an honest guess (and will sometimes miss), exactly as it would be for a person.</summary>
+        public static bool OnPlayNegateEnabled = true;
+
+        /// <summary>Minimum cost of a REVEALED opponent [On Play] Character (in their trash or on their board)
+        /// that marks their deck as on-play-centric enough to be worth denying. Tunable; 4 = a value body.</summary>
+        public static int OnPlayNegateThreshold = 4;
+
+        private static GameCommand OnPlayNegateSetup(GameState world, string seat,
+            HashSet<string> blacklist, HashSet<string> attemptedThisTurn)
+        {
+            var p = world.Players[seat];
+            // Only when we can COMFORTABLY spare the card — this is a speculative deny, not a value play.
+            if (p.Hand.Count < 4) return null;
+            var opp = world.Players[GameEngine.OtherSeat(seat)];
+            if (opp.Hand.Count < 2) return null;   // opponent has no real hand to threaten a big on-play with
+            // PUBLIC evidence the opponent's deck runs impactful [On Play] Characters: any they've already
+            // played (now on the board or in their trash). Never their hidden hand.
+            bool RevealedOnPlay(CardInstance c)
+            {
+                var d = GameEngine.GetCard(c);
+                return d != null && d.Type == "character" && d.Cost >= OnPlayNegateThreshold
+                    && (d.Effect ?? "").IndexOf("[On Play]", StringComparison.OrdinalIgnoreCase) >= 0;
+            }
+            bool oppShownOnPlay = opp.Trash.Any(RevealedOnPlay)
+                || opp.CharacterArea.Any(c => c != null && RevealedOnPlay(c));
+            if (!oppShownOnPlay) return null;
+
+            foreach (var card in BoardCards(p))
+            {
+                if (card == null || attemptedThisTurn.Contains(card.InstanceId)
+                    || p.AbilityUsedThisTurn.Contains(card.InstanceId)) continue;
+                if (!IsOnPlayNegateActivate(GameEngine.GetCard(card)?.Effect)) continue;
+                attemptedThisTurn.Add(card.InstanceId);
+                var activation = new GameCommand { Type = "activateMain", Seat = seat, Target = card.InstanceId };
+                if (blacklist.Contains(IntermediateBot.Signature(activation))) continue;
+                // The engine is the legality oracle; a no-op (e.g. cost unpayable) validates to nothing and
+                // is skipped. The trash-1-from-hand cost is paid on the next tick by DecideEffect, which
+                // trashes the least-valuable hand card. The negate payoff needs no further target.
+                if (LegalActions.Validate(world, seat, new List<GameCommand> { activation }).Count == 0) continue;
+                Interlocked.Increment(ref _activations);
+                return activation;
+            }
+            return null;
+        }
+
+        // True for a "[Activate: Main] you may trash <N> from your hand: … your opponent's [On Play] effects
+        // are negated …" ability (Blackbeard OP09-081). Inspects only the [Activate: Main] line; card-id-free.
+        private static bool IsOnPlayNegateActivate(string effect)
+        {
+            if (string.IsNullOrEmpty(effect)) return false;
+            foreach (var line in effect.Split('\n'))
+            {
+                if (line.IndexOf("[Activate: Main]", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                string e = line.ToLowerInvariant();
+                if (e.Contains("trash") && e.Contains("from your hand")
+                    && e.Contains("opponent") && e.Contains("[on play]") && e.Contains("negat"))
+                    return true;
+            }
+            return false;
+        }
+
         private static bool BeneficialActivateMain(string effect)
         {
             if (string.IsNullOrEmpty(effect)
                 || effect.IndexOf("[Activate: Main]", StringComparison.OrdinalIgnoreCase) < 0) return false;
-            string e = effect.ToLowerInvariant();
+            // Inspect ONLY the [Activate: Main] clause, not the whole effect. A beneficial verb printed on a
+            // DIFFERENT ability line — e.g. Van Augur OP09-083's "[On K.O.] Draw 1 card" — must not make the
+            // Activate:Main line (which merely gives an opponent −3 cost, useless without a cost-KO to combo)
+            // read as worth resting the Character for. Scanning the full text made the bot rest Van Augur every
+            // turn for a no-payoff −cost, losing an attacker. Abilities are printed one per line.
+            string e = string.Join("\n",
+                effect.Split('\n').Where(l => l.IndexOf("[Activate: Main]", StringComparison.OrdinalIgnoreCase) >= 0))
+                .ToLowerInvariant();
+            if (e.Length == 0) return false;
             if (e.Contains("you may trash") && e.Contains("from your hand")) return false;
             if (e.Contains("trash") && e.Contains("from the top of your life")) return false;
             if (e.Contains("trash this character")) return false;

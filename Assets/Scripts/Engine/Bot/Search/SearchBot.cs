@@ -34,6 +34,14 @@ namespace OnePieceTcg.Engine.Bot.Search
 
             var candidates = LegalActions.Candidates(state, seat);
             var legal = LegalActions.Validate(state, seat, candidates);
+            // Respect the caller's no-op blacklist. A command the host already applied and found to NOT change
+            // the (true) state must never be re-picked, or the bot loops on it forever — e.g. a deckLookSelect
+            // the engine rejects (wrong filter/limit) that Validate still rates legal on the search world and
+            // the rollout scores highest. Without this filter the search re-issues it every tick, burning to
+            // the command cap (the op16-luffy-n-ace deck-look hang). If nothing survives, defer to the greedy
+            // fallback, whose resolution path confirms/ends the look once every select is blacklisted.
+            if (blacklist != null && blacklist.Count > 0)
+                legal = legal.Where(kv => !blacklist.Contains(IntermediateBot.Signature(kv.Key))).ToList();
             if (legal.Count == 0) return IntermediateBot.DecideOneCommand(state, seat, blacklist);
 
             IEnumerable<KeyValuePair<GameCommand, GameState>> toScore = legal;
@@ -75,8 +83,14 @@ namespace OnePieceTcg.Engine.Bot.Search
             return Evaluation.Score(clone, seat); // unfinished playout → static eval of the deeper state
         }
 
-        // Play the position out to terminal, driving BOTH seats with the strong Champion policy so
-        // move evaluations are accurate against strong opponents (baseline rollouts mis-evaluate).
+        /// <summary>Rollout policy. FALSE = legacy ChampionBot; TRUE = IntermediateBot (the current STRONG core).
+        /// ChampionBot was picked when it was the strongest policy, but it was later RETIRED for losing to the
+        /// core — so the search has been evaluating moves by simulating WEAK future play. Rolling out with the
+        /// strong core makes every move evaluation more accurate (the value function is only sampled at cutoff).</summary>
+        public static bool StrongRollout = false;
+
+        // Play the position out to terminal, driving BOTH seats with the rollout policy (see StrongRollout) so
+        // move evaluations reflect realistic future play.
         private static void Playout(GameState state, int cap)
         {
             int total = 0;
@@ -96,7 +110,8 @@ namespace OnePieceTcg.Engine.Bot.Search
             var bl = new HashSet<string>();
             for (int i = 0; i < budget; i++)
             {
-                var cmd = ChampionBot.DecideOneCommand(state, seat, bl);
+                var cmd = StrongRollout ? IntermediateBot.DecideOneCommand(state, seat, bl)
+                                        : ChampionBot.DecideOneCommand(state, seat, bl);
                 if (cmd == null) break;
                 object before = IntermediateBot.SnapshotFor(state, cmd);
                 GameEngine.ApplyCommand(state, cmd);

@@ -154,10 +154,17 @@ namespace OnePieceTcg.Engine.Bot
         public static string BlockVariantSeat = null;
         public static int BlockLifeThreshold = 2;
 
-        /// <summary>Sim-only A/B knob: for this seat, sequence attackers WEAKEST-relevant first (the documented
-        /// high-level habit — bait/drain the opponent's counters on small swings, then send the biggest hitter
-        /// into a depleted defense). Baseline (null) attacks strongest-first.</summary>
+        /// <summary>DEPRECATED (weakest-first is now the SHIPPED default — see <see cref="LegacyStrongestFirstSeat"/>).
+        /// Kept as an explicit per-seat force for older experiments; setting it is now redundant with the default.</summary>
         public static string WeakestFirstSeat = null;
+
+        /// <summary>SHIPPED (iter-5 A/B 2026-07-22, +4pp head-to-head, n=3516 pooled, CI clear of 50%): attackers
+        /// are sequenced WEAKEST-relevant FIRST by default — the documented high-level habit of draining the
+        /// opponent's counters/blocks on small swings, THEN sending the biggest hitter into a depleted defense.
+        /// A prior "unconditional weakest-first" test was null, but that predated the 300+ effect fixes that made
+        /// counter/block resolution accurate; re-measured post-fix it is a clear win. This reverts a seat to the
+        /// old strongest-first order for A/B measurement.</summary>
+        public static string LegacyStrongestFirstSeat = null;
 
         /// <summary>SHIPPED ("Life is the clock"): when a Leader swing is available, pressure the Leader instead
         /// of spending DON to KO a rested Character whose Value is below this floor — but ALWAYS answer a Blocker
@@ -1323,13 +1330,10 @@ namespace OnePieceTcg.Engine.Bot
             // Life pressure is king (iter 8); the block is only worth the chip when you need to survive.
             if (HoldBlockersSeat == seat && p.Life.Count <= 2)
                 attackers = attackers.Where(a => a == p.Leader || !GameEngine.HasBlocker(state, a)).ToList();
-            // Attack sequencing. Default: strongest-first. A/B (WeakestFirstSeat): weakest-relevant first,
-            // the documented habit of draining the opponent's counters on small swings before the big hitter.
-            // A/B (BaitBlockerSeat): weakest-first ONLY when the opponent has an active Blocker — bait the block
-            // onto a cheap attacker, then push the big hitter through the cleared lane (research habit; the
-            // unconditional iter-7 weakest-first was null, this isolates the blocker-bait case).
-            bool oppHasActiveBlocker = opponent.CharacterArea.Any(c => c != null && !c.Rested && GameEngine.HasBlocker(state, c));
-            bool weakestFirst = WeakestFirstSeat == seat || (BaitBlockerSeat == seat && oppHasActiveBlocker);
+            // Attack sequencing. SHIPPED default: WEAKEST-relevant first — drain the opponent's counters/blocks on
+            // small swings, then send the big hitter into a depleted defense (iter-5 A/B: +4pp head-to-head,
+            // n=3516). LegacyStrongestFirstSeat reverts a seat to strongest-first for measurement.
+            bool weakestFirst = LegacyStrongestFirstSeat != seat;
             attackers = (weakestFirst
                     ? attackers.OrderBy(a => GameEngine.GetPower(state, a))
                     : attackers.OrderByDescending(a => GameEngine.GetPower(state, a)))

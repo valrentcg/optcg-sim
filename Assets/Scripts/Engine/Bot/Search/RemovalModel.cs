@@ -76,29 +76,46 @@ namespace OnePieceTcg.Engine.Bot.Search
             return m.Success ? int.Parse(m.Groups[1].Value) : 0;
         }
 
-        /// <summary>WS-2: the best EFFECTIVE-cost "K.O. … cost of N or less" threshold the seat could bring to
-        /// bear (from a card in hand or an ability on the board/leader), or -1 if none. Only effective-cost
-        /// K.O.s count — a "base cost" K.O. is unaffected by a −cost reduction, so it is excluded. This lets a
-        /// −cost debuff be valued by the K.O. it unlocks: reduce a body under threshold N, then a KO-by-cost
-        /// finisher removes it. Capability scan (does the deck HAVE the tool), not a full affordability proof.</summary>
+        /// <summary>WS-2: the best EFFECTIVE-cost "K.O. … cost of N or less" threshold the seat can actually
+        /// bring to bear THIS TURN (from a card in hand or an ability on the board/leader), or -1 if none. Only
+        /// effective-cost K.O.s count — a "base cost" K.O. is unaffected by a −cost reduction. This lets a −cost
+        /// debuff be valued by the K.O. it UNLOCKS: reduce a body under threshold N, then a KO-by-cost finisher
+        /// removes it. EXECUTION-aware (not just capability): a HAND finisher must be AFFORDABLE with the DON left
+        /// after the setup, and an [Activate: Main] board/leader finisher must be un-used and its [DON!! xN] gate
+        /// met — otherwise the "removal" never happens and the −cost is wasted (the Van Augur-class problem).</summary>
         public static int BestEffectiveCostKoThreshold(GameState state, string seat)
         {
             if (state == null || !state.Players.ContainsKey(seat)) return -1;
             var p = state.Players[seat];
+            int activeDon = GameEngine.ActiveDonCount(p);
             int best = -1;
-            void Consider(CardInstance c)
+            void Consider(CardInstance c, string zone)
             {
                 if (c == null) return;
                 var def = GameEngine.GetCard(c);
                 string e = (def?.Effect ?? "").ToLowerInvariant();
                 if (e.IndexOf("k.o.", System.StringComparison.Ordinal) < 0) return;
                 if (e.IndexOf("opponent", System.StringComparison.Ordinal) < 0) return;
+                // EXECUTION gate: the finisher must be usable this turn, or the −cost fizzles.
+                if (zone == "hand")
+                {
+                    // Playing it must be affordable with the DON left after the −cost setup was paid.
+                    if (GameEngine.GetCost(state, c) > activeDon) return;
+                }
+                else // board / leader [Activate: Main] finisher
+                {
+                    if (e.IndexOf("[activate: main]", System.StringComparison.Ordinal) < 0) return; // not an on-demand KO
+                    if (p.AbilityUsedThisTurn.Contains(c.InstanceId)) return;                       // already spent
+                    var gate = Regex.Match(e, @"\[don!! x(\d+)\]");                                 // pay any DON!! gate
+                    if (gate.Success && (c.AttachedDonIds?.Count ?? 0) < int.Parse(gate.Groups[1].Value)
+                        && (c.AttachedDonIds?.Count ?? 0) + activeDon < int.Parse(gate.Groups[1].Value)) return;
+                }
                 foreach (Match m in Regex.Matches(e, @"(?<!base )cost of (\d+) or less"))
                     best = System.Math.Max(best, int.Parse(m.Groups[1].Value));
             }
-            foreach (var c in p.Hand) Consider(c);
-            foreach (var c in p.CharacterArea) Consider(c);
-            Consider(p.Leader);
+            foreach (var c in p.Hand) Consider(c, "hand");
+            foreach (var c in p.CharacterArea) Consider(c, "board");
+            Consider(p.Leader, "board");
             return best;
         }
 

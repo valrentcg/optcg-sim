@@ -237,6 +237,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private RectTransform mulliganOverlay;    // opening-hand overlay (deck-look style)
     private bool trashSortLowestFirst = true; // next SORT click: lowest cost at the top (toggles)
     private RectTransform trashOverlayCatcher; // full-screen click-outside-to-close catcher (browse mode)
+    private RectTransform resultPeekChip;     // "◂ SHOW RESULT" chip (lives on the canvas; torn down each Render)
     // ── Bot (Versus A.I.) ─────────────────────────────────────────────────────
     // Two difficulty tiers share one tick loop and one per-turn blacklist:
     //   "beginner"     — AiTick(): Strawtable-style greedy heuristics, no search.
@@ -691,8 +692,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         mulliganDealAnimating = 0;
         lastCardPoses.Clear();
         suppressMoveAnim.Clear();
-        // Hotseat/versus-self: both seats are this player; generic names.
-        southDisplayName = "Player 1";
+        // South is the local player on this device — show their account/guest name (the profile
+        // name, e.g. "Valren") rather than a generic "Player 1", which is only the last-resort
+        // fallback when no account or guest name is available.
+        southDisplayName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername
+            ?? AccountManager.GuestDisplayName ?? "Player 1";
         northDisplayName = aiSeat == null ? "Player 2"
             : aiDifficulty == "advanced" ? "Advanced Bot"
             : aiDifficulty == "intermediate" ? "Intermediate Bot"
@@ -1892,6 +1896,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Clear(boardRoot);
         Clear(sideRoot);
         Clear(leftRoot);
+        // The result peek chip lives on the canvas (not boardRoot), so Clear() above does NOT touch it.
+        // Tear it down every Render and let the result block below recreate it only while it's needed —
+        // otherwise it both stacks a fresh copy each frame and lingers on screen after a re-match.
+        if (resultPeekChip != null) { Destroy(resultPeekChip.gameObject); resultPeekChip = null; }
         handCardRects.Clear();
         boardDeckPileRects.Clear();
         cardTargetRects.Clear();
@@ -2652,7 +2660,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     && state.Players.TryGetValue(kv.Value.owner, out var owP))
                 {
                     var ci = owP.CharacterArea.FirstOrDefault(c => c != null && c.InstanceId == kv.Key);
-                    ghostDesat = ci != null && !ci.Rested && GameEngine.IsSummoningSick(state, ci);
+                    ghostDesat = ci != null && !ci.Rested && GameEngine.IsSummoningSick(state, ci)
+                                 && !CanAttackCharactersNow(ci, kv.Value.owner);
                 }
                 // NOTE: zone changes (hand↔board plays, draws, discards, life, DON) keep the ghost — a
                 // top-level object that renders above the hand fan and animates size. FLIP-ing the real
@@ -3003,6 +3012,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var btn = chip.gameObject.AddComponent<Button>();
         btn.onClick.AddListener(() => { matchResultHidden = false; Render(); });
+        resultPeekChip = chip;   // cached so Render() can tear it down (see the top of Render)
     }
 
     // Thin control strip across the top of the board, only shown during replay playback.
@@ -3597,14 +3607,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             || (!isNetworked && aiSeat != null && dl.Seat == aiSeat);
         if (searchIsOpponents)
         {
-            var oScrim = PanelObject("Opp Search Scrim", canvas.transform, new Color(0f, 0f, 0f, 0.5f));
-            Stretch(oScrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            oScrim.SetAsLastSibling();
-            var msg = TextObject("Opp Search Msg", oScrim,
-                $"{dl.SourceName}: your opponent is looking at their deck…", 18, Ink, TextAnchor.MiddleCenter, titleFont);
-            msg.fontStyle = FontStyle.Bold;
-            Stretch(msg.rectTransform, new Vector2(0.1f, 0.44f), new Vector2(0.9f, 0.56f), Vector2.zero, Vector2.zero);
-            deckLookOverlay = oScrim;
+            // Do NOT pop a full-screen scrim for the opponent's (networked peer or solo AI) private
+            // search: it merely blocks the human's view of a decision that isn't theirs and resolves on
+            // its own. The pending search is already stated in the action log, which is enough. (The
+            // previous overlay was already torn down at the top of this method, so nothing lingers.)
             return;
         }
         bool selecting = dl.Step == "select";
@@ -3786,7 +3792,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             bool wantsTrash = pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash
                 || (pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any
                     && (pe.Text ?? "").IndexOf("trash", System.StringComparison.OrdinalIgnoreCase) >= 0);
-            if (wantsTrash && (!isNetworked || pe.Seat == localSeat))
+            // Auto-open only for OUR OWN trash effect. In a networked match that's localSeat; in a solo
+            // match it's anything that isn't the AI's seat (hotseat has no AI seat, so both are ours).
+            // Previously the solo branch opened for ANY seat, so the AI's trash-search popped the bot's
+            // whole trash onto the human's screen unbidden.
+            bool trashIsOurs = isNetworked ? pe.Seat == localSeat : (aiSeat == null || pe.Seat != aiSeat);
+            if (wantsTrash && trashIsOurs)
             {
                 seatToShow = pe.Seat;
                 trashEffect = pe;
@@ -9254,6 +9265,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return GameEngine.HasModifier(state, attacker, "canAttackActive");
     }
 
+    // A summoning-sick Character with a partial "Rush vs Characters" (EB02-019 Zoro) can still attack
+    // opponent Characters this turn — but only when a LEGAL target actually exists (a rested Character,
+    // or any Character if it can hit active ones). Uses the same engine gate DeclareAttack does, so the
+    // board visual matches what an attack would allow. True → don't dim it as summoning-sick.
+    private bool CanAttackCharactersNow(CardInstance card, string seat)
+    {
+        if (state == null || card == null) return false;
+        if (!GameEngine.CanAttackCharactersOnPlayTurn(state, seat, card)) return false;
+        string oppSeat = OtherSeatLocal(seat);
+        if (!state.Players.TryGetValue(oppSeat, out var opp) || opp == null) return false;
+        return opp.CharacterArea.Any(c => c != null && IsValidAttackTarget(seat, card, c));
+    }
+
     private RectTransform GetCardRect(string instanceId)
     {
         if (string.IsNullOrEmpty(instanceId)) return null;
@@ -10053,8 +10077,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         float donStep = cardW * 0.34f;
         if (cardW + (n - 1) * donStep > availW) donStep = (availW - cardW) / Mathf.Max(1, n - 1);
         float donStart = -((n - 1) * donStep) * 0.5f;
-        for (int i = 0; i < n; i++)
-            AddCostDon(parent, donCards[i], seat, i, donStart + i * donStep, cardW, cardH, inverted, -1);
+        // Draw rested DON first (left) then active DON (right), so DON that refresh/restand back to
+        // active always regroup to one side instead of appearing interleaved with rested ones (the
+        // raw CostArea order can mix them after a restand/return-active). Engine state is untouched —
+        // only the DRAW order changes, and each DON keeps its ORIGINAL CostArea index so click/drag
+        // still resolve correctly (SelectDon validates CostArea[index] == the clicked DON). This
+        // mirrors DrawGroupedDonRow, which already clusters rested-then-active.
+        var order = new List<int>(n);
+        for (int i = 0; i < n; i++) if (donCards[i].Rested) order.Add(i);
+        for (int i = 0; i < n; i++) if (!donCards[i].Rested) order.Add(i);
+        for (int pos = 0; pos < n; pos++)
+        {
+            int oi = order[pos];
+            AddCostDon(parent, donCards[oi], seat, oi, donStart + pos * donStep, cardW, cardH, inverted, -1);
+        }
     }
 
     private static (float cardWidth, float step, float start) FittedRow(int count, float maxCardWidth, float idealGap, float minStep, bool center)
@@ -10586,9 +10622,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             AddCard(holder, card, seat, true, Vector2.zero, true, inverted);
 
             // QoL: dim a summoning-sick Character (played this turn, no [Rush]) on the turn
-            // player's board — a clear cue that it can't attack yet.
+            // player's board — a clear cue that it can't attack yet. A partial "Rush vs Characters"
+            // (EB02-019 Zoro, when its condition holds and a legal Character target exists) can still
+            // attack this turn, so it must NOT be dimmed — it should read as live/clickable.
             if (!isReplayMode && seat == state.ActiveSeat && !card.Rested
-                && GameEngine.IsSummoningSick(state, card))
+                && GameEngine.IsSummoningSick(state, card)
+                && !CanAttackCharactersNow(card, seat))
             {
                 // Official-app style: KEEP the card's colours but DARKEN it. A near-black veil at ~0.70
                 // alpha is a pure multiply (card * ~0.30), so hue/saturation are preserved — it just dims,

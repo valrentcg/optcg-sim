@@ -29,6 +29,9 @@ static class Scenarios
         RayleighThenKoFires();
         ByrnndiSixDigitPowerGain();
         CabajiSelfBuffScope();
+        Op12036ZoroSlashLeaderBuff();
+        Eb02019ConditionalRushVsCharacters();
+        BotDeterminizerFairView();
         PbLuffyDonReturnThreshold();
         BuggyCannotAttackAura();
         CrocodileMihawkDrawTrashThenPlay();
@@ -43,6 +46,7 @@ static class Scenarios
         KingKoReplacementReturnDon();
         RemovalImmunityBlocksBounce();
         SaboRevealPlayGatesBuff();
+        RestByYourEffectFlagSetAndReset();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -226,6 +230,103 @@ static class Scenarios
               cabPow == cabBase + 5000 && otherPow == otherBase,
               $"cabaji={cabPow}(base {cabBase}) other={otherPow}(base {otherBase})  {Tail(st)}");
     }
+
+    // Playtest bug: OP12-036 Zoro "If your Leader has the ＜Slash＞ attribute, this Character cannot be
+    // K.O.'d in battle by ＜Slash＞ attribute cards and gains +1000 power." The +1000 never applied because
+    // the static-self-buff scan bounded the sentence with [^.], which the literal periods in "K.O.'d"
+    // defeat — the "gains +1000 power" clause sits two periods past "this Character". Verify the buff
+    // applies ONLY when the Leader has the ＜Slash＞ attribute.
+    static void Op12036ZoroSlashLeaderBuff()
+    {
+        int Power(string leaderId)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "zoro:" + leaderId });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; S.TurnsStarted = 3;
+            S.Leader.CardId = leaderId;
+            for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+            var zoro = MakeInPlay("OP12-036", "south"); S.CharacterArea[0] = zoro;
+            return GameEngine.GetPower(st, zoro);
+        }
+        int baseP = GameEngine.GetCard(MakeInPlay("OP12-036", "south")).Power; // 5000
+        int withSlash = Power("EB01-001");   // Kouzuki Oden — ＜Slash＞ attribute leader
+        int withStrike = Power("EB02-010");  // Luffy — ＜Strike＞ attribute leader (condition NOT met)
+        Check("OP12-036 Zoro: +1000 power only when Leader has the ＜Slash＞ attribute",
+              withSlash == baseP + 1000 && withStrike == baseP,
+              $"base={baseP} slashLeader={withSlash} strikeLeader={withStrike}");
+    }
+
+    // Playtest bug: EB02-019 Zoro "If your opponent has 2 or more Characters, this Character can attack
+    // Characters on the turn in which it is played." The engine ALLOWED the attack (good) but ignored the
+    // leading condition, and the board dimmed the card as summoning-sick even when it could attack — the
+    // shared CanAttackCharactersOnPlayTurn now drives BOTH, so the condition is honoured and the glow/dim
+    // matches. Verify the gate is true iff the opponent has 2+ Characters, and false when negated.
+    static void Eb02019ConditionalRushVsCharacters()
+    {
+        GameState Build(int oppChars)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "eb02019:" + oppChars });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"]; S.TurnsStarted = 3;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            var zoro = MakeInPlay("EB02-019", "south"); zoro.PlayedOnTurn = st.TurnNumber; S.CharacterArea[0] = zoro;
+            for (int i = 0; i < oppChars; i++) { var c = MakeInPlay("ST01-006", "north"); c.Rested = true; N.CharacterArea[i] = c; }
+            return st;
+        }
+        var two = Build(2); var one = Build(1);
+        bool canTwo = GameEngine.CanAttackCharactersOnPlayTurn(two, "south", two.Players["south"].CharacterArea[0]);
+        bool canOne = GameEngine.CanAttackCharactersOnPlayTurn(one, "south", one.Players["south"].CharacterArea[0]);
+        Check("EB02-019 Zoro: 'can attack Characters when played' true iff opponent has 2+ Characters",
+              canTwo && !canOne, $"opp2={canTwo} opp1={canOne}");
+    }
+
+    // Fair-information restructure: the Advanced bot must decide on a BotDeterminizer.FairView, where the
+    // zones hidden from the acting seat are resampled. Assert the three correctness properties:
+    //   (1) NONINTERFERENCE — same public state + seed ⇒ identical sampled arrangement regardless of the TRUE
+    //       hidden order (this is what proves the bot can't read the truth through the sample; it FAILS if the
+    //       multiset isn't canonicalized before shuffling);
+    //   (2) LEGALITY — the opponent's total hidden multiset (hand+deck+face-down Life) is preserved;
+    //   (3) PRESERVATION — the acting seat's OWN hand keeps its exact ids AND CardIds (it must stay actionable).
+    static void BotDeterminizerFairView()
+    {
+        CardInstance Mk(string id, string owner) => new CardInstance
+        { InstanceId = $"{owner}:{id}:{Guid.NewGuid():N}".Substring(0, 22), CardId = id, Owner = owner, Zone = "hand" };
+
+        GameState Build(bool reverseOppHand)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "det" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.Hand.Clear();
+            foreach (var id in new[] { "ST01-006", "ST01-007" }) S.Hand.Add(Mk(id, "south"));
+            var oppIds = new List<string> { "OP12-036", "EB02-019", "OP09-083", "ST01-005" };
+            if (reverseOppHand) oppIds.Reverse();
+            N.Hand.Clear();
+            foreach (var id in oppIds) N.Hand.Add(Mk(id, "north"));
+            return st;
+        }
+        var a = Build(false); var b = Build(true);
+        const int seed = 12345;
+        var fa = GameEngine_FairView(a, "south", seed);
+        var fb = GameEngine_FairView(b, "south", seed);
+
+        List<string> Hand(GameState s, string seat) => s.Players[seat].Hand.Select(c => c.CardId).ToList();
+        List<string> HiddenMultiset(GameState s) => s.Players["north"].Hand.Concat(s.Players["north"].Deck)
+            .Concat(s.Players["north"].Life.Where(c => !c.FaceUp)).Select(c => c.CardId).OrderBy(x => x).ToList();
+
+        bool noninterference = Hand(fa, "north").SequenceEqual(Hand(fb, "north"));
+        bool legalMultiset = HiddenMultiset(fa).SequenceEqual(HiddenMultiset(a));
+        bool ownCardIds = Hand(fa, "south").SequenceEqual(Hand(a, "south"));
+        bool ownInstanceIds = fa.Players["south"].Hand.Select(c => c.InstanceId)
+            .SequenceEqual(a.Players["south"].Hand.Select(c => c.InstanceId));
+        Check("BotDeterminizer.FairView: noninterferent + legal multiset + preserves own hand",
+              noninterference && legalMultiset && ownCardIds && ownInstanceIds,
+              $"noninterf={noninterference} legal={legalMultiset} ownIds={ownCardIds} ownInst={ownInstanceIds} " +
+              $"faNorthHand=[{string.Join(",", Hand(fa, "north"))}]");
+    }
+
+    static GameState GameEngine_FairView(GameState s, string seat, int seed) =>
+        OnePieceTcg.Engine.Bot.Search.BotDeterminizer.FairView(s, seat, seed);
 
     // Playtest bug: OP09-061 P/B Luffy "[Your Turn][Once Per Turn] When 2 or more DON!! cards …
     // are returned …, add a DON!! active + add another rested" never fired — NotifyDonReturned
@@ -1018,6 +1119,43 @@ static class Scenarios
         heat = MakeInPlay("ST10-011", "south"); heat.Rested = false; heat.PlayedOnTurn = 0; S.CharacterArea[0] = heat;
         for (int i = 0; i < 3; i++) S.CostArea.Add(new DonInstance { InstanceId = $"heatdon{i}", Rested = false });
         return st;
+    }
+
+    // Fix (b): "[Your Turn] [Once Per Turn] If a Character is rested by your effect, <X>" (OP07-031
+    // Bartolomeo, OP10-036 Perona) was DEAD — EvaluateCondition didn't recognise the condition, so it
+    // fired never and spammed "Unknown condition …" on every poll. The general fix: a per-turn
+    // GameState.CharRestedByEffectThisTurn flag, SET by the effect-rest-a-target resolvers and READ by
+    // the shared condition. This asserts the mechanism directly (text-driven, no card-id logic): resting
+    // an opponent's Character via an effect sets the flag, and it resets at the next turn start.
+    static void RestByYourEffectFlagSetAndReset()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "restflag" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 4;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 3;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        for (int i = 0; i < 5; i++) S.CostArea.Add(new DonInstance { InstanceId = $"rf{i}", Rested = false });
+        // Opponent has a cost-1 Character (Laffitte) — a legal target for EB01-015's "cost 2 or less" rest.
+        var victim = MakeInPlay("OP09-095", "north");
+        N.CharacterArea[0] = victim;
+        // South plays EB01-015: "[On Play] Rest up to 1 of your opponent's Characters with a cost of 2 or less."
+        var mover = MakeInPlay("EB01-015", "south"); mover.Zone = "hand"; S.Hand.Add(mover);
+
+        bool emptyBefore = !st.CharRestedByEffectThisTurn.Contains("south");
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = mover.InstanceId, SlotIndex = 0 });
+        var pend = st.PendingEffects.FirstOrDefault();
+        Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pend?.EffectId, Target = victim.InstanceId });
+
+        bool victimRested = victim.Rested;
+        bool flagSet = st.CharRestedByEffectThisTurn.Contains("south");
+
+        // Reset: passing the turn to north clears the flag at north's turn start (ApplyStartOfTurn).
+        Apply(st, new GameCommand { Type = "endTurn", Seat = "south" });
+        bool flagReset = !st.CharRestedByEffectThisTurn.Contains("south");
+
+        Check("Fix (b): resting an opponent Character by effect sets CharRestedByEffectThisTurn, resets next turn",
+              emptyBefore && victimRested && flagSet && flagReset,
+              $"emptyBefore={emptyBefore} victimRested={victimRested} flagSet={flagSet} flagReset={flagReset}  {Tail(st)}");
     }
 
     static CardInstance MakeInPlay(string cardId, string owner) => new CardInstance

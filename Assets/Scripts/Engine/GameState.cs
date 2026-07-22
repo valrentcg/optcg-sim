@@ -265,6 +265,10 @@ namespace OnePieceTcg.Engine
         // Owner-seats whose Character(s) were K.O.'d this turn (for "if your opponent's Character
         // has been K.O.'d during this turn" — OP16-100). Cleared each turn in ApplyStartOfTurn.
         public HashSet<string> CharKoedThisTurn = new HashSet<string>();
+        // Controller-seats whose EFFECT rested a Character this turn (for "[Your Turn] [Once Per Turn]
+        // If a Character is rested by your effect, …" — OP07-031 Bartolomeo, OP10-036 Perona, and any
+        // future card with that pattern). Set by the effect-rest-a-target resolvers; cleared each turn.
+        public HashSet<string> CharRestedByEffectThisTurn = new HashSet<string>();
         // Per-seat highest base cost of an Event that seat activated this turn (for "if you have
         // activated an Event with a base cost of N or more during this turn" — OP15-002).
         public Dictionary<string, int> HighestEventCostThisTurn = new Dictionary<string, int>();

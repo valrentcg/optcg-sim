@@ -15,23 +15,72 @@ namespace OnePieceTcg.Engine.Bot.Search
     ///     <see cref="SearchBot"/>'s one-step rollout, which already best-responds those branches
     ///   • everything else (defence, opponent-turn responses, aggro/combo main) → <see cref="IntermediateBot"/>
     ///
-    /// The research build ran each module on a determinized world to keep MEASUREMENT honest; a shipped AI
-    /// opponent is allowed full information (as the previous SearchBot was), so here the modules run directly
-    /// on the real game state. The engine remains the sole legality oracle and each module fails closed to the
-    /// greedy incumbent.
+    /// FAIR INFORMATION: the modules must reason from what a PLAYER knows, never the true hidden state. The
+    /// whole pipeline runs on a <see cref="BotDeterminizer.FairView"/> of the state — a clone in which the
+    /// zones hidden from <paramref name="seat"/> (the opponent's hand, both deck orders, face-down Life) have
+    /// their identities permuted (multiset preserved, arrangement randomized). The greedy/identity modules read
+    /// only public info and their own hand, so the fair view is behaviour-neutral for them; the search/rollout
+    /// (<see cref="SearchBot"/>) and Trigger simulation (<see cref="TriggerUtilityPolicy"/>), which DO play the
+    /// hidden state forward, now best-respond a sampled world instead of the truth. Every card the seat can act
+    /// on keeps its real id, so a returned command still applies to the true state. The engine remains the sole
+    /// legality oracle and each module fails closed to the greedy incumbent.
     /// </summary>
     public static class AdvancedContractBot
     {
-        public static GameCommand Decide(GameState state, string seat, HashSet<string> blacklist,
+        // Diagnostic A/B toggles: skip a module (fall back to the greedy core) to measure that module's
+        // contribution to the +6pp the modules add over pure greedy. Default false (all modules active).
+        public static bool SkipActivation = false;   // AdvancedActivationPolicy (midrange/activation clean-main)
+        public static bool SkipPressure = false;      // AdvancedPressurePolicy (control clean-main)
+        public static bool SkipSearch = false;        // SearchBot rollout on resolution/tactical branches
+        public static bool SkipTriggerUtility = false; // TriggerUtilityPolicy on the battle Trigger step
+        // EXPERIMENT (iter 9): route clean-main decisions through the SearchBot rollout instead of the greedy/
+        // activation policy — tests whether SEARCH on the BIG decision space (main phase) wins now (post the 300+
+        // effect fixes; a pre-fix "universal clean-main rollout" was rejected). Default false.
+        public static bool SearchCleanMain = false;
+        // iter 2: route clean-main through 1-ply EVAL-GREEDY (pick the action whose resulting position evals best)
+        // using the LEARNED (oracle-distilled) Evaluation weights. This is the ship-form of the distillation win.
+        public static bool EvalGreedyMain = false;
+
+        public static GameCommand Decide(GameState trueState, string seat, HashSet<string> blacklist,
             HashSet<string> attemptedThisTurn, string archetype)
         {
+            var state = trueState;
             if (state == null || !state.Players.ContainsKey(seat)) return null;
+
+            // Fair information, applied LAZILY. Only the two modules that play the hidden state FORWARD
+            // (SearchBot's rollout, TriggerUtilityPolicy's battle sim) may read secrets, so only they get a
+            // resampled BotDeterminizer.FairView. The greedy/activation/pressure modules read only public info
+            // and their own hand, so the true state is already fair for them — and skipping the per-tick clone
+            // on those (the majority of decisions) keeps the bot fast. Determinizing everywhere would be
+            // behaviour-identical for them (they don't read hidden zones) but needlessly clones every tick.
 
             bool cleanMain = state.ActiveSeat == seat && state.Phase == "main" && state.Battle == null
                 && state.PendingEffects.Count == 0 && state.ActiveChoice == null && state.DeckLook == null;
-            if (cleanMain && (archetype == "midrange" || archetype == "activation-engine"))
+            // EXPERIMENT: search the main phase (the largest decision space) instead of greedy/activation.
+            if (SearchCleanMain && cleanMain)
+            {
+                var fairMain = BotDeterminizer.FairView(state, seat, BotDeterminizer.Seed(state, seat));
+                return SearchBot.DecideOneCommand(fairMain, seat, blacklist);
+            }
+            // iter 2: 1-ply eval-greedy main using the learned eval (oracle-distilled).
+            if (EvalGreedyMain && cleanMain)
+            {
+                var legal = LegalActions.Validate(state, seat, LegalActions.Candidates(state, seat));
+                if (legal.Count > 0)
+                {
+                    GameCommand pick = null; double bestSc = double.NegativeInfinity;
+                    foreach (var kv in legal)
+                    {
+                        if (blacklist.Contains(IntermediateBot.Signature(kv.Key))) continue;
+                        double sc = Evaluation.Score(kv.Value, seat);
+                        if (sc > bestSc) { bestSc = sc; pick = kv.Key; }
+                    }
+                    if (pick != null) return pick;
+                }
+            }
+            if (!SkipActivation && cleanMain && (archetype == "midrange" || archetype == "activation-engine"))
                 return AdvancedActivationPolicy.Decide(state, seat, blacklist, attemptedThisTurn);
-            if (cleanMain && archetype == "control")
+            if (!SkipPressure && cleanMain && archetype == "control")
                 return AdvancedPressurePolicy.Decide(state, seat, blacklist);
 
             // Bounded tactical improvement only where the greedy incumbent has explicit blind spots: choice
@@ -48,14 +97,20 @@ namespace OnePieceTcg.Engine.Bot.Search
             // [Counter] + card advantage, with a lethal override). This subsumes the old zero-value gate —
             // a no-target/no-value Trigger scores ~0 and is declined — and, unlike the generic rollout,
             // does not wash out a Trigger's marginal defensive value.
-            if (state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger")
+            if (!SkipTriggerUtility && state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger")
+            {
+                var fair = BotDeterminizer.FairView(state, seat, BotDeterminizer.Seed(state, seat));
                 return new GameCommand
                 {
-                    Type = TriggerUtilityPolicy.ShouldUse(state, seat) ? "useTrigger" : "passTrigger",
+                    Type = TriggerUtilityPolicy.ShouldUse(fair, seat) ? "useTrigger" : "passTrigger",
                     Seat = seat,
                 };
-            if (resolutionDecision)
-                return SearchBot.DecideOneCommand(state, seat, blacklist);
+            }
+            if (!SkipSearch && resolutionDecision)
+            {
+                var fair = BotDeterminizer.FairView(state, seat, BotDeterminizer.Seed(state, seat));
+                return SearchBot.DecideOneCommand(fair, seat, blacklist);
+            }
 
             return IntermediateBot.DecideOneCommand(state, seat, blacklist);
         }

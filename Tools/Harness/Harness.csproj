@@ -28,5 +28,6 @@
     <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\TriggerUtilityPolicy.cs" Link="Engine\Bot\Search\TriggerUtilityPolicy.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\RemovalModel.cs" Link="Engine\Bot\Search\RemovalModel.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\DonOpportunityModel.cs" Link="Engine\Bot\Search\DonOpportunityModel.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\BotDeterminizer.cs" Link="Engine\Bot\Search\BotDeterminizer.cs" />
   </ItemGroup>
 </Project>

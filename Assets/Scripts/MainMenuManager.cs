@@ -4902,6 +4902,7 @@ public partial class MainMenuManager : MonoBehaviour
         if (!RankedStore.IsConfigured) { friendsError = "Invites aren't available yet."; RenderMenu(); return; }
         inviteBusy = true;
         friendsError = null;
+        ResetPeerLobbyState();   // fresh lobby → Start Match stays gated until the guest messages us (P2)
         RenderMenu();
         try
         {
@@ -4974,6 +4975,7 @@ public partial class MainMenuManager : MonoBehaviour
         var inv = pendingInvite;
         if (inv == null) return;
         inviteBusy = true;
+        ResetPeerLobbyState();   // fresh lobby (P2)
         RenderMenu();
         try
         {
@@ -5564,9 +5566,16 @@ public partial class MainMenuManager : MonoBehaviour
 
         bool bothPresent = session.PlayerCount >= session.MaxPlayers;
         bool networkReady = MatchNetworkSync.IsPeerConnected;
+        // A peer MESSAGE (name/deck) proves the guest's NGO named-message handlers are registered,
+        // so our match-start won't be dropped. IsPeerConnected alone can turn true a beat earlier —
+        // clicking Start Match in that window drops the (handler-less) match-start and hangs the
+        // guest on "Connecting…". The guest always sends its name on connect, so this can't stall.
+        // Ranked auto-launch already waits on this (rankedGuestReady); custom's manual Start didn't.
+        // (P2 in Tools/Sim/docs/lobby-connectivity-audit-2026-07.md.)
+        bool peerHandlersReady = lobbyPeerName != null || lobbyPeerDeck != null;
         string noteMessage;
         if (!bothPresent) noteMessage = "Waiting for another player to join...";
-        else if (!networkReady) noteMessage = "Both players are here. Finishing connection...";
+        else if (!networkReady || !peerHandlersReady) noteMessage = "Both players are here. Finishing connection...";
         else if (session.IsHost) noteMessage = "Both players are here — pick decks, then click Start Match.";
         else noteMessage = "Both players are here. Waiting for the host to start the match...";
         var noteText = TextObject("Note", panel, noteMessage,
@@ -5583,7 +5592,7 @@ public partial class MainMenuManager : MonoBehaviour
         ahlg.childControlHeight = false;
         AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false);
         if (session.IsHost)
-            AddButton(actionRow, "Start Match", StartMatchClicked, bothPresent && networkReady && !lobbyBusy, false);
+            AddButton(actionRow, "Start Match", StartMatchClicked, bothPresent && networkReady && peerHandlersReady && !lobbyBusy, false);
     }
 
     // Opens the deck-builder hex roster as a one-shot picker for this online match.
@@ -5617,6 +5626,17 @@ public partial class MainMenuManager : MonoBehaviour
         if (deck != null) MatchNetworkSync.SendDeckShare(NetworkDeck.From(deck));
     }
 
+    // Fresh lobby: forget any peer name/deck carried over from a PRIOR session, so
+    // peerHandlersReady (the custom Start Match guard, P2) correctly starts false until
+    // THIS lobby's guest actually messages us. These statics are only otherwise cleared on
+    // the waiting-room Leave button, not on match-end, so without this a stale name would
+    // re-enable Start instantly and reopen the dropped-match-start race.
+    private static void ResetPeerLobbyState()
+    {
+        lobbyPeerDeck = null;
+        lobbyPeerName = null;
+    }
+
     private void OnPeerDeckShared(NetworkDeck deck)
     {
         lobbyPeerDeck = deck;
@@ -5628,6 +5648,9 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyPeerName = name;
         MarkRankedGuestReady();
+        // The guest always sends its name on connect — in a custom lobby this is what flips
+        // peerHandlersReady, so repaint to enable the host's Start Match button (P2).
+        if (showingLobbyHub) RenderMenu();
     }
 
     // Host: a message arrived from the guest, so its receive handlers are live — safe to
@@ -5654,6 +5677,7 @@ public partial class MainMenuManager : MonoBehaviour
             mode = lobbyMode,                                      // ranked | casual | custom
             forgiveness = lobbyMode == "custom" && lobbyForgiveness,  // rewind toggle; custom lobbies only
             blitz = lobbyMode == "custom" ? LobbyBlitzConfig() : null, // timed-match settings; custom lobbies only
+            build = UpdateChecker.CurrentBuildNumber,               // guest aborts on a version mismatch (anti-desync)
         };
         MatchNetworkSync.SendMatchStart(payload);
         LaunchNetworkedMatch(payload, "south");
@@ -5661,6 +5685,21 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void OnNetworkMatchStartReceived(MatchStartPayload payload)
     {
+        // Anti-desync: both clients replay the SAME GameCommand log, so if the host is on a
+        // different build (divergent engine logic) the boards would silently drift apart. Abort
+        // cleanly with a clear message instead. build==0 = an old host with no build field, which
+        // is itself a mismatch. Leaving the session makes the host see us disconnect; ranked
+        // integrity is safe because we never report a match we didn't play (dual-report needs both
+        // halves). (P4 / version-skew — Tools/Sim/docs/lobby-connectivity-audit-2026-07.md.)
+        if (payload != null && payload.build != UpdateChecker.CurrentBuildNumber)
+        {
+            lobbyError = "Your opponent is on a different game version. Please make sure you're both updated.";
+            rankedQueueActive = false;
+            rankedStatus = "idle";
+            _ = LobbyManager.LeaveCurrentAsync();
+            RenderMenu();
+            return;
+        }
         LaunchNetworkedMatch(payload, "north");
     }
 
@@ -5677,6 +5716,12 @@ public partial class MainMenuManager : MonoBehaviour
     private string lobbyMode = "custom"; // "ranked"|"casual"|"custom" for the next networked match
     private string rankedStatus = "idle";
     private float rankedStartTime;
+    // realtimeSinceStartup when we first entered the connect phase (accepted/matched), or
+    // <0 when not connecting. Bounds the "Connecting…" screen so a stalled Relay handshake
+    // can't freeze on a spinner for the full server-side STALE_MATCH_MS (120s) — see P1 in
+    // Tools/Sim/docs/lobby-connectivity-audit-2026-07.md.
+    private float rankedConnectStart = -1f;
+    private const float RankedConnectTimeout = 45f;   // generous vs. ~2-5s real Relay connect
     private int rankedRange;
     private long rankedDeadline;         // epoch ms the ready check expires
     private bool rankedIAccepted;
@@ -5715,6 +5760,7 @@ public partial class MainMenuManager : MonoBehaviour
         rankedSessionCreated = rankedGuestJoined = rankedLaunching = false;
         rankedGuestReady = false;
         rankedErrorStreak = 0;
+        rankedConnectStart = -1f;
         rankedSessionId = null;
         lobbyRanked = mode == "ranked";   // casual matches don't touch the ladder
         lobbyMode = mode;
@@ -5744,6 +5790,17 @@ public partial class MainMenuManager : MonoBehaviour
             if (!rankedQueueActive) return;
             if (status != null && status.status != "error") { rankedErrorStreak = 0; HandleRankedStatus(status); }
             else rankedErrorStreak++;   // transient blips tolerated; a sustained run surfaces (RankedServerDown)
+            // P1: bound the connect phase. If we've been stuck on "Connecting…" past the
+            // timeout without launching, the Relay handshake failed (or the worker went dark
+            // mid-connect) — bail to the menu with a message instead of freezing on a spinner
+            // until the server's 120s STALE clears the proposal.
+            if (rankedQueueActive && !rankedLaunching && rankedConnectStart >= 0f
+                && Time.realtimeSinceStartup - rankedConnectStart > RankedConnectTimeout)
+            {
+                lobbyError = "Couldn't connect to your opponent — please try again.";
+                EndRankedQueue(true);
+                return;
+            }
             if (rankedQueueActive) RenderMenu();
         }
     }
@@ -5753,6 +5810,14 @@ public partial class MainMenuManager : MonoBehaviour
         if (s == null || !rankedQueueActive) return;
         rankedStatus = s.status;
         rankedRange = s.range;
+
+        // Stamp the connect-phase entry so RankedPollLoop can time it out (P1). Any
+        // non-connecting state clears it, so a requeue/expiry re-arms a fresh clock.
+        if (s.status == "accepted" || s.status == "matched")
+        {
+            if (rankedConnectStart < 0f) rankedConnectStart = Time.realtimeSinceStartup;
+        }
+        else rankedConnectStart = -1f;
 
         switch (s.status)
         {
@@ -5813,7 +5878,18 @@ public partial class MainMenuManager : MonoBehaviour
             if (this == null || menuRoot == null || !rankedQueueActive) return;
             SubscribeToSessionEvents(session);
             rankedSessionId = session.Id;
-            await RankedStore.QueueHostReadyAsync(session.Id);
+            // Publish the session id so the guest can JoinById. Retry a few times: a single failed
+            // post leaves the guest stranded in "accepted" with no matchId until the connect timeout
+            // (P1) / 120s server STALE. QueueHostReadyAsync never throws (returns status "error" on
+            // failure), so we check the returned status rather than catch. (P5.)
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                var hr = await RankedStore.QueueHostReadyAsync(session.Id);
+                if (this == null || menuRoot == null || !rankedQueueActive) return;
+                if (hr != null && hr.status != "error") break;
+                await Task.Delay(700);
+                if (this == null || menuRoot == null || !rankedQueueActive) return;
+            }
             // Guest joins by id → peer connects → TryHostLaunch (poll loop / connect callback).
         }
         catch (Exception ex)
@@ -5850,7 +5926,7 @@ public partial class MainMenuManager : MonoBehaviour
         if (!rankedGuestReady) return;                   // …and for proof its receive handlers are up
         rankedLaunching = true;
         rankedQueueActive = false;
-        lobbyRanked = true;
+        lobbyRanked = lobbyMode == "ranked";   // casual must NOT count toward the bounty ladder
         StartMatchClicked();   // builds payload with ranked = lobbyRanked, sends + launches
     }
 
@@ -5907,8 +5983,11 @@ public partial class MainMenuManager : MonoBehaviour
 
         bool proposed = rankedStatus == "proposed";
         bool connecting = rankedStatus == "accepted" || rankedStatus == "matched";
-        // A sustained run of failed queue calls (not a mid-match blip) = server trouble.
-        bool serverDown = RankedServerDown && !proposed && !connecting;
+        // A sustained run of failed queue calls (5+, ~5s) = server trouble. Surfaced during
+        // searching AND connecting (a normal 2-5s connect can't hit 5 consecutive errors, so no
+        // false flashes) — the connect phase is otherwise silent, and P1's 45s timeout backstops
+        // the hang. Excluded only during the ready-check countdown (proposed), which is its own UI.
+        bool serverDown = RankedServerDown && !proposed;
         string modeLabel = lobbyRanked ? "RANKED" : "CASUAL";
         string title = serverDown ? "MATCHMAKING UNAVAILABLE"
                      : proposed ? "MATCH FOUND" : connecting ? "STARTING MATCH…" : $"FINDING {modeLabel} MATCH";
@@ -5948,6 +6027,11 @@ public partial class MainMenuManager : MonoBehaviour
         {
             var sub = TextObject("RM Sub", panel, "Connecting you to your opponent…", 13, Muted, TextAnchor.MiddleCenter, monoFont);
             Stretch(sub.rectTransform, new Vector2(0f, 0.34f), Vector2.one, Vector2.zero, new Vector2(0f, -70f));
+            // Escape hatch: without this the only way out of a stalled handshake was the 45s
+            // client timeout (or the 120s server STALE) — the spinner had no Cancel (P1).
+            var cancelRow = PanelObject("RM Cancel", panel, new Color(0, 0, 0, 0));
+            Stretch(cancelRow, new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(-60f, 24f), new Vector2(60f, 60f));
+            AddButton(cancelRow, "Cancel", CancelRankedQueue, true, false, false);
         }
         else
         {
@@ -6096,6 +6180,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyBusy = true;
         lobbyError = null;
+        ResetPeerLobbyState();   // fresh lobby (P2)
         RenderMenu();
         try
         {
@@ -6123,6 +6208,7 @@ public partial class MainMenuManager : MonoBehaviour
         if (string.IsNullOrWhiteSpace(joinCodeInput)) { lobbyError = "Enter a join code first."; RenderMenu(); return; }
         lobbyBusy = true;
         lobbyError = null;
+        ResetPeerLobbyState();   // fresh lobby (P2)
         RenderMenu();
         try
         {
@@ -6149,6 +6235,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyBusy = true;
         lobbyError = null;
+        ResetPeerLobbyState();   // fresh lobby (P2)
         RenderMenu();
         try
         {

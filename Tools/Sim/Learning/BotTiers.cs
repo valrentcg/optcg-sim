@@ -37,6 +37,11 @@ namespace OnePieceTcg.Sim.Learning
             // strong opponents — the fix for the advanced bot losing to the intermediate champion.
             "advanced"     => new SearchAgent(AdvancedEval(), null, "advanced", AdvancedRolloutCap, AdvancedShortlist,
                                               new WeightedAgent(IntermediateGenome(), "rollout-champ")),
+            // The ACTUAL shipped Advanced bot (Assets/ AdvancedContractBot), driven through its Sim adapter, so
+            // heuristic work is measured against what ships rather than the research fork above.
+            "shipped-advanced" => new OnePieceTcg.Sim.ShippedAdvancedAgent(),
+            // The honest turn-planner, driven through the same MatchDriver as shipped-advanced (port candidate).
+            "honest-planner" => new OnePieceTcg.Sim.HonestPlannerAgent(),
             _ => throw new ArgumentException($"Unknown tier '{tier}'. Tiers: beginner, intermediate, advanced."),
         };
     }

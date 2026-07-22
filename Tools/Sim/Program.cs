@@ -654,10 +654,11 @@ switch (mode)
         string tierA = args.Length > 1 ? args[1] : "intermediate";
         string tierB = args.Length > 2 ? args[2] : "beginner";
         int n = args.Length > 3 && int.TryParse(args[3], out var nn) ? nn : 60;
+        int tseed = args.Length > 4 && int.TryParse(args[4], out var tsd) ? tsd : 3;
         var reg = BuildRegistry(out _);
         var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
             .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
-        long aWins = 0, done = 0; var rng = new System.Random(3); var sw = System.Diagnostics.Stopwatch.StartNew();
+        long aWins = 0, done = 0; var rng = new System.Random(tseed); var sw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < n; i++)
         {
             string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
@@ -670,6 +671,410 @@ switch (mode)
             if (rec.winner != null) done++;
         }
         Console.WriteLine($"{tierA} vs {tierB}: {aWins}/{done} = {(done>0?100.0*aWins/done:0):F1}% ({n} games, {sw.Elapsed.TotalSeconds:F0}s)");
+        return 0;
+    }
+
+    case "seatab":
+    {
+        // Per-seat toggle A/B (donab-style): both seats run the greedy core; the NEW seat gets a named toggle
+        // set, the OLD seat baseline. Alternate NEW-seat + first player to cancel seat/first bias. Both policies
+        // face each other in the SAME game ⇒ tight paired signal. Reports NEW win rate + Wilson CI. FAST (greedy).
+        // Usage: seatab <toggle> [games] [seed].  toggles: weakestfirst | legacyko | savecounter
+        string toggle = args.Length > 1 ? args[1] : "weakestfirst";
+        int games = args.Length > 2 && int.TryParse(args[2], out var gg2) ? gg2 : 800;
+        int abseed = args.Length > 3 && int.TryParse(args[3], out var ab2) ? ab2 : 11;
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
+            .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        void SetToggle(string newSeat)   // put the NEW policy on `newSeat`, OLD on the other (null clears both)
+        {
+            string oldSeat = newSeat == "south" ? "north" : (newSeat == "north" ? "south" : null);
+            switch (toggle)
+            {
+                // weakest-first is now the DEFAULT; NEW seat = default, OLD seat = legacy strongest-first.
+                case "weakestfirst": OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStrongestFirstSeat = oldSeat; break;
+                case "legacyko": OnePieceTcg.Engine.Bot.IntermediateBot.LegacyKoSeat = newSeat; break;
+                case "savecounter": OnePieceTcg.Engine.Bot.IntermediateBot.SaveCounterForLeaderSeat = newSeat; break;
+                case "racedrop": OnePieceTcg.Engine.Bot.IntermediateBot.RaceDropReserveSeat = newSeat; break;
+                case "attackfirst": OnePieceTcg.Engine.Bot.IntermediateBot.AttackFirstSeat = newSeat; break;
+                case "surplusoverload": OnePieceTcg.Engine.Bot.IntermediateBot.SurplusOverloadSeat = newSeat; break;
+                case "doubleattackfirst": OnePieceTcg.Engine.Bot.IntermediateBot.DoubleAttackFirstSeat = newSeat; break;
+                case "widedeploy": OnePieceTcg.Engine.Bot.IntermediateBot.WideDeploySeat = newSeat; break;
+                case "holdblockers": OnePieceTcg.Engine.Bot.IntermediateBot.HoldBlockersSeat = newSeat; break;
+                case "onkoaversion": OnePieceTcg.Engine.Bot.IntermediateBot.OnKoAversionSeat = newSeat; break;
+                case "richdeploy": OnePieceTcg.Engine.Bot.IntermediateBot.RichDeployValueSeat = newSeat; break;
+            }
+        }
+        int newWins = 0, done = 0; var rng = new System.Random(abseed); var sw = System.Diagnostics.Stopwatch.StartNew();
+        // MATCHUP-PAIRED: each deck pair is played through a fully-crossed 4-game block (NEW∈{south,north} ×
+        // first∈{south,north}) with the SAME two decks. So NEW and OLD each pilot each deck, in each seat, going
+        // first once — deck+seat+first variance cancels PER MATCHUP. (The old design redrew decks per game inside
+        // the balancing group, leaving a per-seed ±3pp bias — a NULLCONTROL hit 53% at seed 31.)
+        int matchups = System.Math.Max(1, games / 4);
+        for (int m = 0; m < matchups; m++)
+        {
+            string dSouth = pool[rng.Next(pool.Count)], dNorth = pool[rng.Next(pool.Count)];
+            foreach (bool newSouth in new[] { true, false })
+                foreach (bool firstSouth in new[] { true, false })
+                {
+                    string newSeat = newSouth ? "south" : "north";
+                    SetToggle(newSeat);
+                    var rec = OnePieceTcg.Sim.MatchDriver.Play(new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(),
+                        reg.Resolve(dSouth), reg.Resolve(dNorth), $"seatab:{abseed}:{m}:{newSouth}:{firstSouth}",
+                        firstSouth ? "south" : "north", new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+                    SetToggle(null);
+                    if (rec.winner != null) { done++; if (rec.winner == newSeat) newWins++; }
+                }
+        }
+        double p = done > 0 ? (double)newWins / done : 0, z = 1.96, z2 = z * z, N = System.Math.Max(1, done);
+        double denom = 1 + z2 / N, center = (p + z2 / (2 * N)) / denom, half = z * System.Math.Sqrt(p * (1 - p) / N + z2 / (4 * N * N)) / denom;
+        Console.WriteLine($"[{toggle}] NEW vs OLD: {newWins}/{done} = {100 * p:F1}%  (95% CI [{100 * (center - half):F1}%, {100 * (center + half):F1}%])  {games} games, {sw.Elapsed.TotalSeconds:F0}s, seed={abseed}");
+        return 0;
+    }
+
+    case "puzzle-harvest":
+    {
+        // puzzle-harvest <nGames> [K] [regretThreshold] [outfile] [seed]  → frozen suite of high-regret positions.
+        int nG = args.Length > 1 && int.TryParse(args[1], out var ng) ? ng : 60;
+        int K = args.Length > 2 && int.TryParse(args[2], out var kk) ? kk : 12;
+        double thr = args.Length > 3 && double.TryParse(args[3], out var th) ? th : 0.12;
+        string outf = args.Length > 4 ? args[4] : "puzzles.json";
+        int sd = args.Length > 5 && int.TryParse(args[5], out var s5) ? s5 : 1;
+        bool advRef = args.Contains("adv");   // reference play: greedy (fast, default) or advanced (relevant, slow)
+        OnePieceTcg.Sim.Runner.PuzzleSuite.Harvest(BuildRegistry(out _), nG, K, thr, outf, sd, advRef);
+        return 0;
+    }
+    case "puzzle-score":
+    {
+        // puzzle-score <suitefile> [bot]  → regret of `bot` on the suite. bot: advanced (default) | intermediate.
+        string suite = args.Length > 1 ? args[1] : "puzzles.json";
+        string botName = args.Length > 2 ? args[2] : "advanced";
+        Func<OnePieceTcg.Sim.IAgent> make = botName == "intermediate" ? () => new OnePieceTcg.Sim.BaselineAgent()
+            : botName == "evalgreedy" ? () => new OnePieceTcg.Sim.EvalGreedyAgent()
+            : () => new OnePieceTcg.Sim.ShippedAdvancedAgent();
+        OnePieceTcg.Sim.Runner.PuzzleSuite.Score(BuildRegistry(out _), suite, make, botName);
+        return 0;
+    }
+
+    case "fit-value":
+    {
+        // fit-value <nGames> [seed] [ridge] [adv]  → train value on REAL self-play outcomes → fitted_w.txt.
+        int ng = args.Length > 1 && int.TryParse(args[1], out var g1) ? g1 : 400;
+        int sd = args.Length > 2 && int.TryParse(args[2], out var s1) ? s1 : 1;
+        double rg = args.Length > 3 && double.TryParse(args[3], out var r1) ? r1 : 1.0;
+        bool adv = args.Contains("adv");
+        OnePieceTcg.Sim.Runner.PuzzleSuite.TrainValueOnOutcomes(BuildRegistry(out _), ng, sd, rg, adv);
+        return 0;
+    }
+
+    case "fit-eval":
+    {
+        // fit-eval <suite> [ridge]  → fit eval weights to the oracle labels, score eval-greedy before/after.
+        string suite = args.Length > 1 ? args[1] : "puzzles.json";
+        double ridge = args.Length > 2 && double.TryParse(args[2], out var rg) ? rg : 1.0;
+        string testf = args.Length > 3 ? args[3] : null;
+        OnePieceTcg.Sim.Runner.PuzzleSuite.FitEval(BuildRegistry(out _), suite, ridge, () => new OnePieceTcg.Sim.EvalGreedyAgent(), testf);
+        return 0;
+    }
+
+    case "oracle":
+    {
+        // SINGLE-SEED DECISION-QUALITY ORACLE (the user's "solve the game" tool). Play a fixed game with the
+        // greedy bot; at each SOUTH clean-main decision, evaluate EVERY legal action by a K-determinized rollout
+        // win-rate (fair: marginalize over the opponent's hidden info via BotDeterminizer), then compare the
+        // bot's chosen action to the best. High "regret" = a concrete main-phase ERROR — low-variance signal,
+        // no ±5pp win-rate fog. Usage: oracle <deckA> <deckB> [seed] [K] [maxDecisions].
+        string dA = args[1], dB = args[2];
+        string oseed = args.Length > 3 ? args[3] : "oracle1";
+        int K = args.Length > 4 && int.TryParse(args[4], out var kk) ? kk : 10;
+        int maxDec = args.Length > 5 && int.TryParse(args[5], out var md) ? md : 40;
+        var reg = BuildRegistry(out _);
+        string WinnerOf(OnePieceTcg.Engine.GameState g)
+        {
+            for (int i = g.EventLog.Count - 1; i >= 0; i--)
+            { var m = g.EventLog[i].Message; if (string.IsNullOrEmpty(m) || m.IndexOf("wins", StringComparison.OrdinalIgnoreCase) < 0) continue;
+              if (m.StartsWith("South", StringComparison.Ordinal)) return "south"; if (m.StartsWith("North", StringComparison.Ordinal)) return "north"; }
+            return null;
+        }
+        // K-determinized rollout win-rate of a position for south (greedy playout both sides).
+        double Evaluate(OnePieceTcg.Engine.GameState pos, int baseSeed)
+        {
+            int wins = 0, done = 0;
+            for (int k = 0; k < K; k++)
+            {
+                var world = OnePieceTcg.Engine.Bot.Search.BotDeterminizer.FairView(pos, "south", baseSeed * 131 + k);
+                OnePieceTcg.Sim.MatchDriver.Playout(world, new OnePieceTcg.Sim.BaselineAgent(), new OnePieceTcg.Sim.BaselineAgent(), 6000);
+                var w = WinnerOf(world); if (w != null) { done++; if (w == "south") wins++; }
+            }
+            return done > 0 ? (double)wins / done : 0.5;
+        }
+        var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig
+        { SouthDeckDef = reg.Resolve(dA), NorthDeckDef = reg.Resolve(dB), Seed = oseed });
+        if (st.Status == "coinflip") { string w = st.CoinFlipWinner; OnePieceTcg.Engine.GameEngine.ApplyCommand(st, new OnePieceTcg.Engine.GameCommand { Type = "chooseTurnOrder", Seat = w, GoingFirst = w == "south" }); }
+        var greedy = new OnePieceTcg.Sim.BaselineAgent();          // north advancement + rollout policy (fast, consistent)
+        var southBot = new OnePieceTcg.Sim.ShippedAdvancedAgent(); // ANALYZE the ADVANCED bot's residual errors
+        int decisions = 0, errors = 0; double regretSum = 0; int total = 0; var sw = System.Diagnostics.Stopwatch.StartNew();
+        var byType = new Dictionary<string, (double reg, int n)>();
+        Console.WriteLine($"ORACLE {dA} vs {dB} seed={oseed} K={K}");
+        while (st.Status != "finished" && total < 4000 && decisions < maxDec)
+        {
+            bool southCleanMain = st.ActiveSeat == "south" && st.Phase == "main" && st.Battle == null
+                && st.PendingEffects.Count == 0 && st.ActiveChoice == null && st.DeckLook == null;
+            if (southCleanMain)
+            {
+                var cands = OnePieceTcg.Sim.Search.LegalActions.Validate(st, "south", OnePieceTcg.Sim.Search.LegalActions.Candidates(st, "south"));
+                var botCmd = southBot.Decide(st, "south", new HashSet<string>());
+                if (botCmd != null && cands.Count > 1)
+                {
+                    double best = -1; string bestType = "?"; double botVal = -1;
+                    foreach (var kv in cands)
+                    {
+                        double v = Evaluate(kv.result, decisions + 1);
+                        if (v > best) { best = v; bestType = $"{kv.cmd.Type}:{kv.cmd.Target ?? kv.cmd.InstanceId ?? kv.cmd.Attacker ?? "-"}"; }
+                        if (OnePieceTcg.Engine.Bot.IntermediateBot.Signature(kv.cmd) == OnePieceTcg.Engine.Bot.IntermediateBot.Signature(botCmd)) botVal = v;
+                    }
+                    if (botVal < 0) { var bc = OnePieceTcg.Engine.Bot.Search.GameClone.Clone(st); OnePieceTcg.Engine.GameEngine.ApplyCommand(bc, botCmd); botVal = Evaluate(bc, decisions + 1); }
+                    double regret = best - botVal; regretSum += regret; decisions++;
+                    var pt = byType.GetValueOrDefault(botCmd.Type); byType[botCmd.Type] = (pt.reg + regret, pt.n + 1);
+                    if (regret >= 0.10)
+                    {
+                        errors++;
+                        Console.WriteLine($"  turn{st.TurnNumber} ERROR regret={regret:F2}  bot={botCmd.Type}:{botCmd.Target ?? botCmd.InstanceId ?? botCmd.Attacker ?? "-"}(wr={botVal:F2})  best={bestType}(wr={best:F2})  [{cands.Count} options]");
+                    }
+                }
+                if (botCmd == null) break;
+                OnePieceTcg.Engine.GameEngine.ApplyCommand(st, botCmd); total++;
+                continue;
+            }
+            // Non-main / opponent decisions: south = advanced (faithful line), north = greedy.
+            foreach (var seat in new[] { "south", "north" })
+            {
+                var c = (seat == "south" ? (OnePieceTcg.Sim.IAgent)southBot : greedy).Decide(st, seat, new HashSet<string>());
+                if (c != null) { OnePieceTcg.Engine.GameEngine.ApplyCommand(st, c); total++; }
+            }
+        }
+        Console.WriteLine($"ORACLE done: {decisions} main decisions, {errors} errors (regret≥0.10), avg regret={(decisions>0?regretSum/decisions:0):F3}, {sw.Elapsed.TotalSeconds:F0}s");
+        foreach (var kv in byType.OrderByDescending(x => x.Value.reg))
+            Console.WriteLine($"   by-type {kv.Key,-14} totalRegret={kv.Value.reg:F2}  n={kv.Value.n}  avg={kv.Value.reg / System.Math.Max(1, kv.Value.n):F3}");
+        return 0;
+    }
+
+    case "champ":
+    {
+        // CHAMPION GAUNTLET (user's ratchet idea): CANDIDATE (advanced bot + a seat-scoped experimental toggle)
+        // vs CHAMPION (the current best advanced bot, no toggle), HEAD-TO-HEAD in the same game. Far more
+        // sensitive to top-end gains than measuring vs the weak intermediate. Matchup-paired (4-game blocks).
+        // A candidate that beats the champion >50% (CI clear) is a real improvement ⇒ PROMOTE (make it default,
+        // it becomes the new champion). Usage: champ <toggle> [pairs] [seed].  toggle: actgate|weakestfirst|...
+        string tog = args.Length > 1 ? args[1] : "actgate";
+        int cpairs = args.Length > 2 && int.TryParse(args[2], out var cp) ? cp : 150;
+        int cseed = args.Length > 3 && int.TryParse(args[3], out var cs) ? cs : 3;
+        void SetCand(string seat)   // enable the candidate toggle for `seat` (null clears)
+        {
+            switch (tog)
+            {
+                case "actgate": OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy.ActivationValueGateSeat = seat; break;
+                case "weakestfirst": OnePieceTcg.Engine.Bot.IntermediateBot.LegacyStrongestFirstSeat = seat == null ? null : (seat == "south" ? "north" : "south"); break; // NEW=default weakest, legacy on the OTHER seat
+            }
+        }
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
+            .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        var rng = new System.Random(cseed); int candWins = 0, done = 0; var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int m = 0; m < cpairs; m++)
+        {
+            string dS = pool[rng.Next(pool.Count)], dN = pool[rng.Next(pool.Count)];
+            foreach (bool candSouth in new[] { true, false })
+                foreach (bool fSouth in new[] { true, false })
+                {
+                    string candSeat = candSouth ? "south" : "north";
+                    SetCand(candSeat);
+                    var rec = OnePieceTcg.Sim.MatchDriver.Play(new OnePieceTcg.Sim.ShippedAdvancedAgent(), new OnePieceTcg.Sim.ShippedAdvancedAgent(),
+                        reg.Resolve(candSouth ? dS : dN), reg.Resolve(candSouth ? dN : dS), $"champ:{cseed}:{m}:{candSouth}:{fSouth}",
+                        fSouth ? "south" : "north", new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+                    SetCand(null);
+                    if (rec.winner != null) { done++; if (rec.winner == candSeat) candWins++; }
+                }
+        }
+        double p = done > 0 ? (double)candWins / done : 0, z = 1.96, z2 = z * z, N = System.Math.Max(1, done);
+        double denom = 1 + z2 / N, center = (p + z2 / (2 * N)) / denom, half = z * System.Math.Sqrt(p * (1 - p) / N + z2 / (4 * N * N)) / denom;
+        Console.WriteLine($"CANDIDATE[{tog}] vs CHAMPION(advanced): {candWins}/{done} = {100 * p:F1}%  (95% CI [{100 * (center - half):F1}%, {100 * (center + half):F1}%])  {cpairs}pairs×4, {sw.Elapsed.TotalSeconds:F0}s, seed={cseed}  ⇒ {(center - half > 0.50 ? "PROMOTE" : center + half < 0.50 ? "REJECT" : "inconclusive")}");
+        return 0;
+    }
+
+    case "moduleab":
+    {
+        // Measure an Advanced MODULE's contribution: run shipped-advanced vs intermediate (matchup-paired) with
+        // that module SKIPPED (falls back to greedy); the drop vs the ~56% all-modules baseline = its value.
+        // Usage: moduleab <act|pressure|search|trigger|none> [pairs] [seed].
+        string mod = args.Length > 1 ? args[1] : "none";
+        int mpairs = args.Length > 2 && int.TryParse(args[2], out var mp) ? mp : 150;
+        int mseed = args.Length > 3 && int.TryParse(args[3], out var ms2) ? ms2 : 3;
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipActivation = mod == "act";
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipPressure = mod == "pressure";
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipSearch = mod == "search";
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipTriggerUtility = mod == "trigger";
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SearchCleanMain = mod == "cleanmain";
+        OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy.ActivationValueGate = mod == "actgate";
+        OnePieceTcg.Engine.Bot.Search.SearchBot.StrongRollout = mod == "strongroll" || mod == "strongmain";
+        if (mod == "strongmain") OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SearchCleanMain = true;
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.EvalGreedyMain = mod == "evalmain";
+        if (mod == "evalmain" || mod == "learnedw") { try { OnePieceTcg.Engine.Bot.Search.Evaluation.SetWeights(System.IO.File.ReadAllText("fitted_w.txt").Split(' ').Select(double.Parse).ToArray()); Console.WriteLine("(loaded fitted eval weights)"); } catch (Exception ex) { Console.WriteLine("WARN: no fitted_w.txt: " + ex.Message); } }
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
+            .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        var rng = new System.Random(mseed); int aWins = 0, done = 0; var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int m = 0; m < mpairs; m++)
+        {
+            string dS = pool[rng.Next(pool.Count)], dN = pool[rng.Next(pool.Count)];
+            foreach (bool aSouth in new[] { true, false })
+                foreach (bool fSouth in new[] { true, false })
+                {
+                    var south = aSouth ? (OnePieceTcg.Sim.IAgent)new OnePieceTcg.Sim.ShippedAdvancedAgent() : OnePieceTcg.Sim.Learning.BotTiers.Make("intermediate");
+                    var north = aSouth ? OnePieceTcg.Sim.Learning.BotTiers.Make("intermediate") : (OnePieceTcg.Sim.IAgent)new OnePieceTcg.Sim.ShippedAdvancedAgent();
+                    var rec = OnePieceTcg.Sim.MatchDriver.Play(south, north, reg.Resolve(aSouth ? dS : dN), reg.Resolve(aSouth ? dN : dS),
+                        $"moduleab:{mseed}:{m}:{aSouth}:{fSouth}", fSouth ? "south" : "north",
+                        new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+                    string aSeat = aSouth ? "south" : "north";
+                    if (rec.winner != null) { done++; if (rec.winner == aSeat) aWins++; }
+                }
+        }
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipActivation = OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipPressure =
+            OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipSearch = OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SkipTriggerUtility =
+            OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.SearchCleanMain = false;
+        OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy.ActivationValueGate = false;
+        OnePieceTcg.Engine.Bot.Search.SearchBot.StrongRollout = false;
+        OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.EvalGreedyMain = false;
+        double pp2 = done > 0 ? (double)aWins / done : 0, z = 1.96, z2 = z * z, N = System.Math.Max(1, done);
+        double denom = 1 + z2 / N, center = (pp2 + z2 / (2 * N)) / denom, half = z * System.Math.Sqrt(pp2 * (1 - pp2) / N + z2 / (4 * N * N)) / denom;
+        Console.WriteLine($"advanced(skip={mod}) vs intermediate: {aWins}/{done} = {100 * pp2:F1}%  (95% CI [{100 * (center - half):F1}%, {100 * (center + half):F1}%])  {mpairs}pairs×4, {sw.Elapsed.TotalSeconds:F0}s, seed={mseed}");
+        return 0;
+    }
+
+    case "abtest":
+    {
+        // PAIRED A/B: tierA vs tierB, each random deck pair played in BOTH seat orientations (cancels deck+seat
+        // bias), first-player alternated across pairs. Reports tierA's win rate vs tierB with a Wilson 95% CI.
+        // Usage: abtest <tierA> <tierB> [pairs] [seed]  (total games = 2*pairs). This is the trustworthy harness.
+        string tA = args.Length > 1 ? args[1] : "shipped-advanced";
+        string tB = args.Length > 2 ? args[2] : "intermediate";
+        int pairs = args.Length > 3 && int.TryParse(args[3], out var pp) ? pp : 100;
+        int seed = args.Length > 4 && int.TryParse(args[4], out var sd) ? sd : 3;
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
+            .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        var rng = new System.Random(seed);
+        int aWins = 0, done = 0, unfinished = 0; var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int m = 0; m < pairs; m++)
+        {
+            string d1 = pool[rng.Next(pool.Count)], d2 = pool[rng.Next(pool.Count)];
+            string first = m % 2 == 0 ? "south" : "north";
+            for (int orient = 0; orient < 2; orient++)   // orient 0: A=south; orient 1: A=north (same decks)
+            {
+                bool aSouth = orient == 0;
+                var south = OnePieceTcg.Sim.Learning.BotTiers.Make(aSouth ? tA : tB);
+                var north = OnePieceTcg.Sim.Learning.BotTiers.Make(aSouth ? tB : tA);
+                var rec = OnePieceTcg.Sim.MatchDriver.Play(south, north,
+                    reg.Resolve(aSouth ? d1 : d2), reg.Resolve(aSouth ? d2 : d1), $"abtest:{seed}:{m}:{orient}", first,
+                    new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = 20000 });
+                string aSeat = aSouth ? "south" : "north";
+                if (rec.winner != null) { done++; if (rec.winner == aSeat) aWins++; } else unfinished++;
+            }
+        }
+        double p = done > 0 ? (double)aWins / done : 0, z = 1.96, z2 = z * z, N = System.Math.Max(1, done);
+        double denom = 1 + z2 / N, center = (p + z2 / (2 * N)) / denom;
+        double half = z * System.Math.Sqrt(p * (1 - p) / N + z2 / (4 * N * N)) / denom;
+        Console.WriteLine($"{tA} vs {tB}: {aWins}/{done} = {100 * p:F1}%  (95% CI [{100 * (center - half):F1}%, {100 * (center + half):F1}%])  " +
+                          $"unfinished={unfinished}  {pairs} pairs×2, {sw.Elapsed.TotalSeconds:F0}s, seed={seed}");
+        return 0;
+    }
+
+    case "advdiag":
+    {
+        // advdiag [n] [cap] [seed] → play shipped-advanced (south) vs intermediate over meta pairs, ONE game at
+        // a time with per-game timing + command count, flushing each line so a HANG shows up immediately (the
+        // culprit game prints commands≈cap and a long wall time). Lower cap keeps a hung game from grinding.
+        int n = args.Length > 1 && int.TryParse(args[1], out var nn) ? nn : 40;
+        int cap = args.Length > 2 && int.TryParse(args[2], out var cc) ? cc : 4000;
+        int seed = args.Length > 3 && int.TryParse(args[3], out var ss) ? ss : 3;
+        var reg = BuildRegistry(out _);
+        var pool = reg.Ids.Where(i => !OnePieceTcg.Engine.CardData.StarterDecks.ContainsKey(i))
+            .Where(id => { var d = reg.Resolve(id); int t = d.List.Where(e => e.cardId != d.Leader).Sum(e => e.qty); int mx = d.List.Where(e => e.cardId != d.Leader).Select(e => e.qty).DefaultIfEmpty(0).Max(); return t == 50 && mx <= 4; }).ToList();
+        var rng = new System.Random(seed);
+        Console.WriteLine($"advdiag: shipped-advanced vs intermediate, n={n} cap={cap} seed={seed}, pool={pool.Count}");
+        for (int i = 0; i < n; i++)
+        {
+            string dA = pool[rng.Next(pool.Count)], dB = pool[rng.Next(pool.Count)];
+            string first = i % 2 == 0 ? "south" : "north";
+            var gsw = System.Diagnostics.Stopwatch.StartNew();
+            var rec = OnePieceTcg.Sim.MatchDriver.Play(
+                new OnePieceTcg.Sim.ShippedAdvancedAgent(), OnePieceTcg.Sim.Learning.BotTiers.Make("intermediate"),
+                reg.Resolve(dA), reg.Resolve(dB), $"advdiag:{i}", first,
+                new OnePieceTcg.Sim.MatchDriver.Options { CommandCap = cap });
+            gsw.Stop();
+            string flag = (rec.commands >= cap || gsw.Elapsed.TotalSeconds > 8) ? "  <<< SLOW/HANG" : "";
+            Console.WriteLine($"  g{i,-3} {gsw.Elapsed.TotalSeconds,6:F1}s cmds={rec.commands,-6} end={rec.end,-7} " +
+                              $"win={rec.winner ?? "-"} first={first}  A={dA} B={dB}{flag}");
+            Console.Out.Flush();
+        }
+        return 0;
+    }
+
+    case "advtrace":
+    {
+        // advtrace <deckA> <deckB> <first> [seed] [dumpAfter] → play shipped-advanced(south)=deckA vs
+        // intermediate(north)=deckB; after `dumpAfter` commands, log each command + state context so a LOOP
+        // is visible. Reproduces a hang found by advdiag.
+        string dA = args[1], dB = args[2], first = args.Length > 3 ? args[3] : "south";
+        string seedStr = args.Length > 4 ? args[4] : "advtrace";
+        int dumpAfter = args.Length > 5 && int.TryParse(args[5], out var da) ? da : 250;
+        var reg = BuildRegistry(out _);
+        var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig
+        { SouthDeckDef = reg.Resolve(dA), NorthDeckDef = reg.Resolve(dB), Seed = seedStr });
+        // Force turn order like MatchDriver.
+        if (st.Status == "coinflip")
+        {
+            string w = st.CoinFlipWinner;
+            OnePieceTcg.Engine.GameEngine.ApplyCommand(st, new OnePieceTcg.Engine.GameCommand
+            { Type = "chooseTurnOrder", Seat = w, GoingFirst = w == first });
+        }
+        var south = new OnePieceTcg.Sim.ShippedAdvancedAgent();
+        var north = OnePieceTcg.Sim.Learning.BotTiers.Make("intermediate");
+        int total = 0, cap = 700;
+        var counts = new Dictionary<string, int>();
+        while (st.Status != "finished" && total < cap)
+        {
+            foreach (var (agent, seat) in new[] { ((OnePieceTcg.Sim.IAgent)south, "south"), (north, "north") })
+            {
+                var bl = new HashSet<string>();
+                for (int i = 0; i < 60 && st.Status != "finished"; i++)
+                {
+                    var cmd = agent.Decide(st, seat, bl);
+                    if (cmd == null) break;
+                    if (total >= dumpAfter)
+                    {
+                        var pe = st.PendingEffects.Count > 0 ? st.PendingEffects[0] : null;
+                        string peText = pe?.Text == null ? "" : (pe.Text.Length > 40 ? pe.Text.Substring(0, 40) : pe.Text);
+                        string ctx = $"phase={st.Phase} turn={st.TurnNumber} pend={st.PendingEffects.Count}" +
+                            (pe != null ? $" pe0='{peText}' zone={pe.TargetZone} donRem={pe.DonPaymentRemaining} selRem={pe.SelectionsRemaining}" : "") +
+                            (st.Battle != null ? $" battle={st.Battle.Step}" : "") +
+                            (st.DeckLook != null ? $" deckLook={st.DeckLook.Seat}/{st.DeckLook.Step}/{st.DeckLook.Cards.Count}" : "");
+                        Console.WriteLine($"  [{total}] {seat} {cmd.Type} tgt={cmd.Target ?? cmd.InstanceId ?? cmd.Attacker ?? "-"} | {ctx}");
+                        string key = $"{seat}:{cmd.Type}";
+                        counts[key] = counts.GetValueOrDefault(key) + 1;
+                    }
+                    object before = OnePieceTcg.Engine.Bot.IntermediateBot.SnapshotFor(st, cmd);
+                    OnePieceTcg.Engine.GameEngine.ApplyCommand(st, cmd);
+                    total++;
+                    if (!OnePieceTcg.Engine.Bot.IntermediateBot.Succeeded(st, cmd, before))
+                        bl.Add(OnePieceTcg.Engine.Bot.IntermediateBot.Signature(cmd));
+                    if (total >= cap) break;
+                }
+                if (total >= cap) break;
+            }
+        }
+        Console.WriteLine($"END status={st.Status} total={total}");
+        foreach (var kv in counts.OrderByDescending(k => k.Value).Take(8)) Console.WriteLine($"   {kv.Key} x{kv.Value}");
         return 0;
     }
 

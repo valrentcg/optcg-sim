@@ -34,7 +34,7 @@ const ADMIN_API_PASSWORD_PATH = (projectId, playerId) =>
   `/player-auth-admin/v1/projects/${projectId}/players/${playerId}/username-password`;
 
 module.exports = async ({ params, context, logger, secretManager }) => {
-  const { projectId, serviceToken } = context;
+  const { projectId } = context;
   const token = (params.token || "").trim();
   const newPassword = params.newPassword || "";
 
@@ -55,23 +55,36 @@ module.exports = async ({ params, context, logger, secretManager }) => {
     return { ok: false, reason: "EXPIRED" };
   }
 
-  let adminToken = serviceToken;
+  // Unity admin APIs require SERVICE ACCOUNT auth over HTTP Basic — NOT a player
+  // accessToken and NOT context.serviceToken (both are Bearer tokens the admin API
+  // rejects). Confirmed at services.docs.unity.com/docs/service-account-auth.
+  // Provide UNITY_SA_BASIC = base64("<KEY_ID>:<SECRET_KEY>") as a Cloud Code secret,
+  // pre-encoded (the JS sandbox has no Buffer and no crypto module to encode here).
+  // The service account needs a role granting Player Authentication admin access.
+  let basicCreds;
   try {
-    const override = await secretManager.getSecret("AUTH_ADMIN_SERVICE_TOKEN");
-    if (override && override.value) adminToken = override.value;
+    basicCreds = (await secretManager.getSecret("UNITY_SA_BASIC")).value;
   } catch (err) {
-    // Secret not configured - fine, fall back to context.serviceToken.
+    logger.error("UNITY_SA_BASIC secret missing — cannot authenticate the admin password update", {
+      "error.message": err.message,
+    });
+    return { ok: false, reason: "NO_ADMIN_CREDENTIALS" };
   }
 
   try {
     await axios.put(
       ADMIN_API_BASE_URL + ADMIN_API_PASSWORD_PATH(projectId, entry.value.playerId),
       { password: newPassword },
-      { headers: { Authorization: `Bearer ${adminToken}`, "Content-Type": "application/json" } }
+      { headers: { Authorization: `Basic ${basicCreds}`, "Content-Type": "application/json" } }
     );
   } catch (err) {
-    logger.error("Admin password update failed - is ADMIN_API_PASSWORD_PATH confirmed yet?", {
+    // Rich error surface so the exact admin path/body can be verified from logs:
+    // the /player-auth-admin/v1/ BASE is confirmed, but the resource sub-path and
+    // body shape below should be checked against the rendered admin API reference.
+    logger.error("Admin password update failed (verify ADMIN_API_PASSWORD_PATH + body vs player-auth-admin/v1)", {
       "error.message": err.message,
+      "error.status": err.response ? String(err.response.status) : "none",
+      "error.data": err.response ? JSON.stringify(err.response.data) : "none",
     });
     throw err;
   }

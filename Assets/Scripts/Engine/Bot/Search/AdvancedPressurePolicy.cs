@@ -14,7 +14,8 @@ namespace OnePieceTcg.Engine.Bot.Search
     /// command is the fail-closed fallback.
     ///
     /// Part of the full advanced contract; the router applies it to control-archetype decks at clean main.
-    /// Runs directly on the real game state (a shipped AI opponent is allowed full information).
+    /// Reads only public info (the opponent's board/Leader); its caller runs it on a fair-information
+    /// <see cref="BotDeterminizer.FairView"/>, so it never sees hidden cards.
     /// </summary>
     public static class AdvancedPressurePolicy
     {

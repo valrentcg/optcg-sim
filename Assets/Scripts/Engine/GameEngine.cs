@@ -614,7 +614,11 @@ namespace OnePieceTcg.Engine
                 // Allow intervening text between "this Character" and "gains +N power" within the SAME sentence
                 // ([^.] bounds it), so a COMPOUND static line "this Character cannot be removed from the field … and
                 // gains +2000 power" (OP15-118) is picked up — the old adjacency "this Character gains +N" missed it.
-                var m = System.Text.RegularExpressions.Regex.Match(line,
+                // "K.O.'d" carries literal periods that defeat the [^.] bounding (OP12-036 Zoro: "cannot be K.O.'d in
+                // battle … and gains +1000 power" — the +power sits two periods past "this Character"), so fold the
+                // abbreviation to "KO" for the scan; only the digit group is extracted, so positions don't matter.
+                string scanLine = line.Replace("K.O.", "KO");
+                var m = System.Text.RegularExpressions.Regex.Match(scanLine,
                     @"this (?:Character|card)\b[^.]*?\bgains?\b[^.]*?\+(\d{3,5})\s*power",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (!m.Success) continue;
@@ -1492,6 +1496,55 @@ namespace OnePieceTcg.Engine
         public static bool IsSummoningSick(GameState state, CardInstance instance) =>
             instance != null && instance.PlayedOnTurn == state.TurnNumber && (!HasRush(state, instance) || IsEffectNegated(state, instance));
 
+        // Partial / conditional "Rush vs Characters": a Character played THIS turn that may still attack
+        // opponent CHARACTERS (never the Leader) the turn it comes down. Sources:
+        //   • printed on the card: "[If <cond>,] this Character can attack Characters on the turn in which
+        //     it is played" (EB02-019 Zoro — gated on the opponent having 2 or more Characters);
+        //   • a rushCharacters modifier granted by an effect (survives negation — rule 8-2-4);
+        //   • a friendly aura: "Your {T} type Characters can attack Characters on the turn in which they
+        //     are played" (OP04-096 Corrida Coliseum from a Stage, etc.).
+        // A negated attacker loses its OWN printed grant but keeps a modifier-granted one. This is the single
+        // source of truth for both DeclareAttack's gate and the board glow/dim, so the two never disagree.
+        public static bool CanAttackCharactersOnPlayTurn(GameState state, string seat, CardInstance attacker)
+        {
+            if (state == null || attacker == null) return false;
+            if (HasModifier(state, attacker, "rushCharacters")) return true;   // effect grant — survives negation
+            var def = GetCard(attacker);
+            if (def != null && !IsEffectNegated(state, attacker))
+            {
+                foreach (var line in (def.Effect ?? "").Split('\n'))
+                {
+                    if (!ContainsAll(line, "can attack Characters on the turn in which it is played")) continue;
+                    var cond = System.Text.RegularExpressions.Regex.Match(line, @"^\s*If ([^,]+),",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (cond.Success && !EvaluateCondition(state, seat, cond.Groups[1].Value.Trim(), attacker.InstanceId)) continue;
+                    return true;
+                }
+            }
+            var p = Player(state, seat);
+            if (p != null)
+            {
+                var auraSrcs = new List<CardInstance>();
+                if (p.Leader != null) auraSrcs.Add(p.Leader);
+                foreach (var cc in p.CharacterArea) if (cc != null) auraSrcs.Add(cc);
+                if (p.Stage != null) auraSrcs.Add(p.Stage);
+                foreach (var src in auraSrcs)
+                {
+                    if (IsEffectNegated(state, src)) continue;
+                    foreach (var line in (GetCard(src)?.Effect ?? "").Split('\n'))
+                    {
+                        if (!ContainsAll(line, "Characters can attack Characters on the turn in which they are played")) continue;
+                        if (!CardPassesFeatureFilter(line, def)) continue;
+                        var cond = System.Text.RegularExpressions.Regex.Match(line, @"^\s*If ([^,]+),",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (cond.Success && !EvaluateCondition(state, seat, cond.Groups[1].Value.Trim(), src.InstanceId)) continue;
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
         // Banish: when this card deals damage to a leader, the life card is trashed instead of
         // going to hand and no Trigger step occurs.
         public static bool HasBanish(GameState state, CardInstance instance) =>
@@ -1957,6 +2010,7 @@ namespace OnePieceTcg.Engine
             state.NoBlockerGrantedThisTurn.Clear();
             state.AttackCountThisTurn.Clear();
             state.CharKoedThisTurn.Clear();
+            state.CharRestedByEffectThisTurn.Clear();
             state.HighestEventCostThisTurn.Clear();
             state.BattledOppCharThisTurn.Clear();
             state.NoPlayCharBaseCostAtLeast.Clear();   // "cannot play a base cost N+ Character this turn" expires
@@ -3305,33 +3359,9 @@ namespace OnePieceTcg.Engine
                 // they are played."). Only lets it attack CHARACTERS the turn it came down.
                 var rushCharTarget = FindInPlay(Player(state, OtherSeat(seat)), targetId);
                 bool targetIsChar = rushCharTarget != null && GetCard(rushCharTarget).Type == "character";
-                // The attacker's OWN printed "can attack Characters …" is also negated; a modifier-granted one
-                // survives (rule 8-2-4). The aura path below already skips negated aura SOURCES.
-                bool rushChars = (!IsEffectNegated(state, attacker) && ContainsAll(attackerDefP.Effect, "can attack Characters on the turn in which it is played"))
-                    || HasModifier(state, attacker, "rushCharacters");
-                if (!rushChars)
-                {
-                    var pAura = Player(state, seat);
-                    var auraSrcsR = new List<CardInstance>();
-                    if (pAura.Leader != null) auraSrcsR.Add(pAura.Leader);
-                    foreach (var cc in pAura.CharacterArea) if (cc != null) auraSrcsR.Add(cc);
-                    if (pAura.Stage != null) auraSrcsR.Add(pAura.Stage);   // OP04-096 Corrida Coliseum grants this from a STAGE
-                    foreach (var srcR in auraSrcsR)
-                    {
-                        if (IsEffectNegated(state, srcR)) continue;
-                        foreach (var lineR in (GetCard(srcR)?.Effect ?? "").Split('\n'))
-                        {
-                            if (!ContainsAll(lineR, "Characters can attack Characters on the turn in which they are played")) continue;
-                            if (!CardPassesFeatureFilter(lineR, attackerDefP)) continue;
-                            // Leading "If <cond>," gate (Corrida: "If your Leader has the {Dressrosa} type, …").
-                            var condR = System.Text.RegularExpressions.Regex.Match(lineR, @"^\s*If ([^,]+),",
-                                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                            if (condR.Success && !EvaluateCondition(state, seat, condR.Groups[1].Value.Trim(), srcR.InstanceId)) continue;
-                            rushChars = true; break;
-                        }
-                        if (rushChars) break;
-                    }
-                }
+                // Partial/conditional "Rush vs Characters" — printed (with its leading "If <cond>," honoured),
+                // a rushCharacters modifier, or a friendly aura. Shared with the board glow/dim so they agree.
+                bool rushChars = CanAttackCharactersOnPlayTurn(state, seat, attacker);
                 if (!(rushChars && targetIsChar))
                 {
                     Log(state, seat, "Only [Rush] characters can attack on the turn they are played.");
@@ -6968,6 +6998,15 @@ namespace OnePieceTcg.Engine
             if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"you have a \[([^\]]+)\](?: or \[([^\]]+)\])? Character with (\d{3,5}) base power or more", RO))().Success)
             { var m = M(); string n1 = m.Groups[1].Value.Trim(); string n2 = m.Groups[2].Success ? m.Groups[2].Value.Trim() : null; int bp = int.Parse(m.Groups[3].Value);
               return p.CharacterArea.Any(c => c != null && GetCard(c).Power >= bp && (NameMatches(state, c, n1) || (n2 != null && NameMatches(state, c, n2)))); }
+
+            // "[Your Turn] [Once Per Turn] If a Character is rested by your effect, <X>" (OP07-031 Bartolomeo,
+            // OP10-036 Perona, and any future card with the pattern). General/text-driven — the per-turn flag is
+            // set by the effect-rest-a-target resolvers and cleared at the controller's turn start. This one
+            // handler makes EVERY consumer of the condition work (the power-buff pollers AND the draw/DON payoff
+            // poller both route through here) and ends the "Unknown condition" log spam it was producing.
+            if (System.Text.RegularExpressions.Regex.IsMatch(condition, @"a Character is rested by your effect",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return state.CharRestedByEffectThisTurn.Contains(seat);
 
             // Unknown condition: skip and (unless silenced) log.
             _conditionRecognized = false;
@@ -11673,6 +11712,7 @@ namespace OnePieceTcg.Engine
                     }
                     rnT.Rested = true;
                     Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(rnT))}.");
+                    state.CharRestedByEffectThisTurn.Add(effect.Seat);
                     effect.SelectionsRemaining--;
                     if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
                     return EffectResolution.Resolved;
@@ -12942,6 +12982,7 @@ namespace OnePieceTcg.Engine
                     return EffectResolution.WaitingForTarget;
                 }
                 rsT.Rested = true;
+                state.CharRestedByEffectThisTurn.Add(effect.Seat);
                 Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(rsT))}.");
                 effect.SelectionsRemaining--;
                 if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
@@ -12956,6 +12997,7 @@ namespace OnePieceTcg.Engine
                 foreach (var c in oppAll.CharacterArea)
                     if (c != null && !c.Rested && !CannotBeRestedByOppEffect(state, c)) { c.Rested = true; restedAll++; }   // printed immunity too
                 Log(state, effect.Seat, $"{sourceName} rests {restedAll} of the opponent's Characters.");
+                if (restedAll > 0) state.CharRestedByEffectThisTurn.Add(effect.Seat);
                 return EffectResolution.Resolved;
             }
 
@@ -13012,6 +13054,7 @@ namespace OnePieceTcg.Engine
                         }
                         rmixT.Rested = true;
                         Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(rmixT))}.");
+                        state.CharRestedByEffectThisTurn.Add(effect.Seat);
                     }
                     effect.SelectionsRemaining--;
                     if (effect.SelectionsRemaining > 0)
@@ -13655,6 +13698,7 @@ namespace OnePieceTcg.Engine
                 }
                 target.Rested = true;
                 Log(state, effect.Seat, $"{sourceName} rests {NameId(GetCard(target))}.");
+                state.CharRestedByEffectThisTurn.Add(effect.Seat);
                 // The rested Character's own "When this Character becomes rested [by your opponent's Character's
                 // effect]" reactive (OP14-070 Buffalo) — the resting was done by effect.Seat's effect, so from the
                 // target owner's view it is "your opponent's <sourceType>'s effect".

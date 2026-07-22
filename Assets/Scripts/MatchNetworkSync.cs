@@ -71,6 +71,11 @@ public class MatchStartPayload
     public string mode;         // "ranked" | "casual" | "custom" — the game type for stats/history
     public bool forgiveness;    // custom lobby: enable the in-match rewind toggle (opponent-approved)
     public BlitzConfig blitz;   // custom lobby: timed-match settings (null/Standard = untimed)
+    // Host's build number (UpdateChecker.CurrentBuildNumber). The guest aborts if it differs from
+    // its own — two builds can have divergent engine logic, and both clients replay the SAME
+    // GameCommand log, so a version mismatch would silently desync into different boards. Absent
+    // field (old client) deserializes to 0, which correctly mismatches any real build.
+    public int build;
 }
 
 // Lightweight "what am I looking at" state each client streams to its opponent while
