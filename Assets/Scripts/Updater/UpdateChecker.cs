@@ -40,7 +40,7 @@ public static class UpdateChecker
 
     // Bump this every release. Must match "buildNumber" in the deployed
     // version.json for that release.
-    public const int CurrentBuildNumber = 18;
+    public const int CurrentBuildNumber = 19;
     // -----------------------------------------------------------------------
 
     [Serializable]
@@ -189,6 +189,16 @@ public static class UpdateChecker
                 prog.notes = pi?.GetValue(rel) as string;
             }
             catch { prog.notes = null; }
+            // Velopack only carries notes if `vpk pack --releaseNotes` embedded them, which has
+            // been inconsistent — so the "What's New" panel kept coming up blank. version.json
+            // always has a hand-written `notes` string, so fall back to it. Prefer the already
+            // fetched manifest (CheckAsync at boot); if that hasn't populated yet, pull it now.
+            if (string.IsNullOrWhiteSpace(prog.notes))
+            {
+                prog.notes = Latest?.notes;
+                if (string.IsNullOrWhiteSpace(prog.notes))
+                    prog.notes = await FetchManifestNotesAsync();
+            }
 
             Debug.Log($"[UpdateChecker] Velopack update found: {prog.toVersion} - downloading.");
             prog.phase = "DOWNLOADING UPDATE";
@@ -211,5 +221,24 @@ public static class UpdateChecker
         await Task.CompletedTask;
         return false;
 #endif
+    }
+
+    // Fetches version.json and returns its `notes` string, or null on any failure. Used as the
+    // "What's New" fallback when the Velopack release carried no embedded notes. Uses UnityWebRequest
+    // (same as CheckAsync) rather than System.Net.Http, which isn't referenced by the build.
+    private static async Task<string> FetchManifestNotesAsync()
+    {
+        try
+        {
+            string url = $"{ManifestBaseUrl}/version.json?ts={DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+            using var req = UnityWebRequest.Get(url);
+            req.timeout = 8;
+            var op = req.SendWebRequest();
+            while (!op.isDone) await Task.Yield();
+            if (req.result != UnityWebRequest.Result.Success) return null;
+            var m = JsonUtility.FromJson<VersionManifest>(req.downloadHandler.text);
+            return m?.notes;
+        }
+        catch { return null; }
     }
 }

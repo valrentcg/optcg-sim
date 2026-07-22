@@ -165,7 +165,7 @@ public static class MatchHistoryStore
     /// ReplayRecord, rotated into `youSeat`'s perspective ("south" for solo play,
     /// the local seat for networked matches — mirrors how the replay itself is
     /// saved from the local viewpoint).</summary>
-    public static MatchSummary BuildSummary(GameState state, ReplayRecord record, string youSeat)
+    public static MatchSummary BuildSummary(GameState state, ReplayRecord record, string youSeat, string oppDisplayName = null)
     {
         if (state == null || record == null) return null;
         try
@@ -188,7 +188,11 @@ public static class MatchHistoryStore
                     ? "win" : "loss",
                 youLeaderId = youLeaderId,
                 oppLeaderId = oppLeaderId,
-                oppName = string.IsNullOrEmpty(opp?.Name) ? "Opponent" : opp.Name,
+                // Prefer the human display name (real username / bot tier) passed from
+                // GameManager; opp.Name is the engine seat identifier ("South"/"North") and
+                // must never surface in the UI.
+                oppName = !string.IsNullOrEmpty(oppDisplayName) ? oppDisplayName
+                    : (string.IsNullOrEmpty(opp?.Name) ? "Opponent" : opp.Name),
                 youFirst = state.FirstPlayer == youSeat,
                 youFinalLife = you?.Life?.Count ?? 0,
                 oppFinalLife = opp?.Life?.Count ?? 0,

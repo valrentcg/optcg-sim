@@ -103,6 +103,8 @@ namespace OnePieceTcg.Engine
         public int PendingLifeDamage;       // extra life damage still to deal this hit (Double Attack = 1 more)
         public bool NoBlocker;              // opponent cannot activate any Blocker this battle
         public int? BlockerPowerBan;        // opponent cannot Blocker with power >= this value this battle
+        public int? BlockerPowerBanMax;     // opponent cannot Blocker with power <= this value this battle (OP01-120 Shanks / OP03-002 Adio: "2000 or less power")
+        public int? BlockerCostBanMax;      // opponent cannot Blocker with cost <= this value this battle (OP02-061 Morley / OP02-101 Strawberry: "Blocker of any Character with a cost of 5 or less")
 
         // EffectScope.Battle power bonuses — keyed by CardInstance.InstanceId, cleared when
         // the BattleState is discarded (attack resolved, blocked, or cleared).
@@ -149,11 +151,19 @@ namespace OnePieceTcg.Engine
         // your hand", "up to 2 of your opponent's Characters ... cannot attack"). 0 = not yet
         // initialized; the resolver sets it to N on first entry and decrements per valid pick.
         public int SelectionsRemaining;
+        // Instance ids already CHOSEN during this multi-pick resolution — an "up to N Characters"
+        // effect must target N DISTINCT cards, so a card here is excluded from the glow and rejected
+        // if clicked again (prevents e.g. double-applying "give up to 2 opponent Characters −2000"
+        // to the same Character). Populated centrally in ResolveEffect after each continuing pick.
+        public System.Collections.Generic.List<string> PickedInstanceIds;
         // Shared numeric budget across picks for "total power/cost of N or less" effects
         // (e.g. "K.O. up to 2 Characters with a TOTAL power of 4000 or less"). -1 = unused.
         public int RemainingBudget = -1;
         // First pick's instance id for two-step effects (base-power swaps etc.).
         public string FirstPickId;
+        // Instance ids played so far by a multi-pick "play … with different card names" effect
+        // (OP16-060 Sengoku leader), so each subsequent pick can be checked for a unique name.
+        public List<string> PlayedPickIds = new List<string>();
         // The REMAINDER of a compound effect ("A. Then, B") stashed while clause A is still being
         // resolved over one or more picks. `Text` is truncated to the clause CURRENTLY resolving so
         // the action button shows only that step; when A finishes, `Text` advances to this and the
@@ -262,6 +272,36 @@ namespace OnePieceTcg.Engine
         // reached the damage step of an attack whose (final) target was a Character. For "If this Leader has
         // battled your opponent's Character during this turn" (OP12-020 Zoro restand). Cleared each turn.
         public HashSet<string> BattledOppCharThisTurn = new HashSet<string>();
+        // Per-seat self-restriction: this turn the seat cannot play Character cards with a base cost >= this value
+        // ("Then, you cannot play Character cards with a base cost of N or more during this turn" — the DON-ramp
+        // downside of OP12-030/OP13-023/OP13-118/OP14-020). Cleared at the start of that seat's next turn.
+        public Dictionary<string, int> NoPlayCharBaseCostAtLeast = new Dictionary<string, int>();
+        // Per-seat self-restriction: this turn the seat cannot play ANY cards from hand ("Then, you cannot play
+        // cards from your hand during this turn" — OP13-028's DON-refresh downside). Cleared next turn.
+        public HashSet<string> NoPlayFromHandThisTurn = new HashSet<string>();
+        // Per-seat self-restriction: this turn the seat's attacks cannot target a Leader ("Then, you cannot attack
+        // a Leader during this turn" — OP06-026's re-stand downside). Cleared next turn.
+        public HashSet<string> CannotAttackLeaderThisTurn = new HashSet<string>();
+        // Per-seat self-restriction: this turn the seat cannot add Life cards to hand via their own effects
+        // ("Then, you cannot add Life cards to your hand using your own effects during this turn" — OP02-004 etc.).
+        public HashSet<string> NoAddLifeToHandThisTurn = new HashSet<string>();
+        // Per-seat self-restriction: this turn the seat cannot set DON!! active via a CHARACTER effect
+        // ("Then, you cannot set DON!! cards as active using Character effects during this turn" — EB04-016/OP10-030).
+        public HashSet<string> NoSetDonActiveViaCharThisTurn = new HashSet<string>();
+        // Per-seat instance-id of the card most recently buffed by an "up to 1 … gains +N power" effect — so a
+        // follow-up "that card gains an additional +M power" clause (10 Counter events) applies to the same card.
+        public Dictionary<string, string> LastPowerBuffTargetId = new Dictionary<string, string>();
+
+        // Seats whose "if your rested Character would be K.O.'d, trash this instead" protection
+        // (OP05-030 Rosinante) has already been PAID during the current command's resolution. Once
+        // paid, every OTHER rested Character K.O.'d by the SAME effect is also saved (official Kaido
+        // ruling). Cleared at the start of each ApplyCommand (= scoped to one effect resolution).
+        public HashSet<string> RestedKoProtectionPaid = new HashSet<string>();
+
+        // Seats with an active "if any of your Characters would be K.O.'d in battle during this turn, you may
+        // trash 1 card from your hand instead" replacement (EB02-030, registered by countering with it). Consulted
+        // by the battle-damage K.O. path; cleared at the start of each turn (like the other this-turn sets).
+        public HashSet<string> BattleKoTrashSaveSeats = new HashSet<string>();
 
         // Alternate name overrides: instanceId → effective name string.
         // Set by "This card's name is also treated as [X]" effects. Cleared when card leaves play.
@@ -315,6 +355,8 @@ namespace OnePieceTcg.Engine
         // Search-mode fields (SearchMode = true → full-deck search; remaining cards shuffled back)
         public bool SearchMode;
         public int MaxCost;          // -1 = no limit; otherwise only cards with cost ≤ MaxCost are valid
+        public int MinCost = -1;     // -1 = no limit; "cost of N or more" / range lower bound (EB02-008, EB03-060)
+        public string ExcludeName;   // "other than [Name]" — a card with this name is NOT a valid pick (60 tutors)
         public string CardTypeFilter; // "" = any type; otherwise only cards of this type are valid
 
         // "Then, trash the rest" variant (e.g. OP03-089 Brannew): after the select step the
@@ -326,11 +368,14 @@ namespace OnePieceTcg.Engine
         public bool PlayMode;
         public bool PlayRested;      // "play that card rested"
         public int MaxPower = -1;    // "with N power or less" eligibility (printed power)
+        public int ExactPower = -1;  // "with N power" (exact printed power, no "or less" — ST30-002 Inazuma)
+        public string ColorFilter;   // required card colour, e.g. "green" (OP02-030 "play … green {Land of Wano} …")
         public bool TrashSelected;   // selected card goes to the TRASH ("trash up to N cards")
         public bool RequireTrigger;  // eligibility: card must have printed [Trigger] text
         public int SelectCount = 1;  // how many picks the select step allows
         public bool ToTop;           // rearranged cards go to the TOP of the deck (ST17-003)
         public bool LifeMode;        // cards came from LIFE; confirmed order writes back to Life (ST13-012 Makino)
+        public string LifeTargetSeat; // whose Life the looked cards belong to (for opponent's-Life peeks, e.g. OP03-099 Katakuri); null/empty = the looker's own Life
 
         // A trailing self-hand-disposal clause the deck-look flow itself does NOT perform, e.g.
         // "… place the rest at the bottom … Then, trash 1 card from your hand." (OP16-067 Tsuru,
@@ -395,6 +440,8 @@ namespace OnePieceTcg.Engine
         public string OptionA;
         /// <summary>Full text of option B (the second bullet).</summary>
         public string OptionB;
+        /// <summary>Full text of option C (the third bullet), if the modal has three (OP05-096). Null otherwise.</summary>
+        public string OptionC;
     }
 
 }

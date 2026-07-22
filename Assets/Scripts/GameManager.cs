@@ -1218,8 +1218,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         GameLogStore.Export(state, currentMatchConfig, record, aiLogCategory, southLogUsername, northLogUsername);
 
-        var summary = MatchHistoryStore.BuildSummary(state, record,
-            isNetworked && !string.IsNullOrEmpty(localSeat) ? localSeat : "south");
+        string youSeatForSummary = isNetworked && !string.IsNullOrEmpty(localSeat) ? localSeat : "south";
+        var summary = MatchHistoryStore.BuildSummary(state, record, youSeatForSummary,
+            DisplayName(OtherSeatLocal(youSeatForSummary)));
         // Result-screen text from the local player's perspective (win/loss only; an
         // ambiguous/simultaneous end falls back to a neutral "MATCH OVER").
         finishedResultText = summary?.result == "win" ? "YOU WIN!"
@@ -2205,8 +2206,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (isNetworked) label = mine ? "YOUR TURN" : "OPPONENT'S TURN";
         else
         {
-            var ap = state.Players.TryGetValue(state.ActiveSeat, out var apv) ? apv : null;
-            label = (ap != null ? ap.Name.ToUpperInvariant() : state.ActiveSeat.ToUpperInvariant()) + "'S TURN";
+            // Non-networked: use the human display name ("You"/"Advanced Bot"/…), never the
+            // engine seat identifier ("South"/"North").
+            label = DisplayName(state.ActiveSeat).ToUpperInvariant() + "'S TURN";
         }
         var accent = mine ? new Color(1f, 0.72f, 0.22f) : new Color(0.38f, 0.72f, 1f);
         StartCoroutine(ShowTurnBanner(label, accent));
@@ -2985,13 +2987,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawMatchResultPeekChip()
     {
         // Parent to the CANVAS (not boardRoot) and SetAsLastSibling so it sits above leftRoot/sideRoot —
-        // the previous top-left placement was drawn behind the left card-preview panel and unclickable.
-        // Top-CENTER, clearly visible; it's the only route back to the result screen + Main Menu.
+        // the old top-LEFT placement hid behind the left card-preview panel, and the top-CENTER one sat
+        // right on the opponent's hand (which renders across the top-center). Anchor to the top-RIGHT
+        // corner instead: clear of both the centre hand strip and the left preview, still prominent.
         var chip = PanelObject("Result Peek Chip", canvas.transform, (Color)new Color32(14, 30, 46, 245));
-        chip.anchorMin = chip.anchorMax = new Vector2(0.5f, 1f);
-        chip.pivot = new Vector2(0.5f, 1f);
+        chip.anchorMin = chip.anchorMax = new Vector2(1f, 1f);
+        chip.pivot = new Vector2(1f, 1f);
         chip.sizeDelta = new Vector2(200f, 42f);
-        chip.anchoredPosition = new Vector2(0f, -10f);
+        chip.anchoredPosition = new Vector2(-14f, -10f);
         Round(chip);
         AddRoundedCardBorder(chip, Accent, 1.4f);
         chip.SetAsLastSibling();
@@ -3670,7 +3673,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         else if (scrying)
         {
-            titleText = $"{dl.SourceName}: click cards to keep on TOP of the deck (click order = top order) — the rest go to the bottom";
+            // LifeMode scry (Katakuri / Power Mochi "look at Life, place top/bottom") reuses this
+            // overlay but the cards are Life cards, not deck cards — label it accordingly.
+            string scryZone = dl.LifeMode ? "Life cards" : "deck";
+            titleText = $"{dl.SourceName}: click cards to keep on TOP of the {scryZone} (click order = top order) — the rest go to the bottom";
         }
         else
         {
@@ -4829,7 +4835,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             // Local player(s) done — just a small status chip while waiting on the peer.
             var wait = TextObject("Mulligan Waiting", boardRoot,
-                "READY — waiting for opponent...", 12, Muted, TextAnchor.MiddleCenter, monoFont);
+                "READY — waiting for opponent...", 12, Color.white, TextAnchor.MiddleCenter, monoFont);
             Stretch(wait.rectTransform, new Vector2(0.3f, 0.48f), new Vector2(0.7f, 0.52f), Vector2.zero, Vector2.zero);
             wait.raycastTarget = false;
             return;
@@ -5205,7 +5211,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         { "Red", new Color32(214, 68, 68, 255) },   { "Green", new Color32(70, 180, 110, 255) },
         { "Blue", new Color32(70, 140, 220, 255) },  { "Purple", new Color32(160, 110, 210, 255) },
-        { "Black", new Color32(90, 100, 120, 255) }, { "Yellow", new Color32(230, 200, 90, 255) },
+        { "Black", new Color32(38, 40, 52, 255) }, { "Yellow", new Color32(230, 200, 90, 255) },
     };
 
     private List<Color> PushPullColorsFor(string seat)
@@ -6077,8 +6083,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var def = focus != null ? GameEngine.GetCard(focus) : null;
         bool showPower = def != null && (def.Type == "character" || def.Type == "leader");
 
-        var nm = TextObject("Preview Name", leftRoot, def != null ? def.Name : "-", 16, Ink, TextAnchor.LowerLeft, titleFont);
-        Stretch(nm.rectTransform, new Vector2(0.06f, 0.602f), new Vector2(0.94f, 0.628f), Vector2.zero, Vector2.zero);
+        // The card art in the preview already shows the card's name, so a separate name label
+        // under it was redundant clutter (user request to drop it). Chips (power/cost/type) stay.
 
         var chips = RowObject("Preview Chips", leftRoot, 4, TextAnchor.MiddleLeft);
         Stretch(chips, new Vector2(0.06f, 0.566f), new Vector2(0.94f, 0.594f), Vector2.zero, Vector2.zero);
@@ -7495,7 +7501,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             RoundCircle(dot);
         }
 
-        string name = p != null ? p.Name : seat;
+        // Player plate: show the human display name, never the engine seat identifier
+        // ("South"/"North" is a stable internal id — see DisplayName()). Falls back to
+        // "Player 1/2" when no name was supplied, never to the raw seat.
+        string name = DisplayName(seat);
         int life = p != null ? p.Life.Count : 0;
         int hand = p != null ? p.Hand.Count : 0;
         int don = p != null ? p.CostArea.Count : 0;
@@ -9699,11 +9708,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         holder.SetParent(zone, false);
         FitCardAspect(zone, holder);
         if (inverted) holder.localRotation = Quaternion.Euler(0, 0, 180f);
-        AddCard(holder, card, seat, faceUp, Vector2.zero, true);
+        // holder is rotated for the opponent side, so tell AddCard to counter-rotate its text
+        // overlays (status tags / DON count) back upright — otherwise they read upside-down.
+        AddCard(holder, card, seat, faceUp, Vector2.zero, true, flipOverlays: inverted);
     }
 
-    private void AddCard(RectTransform parent, CardInstance card, string seat, bool faceUp, Vector2 size, bool stretch = false, bool inverted = false, int handHomeSiblingIndex = -1, bool suppressPreview = false)
+    private void AddCard(RectTransform parent, CardInstance card, string seat, bool faceUp, Vector2 size, bool stretch = false, bool inverted = false, int handHomeSiblingIndex = -1, bool suppressPreview = false, bool flipOverlays = false)
     {
+        // The card reads upside-down (opponent side) when either this call rotates the root 180°
+        // (inverted) or the parent holder was already rotated (flipOverlays) — text overlays must be
+        // counter-rotated so tags/DON counts stay readable.
+        bool overlaysUpsideDown = inverted || flipOverlays;
         var attachedDon = faceUp ? card.AttachedDonIds.Count : 0;
         var root = PanelObject(GameEngine.GetCard(card).Name, parent, new Color(0, 0, 0, 0));
         root.GetComponent<Image>().raycastTarget = false;
@@ -9744,7 +9759,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             // Attached DON!! shown the OP way: ドン!!×N (katakana for DON!!), so it reads distinctly
             // from stat/cost pills (e.g. "+1 COST").
-            if (card.AttachedDonIds.Count > 0) AddBadge(cardBody, "ドン!!×" + card.AttachedDonIds.Count, new Vector2(0.40f, 0.80f), new Vector2(0.98f, 0.99f), new Color32(120, 235, 155, 255), jpFont);
+            if (card.AttachedDonIds.Count > 0) { var db = AddBadge(cardBody, "ドン!!×" + card.AttachedDonIds.Count, new Vector2(0.40f, 0.80f), new Vector2(0.98f, 0.99f), new Color32(120, 235, 155, 255), jpFont); if (overlaysUpsideDown) FlipBadgeUpright(db); }
 
             // Status indicator chips — everything currently affecting this card (OPTCGSim-style
             // insight): power/cost changes, base overrides, keyword grants, restrictions
@@ -9758,15 +9773,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 for (int sbI = 0; sbI < statusBadges.Count && sbI < 5; sbI++)
                 {
                     var sb = statusBadges[sbI];
-                    AddBadge(cardBody, sb.Label,
+                    var badgeRt = AddBadge(cardBody, sb.Label,
                         new Vector2(0.02f, badgeY), new Vector2(0.80f, badgeY + 0.125f),
                         StatusBadgeColor(sb.Kind));
+                    if (overlaysUpsideDown) FlipBadgeUpright(badgeRt);
                     badgeY += 0.138f;
                 }
                 if (statusBadges.Count > 5)
-                    AddBadge(cardBody, "+" + (statusBadges.Count - 5) + " MORE",
+                {
+                    var moreRt = AddBadge(cardBody, "+" + (statusBadges.Count - 5) + " MORE",
                         new Vector2(0.02f, badgeY), new Vector2(0.80f, badgeY + 0.125f),
                         new Color32(170, 182, 200, 255));
+                    if (overlaysUpsideDown) FlipBadgeUpright(moreRt);
+                }
             }
 
             // Persistent GREEN glow on every card that is a VALID target for the pending effect
@@ -10142,9 +10161,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (lifeZone == null || state == null || state.PendingEffects.Count == 0 || p.Life.Count == 0) return;
         var pe = state.PendingEffects[0];
-        if (pe.Seat != seat || (isNetworked && seat != localSeat)) return;
-        if (aiSeat != null && seat == aiSeat) return;
-        if ((pe.Text ?? "").IndexOf("top or bottom of your Life", System.StringComparison.OrdinalIgnoreCase) < 0) return;
+        string peText = pe.Text ?? "";
+        // The effect's controller (pe.Seat) makes the pick — never the AI or a remote player.
+        string controller = pe.Seat;
+        if (isNetworked && controller != localSeat) return;
+        if (aiSeat != null && controller == aiSeat) return;
+        // Which Life pile does this effect want to pick from?
+        //   "top or bottom of your Life"            → the CONTROLLER's own Life  (seat == controller)
+        //   "top or bottom of your opponent's Life" → the OPPONENT's Life        (seat == other seat)
+        bool wantsOpp = peText.IndexOf("top or bottom of your opponent's Life", System.StringComparison.OrdinalIgnoreCase) >= 0;
+        bool wantsOwn = !wantsOpp && peText.IndexOf("top or bottom of your Life", System.StringComparison.OrdinalIgnoreCase) >= 0;
+        bool zoneIsOwn = seat == controller;
+        bool zoneIsOpp = seat == OtherSeatLocal(controller);
+        if (!((wantsOwn && zoneIsOwn) || (wantsOpp && zoneIsOpp))) return;
 
         // Snap the glow to the ACTUAL top and bottom Life card rects (AddLifeStackToZone stores
         // them in lifeMoveRects[seat], card index i == Life[i]), rather than splitting the zone in
@@ -10686,7 +10715,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     // `accent` is the BRIGHT badge colour; the fill is a dark tint of it and the text is the accent —
     // exactly the counter-step "+1000" pill language (dark green pill + bright green text).
-    private void AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color accent, Font labelFont = null)
+    private RectTransform AddBadge(RectTransform parent, string label, Vector2 min, Vector2 max, Color accent, Font labelFont = null)
     {
         var badge = PanelObject("Badge", parent, new Color(accent.r * 0.22f, accent.g * 0.22f, accent.b * 0.22f, 0.92f));
         Stretch(badge, min, max, Vector2.zero, Vector2.zero);
@@ -10696,6 +10725,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         text.fontStyle = FontStyle.Bold;
         text.raycastTarget = false;
         Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(3f, 0f), new Vector2(-3f, 0f));
+        return badge;
+    }
+
+    // Opponent board cards render inside a holder rotated 180°, so text overlays (status tags, DON
+    // count) inherit the flip and read upside-down. Counter-rotate the badge 180° about its own centre
+    // so the text is upright for the viewer while the badge stays put. Call only for inverted cards.
+    private void FlipBadgeUpright(RectTransform badge)
+    {
+        if (badge != null) badge.localRotation = Quaternion.Euler(0, 0, 180f);
     }
 
     private RectTransform PanelObject(string name, Transform parent, Color color)
