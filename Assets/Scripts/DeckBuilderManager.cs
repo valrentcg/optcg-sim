@@ -3255,15 +3255,15 @@ public partial class DeckBuilderManager : MonoBehaviour
     {
         if (string.IsNullOrEmpty(label)) return;
         var chip = Panel(label + " Chip", parent, primary ? Accent : new Color(1f, 1f, 1f, 0.05f));
-        float chipW = 12f + label.Length * 6.6f;
-        chip.sizeDelta = new Vector2(chipW, 18f);
-        SetPref(chip, new Vector2(chipW, 18f));
+        float chipW = 9f + label.Length * 5.6f;   // compact so the leader's stat pills fit the left panel
+        chip.sizeDelta = new Vector2(chipW, 17f);
+        SetPref(chip, new Vector2(chipW, 17f));
         Round(chip);
         chip.GetComponent<Image>().raycastTarget = false;
         if (!primary) AddBorder(chip, ZoneBorder, 1f);
-        var t = Text_("t", chip, label, 9, primary ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
+        var t = Text_("t", chip, label, 8, primary ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
-        Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(4, 0), new Vector2(-4, 0));
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(3, 0), new Vector2(-3, 0));
     }
 
     // Gold-tinted chip flagging a niche rule override on this leader (e.g. a
@@ -3273,14 +3273,14 @@ public partial class DeckBuilderManager : MonoBehaviour
     {
         if (string.IsNullOrEmpty(label)) return;
         var chip = Panel(label + " Chip", parent, new Color(Gold.r, Gold.g, Gold.b, 0.18f));
-        float chipW = 12f + label.Length * 6.6f;
-        chip.sizeDelta = new Vector2(chipW, 18f);
-        SetPref(chip, new Vector2(chipW, 18f));
+        float chipW = 9f + label.Length * 5.6f;   // compact so a wide rule (e.g. "EVENT COST ≤1") stays in-panel
+        chip.sizeDelta = new Vector2(chipW, 17f);
+        SetPref(chip, new Vector2(chipW, 17f));
         Round(chip); AddBorder(chip, Gold, 1f);
         chip.GetComponent<Image>().raycastTarget = false;
-        var t = Text_("t", chip, label, 9, Gold, TextAnchor.MiddleCenter, monoFont);
+        var t = Text_("t", chip, label, 8, Gold, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
-        Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(4, 0), new Vector2(-4, 0));
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(3, 0), new Vector2(-3, 0));
     }
 
     // A chip tinted with a One Piece colour swatch (RED / GREEN / BLUE / …).
@@ -3482,7 +3482,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         var fToggle = Panel("FiltersToggle", panel, filtersCollapsed ? (Color)new Color32(20, 34, 48, 230) : (Color)Accent);
         Stretch(fToggle, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-166f, -52f), new Vector2(-16f, -16f));
         Round(fToggle); AddBorder(fToggle, filtersCollapsed ? MenuB : Accent2, 1f);
-        var ftT = Text_("t", fToggle, filtersCollapsed ? "▸ SHOW FILTERS" : "▾ HIDE FILTERS", 10,
+        var ftT = Text_("t", fToggle, filtersCollapsed ? "[+] SHOW FILTERS" : "[-] HIDE FILTERS", 10,
             filtersCollapsed ? Muted : BadgeInk, TextAnchor.MiddleCenter, monoFont);
         ftT.fontStyle = FontStyle.Bold;
         Stretch(ftT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
