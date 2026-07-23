@@ -55,6 +55,13 @@ public sealed class BugReport
     public string NorthDeckId;
     public string SouthLeaderId;
     public string NorthLeaderId;
+    // Full deck LISTS ("cardId:qty") + leader, so a CUSTOM-deck position is reconstructable even when the
+    // deck id isn't a shareable/known deck. Without these, replaying the CommandHistory needs the deck
+    // definitions, which live only on the reporter's machine — so custom-deck bugs couldn't be reproduced.
+    public string SouthDeckLeader;
+    public string NorthDeckLeader;
+    public List<string> SouthDeck = new List<string>();
+    public List<string> NorthDeck = new List<string>();
     public List<SerializableCommand> CommandHistory = new List<SerializableCommand>();
 
     // A compact, engine-free snapshot so the report can be skimmed without re-simulating.
@@ -109,7 +116,19 @@ public static class BugReportStore
         if (state.CommandHistory != null)
             foreach (var cmd in state.CommandHistory)
                 report.CommandHistory.Add(SerializableCommand.From(cmd));
+
+        // Capture the full deck lists (custom decks live only on this machine) so the position is exactly
+        // reconstructable off-machine: CreateMatch(seed, {leader, list}) + replay CommandHistory.
+        CaptureDeck(config?.SouthDeckDef, out report.SouthDeckLeader, report.SouthDeck);
+        CaptureDeck(config?.NorthDeckDef, out report.NorthDeckLeader, report.NorthDeck);
         return report;
+    }
+
+    private static void CaptureDeck(DeckDef def, out string leader, List<string> into)
+    {
+        leader = def?.Leader;
+        if (def?.List == null) return;
+        foreach (var (cardId, qty) in def.List) into.Add($"{cardId}:{qty}");
     }
 
     /// <summary>Appends a report as one JSON line. Never throws to the caller — a failed save is logged

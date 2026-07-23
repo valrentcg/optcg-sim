@@ -54,6 +54,8 @@ static class Scenarios
         Op13099SkipReplaceDiag();
         Op13082FiveEldersActivateDiag();
         Op13082HandTrashAnyCardDiag();
+        Op13083SearcherDiag();
+        Op09096EventNotStageDiag();
         Op13084BasePowerAuraDiag();
         Op11097CounterTrashAddDiag();
         Op16060SengokuDiag();
@@ -1541,6 +1543,59 @@ static class Scenarios
         bool nowHasTarget = GameEngine.RemovalEventHasTarget(st, "south", gumGum);      // immunity gone → target exists
         Check("Bot guard: Gum-Gum (K.O. ≤6000) has NO target vs immune Five Elders (7+ trash), YES once immunity drops",
               immuneNoTarget && nowHasTarget, $"immuneNoTarget={immuneNoTarget} nowHasTarget={nowHasTarget}");
+    }
+
+    // BUG (playtest v1.0.19): OP13-083 St. Jaygarcia Saturn [On Play] "Look at 5 ... reveal up to 1 {Five
+    // Elders} ... add to hand. Then, place the rest at the bottom" is a SEARCHER, but it was asking to click a
+    // board card instead of opening the deck-look.
+    static void Op13083SearcherDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "saturn" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        var N83 = st.Players["north"]; N83.Leader.CardId = "OP09-081";   // Teach: negates opponent's On-Play
+        S.Leader.CardId = "OP13-079";
+        // Reconstruct the reported context: a FULL board of Five Elders; OP13-083 is the one being played.
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        S.CharacterArea[0] = MakeInPlay("OP13-091", "south");
+        S.CharacterArea[1] = MakeInPlay("OP13-089", "south");
+        S.CharacterArea[2] = MakeInPlay("OP13-080", "south");
+        S.CharacterArea[3] = MakeInPlay("OP13-084", "south");   // 4 filled; OP13-083 becomes the 5th
+        S.Stage = MakeInPlay("OP13-099", "south"); S.Stage.Zone = "stage";
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"s{i}", Rested = false });
+        var saturn = MakeInPlay("OP13-083", "south"); saturn.Zone = "hand"; S.Hand.Add(saturn);
+        // Deck with NO Five Elders in the top 5 (nothing to reveal) — the failure hypothesis.
+        S.Deck.Clear();
+        for (int i = 0; i < 8; i++) { var d = MakeInPlay("OP09-089", "south"); d.Zone = "deck"; S.Deck.Add(d); }
+        int before = st.EventLog.Count;
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = saturn.InstanceId });
+        Console.WriteLine("=== OP13-083 diag ===");
+        for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("   " + st.EventLog[i].Message);
+        Console.WriteLine($"   DeckLook={(st.DeckLook != null)} step={st.DeckLook?.Step} cards={st.DeckLook?.Cards.Count} pending={st.PendingEffects.Count}");
+        for (int i = 0; i < st.PendingEffects.Count; i++) Console.WriteLine($"   Pending[{i}]: zone={st.PendingEffects[i].TargetZone} text={st.PendingEffects[i].Text}");
+        bool searcher = st.DeckLook != null && st.DeckLook.Cards.Count > 0;
+        Check("OP13-083 Saturn: On Play opens a deck-look searcher (not a board target)",
+              searcher, $"DeckLook={(st.DeckLook != null)} pending={st.PendingEffects.Count}  {Tail(st)}");
+    }
+
+    // BUG (playtest v1.0.19): OP09-096 "My Era...Begins!!" is an EVENT (deck-look then trash), but it ended up
+    // in the STAGE zone after being played.
+    static void Op09096EventNotStageDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "myera" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"e{i}", Rested = false });
+        var era = MakeInPlay("OP09-096", "south"); era.Zone = "hand"; S.Hand.Add(era);
+        int before = st.EventLog.Count;
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = era.InstanceId });
+        Console.WriteLine("=== OP09-096 diag ===");
+        for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("   " + st.EventLog[i].Message);
+        bool inStage = S.Stage != null && S.Stage.CardId == "OP09-096";
+        Console.WriteLine($"   stage={(S.Stage?.CardId ?? "null")} DeckLook={(st.DeckLook != null)}");
+        Check("OP09-096 My Era...Begins!!: the EVENT does not go to the Stage zone",
+              !inStage, $"stage={(S.Stage?.CardId ?? "null")}  {Tail(st)}");
     }
 
     static CardInstance MakeInPlay(string cardId, string owner) => new CardInstance
