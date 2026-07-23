@@ -489,6 +489,21 @@ switch (mode)
             var ext = OnePieceTcg.Engine.FormatLegality.CheckDeck(ids, OnePieceTcg.Engine.GameFormat.ExtraRegulation);
             System.Console.WriteLine($"{kv.Key,-10} leader={def.Leader}  Standard={(std.Legal ? "LEGAL " : "ILLEGAL")}  Extra={(ext.Legal ? "LEGAL" : "ILLEGAL")}   {(std.Legal ? "" : std.Reasons.FirstOrDefault())}");
         }
+        // Full-library sweep: prove BlockOf runs over EVERY card, and only Block-1 sets (minus overrides) are illegal.
+        var bySet = new System.Collections.Generic.SortedDictionary<string, (int legal, int illegal)>();
+        int totalIllegal = 0;
+        foreach (var id in OnePieceTcg.Engine.CardData.Library.Keys)
+        {
+            var mm = System.Text.RegularExpressions.Regex.Match(id, @"^([A-Za-z]+\d*)-");
+            string pfx = mm.Success ? mm.Groups[1].Value.ToUpperInvariant() : "OTHER";
+            bool legal = OnePieceTcg.Engine.FormatLegality.IsCardLegal(id, OnePieceTcg.Engine.GameFormat.Standard);
+            var cur = bySet.TryGetValue(pfx, out var v) ? v : (0, 0);
+            bySet[pfx] = legal ? (cur.Item1 + 1, cur.Item2) : (cur.Item1, cur.Item2 + 1);
+            if (!legal) totalIllegal++;
+        }
+        System.Console.WriteLine($"--- Standard-legality sweep over {OnePieceTcg.Engine.CardData.Library.Count} loaded cards ({totalIllegal} illegal) ---");
+        foreach (var kv in bySet)
+            if (kv.Value.illegal > 0) System.Console.WriteLine($"  {kv.Key,-8} legal={kv.Value.legal,4}  ILLEGAL={kv.Value.illegal,4}");
         System.Console.WriteLine("--- spot checks (block derivation + overrides) ---");
         foreach (var cid in new[] { "OP05-082", "OP02-068", "OP01-001", "ST01-002", "OP01-016", "OP13-083", "OP09-001", "P-091" })
             System.Console.WriteLine($"  {cid,-10} block={OnePieceTcg.Engine.FormatLegality.BlockOf(cid),-2} StandardLegal={OnePieceTcg.Engine.FormatLegality.IsCardLegal(cid, OnePieceTcg.Engine.GameFormat.Standard)}");
