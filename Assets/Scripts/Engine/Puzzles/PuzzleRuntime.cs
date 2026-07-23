@@ -121,6 +121,15 @@ namespace OnePieceTcg.Engine.Puzzles
         // True when the board is waiting on a decision the player (attacker) owns: a pending effect, a choice, a
         // deck-look, or a character-replacement. Any such state left after AdvanceThroughNonPlayer belongs to the
         // player, since the defender's decisions are auto-played.
+        // True when it is the player's decision and their only remaining legal move is to end the turn — a dead
+        // attempt with no path to lethal left this turn.
+        private bool OnlyEndTurnLeft()
+        {
+            if (LethalSolver.DecidingSeat(_state, _attacker) != _attacker) return false;
+            var moves = LegalActions.Validate(_state, _attacker, LegalActions.Candidates(_state, _attacker));
+            return moves.Count > 0 && moves.All(kv => kv.Key.Type == "endTurn");
+        }
+
         private bool PlayerHasPendingDecision() =>
             _state.PendingEffects.Count > 0 || _state.ActiveChoice != null
             || _state.DeckLook != null || _state.PendingCharReplace != null;
@@ -189,6 +198,17 @@ namespace OnePieceTcg.Engine.Puzzles
             {
                 Status = PuzzleStatus.Failed; StillWinning = false;
                 Message = "Out of lethal — your turn ended.";
+                return;
+            }
+            // Dead attempt: it is still the player's turn but their ONLY legal action is to end it — every
+            // attacker is spent and nothing left to play. That is an unambiguous fail (no lethal is reachable
+            // this turn), so engage the strike/answer-reveal system instead of leaving them to hit Restart with
+            // no feedback. This is NOT the same as re-solving after a wrong move: it fires only when the board
+            // itself offers no other move.
+            if (OnlyEndTurnLeft())
+            {
+                Status = PuzzleStatus.Failed; StillWinning = false;
+                Message = "Out of moves — no lethal this turn.";
                 return;
             }
             Message = "Find the lethal line.";

@@ -190,6 +190,9 @@ public partial class GameManager
             if (!string.IsNullOrEmpty(puzzleHintText)) AddInfo(body, "Hint: " + puzzleHintText);
             if (puzzleHintLevel < 3)
                 AddButton(body, puzzleHintLevel == 0 ? "Hint" : "Reveal more", () => RevealHint(puzzleHintLevel + 1), true, false);
+            // End the attempt on purpose (e.g. you don't see the line): ends the turn, which fails the puzzle and
+            // costs a strike — after 3 the winning line is revealed. Restart, by contrast, is a free do-over.
+            AddButton(body, "Give Up (End Turn)", () => Dispatch(new GameCommand { Type = "endTurn", Seat = state.ActiveSeat }), CanEndTurn(), false);
             AddButton(body, "Restart", () => LoadPuzzle(puzzleIndex), true, false);
             AddButton(body, "Next Puzzle", NextPuzzle, true, false);
         }
