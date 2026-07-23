@@ -4891,16 +4891,29 @@ namespace OnePieceTcg.Engine
 
         // Reveal the top life card and enter the Trigger Step. Auto-resolves when the
         // revealed card has no imported trigger text.
-        private static void RevealLifeAndStartTrigger(GameState state, string defenderSeat)
+        // canDefeat is false for the 2nd+ damage point of a SINGLE hit ([Double Attack]): running out of Life
+        // on the overkill does NOT defeat — the player survives at 0 Life (official ruling Q36: a Double Attack
+        // does NOT win against a Leader with exactly 1 Life). Only a hit that LANDS on a 0-Life Leader defeats.
+        private static void RevealLifeAndStartTrigger(GameState state, string defenderSeat, bool canDefeat = true)
         {
             var p = Player(state, defenderSeat);
             var cardFromLife = Pop(p.Life);
             if (cardFromLife == null)
             {
-                state.Status = "finished";
-                state.Phase = "finished";
-                Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
+                if (canDefeat)
+                {
+                    state.Status = "finished";
+                    state.Phase = "finished";
+                    Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
+                    state.Battle = null;
+                    return;
+                }
+                // Overkill from the same hit — survive at 0 Life; end the battle cleanly.
+                string survivedBattleId = state.Battle?.Id;
                 state.Battle = null;
+                state.Phase = "main";
+                CleanupBattleModifiers(state, survivedBattleId);
+                FireOnLifeBecomesZero(state, defenderSeat);
                 return;
             }
             state.Battle.RevealedLife = cardFromLife;
@@ -4939,7 +4952,7 @@ namespace OnePieceTcg.Engine
             {
                 state.Battle.PendingLifeDamage--;
                 state.Battle.RevealedLife = null;
-                RevealLifeAndStartTrigger(state, defenderSeat);
+                RevealLifeAndStartTrigger(state, defenderSeat, canDefeat: false);   // 2nd+ [Double Attack] point can't defeat
                 return;
             }
             string endedBattleId = state.Battle?.Id;
@@ -4959,12 +4972,19 @@ namespace OnePieceTcg.Engine
                 var lifeCard = Pop(p.Life);
                 if (lifeCard == null)
                 {
-                    state.Status = "finished";
-                    state.Phase = "finished";
-                    Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
-                    state.Battle = null;
-                    CleanupBattleModifiers(state, endedBattleId);
-                    return;
+                    // Only a hit that LANDS on a 0-Life Leader (i == 0) defeats. Running out of Life on the
+                    // overkill of a single multi-damage hit ([Double Attack]+[Banish]) does NOT defeat — the
+                    // player survives at 0 Life (official ruling Q36).
+                    if (i == 0)
+                    {
+                        state.Status = "finished";
+                        state.Phase = "finished";
+                        Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
+                        state.Battle = null;
+                        CleanupBattleModifiers(state, endedBattleId);
+                        return;
+                    }
+                    break;
                 }
                 lifeCard.Zone = "trash";
                 p.Trash.Add(lifeCard);
@@ -5060,9 +5080,10 @@ namespace OnePieceTcg.Engine
                     // negation guard in BlockAttack. Without this, negating an attacking Character via a [Counter]
                     // (OP09-097 Black Hole) still let it deal 2 damage / banish.
                     bool atkNegated = atkCard != null && IsEffectNegated(state, atkCard);
-                    // [Double Attack] deals 2 damage to the Leader's Life in this ONE hit (the
-                    // real rule) — NOT a second attack. At <2 Life the 2nd point still lands at 0
-                    // Life and finishes the game.
+                    // [Double Attack] deals 2 damage to the Leader's Life in this ONE hit (the real rule) — NOT
+                    // a second attack. Per official ruling Q36 the overkill does NOT defeat: a hit only wins if
+                    // it LANDS on a 0-Life Leader, so Double Attack does not defeat a Leader with exactly 1 Life
+                    // (they take the last card and survive at 0). Enforced in RevealLifeAndStartTrigger/BanishLifeCards.
                     int dmg = 1 + (atkCard != null && !atkNegated && HasDoubleAttack(state, atkCard) ? 1 : 0);
                     if (atkCard != null && !atkNegated && HasBanish(state, atkCard))
                     {

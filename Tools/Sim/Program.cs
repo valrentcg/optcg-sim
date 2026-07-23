@@ -448,6 +448,36 @@ switch (mode)
         return bad == 0 ? 0 : 1;
     }
 
+    case "datest":
+    {
+        // Official ruling Q36: [Double Attack] does NOT defeat a Leader with exactly 1 Life (they take the last
+        // card and survive at 0). It DOES defeat a Leader already at 0 Life. Oracle via the solver.
+        OnePieceTcg.Engine.GameState Setup(int northLife)
+        {
+            var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "da" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.TurnsStarted = 3; N.TurnsStarted = 2;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            N.Hand.Clear();
+            N.Life.Clear();
+            for (int i = 0; i < northLife; i++)
+                N.Life.Add(new OnePieceTcg.Engine.CardInstance { InstanceId = "north-life-" + i, CardId = "ST01-002", Owner = "north", Zone = "life" });
+            S.Leader.Rested = true;   // only the Double-Attack Character can attack
+            var da = new OnePieceTcg.Engine.CardInstance { InstanceId = "south-da-1", CardId = "OP01-121", Owner = "south", Zone = "character", Rested = false };
+            for (int i = 0; i < 3; i++) da.AttachedDonIds.Add("d" + i);   // 5000+3000 power → connects on the 5000 Leader
+            S.CharacterArea[0] = da;
+            return st;
+        }
+        var opts = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 60_000 };
+        var at1 = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(Setup(1), "south", opts);
+        var at0 = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(Setup(0), "south", opts);
+        bool ok1 = at1.Outcome != OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win;   // DA can't kill at 1 Life
+        bool ok0 = at0.Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win;   // DA kills at 0 Life
+        System.Console.WriteLine($"Double Attack: at 1 Life -> {at1.Outcome} (want not-Win: {ok1}); at 0 Life -> {at0.Outcome} (want Win: {ok0})");
+        return (ok1 && ok0) ? 0 : 1;
+    }
+
     case "vivitest":
     {
         // EB03-001 Nefeltari Vivi leader: her ability is [Activate: Main]; it merely REFERENCES the keyword

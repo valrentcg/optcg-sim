@@ -8512,15 +8512,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             AddButton(footer, "Resolve Attack", ResolveCounterStep, true, false);
         }
 
-        // Puzzle mode: when the PLAYER has a pending decision (a [When Attacking] effect, an activated ability's
-        // target, a look/choice) fall through to the SAME resolution UI PvP uses; otherwise show the puzzle
-        // status/hints panel. The defender's decisions are auto-played inside PuzzleRuntime, so any pending
-        // state left on the board after a move belongs to the player and needs the real resolution controls.
+        // Puzzle mode: fall through to the SAME action/resolution UI PvP uses whenever the player is actually
+        // doing something — a pending decision (a [When Attacking] effect, a choice, a look), OR a live
+        // selection (a board card whose [Activate: Main] ability / info needs to show, a hand card to Play, or
+        // DON to attach). Only when idle (nothing pending, nothing selected) do we show the puzzle status/hints
+        // panel. Without this, selecting a leader with an [Activate: Main] ability (OP06-021 Perona, Sanji, …)
+        // never surfaced its Activate button, so the ability was unusable.
         if (isPuzzle)
         {
             bool playerPending = state.DeckLook != null || state.ActiveChoice != null
                 || state.PendingEffects.Count > 0 || state.PendingCharReplace != null;
-            if (!playerPending) { DrawPuzzleActions(body); return; }
+            bool hasSelection = !string.IsNullOrEmpty(selectedId) || selectedDonIds.Count > 0 || trashViewSeat != null;
+            if (!playerPending && !hasSelection) { DrawPuzzleActions(body); return; }
         }
 
         if (state.DeckLook != null)
