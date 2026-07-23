@@ -52,6 +52,7 @@ public partial class MainMenuManager : MonoBehaviour
         new MenuMode { Id = "soloSelf",    Parent = "SOLO PLAY",   Label = "Versus Self",   Status = ModeStatus.Ready, Launch = "ENTER SANDBOX" },
         new MenuMode { Id = "soloAi",      Parent = "SOLO PLAY",   Label = "Versus A.I.",   Status = ModeStatus.Ready, Launch = "START MATCH"   },
         new MenuMode { Id = "soloSandbox", Parent = "SOLO PLAY",   Label = "Sandbox",       Status = ModeStatus.Ready, Launch = "ENTER SANDBOX" },
+        new MenuMode { Id = "soloPuzzle",  Parent = "SOLO PLAY",   Label = "Puzzles",       Status = ModeStatus.Ready, Launch = "PLAY PUZZLES"  },
         new MenuMode { Id = "casual",      Parent = "MULTIPLAYER", Label = "Casual Match",  Status = ModeStatus.Ready, Launch = "QUEUE MATCH"   },
         new MenuMode { Id = "ranked",      Parent = "MULTIPLAYER", Label = "Ranked Match",  Status = ModeStatus.Ready, Launch = "QUEUE MATCH"   },
         new MenuMode { Id = "privateRoom", Parent = "MULTIPLAYER", Label = "Custom Room",   Status = ModeStatus.Ready, Launch = "VIEW LOBBIES"  },
@@ -6818,9 +6819,22 @@ public partial class MainMenuManager : MonoBehaviour
         // Versus A.I.: BASIC BOT (top, AI-piloted) / YOUR DECK (bottom).
         bool aiMode = selectedId == "soloAi";
         bool sandboxMode = selectedId == "soloSandbox";
+        bool puzzleMode = selectedId == "soloPuzzle";
         var northDeck = DeckStore.Get(aiMode ? aiDeckId : p2DeckId);
         var southDeck = DeckStore.Get(p1DeckId);
-        if (aiMode)
+        if (puzzleMode)
+        {
+            var desc = TextObject("Puzzle Desc", portal,
+                "Brain teasers\n\nEach puzzle is a real board where a forced win exists this turn - find the line. " +
+                "The opponent always plays its best surviving defense, so a sloppy line loses. Stuck? Three levels " +
+                "of hints: the first is a nudge, the second points at a card, the third spells out the move.",
+                14, Ink, TextAnchor.UpperLeft);
+            desc.horizontalOverflow = HorizontalWrapMode.Wrap;
+            desc.verticalOverflow = VerticalWrapMode.Overflow;
+            Stretch(desc.rectTransform, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.90f),
+                new Vector2(8f, 0f), new Vector2(-8f, -8f));
+        }
+        else if (aiMode)
         {
             // Shrink the bot's deck panel slightly (0.610 vs 0.575) to free a thin band for
             // the difficulty toggle, sandwiched between it and YOUR DECK below.
@@ -6840,20 +6854,25 @@ public partial class MainMenuManager : MonoBehaviour
 
         // Status caption
         bool bothReady = northDeck != null && southDeck != null;
-        string capText = sandboxMode
+        string capText = puzzleMode
+            ? "Preset boards — no deck needed. Find the forced win."
+            : sandboxMode
             ? "Decks optional — they just stock each side's deck zone. Enter with a blank board either way."
             : bothReady
             ? (aiMode ? $"Ready — {AiDifficultyLabel(aiDifficulty)} Bot pilots the top deck" : "Both seats ready")
             : (northDeck == null && southDeck == null) ? "Select 2 decks to begin"
             : "Select 1 more deck to begin";
         var cap = TextObject("Deck Caption", portal, capText, 10,
-            (sandboxMode || bothReady) ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
+            (puzzleMode || sandboxMode || bothReady) ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
         cap.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(cap.rectTransform, new Vector2(0f, 0.195f), new Vector2(1f, 0.232f),
             new Vector2(12f, 0f), new Vector2(-12f, 0f));
 
-        // Primary CTA. Sandbox is always launchable (decks optional).
-        if (sandboxMode)
+        // Primary CTA. Sandbox + Puzzles are always launchable (no deck needed).
+        if (puzzleMode)
+            BuildPortalCta(portal, "PLAY PUZZLES  ▸", true,
+                new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterPuzzle);
+        else if (sandboxMode)
             BuildPortalCta(portal, "ENTER SANDBOX  ▸", true,
                 new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterSandbox);
         else
@@ -6861,14 +6880,15 @@ public partial class MainMenuManager : MonoBehaviour
                 new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f),
                 aiMode ? (UnityEngine.Events.UnityAction)EnterVersusAi : EnterVersusSelf);
 
-        // Mode tabs (Versus Self / Versus A.I. / Sandbox) — three even slots.
+        // Mode tabs (Versus Self / Versus A.I. / Sandbox / Puzzles) — four even slots.
         var subRow = PanelObject("Sub Row", portal, new Color(0f, 0f, 0f, 0f));
         Stretch(subRow, new Vector2(0f, 0f), new Vector2(1f, 0.09f),
             new Vector2(12f, 10f), new Vector2(-12f, 0f));
 
-        BuildMultiSubTile(subRow, "Versus Self", "soloSelf",   ModeStatus.Ready, 0, 3, 6f);
-        BuildMultiSubTile(subRow, "Versus A.I.", "soloAi",     ModeStatus.Ready, 1, 3, 6f);
-        BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Ready, 2, 3, 6f);
+        BuildMultiSubTile(subRow, "Versus Self", "soloSelf",   ModeStatus.Ready, 0, 4, 6f);
+        BuildMultiSubTile(subRow, "Versus A.I.", "soloAi",     ModeStatus.Ready, 1, 4, 6f);
+        BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Ready, 2, 4, 6f);
+        BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Ready, 3, 4, 6f);
     }
 
     // ── Multiplayer sub-tile (centered label + SOON chip below) ──────────────
@@ -7293,6 +7313,16 @@ public partial class MainMenuManager : MonoBehaviour
         CancelInvoke();
         if (canvas != null) canvas.gameObject.SetActive(false);
         GameManager.LaunchSandbox(p1DeckId, p2DeckId);
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    // Puzzles need no decks — the puzzle provides its own preset board.
+    private void EnterPuzzle()
+    {
+        CancelInvoke();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        GameManager.LaunchPuzzle();
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
     }

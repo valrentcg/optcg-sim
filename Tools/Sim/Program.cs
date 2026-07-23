@@ -87,6 +87,9 @@ if (args.Contains("--sick-aware"))
 
 switch (mode)
 {
+    case "lethaltest":
+        return OnePieceTcg.Sim.Puzzles.LethalSolverTest.Run();
+
     case "smoke":
     {
         var cfg = new ExperimentConfig

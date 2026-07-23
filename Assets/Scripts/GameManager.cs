@@ -414,6 +414,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             PendingSandbox = false;
             NewSandbox();
         }
+        else if (PendingPuzzle)
+        {
+            PendingPuzzle = false;
+            NewPuzzle();
+        }
         else if (!string.IsNullOrEmpty(PendingRestoreCode))
         {
             var code = PendingRestoreCode;
@@ -719,6 +724,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void Dispatch(GameCommand command)
     {
         if (isReplayMode) return; // read-only playback: ignore stray interactive input
+        if (isPuzzle) { DispatchPuzzle(command); return; }   // route through PuzzleRuntime (auto-defends + verifies)
         // Networked match: block acting as the other seat (e.g. a stray click reaching a
         // handler before UI catches up) rather than auditing every call site individually.
         if (isNetworked && !string.IsNullOrEmpty(command.Seat) && command.Seat != localSeat) return;
@@ -8388,6 +8394,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             AddButton(footer, "Resolve Attack", ResolveCounterStep, true, false);
         }
 
+        if (isPuzzle) { DrawPuzzleActions(body); return; }
+
         if (state.DeckLook != null)
         {
             selectedId = null;
@@ -10329,6 +10337,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // they are the "play over this one" picks.
             if (state != null && state.PendingCharReplace != null && IsCharReplaceTarget(card))
                 AddUsableGlow(cardBody);
+
+            // Puzzle-mode HINT glow: a distinct gold outline on the card(s) a revealed hint points at,
+            // so it reads apart from the normal green "valid move" glow.
+            if (IsPuzzleHintGlow(card))
+                AddOutline(cardBody.gameObject, (Color)new Color32(255, 205, 92, 235), 3f);
         }
 
         if (faceUp && IsDonAttachTarget(seat, card))
