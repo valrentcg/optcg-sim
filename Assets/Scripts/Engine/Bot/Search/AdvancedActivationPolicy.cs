@@ -84,10 +84,11 @@ namespace OnePieceTcg.Engine.Bot.Search
                 // that move class through a value-gated, card-id-free path.
                 bool sacRecur = SacrificeRecurEnabled && IsSacrificeToRecur(def.Effect, def.Cost, card.Rested);
                 if (!BeneficialActivateMain(def.Effect) && !sacRecur) continue;
-                // Never sacrifice this live body to recur when the trash holds NO valid recur target — the
-                // "play from trash" whiffs and you've traded a Character for the ability's incidental draw
-                // (OP10-082 Kuzan into a trash whose only ≤5 {Blackbeard} is Kuzan itself, excluded).
-                if (sacRecur && !HasValidTrashRecurTarget(world, seat, def, card)) continue;
+                // General behaviour: never trash a LIVE body to recur when the trash holds NO valid recur target
+                // — the "play from trash" whiffs and you've traded an attacker for the ability's incidental draw
+                // (any sacrifice-recur card, e.g. OP10-082 Kuzan into a trash whose only in-clause body is itself,
+                // excluded). A rested (already-spent) body is exempt: sacrificing it for the draw costs nothing.
+                if (sacRecur && !card.Rested && !HasValidTrashRecurTarget(world, seat, def, card)) continue;
                 // A DON!! −N activation (e.g. Crocodile's DON!! −4 leader bounce) must clear its DON-return
                 // cost. For a no-recovery deck that returned DON!! is real tempo, so the removal must be worth
                 // it; for a re-ramp deck it is nearly free. Not marked attempted — a better target may appear.
