@@ -956,8 +956,21 @@ public partial class DeckBuilderManager : MonoBehaviour
         else { previewImage.sprite = null; previewImage.color = new Color(1f, 1f, 1f, 0.06f); RequestArt(previewImage, id); }
 
         if (previewName != null) previewName.text = rec.name ?? "";
+        PositionPreview();
         previewRoot.gameObject.SetActive(true);
         previewRoot.SetAsLastSibling();   // keep it above everything just drawn
+    }
+
+    // Dock the floating preview JUST LEFT of the right-side decklist panel (whose width differs by view),
+    // instead of on top of it — like the in-match Blocker-shield hover popup. Anchored to the canvas right
+    // edge so it tracks the decklist regardless of window size.
+    private void PositionPreview()
+    {
+        if (previewRoot == null) return;
+        float rightW = (view == View.Editor) ? 320f : 480f;   // matches the decklist panel width per view
+        const float prevW = 300f, margin = 14f;
+        Stretch(previewRoot, new Vector2(1f, 0.16f), new Vector2(1f, 0.84f),
+            new Vector2(-(rightW + margin + prevW), 0f), new Vector2(-(rightW + margin), 0f));
     }
 
     private void HideCardPreview()
@@ -2072,8 +2085,19 @@ public partial class DeckBuilderManager : MonoBehaviour
         badgeT.fontStyle = FontStyle.Bold;
         Stretch(badgeT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
+        // ── Format legality: Standard / Extra Regulation, each lit green (legal) or red (has cards illegal
+        //    for that format — banned, or Extra-only cards in a Standard deck). ──
+        float fmtY = badgeY - BADGE_H - 8f;
+        var fmtRow = Row("FmtRow", panel, 6f, TextAnchor.MiddleCenter);
+        fmtRow.anchorMin = fmtRow.anchorMax = new Vector2(0.5f, 0.5f);
+        fmtRow.pivot = new Vector2(0.5f, 1f);
+        fmtRow.sizeDelta = new Vector2(230f, 22f);
+        fmtRow.anchoredPosition = new Vector2(0f, fmtY);
+        AddFormatChip(fmtRow, "STANDARD", deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal);
+        AddFormatChip(fmtRow, "EXTRA REG", deck.Check(OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal);
+
         // ── EDIT + DELETE buttons (no Play — selecting a deck already locks it in) ─
-        float btnY = badgeY - BADGE_H - GAP;
+        float btnY = fmtY - 22f - GAP;
         const float ROW_W = 220f, DEL_W = 92f, ROW_GAP = 8f;
         float editW = ROW_W - DEL_W - ROW_GAP;
 
@@ -3018,18 +3042,15 @@ public partial class DeckBuilderManager : MonoBehaviour
             knownNoArt = haveEntry && cachedArt == null;
         }
 
-        // Section label, top-left.
-        var lbl = Text_("LeadLbl", leaderSlot, "LEADER", 9, Accent, TextAnchor.UpperLeft, monoFont);
-        lbl.fontStyle = FontStyle.Bold;
-        Stretch(lbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f),
-            new Vector2(14f, -22f), new Vector2(-14f, -6f));
+        // (No in-slot "LEADER" label — the section header above the slot already labels it; a second one
+        //  here just read as a duplicate.)
 
         // Card art region, centred near the top.
         var cardRegion = Panel("Card Region", leaderSlot, new Color(0, 0, 0, 0));
         cardRegion.anchorMin = cardRegion.anchorMax = new Vector2(0.5f, 1f);
         cardRegion.pivot = new Vector2(0.5f, 1f);
         cardRegion.sizeDelta = new Vector2(150f, 210f);
-        cardRegion.anchoredPosition = new Vector2(0f, -28f);
+        cardRegion.anchoredPosition = new Vector2(0f, -20f);
         cardRegion.GetComponent<Image>().raycastTarget = false;
         if (!knownNoArt)
         {
@@ -3055,31 +3076,36 @@ public partial class DeckBuilderManager : MonoBehaviour
 
         if (lead != null)
         {
-            // Chip row (TYPE / COLOR / LIFE / POWER), centred.
-            var chips = Row("LeadChips", leaderSlot, 5f, TextAnchor.MiddleCenter);
+            // Chip row (COLOR / LIFE / POWER / niche rule) — no "LEADER" chip (redundant with the header);
+            // dropping it also keeps the pills inside the panel instead of overflowing its sides.
+            var chips = Row("LeadChips", leaderSlot, 4f, TextAnchor.MiddleCenter);
             chips.anchorMin = new Vector2(0f, 1f); chips.anchorMax = new Vector2(1f, 1f);
             chips.pivot = new Vector2(0.5f, 1f);
             chips.sizeDelta = new Vector2(0f, 20f);
-            chips.anchoredPosition = new Vector2(0f, -290f);
-            AddPreviewChip(chips, "LEADER", true);
+            chips.anchoredPosition = new Vector2(0f, -282f);
             if (!string.IsNullOrEmpty(lead.color)) AddPreviewChip(chips, lead.color.ToUpper(), false);
             AddPreviewChip(chips, "LIFE " + lead.life, false);
             AddPreviewChip(chips, "POWER " + lead.power, false);
             AddNicheRuleChips(chips, editing.leaderId);
 
-            // Effect box.
+            // Effect box — SCROLLABLE (a viewport + scrollbar) so long leader text (Imu etc.) is fully
+            // readable instead of truncated.
             var effBox = Panel("LeadEffect", leaderSlot, LogBgDark);
             Stretch(effBox, new Vector2(0f, 1f), new Vector2(1f, 1f),
-                new Vector2(12f, -398f), new Vector2(-12f, -318f));
+                new Vector2(12f, -398f), new Vector2(-12f, -310f));
             RoundBig(effBox); AddBorder(effBox, MenuB, 1f);
-            effBox.GetComponent<Image>().raycastTarget = false;
-            var eff = Text_("LeadEffectText", effBox,
+            var effContent = MakeScroll(effBox);
+            var evlg = effContent.gameObject.AddComponent<VerticalLayoutGroup>();
+            evlg.childControlWidth = true; evlg.childControlHeight = true;
+            evlg.childForceExpandWidth = true; evlg.childForceExpandHeight = false;
+            evlg.padding = new RectOffset(8, 8, 6, 6);
+            var efit = effContent.gameObject.AddComponent<ContentSizeFitter>();
+            efit.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            var eff = Text_("LeadEffectText", effContent,
                 !string.IsNullOrEmpty(lead.effect) ? lead.effect : "No effect text.",
                 10, string.IsNullOrEmpty(lead.effect) ? Muted : Ink, TextAnchor.UpperLeft);
             eff.horizontalOverflow = HorizontalWrapMode.Wrap;
-            eff.verticalOverflow   = VerticalWrapMode.Truncate;
-            Stretch(eff.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f),
-                new Vector2(8f, 6f), new Vector2(-8f, -6f));
+            eff.verticalOverflow   = VerticalWrapMode.Overflow;
 
             var change = Text_("Change", leaderSlot, "tap to change ▸", 9, Accent, TextAnchor.LowerCenter, monoFont);
             Stretch(change.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
@@ -3101,6 +3127,23 @@ public partial class DeckBuilderManager : MonoBehaviour
     // Small pill used by the leader preview. Primary chips read as the accent
     // colour; secondary chips are faint with a hairline border. All chips are
     // non-raycast so they never block the leader slot's tap-to-change button.
+    // Standard / Extra Regulation legality chip: green when the deck is legal in that format, red when it
+    // holds a card that isn't (banned, or an Extra-only card in a Standard deck).
+    private void AddFormatChip(RectTransform parent, string label, bool legal)
+    {
+        var col = legal ? GoodGreen : RedAccent;
+        var chip = Panel(label + " FmtChip", parent, new Color(col.r, col.g, col.b, 0.16f));
+        float chipW = 20f + label.Length * 6.6f;
+        chip.sizeDelta = new Vector2(chipW, 20f);
+        SetPref(chip, new Vector2(chipW, 20f));
+        Round(chip);
+        chip.GetComponent<Image>().raycastTarget = false;
+        AddBorder(chip, col, 1f);
+        var t = Text_("t", chip, "● " + label, 9, col, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(4, 0), new Vector2(-4, 0));
+    }
+
     private void AddPreviewChip(RectTransform parent, string label, bool primary)
     {
         if (string.IsNullOrEmpty(label)) return;
@@ -3316,12 +3359,15 @@ public partial class DeckBuilderManager : MonoBehaviour
         // colour filter chips
         var colorRow = Row("Colors", panel, 6, TextAnchor.MiddleLeft);
         Stretch(colorRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -86f), new Vector2(-16f, -60f));
-        ChipToggle(colorRow, "ALL", "", filterColor == "", c => { filterColor = ""; RefreshGrid(); }, Muted);
+        // NOTE: filter TOGGLES call Render() (not RefreshGrid) so the chip row rebuilds and the pressed pill's
+        // active highlight actually reflects the new state — RefreshGrid only relays out the card grid, leaving
+        // the chips visually stale. (The search field stays on RefreshGrid so typing doesn't lose focus.)
+        ChipToggle(colorRow, "ALL", "", filterColor == "", c => { filterColor = ""; Render(); }, Muted);
         foreach (var col in new[] { "Red", "Green", "Blue", "Purple", "Black", "Yellow" })
         {
             var cc = col;
             ChipToggle(colorRow, col.ToUpper(), col, filterColor == col,
-                _ => { filterColor = filterColor == cc ? "" : cc; RefreshGrid(); },
+                _ => { filterColor = filterColor == cc ? "" : cc; Render(); },
                 ColorSwatch[col]);
         }
 
@@ -3332,7 +3378,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         {
             var v = val;
             ChipToggle(typeRow, lab, val, filterType == val && !pickingLeader,
-                _ => { if (!pickingLeader) { filterType = v; RefreshGrid(); } }, Accent2);
+                _ => { if (!pickingLeader) { filterType = v; Render(); } }, Accent2);
         }
         // LEADER type: browse leaders directly in the pool and click one to set it.
         ChipToggle(typeRow, "LEADER", "leader", pickingLeader, _ =>
@@ -3345,12 +3391,12 @@ public partial class DeckBuilderManager : MonoBehaviour
         // cost chips
         var costRow = Row("Costs", panel, 5, TextAnchor.MiddleLeft);
         Stretch(costRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -146f), new Vector2(-16f, -120f));
-        ChipToggle(costRow, "COST·ALL", "", filterCost == -1, _ => { filterCost = -1; RefreshGrid(); }, Muted);
+        ChipToggle(costRow, "COST·ALL", "", filterCost == -1, _ => { filterCost = -1; Render(); }, Muted);
         for (int c = 0; c <= 10; c++)
         {
             int cv = c;
             ChipToggle(costRow, c == 10 ? "10+" : c.ToString(), c.ToString(), filterCost == cv,
-                _ => { filterCost = filterCost == cv ? -1 : cv; RefreshGrid(); }, Accent2, 34f);
+                _ => { filterCost = filterCost == cv ? -1 : cv; Render(); }, Accent2, 34f);
         }
 
         // colour-lock + archetype-lock toggles (only show cards matching the leader's
@@ -3358,9 +3404,9 @@ public partial class DeckBuilderManager : MonoBehaviour
         var lockChip = Row("Lock", panel, 6, TextAnchor.MiddleLeft);
         Stretch(lockChip, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -176f), new Vector2(-16f, -150f));
         ChipToggle(lockChip, colorLock ? "◢ MATCH LEADER COLOURS: ON" : "◢ MATCH LEADER COLOURS: OFF", "",
-            colorLock, _ => { colorLock = !colorLock; RefreshGrid(); }, colorLock ? Accent : Muted, 280f);
+            colorLock, _ => { colorLock = !colorLock; Render(); }, colorLock ? Accent : Muted, 280f);
         ChipToggle(lockChip, archetypeLock ? "◢ MATCH LEADER ARCHETYPE: ON" : "◢ MATCH LEADER ARCHETYPE: OFF", "",
-            archetypeLock, _ => { archetypeLock = !archetypeLock; RefreshGrid(); }, archetypeLock ? Accent : Muted, 300f);
+            archetypeLock, _ => { archetypeLock = !archetypeLock; Render(); }, archetypeLock ? Accent : Muted, 300f);
 
         if (pickingLeader)
         {
@@ -3371,25 +3417,25 @@ public partial class DeckBuilderManager : MonoBehaviour
         // format-legality filter chips
         var fmtRow = Row("Format", panel, 6, TextAnchor.MiddleLeft);
         Stretch(fmtRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -206f), new Vector2(-16f, -180f));
-        ChipToggle(fmtRow, "FORMAT·ALL", "", filterFormat == "", _ => { filterFormat = ""; RefreshGrid(); }, Muted);
+        ChipToggle(fmtRow, "FORMAT·ALL", "", filterFormat == "", _ => { filterFormat = ""; Render(); }, Muted);
         foreach (var (lab, val, cch) in new[] {
             ("STANDARD", "std", GoodGreen), ("EXTRA", "extra", Accent2),
             ("EXTRA-ONLY", "extraonly", Gold), ("BANNED", "banned", RedAccent) })
         {
             var vv = val;
             ChipToggle(fmtRow, lab, val, filterFormat == val,
-                _ => { filterFormat = filterFormat == vv ? "" : vv; RefreshGrid(); }, cch, lab.Length * 7.5f + 20f);
+                _ => { filterFormat = filterFormat == vv ? "" : vv; Render(); }, cch, lab.Length * 7.5f + 20f);
         }
 
         // block-number filter chips
         var blockRow = Row("Block", panel, 5, TextAnchor.MiddleLeft);
         Stretch(blockRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -236f), new Vector2(-16f, -210f));
-        ChipToggle(blockRow, "BLOCK·ALL", "", filterBlock == "", _ => { filterBlock = ""; RefreshGrid(); }, Muted);
+        ChipToggle(blockRow, "BLOCK·ALL", "", filterBlock == "", _ => { filterBlock = ""; Render(); }, Muted);
         foreach (var b in new[] { "1", "2", "3", "4", "5" })
         {
             var bb = b;
             ChipToggle(blockRow, b, b, filterBlock == b,
-                _ => { filterBlock = filterBlock == bb ? "" : bb; RefreshGrid(); }, Accent2, 34f);
+                _ => { filterBlock = filterBlock == bb ? "" : bb; Render(); }, Accent2, 34f);
         }
 
         // grid scroll (top pushed down to make room for the format + block filter rows)
@@ -4445,6 +4491,13 @@ public partial class DeckBuilderManager : MonoBehaviour
 
             Color nameCol = items[i].Key == "Other" ? Muted : Ink;
             var nm = Text_("n", cell, items[i].Key, 11, nameCol, TextAnchor.MiddleLeft);
+            // Auto-shrink long archetype names ("The Seven Warlords of the Sea", …) so they fit inside their
+            // half-width cell instead of overflowing into the next column.
+            nm.horizontalOverflow = HorizontalWrapMode.Wrap;
+            nm.verticalOverflow = VerticalWrapMode.Truncate;
+            nm.resizeTextForBestFit = true;
+            nm.resizeTextMinSize = 7;
+            nm.resizeTextMaxSize = 11;
             Stretch(nm.rectTransform, Vector2.zero, Vector2.one, new Vector2(pad + 13f, 0f), new Vector2(-22f, 0f));
 
             var vv = Text_("v", cell, items[i].Value.ToString(), 10,
