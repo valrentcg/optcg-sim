@@ -56,6 +56,12 @@ namespace OnePieceTcg.Engine.Puzzles
         /// staying small enough that the solve stays snappy on Unity's slower Mono runtime.</summary>
         public LethalSolver.Options SolveOpts = new LethalSolver.Options { WorkBudget = 150_000 };
 
+        /// <summary>Budget for the post-move "is this still winnable?" re-solve. Smaller than SolveOpts so it
+        /// stays snappy on Mono after every move: proving a genuinely dead position NoLethal (few legal moves)
+        /// is cheap, and anything it can't resolve in this budget stays Unknown → the player gets the benefit of
+        /// the doubt (no false fail).</summary>
+        public LethalSolver.Options StuckCheckOpts = new LethalSolver.Options { WorkBudget = 70_000 };
+
         /// <summary>Begin from a live position. Returns false (and marks Failed) if it is NOT a valid lethal
         /// puzzle — i.e. the solver cannot prove a forced win for the attacker. A valid puzzle must start Win.</summary>
         public bool Start(GameState position, string attackerSeat)
@@ -200,15 +206,25 @@ namespace OnePieceTcg.Engine.Puzzles
                 Message = "Out of lethal — your turn ended.";
                 return;
             }
-            // Dead attempt: it is still the player's turn but their ONLY legal action is to end it — every
-            // attacker is spent and nothing left to play. That is an unambiguous fail (no lethal is reachable
-            // this turn), so engage the strike/answer-reveal system instead of leaving them to hit Restart with
-            // no feedback. This is NOT the same as re-solving after a wrong move: it fires only when the board
-            // itself offers no other move.
+            // Dead attempt detection while it is still the player's turn. Two paths:
+            //  (a) fast: their ONLY legal action is to end the turn (every attacker spent, nothing to play).
+            //  (b) general: RE-SOLVE and, only if the solver PROVES no forced lethal remains (NoLethal — not a
+            //      mere Unknown within budget), fail now. This covers the case the board can't self-detect: all
+            //      attackers are spent but the player still holds DON!! and a Character with no way to attack
+            //      this turn, so no line can win. It does NOT leak the answer — a still-winning position (even
+            //      after a sub-optimal move) returns Win and simply stays in progress with no tell.
             if (OnlyEndTurnLeft())
             {
                 Status = PuzzleStatus.Failed; StillWinning = false;
                 Message = "Out of moves — no lethal this turn.";
+                return;
+            }
+            var check = LethalSolver.Solve(_state, _attacker, StuckCheckOpts);
+            StillWinning = check.Outcome == LethalSolver.Lethal.Win;
+            if (check.Outcome == LethalSolver.Lethal.NoLethal)
+            {
+                Status = PuzzleStatus.Failed;
+                Message = "No lethal remaining — this line can't win.";
                 return;
             }
             Message = "Find the lethal line.";

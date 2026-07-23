@@ -8617,7 +8617,21 @@ namespace OnePieceTcg.Engine
 
         private static bool HasTiming(string text, string timing)
         {
-            return !string.IsNullOrWhiteSpace(text) && text.IndexOf("[" + timing + "]", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            string tag = "[" + timing + "]";
+            // A timing tag only counts when it TAGS a clause — i.e. it sits in a line's LEADING run of bracket
+            // tags ("[DON!! x1] [When Attacking] …" or "[On Play]/[When Attacking] …"). A tag that appears
+            // mid-sentence is a REFERENCE to the keyword, not a trigger, and must not fire the timing (EB03-001
+            // Vivi: "…up to 1 of your Characters without a [When Attacking] effect gains [Rush]…" was firing a
+            // bogus When-Attacking trigger on every swing).
+            foreach (var line in text.Split('\n'))
+            {
+                int idx = line.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
+                if (idx < 0) continue;
+                var lead = System.Text.RegularExpressions.Regex.Match(line, @"^\s*(\[[^\]]+\]\s*/?\s*)+");
+                if (lead.Success && idx < lead.Length) return true;
+            }
+            return false;
         }
 
         /// <summary>Outcome of the v2 operability probe (Tools/Sim EffectCoverageAudit).</summary>

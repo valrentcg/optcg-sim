@@ -41,6 +41,11 @@ namespace OnePieceTcg.Engine.Puzzles
             {
                 int s = seed;                                   // capture per-iteration for the closure
                 var meta = PuzzleGenerator.Build(s);            // title / teaches / difficulty / category
+                // The generated puzzles are honestly shallow, so the OLD easy/medium are dropped entirely and
+                // only the OLD hard/expert survive, relabelled DOWN two tiers (Hard->Easy, Expert->Medium). The
+                // genuinely hard/expert tiers are owned by the real-game HARVESTED puzzles (puzzleharvest), which
+                // carry the tight, resource-constrained, counter-aware lines the generator can't produce.
+                if (meta.Difficulty < 3) continue;
                 list.Add(new AuthoredPuzzle
                 {
                     Id = "gen-" + s,
@@ -48,7 +53,7 @@ namespace OnePieceTcg.Engine.Puzzles
                     Attacker = meta.AttackerSeat,
                     Category = meta.Category,
                     Teaches = meta.Teaches,
-                    Difficulty = meta.Difficulty,
+                    Difficulty = meta.Difficulty - 2,
                     Build = () => PuzzleGenerator.Build(s).State,
                 });
             }

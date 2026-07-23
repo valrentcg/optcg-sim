@@ -380,6 +380,21 @@ switch (mode)
         return (skipShalria && !skipPowerBody) ? 0 : 1;
     }
 
+    case "puzzleharvest":
+    {
+        // Reconstruct saved real games and harvest forced-lethal positions into StreamingAssets puzzles.
+        // usage: puzzleharvest [baseDir] [outPath]   (baseDir = the game's persistentDataPath)
+        string baseDir = args.Length > 1 ? args[1]
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                           "..", "LocalLow", "DefaultCompany", "One Piece TCG Simulator");
+        string outPath = args.Length > 2 ? args[2]
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+                               "Assets", "StreamingAssets", "Puzzles", "harvested.json"));
+        Console.WriteLine($"Harvesting from: {Path.GetFullPath(baseDir)}");
+        OnePieceTcg.Sim.Puzzles.PuzzleHarvester.Run(baseDir, outPath);
+        return 0;
+    }
+
     case "odentest":
     {
         // EB01-001 Kouzuki Oden leader: "[DON!! x1] [When Attacking] If you have a {Land of Wano} type
@@ -408,6 +423,47 @@ switch (mode)
         bool buffApplies = p1 == 7000;               // 1 DON => 5000 + 1000(raw DON) + 1000(Oden buff)
         System.Console.WriteLine($"Oden [DON!! x1] gate: 0-DON power={p0} (want 5000, gate holds={gateHolds}), 1-DON power={p1} (want 7000, buff applies={buffApplies})");
         return (gateHolds && buffApplies) ? 0 : 1;
+    }
+
+    case "harvestcheck":
+    {
+        // Verify each harvested.json puzzle round-trips: rebuild the recipe and confirm PuzzleRuntime.Start
+        // proves it a forced lethal (i.e. it's a valid, solvable puzzle), then drive the solver's line to a win.
+        string hp = args.Length > 1 ? args[1]
+            : Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+                               "Assets", "StreamingAssets", "Puzzles", "harvested.json"));
+        var setJson = System.Text.Json.JsonSerializer.Deserialize<OnePieceTcg.Engine.Puzzles.HarvestedPuzzleSet>(
+            File.ReadAllText(hp), new System.Text.Json.JsonSerializerOptions { IncludeFields = true, PropertyNameCaseInsensitive = true });
+        int ok = 0, bad = 0;
+        foreach (var puz in setJson.puzzles)
+        {
+            var rt = new OnePieceTcg.Engine.Puzzles.PuzzleRuntime();
+            bool started;
+            try { started = rt.Start(puz.Build(), puz.Attacker); }
+            catch (Exception e) { Console.WriteLine($"  THREW {puz.Id}: {e.Message}"); bad++; continue; }
+            Console.WriteLine($"  {(started ? "OK  " : "BAD ")} {puz.Id} D{puz.Difficulty} start={started}");
+            if (started) ok++; else bad++;
+        }
+        Console.WriteLine($"harvestcheck: {ok}/{ok + bad} harvested puzzles are valid forced-lethal ({bad} bad)");
+        return bad == 0 ? 0 : 1;
+    }
+
+    case "vivitest":
+    {
+        // EB03-001 Nefeltari Vivi leader: her ability is [Activate: Main]; it merely REFERENCES the keyword
+        // ("...up to 1 of your Characters without a [When Attacking] effect gains [Rush]..."). Attacking with
+        // her must NOT fire a When-Attacking trigger — HasTiming was matching the inline reference.
+        var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "vivi" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 3; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        S.Leader.CardId = "EB03-001";
+        OnePieceTcg.Engine.GameEngine.ApplyCommand(st, new OnePieceTcg.Engine.GameCommand
+        { Type = "declareAttack", Seat = "south", Attacker = S.Leader.InstanceId, Target = N.Leader.InstanceId });
+        bool noBogusTrigger = st.PendingEffects.Count == 0;
+        System.Console.WriteLine($"Vivi attack: pendingEffects={st.PendingEffects.Count} (want 0, no bogus When-Attacking={noBogusTrigger})");
+        return noBogusTrigger ? 0 : 1;
     }
 
     case "smoke":

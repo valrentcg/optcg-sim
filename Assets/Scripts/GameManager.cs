@@ -192,6 +192,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // south/localSeat pick; replay's own north-view flip is unaffected because sandbox and replay
     // are mutually exclusive modes.
     private string BottomSeat => isSandbox ? sandboxViewSeat
+        : isPuzzle ? puzzleAttacker           // the puzzle player always sits at the bottom
         : (isReplayMode && replayViewMode == "north") ? "north"
         : isNetworked ? localSeat
         : (povSeat ?? "south");   // povSeat: chosen perspective for a restored-from-code solo game
@@ -10689,7 +10690,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // Hotseat/Versus Self is unaffected (isNetworked is false there).
                 // At the end of the match we reveal the opponent's hand (RevealFinishedInfo, win or
                 // lose) — the local hand is already face-up, so this only flips the top one.
-                handFaceUp = RevealFinishedInfo() || !(top && (isNetworked || aiSeat == TopSeat));
+                // Puzzle mode hides the opponent's hand too: it's single-player, but you must find the lethal
+                // WITHOUT seeing their cards (the solver knows them; you don't).
+                handFaceUp = RevealFinishedInfo() || !(top && (isNetworked || aiSeat == TopSeat || isPuzzle));
             }
             AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top && !IsReplayRotated, count - 1 - i);
             holders[i] = holder;

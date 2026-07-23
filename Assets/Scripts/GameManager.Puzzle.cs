@@ -65,7 +65,11 @@ public partial class GameManager
     private List<AuthoredPuzzle> BuildShuffledPuzzleSet()
     {
         var rng = new System.Random();
-        return PuzzleLibrary.All().OrderBy(_ => rng.Next()).ToList();
+        // Generated puzzles (Easy/Medium after the relabel) + real-game HARVESTED puzzles (Hard/Expert),
+        // fully shuffled so "Next" lands on any difficulty.
+        var all = new List<AuthoredPuzzle>(PuzzleLibrary.All());
+        all.AddRange(HarvestedPuzzleStore.All());
+        return all.OrderBy(_ => rng.Next()).ToList();
     }
 
     private void LoadPuzzle(int idx)
