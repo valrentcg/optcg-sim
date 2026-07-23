@@ -454,6 +454,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             Render();
         }
 
+        // Windowed-resize watcher: once the window size settles (0.12s after the last change), rebuild the
+        // board so Screen.width/height-derived sizing refreshes. Never mid-drag (Render() would destroy the
+        // dragged object) — the CanvasScaler already scales the canvas proportionally every frame regardless.
+        if (Screen.width != _seenW || Screen.height != _seenH)
+        {
+            _seenW = Screen.width; _seenH = Screen.height;
+            _resizeSettleAt = Time.unscaledTime + 0.12f;
+        }
+        if (_resizeSettleAt > 0f && Time.unscaledTime >= _resizeSettleAt
+            && (_seenW != _renderedW || _seenH != _renderedH)
+            && !isDraggingHandCard && !isDraggingAttack && boardRoot != null)
+        {
+            _resizeSettleAt = 0f; _renderedW = _seenW; _renderedH = _seenH;
+            Render();
+        }
+
         if (coinFlipWaitingText != null)
         {
             int dots = (int)(Time.unscaledTime * 2f) % 4;
@@ -12390,6 +12406,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // then a single coalesced Render() picks them up (see Update).
     private readonly HashSet<string> _artPending = new HashSet<string>();
     private bool _artRefreshQueued;
+    // Windowed-resize watcher state (see Update): last-seen and last-rendered window size + settle timer.
+    private int _seenW, _seenH, _renderedW, _renderedH;
+    private float _resizeSettleAt;
 
     private async void KickCardSpriteLoad(string cardId)
     {

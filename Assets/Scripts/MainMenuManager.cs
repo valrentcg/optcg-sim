@@ -530,11 +530,8 @@ public partial class MainMenuManager : MonoBehaviour
         // Update clock every 30 seconds (no need for every-second polling)
         InvokeRepeating(nameof(UpdateClock), 30f, 30f);
         BootUpdateAndAssetsOnce();
-        // Restore the saved display mode (see SetDisplayMode) — applying the same mode
-        // repeatedly (e.g. every time the menu is rebuilt after leaving a match) is a no-op,
-        // so this is safe to call unconditionally rather than tracking "already applied".
-        bool fullscreen = PlayerPrefs.GetInt("optcg.display.fullscreen", Screen.fullScreenMode != FullScreenMode.Windowed ? 1 : 0) != 0;
-        Screen.fullScreenMode = fullscreen ? FullScreenMode.FullScreenWindow : FullScreenMode.Windowed;
+        // Restore the saved display mode + resolution (see DisplaySettings) — safe to call unconditionally.
+        DisplaySettings.RestoreSaved();
     }
 
     // Launch-time update check + CDN asset index, once per app run. On WebGL a
@@ -681,8 +678,32 @@ public partial class MainMenuManager : MonoBehaviour
 
     private readonly List<InputField> tabOrder = new List<InputField>();
 
+    // Windowed-resize watcher: rebuild the menu once the window size has settled (0.12s after the last
+    // change) so custom Screen.width/height-based layout refreshes. The CanvasScaler scales the canvas every
+    // frame on its own; this only refreshes the pixel-derived bits, and debouncing avoids rebuilding mid-drag.
+    private int _seenW, _seenH, _renderedW, _renderedH;
+    private float _resizeSettleAt;
+
+    private void WatchWindowResize()
+    {
+        if (Screen.width != _seenW || Screen.height != _seenH)
+        {
+            _seenW = Screen.width; _seenH = Screen.height;
+            _resizeSettleAt = Time.unscaledTime + 0.12f;
+        }
+        if (_resizeSettleAt > 0f && Time.unscaledTime >= _resizeSettleAt
+            && (_seenW != _renderedW || _seenH != _renderedH)
+            && menuRoot != null && !showingAccountGate)
+        {
+            _resizeSettleAt = 0f; _renderedW = _seenW; _renderedH = _seenH;
+            RenderMenu();
+        }
+    }
+
     private void Update()
     {
+        WatchWindowResize();
+
         // Update-splash progress arrives from Velopack's background threads; apply
         // it to the themed splash here, on the main thread (with a smoothed bar).
         ApplyUpdateSplashProgress();
@@ -3432,9 +3453,21 @@ public partial class MainMenuManager : MonoBehaviour
         displayHlg.childControlWidth = false;
         displayHlg.childControlHeight = false;
 
-        bool isFullscreen = Screen.fullScreenMode != FullScreenMode.Windowed;
+        bool isFullscreen = DisplaySettings.Fullscreen;
         AddDisplayModePill(displayRow, "FULLSCREEN", isFullscreen, () => SetDisplayMode(true));
         AddDisplayModePill(displayRow, "WINDOWED", !isFullscreen, () => SetDisplayMode(false));
+
+        // Resolution cycle pill (16:9 modes that fit the display). Click cycles to the next size.
+        var modes = DisplaySettings.Available();
+        int cur = DisplaySettings.CurrentIndex();
+        var (cw, ch) = modes[Mathf.Clamp(cur, 0, modes.Count - 1)];
+        AddDisplayModePill(displayRow, $"{cw}x{ch}", false, () =>
+        {
+            var list = DisplaySettings.Available();
+            int next = (DisplaySettings.CurrentIndex() + 1) % list.Count;
+            DisplaySettings.ApplyResolution(list[next].w, list[next].h);
+            RenderMenu();
+        });
     }
 
     // Applies immediately and persists across launches (PlayerPrefs, same "optcg.xxx"
@@ -3443,9 +3476,7 @@ public partial class MainMenuManager : MonoBehaviour
     // avoids a jarring display-mode switch flicker on entry.
     private void SetDisplayMode(bool fullscreen)
     {
-        Screen.fullScreenMode = fullscreen ? FullScreenMode.FullScreenWindow : FullScreenMode.Windowed;
-        PlayerPrefs.SetInt("optcg.display.fullscreen", fullscreen ? 1 : 0);
-        PlayerPrefs.Save();
+        DisplaySettings.ApplyMode(fullscreen);
         RenderMenu();
     }
 
