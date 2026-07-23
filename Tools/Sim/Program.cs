@@ -90,6 +90,26 @@ switch (mode)
     case "lethaltest":
         return OnePieceTcg.Sim.Puzzles.LethalSolverTest.Run();
 
+    case "kuzantest":
+    {
+        // OP10-082 Kuzan sacrifice-recur guard: don't trash a live body when the trash has no valid recur target.
+        var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "kuzan" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"];
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        OnePieceTcg.Engine.CardInstance In(string id, string zone) => new OnePieceTcg.Engine.CardInstance
+        { InstanceId = $"south-{id}-{System.Guid.NewGuid():N}".Substring(0, 20), CardId = id, Owner = "south", Zone = zone };
+        var kuzan = In("OP10-082", "character"); S.CharacterArea[0] = kuzan;
+        var kdef = OnePieceTcg.Engine.GameEngine.GetCard(kuzan);
+        S.Trash.Clear();
+        S.Trash.Add(In("OP10-082", "trash"));   // only another Kuzan -> excluded by "other than [Kuzan]"
+        bool block = !OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy.HasValidTrashRecurTarget(st, "south", kdef, kuzan);
+        S.Trash.Add(In("OP09-089", "trash"));   // Stronger: Blackbeard, cost 1 -> a real recur target
+        bool allow = OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy.HasValidTrashRecurTarget(st, "south", kdef, kuzan);
+        System.Console.WriteLine($"Kuzan recur guard: only-Kuzan -> block={block}  with-valid -> allow={allow}");
+        return (block && allow) ? 0 : 1;
+    }
+
     case "smoke":
     {
         var cfg = new ExperimentConfig

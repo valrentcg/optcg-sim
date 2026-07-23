@@ -82,8 +82,12 @@ namespace OnePieceTcg.Engine.Bot.Search
                 // self-sacrifice — but that also disabled the deliberate sacrifice-to-recur engine (trash a
                 // small body to deploy a BIGGER one from the trash: Yamato 6→8, Momonosuke 5→9, …). Restore
                 // that move class through a value-gated, card-id-free path.
-                if (!BeneficialActivateMain(def.Effect)
-                    && !(SacrificeRecurEnabled && IsSacrificeToRecur(def.Effect, def.Cost, card.Rested))) continue;
+                bool sacRecur = SacrificeRecurEnabled && IsSacrificeToRecur(def.Effect, def.Cost, card.Rested);
+                if (!BeneficialActivateMain(def.Effect) && !sacRecur) continue;
+                // Never sacrifice this live body to recur when the trash holds NO valid recur target — the
+                // "play from trash" whiffs and you've traded a Character for the ability's incidental draw
+                // (OP10-082 Kuzan into a trash whose only ≤5 {Blackbeard} is Kuzan itself, excluded).
+                if (sacRecur && !HasValidTrashRecurTarget(world, seat, def, card)) continue;
                 // A DON!! −N activation (e.g. Crocodile's DON!! −4 leader bounce) must clear its DON-return
                 // cost. For a no-recovery deck that returned DON!! is real tempo, so the removal must be worth
                 // it; for a re-ramp deck it is nearly free. Not marked attempted — a better target may appear.
@@ -154,6 +158,40 @@ namespace OnePieceTcg.Engine.Bot.Search
             int recurCost = RecurTargetCost(e);
             if (recurCost >= 0) return recurCost >= ownCost;   // deploy a body at least as big as the one trashed
             return cardRested;                                  // no printed cost → only sacrifice an already-spent body
+        }
+
+        /// <summary>True iff the sacrifice-recur ability actually has a VALID body to bring back from the trash
+        /// right now: a Character matching the recur clause's {type}, cost cap, and "other than [Name]"
+        /// exclusion. Without this the bot fires OP10-082 Kuzan ("trash this: Draw 1. Then play up to 1
+        /// {Blackbeard} ≤5 other than [Kuzan] from trash") when the only ≤5 {Blackbeard} in the trash is Kuzan
+        /// itself — trashing a live 5-cost body for nothing but the incidental draw. Text-driven, card-id-free.</summary>
+        public static bool HasValidTrashRecurTarget(GameState world, string seat, CardDef def, CardInstance source)
+        {
+            if (def?.Effect == null || !world.Players.TryGetValue(seat, out var p)) return true;
+            string e = def.Effect;
+            int playIdx = e.IndexOf("play up to", StringComparison.OrdinalIgnoreCase);
+            if (playIdx < 0) playIdx = e.IndexOf("play 1", StringComparison.OrdinalIgnoreCase);
+            if (playIdx < 0) playIdx = e.IndexOf("play a ", StringComparison.OrdinalIgnoreCase);
+            string recur = playIdx >= 0 ? e.Substring(playIdx) : e;
+
+            var featM = System.Text.RegularExpressions.Regex.Match(recur, @"\{([^}]+)\}");
+            string feature = featM.Success ? featM.Groups[1].Value.Trim() : null;
+            var capM = System.Text.RegularExpressions.Regex.Match(recur, @"cost of (\d+) or less", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            int costCap = capM.Success ? int.Parse(capM.Groups[1].Value) : -1;
+            var exM = System.Text.RegularExpressions.Regex.Match(recur, @"other than \[([^\]]+)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            string exclude = exM.Success ? exM.Groups[1].Value.Trim() : null;
+
+            foreach (var c in p.Trash)
+            {
+                if (c == null || (source != null && c.InstanceId == source.InstanceId)) continue;
+                var d = GameEngine.GetCard(c);
+                if (d == null || d.Type != "character") continue;
+                if (!string.IsNullOrEmpty(feature) && !d.HasFeature(feature)) continue;
+                if (costCap >= 0 && d.Cost > costCap) continue;
+                if (!string.IsNullOrEmpty(exclude) && GameEngine.NameMatches(world, c, exclude)) continue;
+                return true;   // a real recur target exists
+            }
+            return false;
         }
 
         // The cost of the body played FROM TRASH: the first "cost of N" / "cost N" AFTER the "play" verb, so a
@@ -346,6 +384,9 @@ namespace OnePieceTcg.Engine.Bot.Search
             return e.Contains("draw ") || e.Contains("k.o.") || e.Contains("set up to") || e.Contains("rest up to")
                 || e.Contains("play up to") || e.Contains("add up to") || e.Contains("return up to")
                 || e.Contains("gains +") || e.Contains("look at")
+                // Denial: "negate the effect of up to 1 of your opponent's Leader/Character" (OP09-093 Teach —
+                // and it's TURN-LIMITED to the turn played, so failing to consider it loses the ability outright).
+                || e.Contains("negate the effect")
                 // ST01-001 Luffy / ST01-007 Nami: turn rested DON!! into an extra attacker buff.
                 || (e.Contains("give") && e.Contains("rested don!!"));
         }
