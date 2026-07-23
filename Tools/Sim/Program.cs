@@ -489,6 +489,9 @@ switch (mode)
             var ext = OnePieceTcg.Engine.FormatLegality.CheckDeck(ids, OnePieceTcg.Engine.GameFormat.ExtraRegulation);
             System.Console.WriteLine($"{kv.Key,-10} leader={def.Leader}  Standard={(std.Legal ? "LEGAL " : "ILLEGAL")}  Extra={(ext.Legal ? "LEGAL" : "ILLEGAL")}   {(std.Legal ? "" : std.Reasons.FirstOrDefault())}");
         }
+        System.Console.WriteLine("--- spot checks (block derivation + overrides) ---");
+        foreach (var cid in new[] { "OP05-082", "OP02-068", "OP01-001", "ST01-002", "OP01-016", "OP13-083", "OP09-001", "P-091" })
+            System.Console.WriteLine($"  {cid,-10} block={OnePieceTcg.Engine.FormatLegality.BlockOf(cid),-2} StandardLegal={OnePieceTcg.Engine.FormatLegality.IsCardLegal(cid, OnePieceTcg.Engine.GameFormat.Standard)}");
         return 0;
     }
 

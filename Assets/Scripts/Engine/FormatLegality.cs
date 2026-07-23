@@ -27,6 +27,51 @@ namespace OnePieceTcg.Engine
         public const string StandardBlocksLabel = "Blocks 2–5";           // what Standard currently allows
         public const string RotatedBlocksLabel = "Block 1 (OP01–OP04, ST01–ST09)";
 
+        // ── Official block-number OVERRIDES (en.onepiece-cardgame.com/rules/blockicon-card/). Block-1 cards
+        //    that were REPRINTED in a later block (so they stay Standard-legal), and "X" = Manga Rare / Super
+        //    Parallel Rare that never rotate. These win over the set-derived block below. Keep in sync with the
+        //    official page when Bandai updates it. ──
+        public static readonly Dictionary<string, string> BlockOverrides = new Dictionary<string, string>
+        {
+            // Block X — never rotates (Manga Rare / Super Parallel Rare)
+            ["EB01-006"]="X", ["EB02-061"]="X", ["EB03-061"]="X", ["EB04-044"]="X",
+            ["OP01-016"]="X", ["OP01-120"]="X", ["OP02-013"]="X", ["OP03-122"]="X", ["OP04-083"]="X",
+            ["OP05-069"]="X", ["OP05-074"]="X", ["OP05-119"]="X", ["OP06-118"]="X", ["OP06-119"]="X",
+            ["OP07-051"]="X", ["OP08-118"]="X", ["OP09-004"]="X", ["OP09-051"]="X", ["OP09-093"]="X",
+            ["OP09-118"]="X", ["OP09-119"]="X", ["OP10-119"]="X", ["OP11-118"]="X", ["OP12-118"]="X",
+            ["OP13-118"]="X", ["OP13-119"]="X", ["OP13-120"]="X", ["OP14-119"]="X", ["OP15-118"]="X",
+            ["OP16-063"]="X", ["OP16-065"]="X", ["OP16-073"]="X",
+            // Block 4 — block-1 cards reprinted into Block 4 (legal Apr 2026 – Mar 2029)
+            ["OP01-039"]="4", ["OP01-055"]="4", ["OP02-005"]="4", ["OP02-068"]="4", ["OP03-008"]="4",
+            ["OP03-044"]="4", ["OP03-048"]="4", ["OP03-072"]="4", ["OP03-097"]="4", ["OP04-016"]="4",
+            ["OP04-077"]="4", ["OP04-096"]="4", ["ST01-011"]="4", ["ST02-007"]="4", ["ST06-008"]="4",
+        };
+
+        private static readonly Regex SetRx = new Regex(@"^([A-Za-z]+)(\d+)-", RegexOptions.Compiled);
+
+        // The card's regulation block, derived AUTHORITATIVELY: an official override, else the card's SET.
+        // The scraped per-card `block` field is NOT used — it's unreliable (dozens of OP05 = Block 2 cards were
+        // mislabelled block 1). Set membership is the real rotation signal.
+        //   Block 1: OP01–OP04, ST01–ST09     Block 2: OP05–OP08, EB01, ST10–ST14
+        //   Block 3: OP09–OP12, ST15–ST20     Block 4: OP13–OP16, ST21+, EB02+   (P-/PRB/unknown → legal)
+        public static string BlockOf(string cardId)
+        {
+            string id = BaseId(cardId);
+            if (BlockOverrides.TryGetValue(id, out var ov)) return ov;
+            var m = SetRx.Match(id);
+            if (!m.Success) return "0";   // promos (P-###), unknown → not Block 1 → legal
+            string p = m.Groups[1].Value.ToUpperInvariant();
+            if (!int.TryParse(m.Groups[2].Value, out int n)) return "0";
+            switch (p)
+            {
+                case "OP": return n <= 4 ? "1" : n <= 8 ? "2" : n <= 12 ? "3" : "4";
+                case "ST": return n <= 9 ? "1" : n <= 14 ? "2" : n <= 20 ? "3" : "4";
+                case "EB": return n <= 1 ? "2" : "4";
+                case "PRB": return "4";   // parallel/prize boosters are 2026 products
+                default:   return "0";    // unknown prefix → legal
+            }
+        }
+
         // ── Banned cards (same list in Standard and Extra Regulation). Effective April 10, 2026. ──
         public static readonly Dictionary<string, string> BannedCards = new Dictionary<string, string>
         {
@@ -54,11 +99,7 @@ namespace OnePieceTcg.Engine
         public static bool IsRestricted(string cardId) => RestrictedCards.ContainsKey(BaseId(cardId));
 
         /// <summary>True if the card's block is still in the Standard rotation (not rotated out).</summary>
-        public static bool InStandardPool(string cardId)
-        {
-            var def = CardData.GetCard(BaseId(cardId));
-            return !RotatedOutBlocks.Contains(def?.Block ?? "");
-        }
+        public static bool InStandardPool(string cardId) => !RotatedOutBlocks.Contains(BlockOf(cardId));
 
         public static CardLegality Legality(string cardId)
         {
