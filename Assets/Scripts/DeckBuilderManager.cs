@@ -1537,9 +1537,9 @@ public partial class DeckBuilderManager : MonoBehaviour
     private void BuildStarterLeaderCard(RectTransform panel, DeckDef def)
     {
         const float CARD_W = 300f, CARD_H = 418f, CONTENT_W = 300f;
-        const float HDR_H = 30f, NAME_H = 28f, CHIP_H = 20f, BADGE_H = 26f, BTN_H = 40f;
+        const float HDR_H = 30f, NAME_H = 28f, CHIP_H = 20f, BADGE_H = 26f, FMT_H = 22f, BTN_H = 40f;
         const float GAP = 14f;
-        float totalH = HDR_H + 10f + CARD_H + GAP + NAME_H + 6f + CHIP_H + 16f + BADGE_H + GAP + BTN_H;
+        float totalH = HDR_H + 10f + CARD_H + GAP + NAME_H + 6f + CHIP_H + 16f + BADGE_H + 8f + FMT_H + GAP + BTN_H;
         float startY = totalH / 2f;
 
         if (def == null)
@@ -1652,12 +1652,23 @@ public partial class DeckBuilderManager : MonoBehaviour
         badgeT.fontStyle = FontStyle.Bold;
         Stretch(badgeT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
+        // ── Format legality: Standard / Extra Regulation (green = legal in that format, red = has cards that
+        //    aren't). Starter decks are all current, so these are typically both green. ──
+        float fmtY = badgeY - BADGE_H - 8f;
+        var fmtRow = Row("FmtRow", panel, 6f, TextAnchor.MiddleCenter);
+        fmtRow.anchorMin = fmtRow.anchorMax = new Vector2(0.5f, 0.5f);
+        fmtRow.pivot = new Vector2(0.5f, 1f);
+        fmtRow.sizeDelta = new Vector2(230f, FMT_H);
+        fmtRow.anchoredPosition = new Vector2(0f, fmtY);
+        AddFormatChip(fmtRow, "STANDARD", deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal);
+        AddFormatChip(fmtRow, "EXTRA REG", deck.Check(OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal);
+
         // ── Primary action: in picker mode (Solo/PvP deck selection) this deck
         // can be used directly - copy it into DeckStore (so match setup can
         // resolve it the same way as any owned deck) and hand it straight back
         // to the picker. Outside picker mode it's just COPY TO MY DECKS, since
         // starter decks aren't user-owned data and can't be played from here. ──
-        float btnY = badgeY - BADGE_H - GAP;
+        float btnY = fmtY - FMT_H - GAP;
         // In picker mode nothing is saved, so the roster limit doesn't apply.
         bool canAdd = pickerActive || DeckStore.CanAddNew();
         var copyBtn = Panel("Copy", panel, canAdd ? (Color)Accent : (Color)new Color32(40, 60, 78, 220));
@@ -1955,10 +1966,10 @@ public partial class DeckBuilderManager : MonoBehaviour
     private void BuildSelectLeaderCard(RectTransform panel, DeckData deck)
     {
         const float CARD_W = 300f, CARD_H = 418f, CONTENT_W = 300f;
-        const float HDR_H = 30f, NAME_H = 28f, CHIP_H = 20f, BADGE_H = 26f, BTN_H = 40f;
+        const float HDR_H = 30f, NAME_H = 28f, CHIP_H = 20f, BADGE_H = 26f, FMT_H = 22f, BTN_H = 40f;
         const float GAP = 14f;
-        // Stack: header + card + caption(name + chips) + badge + edit button, centred.
-        float totalH = HDR_H + 10f + CARD_H + GAP + NAME_H + 6f + CHIP_H + 16f + BADGE_H + GAP + BTN_H;
+        // Stack: header + card + caption(name + chips) + badge + format row + edit button, centred.
+        float totalH = HDR_H + 10f + CARD_H + GAP + NAME_H + 6f + CHIP_H + 16f + BADGE_H + 8f + FMT_H + GAP + BTN_H;
         float startY = totalH / 2f;
 
         if (deck == null)

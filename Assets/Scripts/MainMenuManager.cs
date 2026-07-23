@@ -6407,6 +6407,11 @@ public partial class MainMenuManager : MonoBehaviour
         ShareLobbyDeck();
         MatchNetworkSync.SendPeerName(
             AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName);
+        // Host: push the lobby rules (format/forgiveness/timing) the instant a peer connects, so the GUEST has
+        // the correct format BEFORE it opens the deck picker — otherwise the guest greys decks against its
+        // default format, not the host's (an Extra lobby wrongly hid Standard-illegal decks). No-ops on the
+        // guest (HostBroadcastLobbyState self-guards to the custom-lobby host).
+        HostBroadcastLobbyState();
         if (rankedQueueActive) TryHostLaunch();
         RenderMenu();
     }
