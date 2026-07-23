@@ -1104,6 +1104,53 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.20", "Puzzles mode, display options, and bot judgment fixes", "Jul 23, 2026", new (string, string[])[]
+        {
+            ("New: Puzzles (Solo Play)", new[]
+            {
+                "A new Puzzles tab under Solo Play: 100 hand-crafted lethal puzzles, from easy warm-ups to really hard, each a single board with a guaranteed winning line this turn — find it.",
+                "Every puzzle needs a real decision — spread your DON, clear a Blocker, play around counters, or land a Double Attack / Rush finisher. You can't just swing and win.",
+                "Stuck? Three graduated hints, from a nudge to the exact move. The opponent defends optimally right to the end, so there's one clean solution.",
+                "Puzzles are shuffled and span every colour and leader, so you won't see the same two twice.",
+            }),
+            ("New: Display options", new[]
+            {
+                "Pick your resolution and toggle Fullscreen / Windowed in Settings.",
+                "Windowed mode is now freely resizable — drag the window to any size and the UI scales to fit.",
+            }),
+            ("Smarter Advanced bot", new[]
+            {
+                "Won't rest an attacker to remove a Character that isn't actually a threat (a spent, do-nothing body).",
+                "Won't trash a live attacker to \"play from trash\" when there's nothing valid to bring back.",
+                "Now considers negate effects and sacrifice-to-recur plays it used to ignore.",
+            }),
+            ("Bug reports", new[]
+            {
+                "Reports now capture the full decks in play, so custom-deck issues can be reproduced exactly.",
+            }),
+        }),
+        ("v1.0.19", "Five Elders deck, connectivity fixes, and in-game bug reports", "Jul 23, 2026", new (string, string[])[]
+        {
+            ("New: Imu / Five Elders deck", new[]
+            {
+                "The Five Elders (OP13-082) deck now works end to end — pay the cost, trash your board, and play back up to five different-named Five Elders from your trash (unique names enforced).",
+                "St. Shepherd Ju Peter's aura (base power 7000 with a full trash), St. Marcus Mars, and The Empty Throne now resolve correctly, including when a Character is played over a full board.",
+                "Search and trash-selection screens scale to fit the window instead of overflowing off the bottom.",
+            }),
+            ("New: Report a Bug", new[]
+            {
+                "Right-click any card in a match to report a bug — it captures the exact situation so issues can be tracked and fixed faster.",
+            }),
+            ("Connectivity & account", new[]
+            {
+                "Several lobby / matchmaking connectivity fixes, including a timeout and a Cancel button on the \"Connecting…\" screen.",
+                "Password recovery now works end to end.",
+            }),
+            ("Card fixes", new[]
+            {
+                "A large card-effect audit pass fixing dozens of interactions that were silently mis-resolving.",
+            }),
+        }),
         ("v1.0.18", "Smarter bots + a smooth difficulty curve", "Jul 19, 2026", new (string, string[])[]
         {
             ("Difficulty curve", new[]
