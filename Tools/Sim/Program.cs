@@ -380,6 +380,36 @@ switch (mode)
         return (skipShalria && !skipPowerBody) ? 0 : 1;
     }
 
+    case "odentest":
+    {
+        // EB01-001 Kouzuki Oden leader: "[DON!! x1] [When Attacking] If you have a {Land of Wano} type
+        // Character with a cost of 5 or more, this Leader gains +1000 power until the start of your next turn."
+        // Bug report: leader got +1000 with NO DON attached — ExtractTimedClause dropped the leading [DON!! x1]
+        // gate. Verify: 0 DON => no buff (power 5000); 1 DON => buff applies (5000 + 1000 raw DON + 1000 buff).
+        int PowerAfterAttack(int donOnLeader)
+        {
+            var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "oden" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            OnePieceTcg.Engine.CardInstance In(string id, string owner, string zone, bool rested = false) => new OnePieceTcg.Engine.CardInstance
+            { InstanceId = $"{owner}-{id}-{System.Guid.NewGuid():N}".Substring(0, 18), CardId = id, Owner = owner, Zone = zone, Rested = rested };
+            S.TurnsStarted = 3; N.TurnsStarted = 2;             // past the no-battle-on-first-turn rule
+            S.Leader.CardId = "EB01-001";                       // Oden leader
+            S.CharacterArea[0] = In("EB01-007", "south", "character");   // Yamato: {Land of Wano}, cost 5 (condition met)
+            for (int i = 0; i < donOnLeader; i++) S.Leader.AttachedDonIds.Add("D" + i);   // DON!! attached to the leader
+            OnePieceTcg.Engine.GameEngine.ApplyCommand(st, new OnePieceTcg.Engine.GameCommand
+            { Type = "declareAttack", Seat = "south", Attacker = S.Leader.InstanceId, Target = N.Leader.InstanceId });
+            return OnePieceTcg.Engine.GameEngine.GetPower(st, S.Leader);
+        }
+        int p0 = PowerAfterAttack(0);
+        int p1 = PowerAfterAttack(1);
+        bool gateHolds = p0 == 5000;                 // 0 DON => gate blocks the buff
+        bool buffApplies = p1 == 7000;               // 1 DON => 5000 + 1000(raw DON) + 1000(Oden buff)
+        System.Console.WriteLine($"Oden [DON!! x1] gate: 0-DON power={p0} (want 5000, gate holds={gateHolds}), 1-DON power={p1} (want 7000, buff applies={buffApplies})");
+        return (gateHolds && buffApplies) ? 0 : 1;
+    }
+
     case "smoke":
     {
         var cfg = new ExperimentConfig

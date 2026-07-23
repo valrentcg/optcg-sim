@@ -1871,7 +1871,15 @@ namespace OnePieceTcg.Engine
                 // clause and must be dropped, else its wording (e.g. a static "gains [Blocker]") leaks
                 // into this clause's resolver and hijacks it.
                 int tagIdx = lines[i].IndexOf(tag, StringComparison.OrdinalIgnoreCase);
-                string head = (tagIdx > 0 ? lines[i].Substring(tagIdx) : lines[i]).Trim();
+                // Keep any leading bracket tags that are CONTIGUOUS with the timing tag ("[DON!! x1] [Once Per
+                // Turn] [When Attacking] …") — they are THIS clause's activation gate (the DON!! threshold, the
+                // once-per-turn flag), not a separate clause, and dropping them silently bypassed the gate (Oden
+                // EB01-001's leader buff, and every "[DON!! xN] [On Block]/[End of Your Turn]" card, fired with 0
+                // DON attached). Only drop text before the tag when a NON-tag clause (a merged static "gains
+                // [Blocker]." etc.) precedes it. The clause resolver strips these leading tags before matching.
+                var lead = System.Text.RegularExpressions.Regex.Match(lines[i], @"^\s*(\[[^\]]+\]\s*/?\s*)+");
+                bool tagInLeadRun = lead.Success && tagIdx >= 0 && tagIdx < lead.Length;
+                string head = ((tagIdx > 0 && !tagInLeadRun) ? lines[i].Substring(tagIdx) : lines[i]).Trim();
                 // Include following bullet lines ("Choose one:" / "Apply each …" blocks list
                 // their options on subsequent lines starting with •, - or ‐).
                 var sb = new System.Text.StringBuilder(head);
