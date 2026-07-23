@@ -3050,13 +3050,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         panel.SetAsLastSibling();
 
         // Strike pips (● ● ● ) so the count reads at a glance.
-        string pips = string.Concat(Enumerable.Repeat("● ", Math.Min(puzzleStrikes, PuzzleMaxStrikes)))
-                    + string.Concat(Enumerable.Repeat("○ ", Math.Max(0, PuzzleMaxStrikes - puzzleStrikes)));
+        string pips = string.Concat(Enumerable.Repeat("● ", Mathf.Min(puzzleStrikes, PuzzleMaxStrikes)))
+                    + string.Concat(Enumerable.Repeat("○ ", Mathf.Max(0, PuzzleMaxStrikes - puzzleStrikes)));
         string title = struckOut ? "STRUCK OUT" : "NO LETHAL THIS TIME";
         var label = TextObject("Puzzle Fail Text", panel, title, struckOut ? 24 : 26, accent, TextAnchor.UpperCenter, titleFont);
         label.fontStyle = FontStyle.Bold;
         Stretch(label.rectTransform, new Vector2(0.04f, 0.87f), new Vector2(0.96f, 0.97f), Vector2.zero, Vector2.zero);
-        var pipText = TextObject("Strike Pips", panel, $"Strike {Math.Min(puzzleStrikes, PuzzleMaxStrikes)} / {PuzzleMaxStrikes}   {pips.Trim()}",
+        var pipText = TextObject("Strike Pips", panel, $"Strike {Mathf.Min(puzzleStrikes, PuzzleMaxStrikes)} / {PuzzleMaxStrikes}   {pips.Trim()}",
             13, accent, TextAnchor.UpperCenter, monoFont);
         Stretch(pipText.rectTransform, new Vector2(0.04f, 0.80f), new Vector2(0.96f, 0.87f), Vector2.zero, Vector2.zero);
 
