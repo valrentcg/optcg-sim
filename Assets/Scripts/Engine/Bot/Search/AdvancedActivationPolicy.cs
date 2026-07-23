@@ -89,6 +89,9 @@ namespace OnePieceTcg.Engine.Bot.Search
                 // (any sacrifice-recur card, e.g. OP10-082 Kuzan into a trash whose only in-clause body is itself,
                 // excluded). A rested (already-spent) body is exempt: sacrificing it for the draw costs nothing.
                 if (sacRecur && !card.Rested && !HasValidTrashRecurTarget(world, seat, def, card)) continue;
+                // Don't rest a live attacker to remove a target that isn't a live threat — a losing trade
+                // (OP09-090 Doc Q resting to K.O. a spent 0-power body). General over every rest-cost removal.
+                if (RestCostRemovalHasNoLiveTarget(world, seat, def)) continue;
                 // A DON!! −N activation (e.g. Crocodile's DON!! −4 leader bounce) must clear its DON-return
                 // cost. For a no-recovery deck that returned DON!! is real tempo, so the removal must be worth
                 // it; for a re-ramp deck it is nearly free. Not marked attempted — a better target may appear.
@@ -193,6 +196,67 @@ namespace OnePieceTcg.Engine.Bot.Search
                 return true;   // a real recur target exists
             }
             return false;
+        }
+
+        /// <summary>True when an [Activate: Main] ability's COST is resting this Character (giving up an
+        /// attacker) and its PAYOFF removes an opponent Character — but NONE it can legally hit actually POSES A
+        /// THREAT. Forfeiting an attacker to delete a body that does nothing is a losing trade (OP09-090 Doc Q
+        /// resting to K.O. a 0-power Saint Shalria whose only ability was a spent [On Play] — note it was
+        /// UNRESTED, so "live/rested" is the wrong test; the test is whether the body threatens the board at all).
+        /// Text-driven and card-id-free — governs EVERY "rest this Character: K.O./rest/bounce an opponent
+        /// Character" card. A rested source can't pay a self-rest cost, so this only fires when a real attacker
+        /// would be spent.</summary>
+        public static bool RestCostRemovalHasNoLiveTarget(GameState world, string seat, CardDef def)
+        {
+            if (def?.Effect == null || !world.Players.ContainsKey(seat)) return false;
+            string clause = string.Join("\n", def.Effect.Split('\n')
+                .Where(l => l.IndexOf("[Activate: Main]", StringComparison.OrdinalIgnoreCase) >= 0));
+            if (clause.Length == 0) return false;
+            string low = clause.ToLowerInvariant();
+            if (!low.Contains("rest this character")) return false;                    // cost = rest an own attacker
+            if (low.IndexOf("opponent", StringComparison.Ordinal) < 0) return false;   // payoff hits the opponent
+            if (RemovalModel.Classify(clause) == RemovalKind.None) return false;       // not a removal payoff
+            int costCap = Cap(low, @"cost of (\d+) or less");
+            int powCap = Cap(low, @"(\d+) power or less");
+            var opp = world.Players[GameEngine.OtherSeat(seat)];
+            foreach (var c in opp.CharacterArea)
+            {
+                if (c == null) continue;
+                if (costCap >= 0 && GameEngine.GetCost(world, c) > costCap) continue;
+                if (powCap >= 0 && GameEngine.GetPower(world, c) > powCap) continue;
+                if (PosesBoardThreat(world, c)) return false;                          // a worthwhile target exists
+            }
+            return true;   // rest-cost removal with no threatening target -> skip; keep the attacker
+        }
+
+        /// <summary>Does this board Character threaten anything at all, so that spending a resource to remove it
+        /// is worthwhile? A Character with real power (can attack/trade), a Blocker (can wall), or any ONGOING /
+        /// repeatable ability threatens the board. A 0-power body whose only ability is a spent, reactive
+        /// [On Play] / [On K.O.] / [Trigger] / [Counter] (or a vanilla body) does not — removing it gains almost
+        /// nothing. Rested-status is irrelevant: a rested body with power will refresh and attack next turn.</summary>
+        public static bool PosesBoardThreat(GameState state, CardInstance card)
+        {
+            if (card == null) return false;
+            if (GameEngine.HasBlocker(state, card)) return true;      // can wall
+            if (GameEngine.GetPower(state, card) > 0) return true;    // has power -> can attack/trade (now or next turn)
+            var d = GameEngine.GetCard(card);
+            string e = d?.Effect ?? "";
+            if (e.Length == 0) return false;                          // vanilla 0-power body
+            // Any ONGOING/repeatable ability makes a 0-power body still matter.
+            string[] ongoing = { "[Activate: Main]", "[Your Turn]", "[Opponent's Turn]", "[When Attacking]",
+                "[On Your Opponent's Attack]", "[On Block]", "[DON!! x", "[End of Your Turn]", "[Once Per Turn]" };
+            foreach (var tag in ongoing)
+                if (e.IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            // A continuous static ability (aura) prints NO timing tag on its leading line — treat that as ongoing.
+            var first = e.Split('\n')[0].TrimStart();
+            if (first.Length > 0 && !first.StartsWith("[")) return true;
+            return false;   // only spent/reactive [On Play]/[On K.O.]/[Trigger]/[Counter] -> no board threat
+        }
+
+        private static int Cap(string lowered, string pattern)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(lowered, pattern);
+            return m.Success ? int.Parse(m.Groups[1].Value) : -1;
         }
 
         // The cost of the body played FROM TRASH: the first "cost of N" / "cost N" AFTER the "play" verb, so a
