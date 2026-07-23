@@ -205,6 +205,39 @@ switch (mode)
         return all.Count >= 100 ? 0 : 2;
     }
 
+    case "mate2test":
+    {
+        // Controlled "mate in 2": I can't win THIS turn (only my Leader can attack a 1-Life opponent = 1 hit,
+        // not lethal), but I can play a finisher now (summoning-sick) and next turn swing Leader + finisher for
+        // lethal. The opponent has no board, an empty hand, and a deck stacked with harmless counter-0 non-
+        // Blockers, so nothing they draw/play can stop it.
+        var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "mate2" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 4; N.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        S.Hand.Clear(); N.Hand.Clear(); S.CostArea.Clear(); N.CostArea.Clear(); S.Life.Clear(); N.Life.Clear();
+        OnePieceTcg.Engine.CardInstance In(string id, string owner, string zone) => new OnePieceTcg.Engine.CardInstance
+        { InstanceId = $"{owner}-{id}-{System.Guid.NewGuid():N}".Substring(0, 22), CardId = id, Owner = owner, Zone = zone, Rested = false, PlayedOnTurn = 0 };
+        S.Leader.CardId = "ST01-001"; S.Leader.Rested = false; S.Leader.PlayedOnTurn = 0; S.Leader.AttachedDonIds.Clear();
+        N.Leader.CardId = "ST01-001"; N.Leader.Rested = false; N.Leader.PlayedOnTurn = 0; N.Leader.AttachedDonIds.Clear();
+        N.Life.Add(In("EB01-002", "north", "life"));                       // 1 Life, counter 0
+        for (int i = 0; i < 3; i++) S.Life.Add(In("EB02-052", "south", "life"));   // I have Life so their Leader swing can't just kill me
+        for (int i = 0; i < 4; i++) S.CostArea.Add(new OnePieceTcg.Engine.DonInstance { InstanceId = $"south-don-{i}", Rested = false });
+        S.Hand.Add(In("ST01-010", "south", "hand"));                       // cost-4 6000 finisher (no Rush)
+        N.Deck.Clear(); for (int i = 0; i < 10; i++) N.Deck.Add(In("EB02-052", "north", "deck"));   // cost-10 counter-0: undraw-playable
+        S.Deck.Clear(); for (int i = 0; i < 10; i++) S.Deck.Add(In("EB02-052", "south", "deck"));
+        N.DonDeck = 0;                                                     // opponent cannot gain DON -> cannot boost its Leader or play
+
+        var one = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(st, "south", new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 500_000 });
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var m2 = OnePieceTcg.Engine.Puzzles.Mate2Solver.Solve(st, "south", new OnePieceTcg.Engine.Puzzles.Mate2Solver.Options { WorkBudget = 3_000_000 });
+        sw.Stop();
+        Console.WriteLine($"mate2test: one-turn={one.Outcome} (want NoLethal), mate-in-2={m2} (want Win)  [{sw.ElapsedMilliseconds}ms]");
+        return (one.Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.NoLethal
+             && m2 == OnePieceTcg.Engine.Puzzles.Mate2Solver.Mate.Win) ? 0 : 1;
+    }
+
     case "puzzledump":
     {
         int seed = args.Length > 1 ? int.Parse(args[1]) : 1;
