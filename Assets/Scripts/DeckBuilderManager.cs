@@ -59,6 +59,17 @@ public class DeckData
         return 0;
     }
 
+    /// <summary>Every card id in the deck (leader + main), each yielded once, for format-legality checks.</summary>
+    public IEnumerable<string> AllCardIds()
+    {
+        if (!string.IsNullOrEmpty(leaderId)) yield return leaderId;
+        if (cards != null) foreach (var e in cards) if (e.count > 0) yield return e.id;
+    }
+
+    /// <summary>Format-legality result for this deck (banned cards, banned pairs, out-of-rotation cards).</summary>
+    public OnePieceTcg.Engine.FormatLegality.DeckCheck Check(OnePieceTcg.Engine.GameFormat format) =>
+        OnePieceTcg.Engine.FormatLegality.CheckDeck(AllCardIds(), format);
+
     public void SetCount(string cardId, int count)
     {
         cards ??= new List<DeckEntry>();
@@ -457,6 +468,8 @@ public partial class DeckBuilderManager : MonoBehaviour
         public Text cost, label;
         public RectTransform badge;
         public Text badgeText;
+        public RectTransform formatFlag;   // legality flag, shown only on BANNED / EXTRA-only cards
+        public Text formatText;
         public string boundId;   // card this tile currently represents
         public string artId;     // card whose art is currently shown (null = placeholder)
     }
@@ -1115,6 +1128,15 @@ public partial class DeckBuilderManager : MonoBehaviour
         foreach (var d in decks) BuildDeckCard(content, d);
     }
 
+    // The format(s) a deck can legally be played in, as a coloured tag: ILLEGAL (banned card/pair, no format),
+    // STANDARD (in-rotation + clean), or EXTRA ONLY (legal in Extra Regulation but has rotated-out cards).
+    private (string label, Color color) FormatTag(DeckData d)
+    {
+        if (!d.Check(OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal) return ("ILLEGAL", RedAccent);
+        if (d.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal) return ("STANDARD", GoodGreen);
+        return ("EXTRA ONLY", Gold);
+    }
+
     private void BuildDeckCard(RectTransform parent, DeckData d)
     {
         var card = Panel(d.name + " Card", parent, PanelFill);
@@ -1187,6 +1209,17 @@ public partial class DeckBuilderManager : MonoBehaviour
         var bt = Text_("bt", badge, (ok ? "LEGAL  ·  " : "INVALID  ·  ") + total + "/50", 9,
             ok ? GoodGreen : RedAccent, TextAnchor.MiddleCenter, monoFont);
         bt.fontStyle = FontStyle.Bold;
+
+        // format-legality tag: which format(s) this deck can be played in
+        var (flabel, fcol) = FormatTag(d);
+        var fbadge = Panel("FormatBadge", card, new Color(fcol.r, fcol.g, fcol.b, 0.14f));
+        fbadge.anchorMin = fbadge.anchorMax = new Vector2(0f, 0f);
+        fbadge.pivot = new Vector2(0f, 0f);
+        fbadge.sizeDelta = new Vector2(120f, 22f);
+        fbadge.anchoredPosition = new Vector2(256f, 14f);
+        Round(fbadge); AddBorder(fbadge, fcol, 1f);
+        var ft = Text_("ft", fbadge, flabel, 9, fcol, TextAnchor.MiddleCenter, monoFont);
+        ft.fontStyle = FontStyle.Bold;
         Stretch(bt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
         // action buttons row (favorite / edit / delete) bottom-right
@@ -3461,8 +3494,20 @@ public partial class DeckBuilderManager : MonoBehaviour
         badgeText.fontStyle = FontStyle.Bold;
         Stretch(badgeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
+        // Legality flag (hidden unless the bound card is BANNED or EXTRA-only) — sits above the name label.
+        var fflag = Panel("Fmt", tile, RedAccent);
+        fflag.anchorMin = fflag.anchorMax = new Vector2(0f, 0f);
+        fflag.pivot = new Vector2(0f, 0f);
+        fflag.sizeDelta = new Vector2(46f, 15f);
+        fflag.anchoredPosition = new Vector2(3f, 25f);
+        Round(fflag);
+        var fftext = Text_("ff", fflag, "", 8, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        fftext.fontStyle = FontStyle.Bold;
+        Stretch(fftext.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        fflag.gameObject.SetActive(false);
+
         var tv = new TileView { root = tile, art = artImg, cost = costText, label = label,
-                                badge = badge, badgeText = badgeText };
+                                badge = badge, badgeText = badgeText, formatFlag = fflag, formatText = fftext };
         var btn = tile.gameObject.AddComponent<Button>();
         btn.onClick.AddListener(() => OnTileClick(tv));
         // Hovering the tile pops the big right-side preview (reads the tile's live
@@ -3517,6 +3562,13 @@ public partial class DeckBuilderManager : MonoBehaviour
             tv.label.text = c.name;
             if (_artCache.TryGetValue(c.id, out var sp)) { ApplyArt(tv, sp); tv.artId = c.id; }
             else { ApplyArt(tv, null); tv.artId = null; }   // Update() decodes it
+            // format-legality flag: only surface problem cards (banned / rotated-out-of-Standard)
+            var leg = OnePieceTcg.Engine.FormatLegality.Legality(c.id);
+            if (leg == OnePieceTcg.Engine.CardLegality.Banned)
+            { tv.formatFlag.gameObject.SetActive(true); tv.formatText.text = "BANNED"; tv.formatFlag.GetComponent<Image>().color = RedAccent; }
+            else if (leg == OnePieceTcg.Engine.CardLegality.ExtraOnly)
+            { tv.formatFlag.gameObject.SetActive(true); tv.formatText.text = "EXTRA"; tv.formatFlag.GetComponent<Image>().color = Gold; }
+            else tv.formatFlag.gameObject.SetActive(false);
         }
         int n = pickingLeader ? 0 : editing.CountOf(c.id);
         if (n > 0) { tv.badge.gameObject.SetActive(true); tv.badgeText.text = "×" + n; }
