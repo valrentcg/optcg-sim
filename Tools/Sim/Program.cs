@@ -238,6 +238,43 @@ switch (mode)
              && m2 == OnePieceTcg.Engine.Puzzles.Mate2Solver.Mate.Win) ? 0 : 1;
     }
 
+    case "formattest":
+    {
+        int fail = 0;
+        void Chk(string label, bool ok) { Console.WriteLine($"  {(ok ? "PASS" : "FAIL")}  {label}"); if (!ok) fail++; }
+        var FL = typeof(OnePieceTcg.Engine.FormatLegality);
+        // block data actually loaded?
+        var op01 = OnePieceTcg.Engine.CardData.GetCard("OP01-001");
+        var op16 = OnePieceTcg.Engine.CardData.GetCard("OP16-001");
+        Chk($"OP01-001 block loaded (='{op01?.Block}')", op01 != null && op01.Block == "1");
+        Chk($"OP16-001 block loaded (='{op16?.Block}')", op16 != null && !string.IsNullOrEmpty(op16.Block));
+        // per-card legality
+        Chk("OP06-047 (Pudding) is Banned", OnePieceTcg.Engine.FormatLegality.Legality("OP06-047") == OnePieceTcg.Engine.CardLegality.Banned);
+        Chk("OP01-001 is ExtraOnly (Block 1 rotated)", OnePieceTcg.Engine.FormatLegality.Legality("OP01-001") == OnePieceTcg.Engine.CardLegality.ExtraOnly);
+        Chk("OP16-001 is LegalBoth", OnePieceTcg.Engine.FormatLegality.Legality("OP16-001") == OnePieceTcg.Engine.CardLegality.LegalBoth);
+        Chk("OP01-001 legal in Extra", OnePieceTcg.Engine.FormatLegality.IsCardLegal("OP01-001", OnePieceTcg.Engine.GameFormat.ExtraRegulation));
+        Chk("OP01-001 NOT legal in Standard", !OnePieceTcg.Engine.FormatLegality.IsCardLegal("OP01-001", OnePieceTcg.Engine.GameFormat.Standard));
+        Chk("OP06-047 NOT legal in Extra (banned)", !OnePieceTcg.Engine.FormatLegality.IsCardLegal("OP06-047", OnePieceTcg.Engine.GameFormat.ExtraRegulation));
+        Chk("alt-art suffix normalizes (OP01-001_p1)", !OnePieceTcg.Engine.FormatLegality.IsCardLegal("OP01-001_p1", OnePieceTcg.Engine.GameFormat.Standard));
+        // deck checks
+        var stdDeck = new[] { "OP16-001", "OP16-002", "OP16-002" };
+        Chk("clean Standard deck is legal", OnePieceTcg.Engine.FormatLegality.CheckDeck(stdDeck, OnePieceTcg.Engine.GameFormat.Standard).Legal);
+        var block1Deck = new[] { "OP16-001", "OP01-005" };
+        Chk("Block-1 card illegal in Standard, legal in Extra",
+            !OnePieceTcg.Engine.FormatLegality.CheckDeck(block1Deck, OnePieceTcg.Engine.GameFormat.Standard).Legal
+            && OnePieceTcg.Engine.FormatLegality.CheckDeck(block1Deck, OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal);
+        var bannedDeck = new[] { "OP16-001", "OP06-047" };
+        Chk("banned card illegal in BOTH", !OnePieceTcg.Engine.FormatLegality.CheckDeck(bannedDeck, OnePieceTcg.Engine.GameFormat.Standard).Legal
+            && !OnePieceTcg.Engine.FormatLegality.CheckDeck(bannedDeck, OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal);
+        var pairDeck = new[] { "OP11-040", "OP11-067", "OP16-001" };
+        var pairChk = OnePieceTcg.Engine.FormatLegality.CheckDeck(pairDeck, OnePieceTcg.Engine.GameFormat.ExtraRegulation);
+        Chk("banned pair detected: " + string.Join("; ", pairChk.Reasons), !pairChk.Legal);
+        Console.WriteLine("  pool(Standard): " + OnePieceTcg.Engine.FormatLegality.PoolDescription(OnePieceTcg.Engine.GameFormat.Standard));
+        Console.WriteLine("  ban list: " + string.Join(" | ", OnePieceTcg.Engine.FormatLegality.BanListLines()));
+        Console.WriteLine($"formattest: {(fail == 0 ? "ALL PASS" : fail + " FAILED")}");
+        return fail == 0 ? 0 : 1;
+    }
+
     case "puzzledump":
     {
         int seed = args.Length > 1 ? int.Parse(args[1]) : 1;

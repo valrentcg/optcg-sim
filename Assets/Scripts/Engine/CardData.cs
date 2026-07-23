@@ -38,6 +38,10 @@ namespace OnePieceTcg.Engine
         /// the effect TEXT during extraction, so those clauses resolve against this field instead).</summary>
         public string Attribute = "";
 
+        /// <summary>Regulation block number printed on the card ("1".."5", or "X"/"-"/"" for special/promo/
+        /// unnumbered). Drives Standard vs Extra Regulation format legality — see <see cref="FormatLegality"/>.</summary>
+        public string Block = "";
+
         public CardDef(string id, string name, string type, string color, int cost,
                        int power = 0, int? life = null, int counter = 0, List<string> keywords = null,
                        string effect = "", string trigger = "", List<string> features = null)
@@ -97,12 +101,14 @@ namespace OnePieceTcg.Engine
         public static void UpsertCard(string id, string name, string type, string color, int cost,
                                       int power = 0, int? life = null, int counter = 0,
                                       string[] keywords = null, string effect = "", string trigger = "",
-                                      string[] features = null, string rarity = null, string attribute = null)
+                                      string[] features = null, string rarity = null, string attribute = null,
+                                      string block = null)
         {
             if (string.IsNullOrEmpty(id)) return;
             var def = Card(id, name, type, color, cost, power, life, counter, keywords, effect, trigger, features);
             def.Rarity = rarity ?? "";
             def.Attribute = attribute ?? "";
+            def.Block = block ?? "";
             // Some cards (23 in the library) carry their [Trigger] clause inside the EFFECT text with an
             // empty trigger field, so every def.Trigger consumer (life reveal @~2706, "with a [Trigger]"
             // gates, TryResolveKnownTrigger) missed it and the trigger silently never fired. Lift the

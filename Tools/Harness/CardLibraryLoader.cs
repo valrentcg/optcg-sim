@@ -44,7 +44,8 @@ static class CardLibraryLoader
                 NormalizeEffectText(Str(el, "trigger")),
                 NormalizeFeatures(el),
                 Str(el, "rarity"),
-                Str(el, "attribute"));
+                Str(el, "attribute"),
+                Str(el, "block"));
             n++;
         }
         return n;

@@ -377,6 +377,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         public string[] features = new string[0];
         public string feature = "";
         public string attribute = "";   // ＜Slash＞/＜Strike＞/… icon; drives battle-K.O.-immunity clauses
+        public string block = "";       // regulation block number ("1".."5", "X", "-", "" ); drives format legality
     }
     private void Awake()
     {
@@ -578,7 +579,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     NormalizeEffectText(card.trigger),
                     NormalizeFeatures(card),
                     null,
-                    card.attribute);
+                    card.attribute,
+                    card.block);
             }
             Debug.Log($"Loaded {seen.Count} official One Piece card definitions.");
         }
