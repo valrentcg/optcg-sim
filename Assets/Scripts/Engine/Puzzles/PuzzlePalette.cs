@@ -2,9 +2,10 @@ using System.Collections.Generic;
 
 namespace OnePieceTcg.Engine.Puzzles
 {
-    // AUTO-GENERATED per-color, color-LEGAL card pools for the puzzle generator (Tools emit_palette).
-    // Deduped first-record-per-id to match the engine's loader, so every stat here (counter/power/effect) is
-    // exactly what the engine uses. Blockers are INNATE only. Do not hand-edit; regenerate from the card DB.
+    // AUTO-GENERATED per-color, color-LEGAL pools. Deduped first-record-per-id (matches the engine loader).
+    // Leaders keep their real abilities ([When Attacking]/[Activate: Main]/reactions) — puzzle mode now shows the
+    // same resolution controls PvP does. Blockers INNATE. Removal is a single [On Play] clause (dodges the engine
+    // chained rest+KO parser bug). Do not hand-edit; regenerate from the card DB.
     public static class PuzzlePalette
     {
         public sealed class ColorPool
@@ -40,7 +41,7 @@ namespace OnePieceTcg.Engine.Puzzles
                 Blockers = new (string, int)[] { ("EB01-017", 2), ("OP01-039", 2), ("OP03-031", 2), ("OP05-024", 2), ("OP05-030", 2) },
                 Ctr1000 = new[] { "EB01-018", "OP01-036", "OP01-037", "OP01-043", "OP01-045" }, Ctr2000 = new[] { "OP03-033", "OP11-032", "OP11-033", "OP12-023", "OP12-032" },
                 Ev2000 = new (string, int)[] { ("EB03-020", 1), ("OP01-057", 1), ("OP04-037", 2), ("OP06-038", 1) }, Ev4000 = new (string, int)[] { ("OP04-035", 2), ("OP05-038", 2), ("OP14-036", 1), ("ST02-016", 2) },
-                RestRemoval = new (string, int, int)[] { ("EB01-015", 1, 2), ("EB02-011", 3, 5), ("OP01-033", 3, 4) }, KoRemoval = new (string, int, int)[] { ("OP12-029", 3, 2), ("P-072", 4, 4) },
+                RestRemoval = new (string, int, int)[] { ("EB01-015", 1, 2), ("OP01-033", 3, 4), ("OP01-048", 2, 3) }, KoRemoval = new (string, int, int)[] { ("P-072", 4, 4) },
                 DoubleAttack = new string[] { "OP01-121" }, Rush = new (string, int)[] {  },
                 Life = "EB03-016",
             },
@@ -62,7 +63,7 @@ namespace OnePieceTcg.Engine.Puzzles
                 Blockers = new (string, int)[] { ("EB04-034", 2), ("OP01-100", 2), ("OP02-081", 2), ("OP03-065", 2), ("OP06-073", 2) },
                 Ctr1000 = new[] { "EB01-032", "EB02-034", "OP01-092", "OP01-103", "OP01-104" }, Ctr2000 = new[] { "EB03-030", "OP02-075", "OP11-068", "OP11-078", "OP12-068" },
                 Ev2000 = new (string, int)[] {  }, Ev4000 = new (string, int)[] { ("OP01-119", 2), ("OP10-080", 3), ("ST05-017", 2) },
-                RestRemoval = new (string, int, int)[] { ("OP06-075", 2, 2), ("OP11-063", 2, 3), ("OP13-061", 3, 1) }, KoRemoval = new (string, int, int)[] { ("EB03-036", 4, 3), ("OP02-076", 4, 1), ("OP05-063", 4, 3) },
+                RestRemoval = new (string, int, int)[] { ("OP06-075", 2, 2) }, KoRemoval = new (string, int, int)[] { ("EB03-036", 4, 3), ("OP02-076", 4, 1), ("ST04-010", 3, 3) },
                 DoubleAttack = new string[] { "OP02-087" }, Rush = new (string, int)[] {  },
                 Life = "EB01-036",
             },
@@ -73,7 +74,7 @@ namespace OnePieceTcg.Engine.Puzzles
                 Blockers = new (string, int)[] { ("EB03-048", 2), ("EB04-046", 2), ("OP02-108", 2), ("OP04-077", 2), ("OP05-085", 2) },
                 Ctr1000 = new[] { "EB01-041", "EB02-042", "EB02-043", "OP02-097", "OP02-104" }, Ctr2000 = new[] { "EB03-040", "OP11-087", "OP11-093", "OP12-083", "OP12-092" },
                 Ev2000 = new (string, int)[] { ("OP04-095", 1), ("OP07-094", 1), ("OP07-095", 2), ("OP12-098", 1) }, Ev4000 = new (string, int)[] { ("OP07-095", 2) },
-                RestRemoval = new (string, int, int)[] { ("OP04-082", 3, 1), ("OP04-091", 1, 1) }, KoRemoval = new (string, int, int)[] { ("OP02-098", 3, 3), ("OP03-093", 2, 1), ("OP04-082", 3, 1) },
+                RestRemoval = new (string, int, int)[] {  }, KoRemoval = new (string, int, int)[] { ("OP02-098", 3, 3), ("OP05-093", 4, 2), ("OP07-092", 1, 1) },
                 DoubleAttack = new string[] {  }, Rush = new (string, int)[] {  },
                 Life = "EB01-047",
             },
@@ -84,7 +85,7 @@ namespace OnePieceTcg.Engine.Puzzles
                 Blockers = new (string, int)[] { ("EB01-052", 2), ("EB04-053", 2), ("OP03-107", 2), ("OP05-113", 2), ("OP11-101", 2) },
                 Ctr1000 = new[] { "EB01-055", "OP03-101", "OP03-103", "OP03-106", "OP03-111" }, Ctr2000 = new[] { "EB02-055", "OP04-100", "OP05-105", "OP07-099", "OP07-107" },
                 Ev2000 = new (string, int)[] { ("OP09-116", 1), ("OP12-115", 1), ("OP14-116", 4), ("ST13-018", 1) }, Ev4000 = new (string, int)[] { ("OP08-116", 2), ("OP10-115", 2), ("OP11-115", 1) },
-                RestRemoval = new (string, int, int)[] { ("EB01-054", 3, 3), ("OP11-110", 3, 1) }, KoRemoval = new (string, int, int)[] { ("EB01-054", 3, 3), ("EB03-051", 3, 2), ("EB03-056", 4, 3) },
+                RestRemoval = new (string, int, int)[] {  }, KoRemoval = new (string, int, int)[] { ("EB03-056", 4, 3), ("OP03-115", 1, 1), ("OP11-106", 2, 5) },
                 DoubleAttack = new string[] {  }, Rush = new (string, int)[] {  },
                 Life = "EB02-052",
             },

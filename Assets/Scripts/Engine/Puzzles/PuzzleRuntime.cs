@@ -97,14 +97,33 @@ namespace OnePieceTcg.Engine.Puzzles
             if (Status != PuzzleStatus.InProgress) return false;
             var legal = LegalActions.Validate(_state, _attacker, LegalActions.Candidates(_state, _attacker));
             var match = legal.FirstOrDefault(kv => SameCommand(kv.Key, cmd));
-            if (match.Key == null) { Message = "That move isn't legal here."; return false; }
+            if (match.Key != null)
+            {
+                _state = match.Value;              // already the applied clone
+                _playerMoves.Add(match.Key);
+            }
+            else if (LethalSolver.DecidingSeat(_state, _attacker) == _attacker && PlayerHasPendingDecision())
+            {
+                // The player has a pending decision ([When Attacking] effect, an ability's target, a look/choice)
+                // but the UI's exact command wasn't in LegalActions' enumerated candidate set — its target set is
+                // pruned for search. Apply it straight through the engine, exactly as PvP applies UI commands, so
+                // puzzle mode offers the same resolution controls. The UI only surfaces legal controls here.
+                _state = GameEngine.ApplyCommand(_state, cmd);
+                _playerMoves.Add(cmd);
+            }
+            else { Message = "That move isn't legal here."; return false; }
 
-            _state = match.Value;              // already the applied clone
-            _playerMoves.Add(match.Key);
             AdvanceThroughNonPlayer();
             UpdateStatus();
             return true;
         }
+
+        // True when the board is waiting on a decision the player (attacker) owns: a pending effect, a choice, a
+        // deck-look, or a character-replacement. Any such state left after AdvanceThroughNonPlayer belongs to the
+        // player, since the defender's decisions are auto-played.
+        private bool PlayerHasPendingDecision() =>
+            _state.PendingEffects.Count > 0 || _state.ActiveChoice != null
+            || _state.DeckLook != null || _state.PendingCharReplace != null;
 
         // Auto-advance while it is NOT the player's decision. Defender decisions are resolved with the
         // strongest surviving defense; when control is the attacker's again (their own effect/target, or a
