@@ -3028,32 +3028,57 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddButton(buttons, "MAIN MENU", ReturnToMenu, true, false);
     }
 
-    // Puzzle fail screen: the player's turn ended without lethal. Amber (not the harsh red loss modal) — a
-    // "not this time" nudge with the retry / move-on options. The board stays reachable via View Board.
+    // Puzzle fail screen: the player's turn ended without lethal. Counts a STRIKE; after 3 strikes it reveals
+    // the full winning line. Amber for a strike, red once you strike out. Board stays reachable via View Board.
     private void DrawPuzzleFailOverlay()
     {
+        bool struckOut = puzzleStrikes >= PuzzleMaxStrikes;
+        Color amber = new Color(0.95f, 0.72f, 0.36f);
+        Color red = new Color(0.93f, 0.48f, 0.48f);
+        Color accent = struckOut ? red : amber;
+
         var dim = PanelObject("Puzzle Fail Dim", boardRoot, new Color32(8, 10, 14, 200));
         Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         dim.SetAsLastSibling();
 
-        Color amber = new Color(0.95f, 0.72f, 0.36f);
         var panel = PanelObject("Puzzle Fail Panel", boardRoot, (Color)new Color32(30, 24, 16, 250));
-        Stretch(panel, new Vector2(0.26f, 0.36f), new Vector2(0.74f, 0.64f), Vector2.zero, Vector2.zero);
+        // Taller when we're revealing the full winning line.
+        if (struckOut) Stretch(panel, new Vector2(0.22f, 0.22f), new Vector2(0.78f, 0.78f), Vector2.zero, Vector2.zero);
+        else Stretch(panel, new Vector2(0.26f, 0.36f), new Vector2(0.74f, 0.64f), Vector2.zero, Vector2.zero);
         RoundBig(panel);
-        AddRoundedCardBorder(panel, amber, 2f);
+        AddRoundedCardBorder(panel, accent, 2f);
         panel.SetAsLastSibling();
 
-        var label = TextObject("Puzzle Fail Text", panel, "NO LETHAL THIS TIME", 26, amber, TextAnchor.MiddleCenter, titleFont);
+        // Strike pips (● ● ● ) so the count reads at a glance.
+        string pips = string.Concat(Enumerable.Repeat("● ", Math.Min(puzzleStrikes, PuzzleMaxStrikes)))
+                    + string.Concat(Enumerable.Repeat("○ ", Math.Max(0, PuzzleMaxStrikes - puzzleStrikes)));
+        string title = struckOut ? "STRUCK OUT" : "NO LETHAL THIS TIME";
+        var label = TextObject("Puzzle Fail Text", panel, title, struckOut ? 24 : 26, accent, TextAnchor.UpperCenter, titleFont);
         label.fontStyle = FontStyle.Bold;
-        Stretch(label.rectTransform, new Vector2(0.04f, 0.54f), new Vector2(0.96f, 0.94f), Vector2.zero, Vector2.zero);
+        Stretch(label.rectTransform, new Vector2(0.04f, 0.87f), new Vector2(0.96f, 0.97f), Vector2.zero, Vector2.zero);
+        var pipText = TextObject("Strike Pips", panel, $"Strike {Math.Min(puzzleStrikes, PuzzleMaxStrikes)} / {PuzzleMaxStrikes}   {pips.Trim()}",
+            13, accent, TextAnchor.UpperCenter, monoFont);
+        Stretch(pipText.rectTransform, new Vector2(0.04f, 0.80f), new Vector2(0.96f, 0.87f), Vector2.zero, Vector2.zero);
 
-        var sub = TextObject("Puzzle Fail Sub", panel, "Your turn ended before lethal. Try again — there is a forced win in this position.",
-            12, Muted, TextAnchor.MiddleCenter, monoFont);
-        sub.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(sub.rectTransform, new Vector2(0.06f, 0.40f), new Vector2(0.94f, 0.54f), Vector2.zero, Vector2.zero);
+        if (struckOut)
+        {
+            var body = TextObject("Puzzle Fail Solution", panel,
+                "The winning line was:\n\n" + (puzzleSolutionText ?? "(couldn't reconstruct the line — try the hints)"),
+                13, Ink, TextAnchor.UpperLeft, monoFont);
+            body.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(body.rectTransform, new Vector2(0.07f, 0.22f), new Vector2(0.93f, 0.78f), Vector2.zero, Vector2.zero);
+        }
+        else
+        {
+            var sub = TextObject("Puzzle Fail Sub", panel,
+                "Your turn ended before lethal — there IS a forced win here. Try again, or use a hint. Strike out (3) to see the full line.",
+                12, Muted, TextAnchor.MiddleCenter, monoFont);
+            sub.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(sub.rectTransform, new Vector2(0.06f, 0.38f), new Vector2(0.94f, 0.78f), Vector2.zero, Vector2.zero);
+        }
 
         var buttons = RowObject("Puzzle Fail Buttons", panel, 10, TextAnchor.MiddleCenter);
-        Stretch(buttons, new Vector2(0.04f, 0.10f), new Vector2(0.96f, 0.36f), Vector2.zero, Vector2.zero);
+        Stretch(buttons, new Vector2(0.04f, 0.06f), new Vector2(0.96f, 0.19f), Vector2.zero, Vector2.zero);
         AddButton(buttons, "TRY AGAIN", () => LoadPuzzle(puzzleIndex), true, false);
         AddButton(buttons, "NEXT PUZZLE", NextPuzzle, true, false);
         AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); }, true, false);

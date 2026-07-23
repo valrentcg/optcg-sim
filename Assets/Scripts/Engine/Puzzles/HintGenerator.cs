@@ -95,6 +95,24 @@ namespace OnePieceTcg.Engine.Puzzles
             _ => c.InstanceId ?? c.Target,
         };
 
+        /// <summary>The full proven winning line as human-readable, numbered attacker steps — used to reveal
+        /// the answer after the player strikes out (3 losses). Names resolve against the STARTING position
+        /// (every instance the line references exists there). Returns null if no forced win is found.</summary>
+        public static string DescribeSolution(GameState pos, string attacker)
+        {
+            var proof = LethalSolver.Solve(pos, attacker, new LethalSolver.Options { WorkBudget = 400_000 });
+            if (proof.Outcome != LethalSolver.Lethal.Win) return null;
+            // Only the player-facing actions — drop internal resolution steps (resolveEffect/passEffect/choices).
+            var mine = proof.PrincipalVariation
+                .Where(c => (c.Seat == null || c.Seat == attacker)
+                         && (c.Type == "playCard" || c.Type == "activateMain" || c.Type == "attachDon" || c.Type == "declareAttack"))
+                .ToList();
+            if (mine.Count == 0) return null;
+            return string.Join("\n", mine.Select((m, i) => $"{i + 1}. " + Cap(DescribeMove(pos, attacker, m))));
+        }
+
+        private static string Cap(string s) => string.IsNullOrEmpty(s) ? s : char.ToUpper(s[0]) + s.Substring(1);
+
         private static string DescribeMove(GameState s, string seat, GameCommand c)
         {
             string Name(string instId) => CardData.GetCard(InstanceCardId(s, instId))?.Name ?? "that card";

@@ -35,6 +35,12 @@ public partial class GameManager
     private int puzzleHintLevel;                                   // how many hints the player has revealed (0-3)
     private string puzzleHintText;
     private readonly HashSet<string> puzzleHintGlow = new HashSet<string>();
+    // Three strikes: each failed attempt at the CURRENT puzzle is a strike; on the 3rd, the winning line is
+    // revealed. Strikes persist across "Try Again" (same puzzle) and reset when you move to a different puzzle.
+    private const int PuzzleMaxStrikes = 3;
+    private int puzzleStrikes;
+    private bool puzzleFailCounted;      // guards one strike per failed attempt
+    private string puzzleSolutionText;   // the revealed winning line (set once you strike out)
 
     private void NewPuzzle()
     {
@@ -65,7 +71,10 @@ public partial class GameManager
     private void LoadPuzzle(int idx)
     {
         if (puzzleSet == null || puzzleSet.Count == 0) return;
-        puzzleIndex = Mathf.Clamp(idx, 0, puzzleSet.Count - 1);
+        int newIndex = Mathf.Clamp(idx, 0, puzzleSet.Count - 1);
+        if (newIndex != puzzleIndex) { puzzleStrikes = 0; puzzleSolutionText = null; }   // strikes reset on a NEW puzzle
+        puzzleFailCounted = false;                                                        // a fresh attempt can strike again
+        puzzleIndex = newIndex;
         var pz = puzzleSet[puzzleIndex];
         puzzleAttacker = pz.Attacker;
 
@@ -120,6 +129,14 @@ public partial class GameManager
             puzzleHintLevel = 0;
             puzzleHintText = null;
             puzzleHintGlow.Clear();
+        }
+        // Strike: the attempt failed (turn ended without lethal). Count it once; on the 3rd, reveal the line.
+        if (puzzleRuntime.Status == PuzzleRuntime.PuzzleStatus.Failed && !puzzleFailCounted)
+        {
+            puzzleFailCounted = true;
+            puzzleStrikes++;
+            if (puzzleStrikes >= PuzzleMaxStrikes && puzzleSolutionText == null && puzzleSet != null && puzzleIndex < puzzleSet.Count)
+                puzzleSolutionText = HintGenerator.DescribeSolution(puzzleSet[puzzleIndex].Build(), puzzleAttacker);
         }
         NormalizeSelection();
         Render();

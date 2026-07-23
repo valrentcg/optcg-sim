@@ -53,8 +53,8 @@ namespace OnePieceTcg.Engine.Puzzles
 
         /// <summary>Options for live verification. The budget comfortably exceeds what the baked puzzles need to
         /// prove lethal (they certify in well under 80k work), so Start never reports a false "Unknown", while
-        /// staying small enough that the solve is snappy.</summary>
-        public LethalSolver.Options SolveOpts = new LethalSolver.Options { WorkBudget = 400_000 };
+        /// staying small enough that the solve stays snappy on Unity's slower Mono runtime.</summary>
+        public LethalSolver.Options SolveOpts = new LethalSolver.Options { WorkBudget = 150_000 };
 
         /// <summary>Begin from a live position. Returns false (and marks Failed) if it is NOT a valid lethal
         /// puzzle — i.e. the solver cannot prove a forced win for the attacker. A valid puzzle must start Win.</summary>
@@ -111,7 +111,8 @@ namespace OnePieceTcg.Engine.Puzzles
         // fresh main-phase decision) we stop so the player chooses.
         private void AdvanceThroughNonPlayer()
         {
-            for (int guard = 0; guard < 500; guard++)
+            string prevSig = null;
+            for (int guard = 0; guard < 200; guard++)
             {
                 if (_state.Status == "finished") return;
                 if (_state.ActiveSeat != _attacker) return;                 // turn ended
@@ -120,6 +121,11 @@ namespace OnePieceTcg.Engine.Puzzles
                 var defense = StrongestDefense(_state, decider);
                 if (defense.Key == null) return;                           // no legal defense
                 _state = defense.Value;
+                // Safety: if applying the "defense" didn't actually move the battle forward, stop rather than
+                // spin (would freeze the UI). Cheap signature of the things a defender action should change.
+                string sig = $"{_state.ActiveSeat}|{_state.Battle?.Step}|{_state.Battle?.AttackerId}|{_state.Battle?.Blocked}|{_state.PendingEffects.Count}|{_state.Players[_attacker].Life.Count}|{_state.Players[GameEngine.OtherSeat(_attacker)].Hand.Count}";
+                if (sig == prevSig) return;
+                prevSig = sig;
             }
         }
 
@@ -133,7 +139,9 @@ namespace OnePieceTcg.Engine.Puzzles
             if (legal.Count == 0) return default;
             if (legal.Count == 1) return legal[0];
 
-            var defenseOpts = new LethalSolver.Options { WorkBudget = 200_000 };
+            // Small budget: these are tiny battle-step positions and this runs synchronously on Unity's Mono
+            // runtime after every attack, so a deep solve here freezes the UI. 40k is ample to rank defenses.
+            var defenseOpts = new LethalSolver.Options { WorkBudget = 40_000 };
             KeyValuePair<GameCommand, GameState> best = default; int bestRank = -1; long bestWork = -1;
             foreach (var kv in legal)
             {

@@ -275,6 +275,29 @@ switch (mode)
         return fail == 0 ? 0 : 1;
     }
 
+    case "puzzleattack":
+    {
+        // Reproduce the "attack got stuck" report: drive RAW attacks (no setup) through PuzzleRuntime.ApplyMove
+        // like the UI does, and time each — a freeze shows up as a slow ApplyMove / non-advancing state.
+        int seed = args.Length > 1 ? int.Parse(args[1]) : 12;
+        var gp = OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(seed);
+        var rt = new OnePieceTcg.Engine.Puzzles.PuzzleRuntime();
+        if (!rt.Start(gp.State, gp.AttackerSeat)) { Console.WriteLine($"seed {seed} [{gp.Category}] Start failed: {rt.Message}"); return 1; }
+        Console.WriteLine($"seed {seed} [{gp.Category}] {gp.Title} — driving raw attacks:");
+        for (int step = 0; step < 12 && rt.Status == OnePieceTcg.Engine.Puzzles.PuzzleRuntime.PuzzleStatus.InProgress; step++)
+        {
+            var atk = rt.LegalMoves().FirstOrDefault(m => m.Type == "declareAttack");
+            if (atk == null) { Console.WriteLine($"  step {step}: no attack available (moves: {string.Join(",", rt.LegalMoves().Select(m => m.Type).Distinct())})"); break; }
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            bool ok = rt.ApplyMove(atk);
+            sw.Stop();
+            var st = rt.State;
+            Console.WriteLine($"  step {step}: attack {atk.Attacker}->{atk.Target}  applied={ok}  {sw.ElapsedMilliseconds}ms  status={rt.Status}  battle={(st.Battle == null ? "none" : st.Battle.Step)}  active={st.ActiveSeat}");
+        }
+        Console.WriteLine($"  final: status={rt.Status}");
+        return 0;
+    }
+
     case "puzzledump":
     {
         int seed = args.Length > 1 ? int.Parse(args[1]) : 1;
@@ -284,6 +307,7 @@ switch (mode)
         Console.WriteLine($"seed {seed} [{gp.Category}] {gp.Title}");
         Console.WriteLine($"  SOUTH leader {Pw(S.Leader)} don={S.CostArea.Count} chars=[{string.Join(" ", S.CharacterArea.Where(c => c != null).Select(Pw))}] hand=[{string.Join(" ", S.Hand.Select(c => c.CardId))}]");
         Console.WriteLine($"  NORTH leader {Pw(N.Leader)} life={N.Life.Count} don={N.CostArea.Count} chars=[{string.Join(" ", N.CharacterArea.Where(c => c != null).Select(Pw))}] hand=[{string.Join(" ", N.Hand.Select(c => c.CardId))}]");
+        System.Console.WriteLine("  SOLUTION: " + OnePieceTcg.Engine.Puzzles.HintGenerator.DescribeSolution(st, "south")?.Replace("\n", " | "));
         var cands = OnePieceTcg.Engine.Bot.Search.LegalActions.Validate(st, "south",
             OnePieceTcg.Engine.Bot.Search.LegalActions.Candidates(st, "south"));
         Console.WriteLine($"  south legal moves: {string.Join(" | ", cands.Select(kv => $"{kv.Key.Type}:{kv.Key.Attacker ?? kv.Key.Target}"))}");
