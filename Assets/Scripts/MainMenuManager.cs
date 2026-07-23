@@ -161,6 +161,11 @@ public partial class MainMenuManager : MonoBehaviour
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
     private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
     private static bool reopenLobbyAfterPicker;   // restore the waiting room after the picker closes
+    // Custom-lobby Ready handshake: the game can't start until BOTH players are ready.
+    private static bool localReady;               // this client has readied up
+    private static bool peerReady;                // the peer has readied up (via OptcgReady)
+    private static bool hostAutoStarted;          // host: guards a single auto-commence when both go ready
+    private static string lobbyTimingSummary = "Untimed";  // guest's copy of the host's timing rule (for display)
     // Set when ENTER is pressed without both decks chosen; cleared automatically
     // once both are valid (recomputed fresh every BuildLaunchBar), so it doesn't
     // need its own timer — it just flags whichever slot(s) are still empty.
@@ -403,6 +408,12 @@ public partial class MainMenuManager : MonoBehaviour
 
         MatchNetworkSync.PeerNameReceived -= OnPeerNameReceived;
         MatchNetworkSync.PeerNameReceived += OnPeerNameReceived;
+
+        MatchNetworkSync.ReadyReceived -= OnPeerReadyReceived;
+        MatchNetworkSync.ReadyReceived += OnPeerReadyReceived;
+
+        MatchNetworkSync.LobbySettingsReceived -= OnLobbySettingsReceived;
+        MatchNetworkSync.LobbySettingsReceived += OnLobbySettingsReceived;
 
         FriendsManager.FriendsChanged -= OnFriendsChanged;
         FriendsManager.FriendsChanged += OnFriendsChanged;
@@ -5709,7 +5720,25 @@ public partial class MainMenuManager : MonoBehaviour
         string peerDeckName = lobbyPeerDeck != null ? lobbyPeerDeck.name : "not chosen yet (starter default)";
         var peerDeckText = TextObject("Peer Deck", panel, $"OPPONENT DECK: {peerDeckName}", 11, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(peerDeckText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 22f), new Vector2(-16f, y));
-        y -= 28f;
+        y -= 30f;
+
+        // ── Match rules detail — both players see exactly what they're entering ──
+        var rulesHeader = TextObject("Rules Header", panel, "MATCH RULES", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(rulesHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 20f), new Vector2(-16f, y));
+        y -= 24f;
+        string fmtName = (lobbyMode == "custom" && lobbyFormat == "extra") ? "Extra Regulation (all blocks)" : "Standard (Blocks 2–5)";
+        string timingName = session.IsHost ? LobbyTimingSummary() : lobbyTimingSummary;
+        string rules = $"Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}";
+        var rulesText = TextObject("Rules", panel, rules, 11, Accent2, TextAnchor.UpperLeft, monoFont);
+        rulesText.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(rulesText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 34f), new Vector2(-16f, y));
+        y -= 40f;
+        string banned = string.Join(", ", OnePieceTcg.Engine.FormatLegality.BannedCards.Select(kv => $"{kv.Value} ({kv.Key})"));
+        var banText = TextObject("BanNote", panel, "Ban list (both formats): " + banned + " · plus banned pairs.",
+            9, Muted, TextAnchor.UpperLeft, monoFont);
+        banText.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(banText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 30f), new Vector2(-16f, y));
+        y -= 34f;
 
         bool bothPresent = session.PlayerCount >= session.MaxPlayers;
         bool networkReady = MatchNetworkSync.IsPeerConnected;
@@ -5720,13 +5749,16 @@ public partial class MainMenuManager : MonoBehaviour
         // Ranked auto-launch already waits on this (rankedGuestReady); custom's manual Start didn't.
         // (P2 in Tools/Sim/docs/lobby-connectivity-audit-2026-07.md.)
         bool peerHandlersReady = lobbyPeerName != null || lobbyPeerDeck != null;
+        bool connected = bothPresent && networkReady && peerHandlersReady;
+        bool deckPicked = lobbyDeckId != null;   // "after they've locked in their deck"
+
         string noteMessage;
         if (!bothPresent) noteMessage = "Waiting for another player to join...";
-        else if (!networkReady || !peerHandlersReady) noteMessage = "Both players are here. Finishing connection...";
-        else if (session.IsHost) noteMessage = "Both players are here — pick decks, then click Start Match.";
-        else noteMessage = "Both players are here. Waiting for the host to start the match...";
+        else if (!connected) noteMessage = "Both players are here. Finishing connection...";
+        else if (!deckPicked) noteMessage = "Select your deck, then hit Ready. The match starts once BOTH players are ready.";
+        else noteMessage = $"You: {(localReady ? "READY ✓" : "not ready")}    ·    Opponent: {(peerReady ? "READY ✓" : "not ready")}    ·    The match starts automatically when both are ready.";
         var noteText = TextObject("Note", panel, noteMessage,
-            11, Muted, TextAnchor.UpperLeft, monoFont);
+            11, connected && localReady && peerReady ? GoodGreen : Muted, TextAnchor.UpperLeft, monoFont);
         noteText.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(noteText.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 56f), new Vector2(-16f, 96f));
 
@@ -5738,8 +5770,10 @@ public partial class MainMenuManager : MonoBehaviour
         ahlg.childControlWidth = false;
         ahlg.childControlHeight = false;
         AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false);
-        if (session.IsHost)
-            AddButton(actionRow, "Start Match", StartMatchClicked, bothPresent && networkReady && peerHandlersReady && !lobbyBusy, false);
+        // Ready / Cancel — both players. Enabled once connected and a deck is picked. The host auto-commits the
+        // match the instant both are ready (TryLobbyAutoStart); either player can Cancel to un-ready before then.
+        AddButton(actionRow, localReady ? "Cancel Ready" : "Ready",
+            ToggleLobbyReady, connected && deckPicked && !lobbyBusy, false);
     }
 
     // Opens the deck-builder hex roster as a one-shot picker for this online match.
@@ -5759,6 +5793,7 @@ public partial class MainMenuManager : MonoBehaviour
             {
                 lobbyDeckId = chosenId;
                 reopenLobbyAfterPicker = true;
+                localReady = false; MatchNetworkSync.SendReady(false);   // changing decks un-readies you
                 ShareLobbyDeck();
                 EnsureMenu();
             },
@@ -5785,6 +5820,79 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyPeerDeck = null;
         lobbyPeerName = null;
+        localReady = false;
+        peerReady = false;
+        hostAutoStarted = false;
+    }
+
+    // A human-readable timing summary for the lobby detail panel + the host->guest settings broadcast.
+    private string LobbyTimingSummary()
+    {
+        if (lobbyTimingMode == "ranked") return "Ranked match clock (one shared clock + overtime)";
+        if (lobbyTimingMode != "blitz") return "Untimed";
+        var cfg = LobbyBlitzConfig();
+        if (cfg == null) return "Blitz";
+        string Fmt(int s) => $"{s / 60}:{(s % 60):00}";
+        return lobbyBlitzPreset switch
+        {
+            "bullet" => "Blitz · Bullet · 5:00/player · +1s",
+            "rapid"  => "Blitz · Rapid · 12:00/player · +2s",
+            "custom" => $"Blitz · Custom · You {Fmt(ParseClockSeconds(lobbyBlitzCustomSouthText, 450))} / Opp {Fmt(ParseClockSeconds(lobbyBlitzCustomNorthText, 450))} · +{ParseIntOr(lobbyBlitzCustomIncrementText, 5)}s · resp {ParseIntOr(lobbyBlitzCustomResponseText, 15)}s",
+            _        => "Blitz · 7:30/player · +2s",
+        };
+    }
+
+    // Host: push the lobby's rules + our ready state to the guest (called once the guest is connected).
+    private void HostBroadcastLobbyState()
+    {
+        if (lobbyMode != "custom" || LobbyManager.CurrentSession == null || !LobbyManager.CurrentSession.IsHost) return;
+        MatchNetworkSync.SendLobbySettings(new LobbySettingsPayload
+        {
+            format = lobbyFormat,
+            forgiveness = lobbyForgiveness,
+            timing = LobbyTimingSummary(),
+        });
+        MatchNetworkSync.SendReady(localReady);
+    }
+
+    // Peer toggled ready. Track it; if BOTH are ready, the host commits the match once.
+    private void OnPeerReadyReceived(bool ready)
+    {
+        peerReady = ready;
+        if (showingLobbyHub) RenderMenu();
+        TryLobbyAutoStart();
+    }
+
+    // Guest: the host told us the lobby's rules — mirror them so the detail panel + our deck grey-out match.
+    private void OnLobbySettingsReceived(LobbySettingsPayload p)
+    {
+        if (p == null) return;
+        lobbyFormat = p.format == "extra" ? "extra" : "standard";
+        lobbyForgiveness = p.forgiveness;
+        lobbyTimingSummary = string.IsNullOrEmpty(p.timing) ? "Untimed" : p.timing;
+        if (showingLobbyHub) RenderMenu();
+    }
+
+    // The host commits the match the moment both players are ready (guarded to fire once).
+    private void TryLobbyAutoStart()
+    {
+        if (lobbyMode != "custom" || hostAutoStarted) return;
+        var s = LobbyManager.CurrentSession;
+        if (s == null || !s.IsHost) return;
+        if (localReady && peerReady && !lobbyBusy)
+        {
+            hostAutoStarted = true;
+            StartMatchClicked();
+        }
+    }
+
+    // Toggle our own ready state, tell the peer, and (host) try to auto-start.
+    private void ToggleLobbyReady()
+    {
+        localReady = !localReady;
+        MatchNetworkSync.SendReady(localReady);
+        RenderMenu();
+        TryLobbyAutoStart();
     }
 
     private void OnPeerDeckShared(NetworkDeck deck)
@@ -5798,8 +5906,11 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyPeerName = name;
         MarkRankedGuestReady();
+        // Guest just connected: the host pushes the lobby's rules + its ready state so the guest's detail
+        // panel and deck grey-out reflect the real format/timing before they pick.
+        HostBroadcastLobbyState();
         // The guest always sends its name on connect — in a custom lobby this is what flips
-        // peerHandlersReady, so repaint to enable the host's Start Match button (P2).
+        // peerHandlersReady, so repaint to enable the host's controls (P2).
         if (showingLobbyHub) RenderMenu();
     }
 
@@ -6298,6 +6409,8 @@ public partial class MainMenuManager : MonoBehaviour
         UnsubscribeFromSessionEvents();
         MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
         MatchNetworkSync.DeckShareReceived -= OnPeerDeckShared;
+        MatchNetworkSync.ReadyReceived -= OnPeerReadyReceived;
+        MatchNetworkSync.LobbySettingsReceived -= OnLobbySettingsReceived;
         FriendsManager.FriendsChanged -= OnFriendsChanged;
     }
 

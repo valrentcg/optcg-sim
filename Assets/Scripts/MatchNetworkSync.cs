@@ -79,6 +79,16 @@ public class MatchStartPayload
     public int build;
 }
 
+/// <summary>Host -> guest broadcast of a custom lobby's rules, so the guest can SEE what they're joining
+/// (format, forgiveness, timing) and apply the format to their own deck grey-out before picking.</summary>
+[Serializable]
+public class LobbySettingsPayload
+{
+    public string format = "standard";   // "standard" | "extra"
+    public bool forgiveness;             // rewind toggle enabled
+    public string timing = "Untimed";    // human-readable timing summary (per-player clocks etc.)
+}
+
 // Lightweight "what am I looking at" state each client streams to its opponent while
 // playing: which board card is being hovered (opponent renders a gold glow on it) and
 // which face-down hand cards are being lifted/inspected. Sent over an Unreliable
@@ -125,6 +135,8 @@ public static class MatchNetworkSync
     private const string RematchGoMessage = "OptcgRematchGo";     // host: "rematch on, here's the seed"
     private const string RewindReqMessage = "OptcgRewindReq";     // "can we rewind to cursor N?"
     private const string RewindRespMessage = "OptcgRewindResp";   // "accept/decline your rewind"
+    private const string ReadyMessage = "OptcgReady";             // custom lobby: "I am / am not ready"
+    private const string LobbySettingsMessage = "OptcgLobbySet";  // host -> guest: format + custom-rule details
 
     // Chat messages longer than this are truncated before sending (UI should enforce the
     // same cap on its input field; this is the transport-level backstop).
@@ -147,6 +159,8 @@ public static class MatchNetworkSync
     public static event Action<string> RematchStartReceived;     // host published the rematch seed
     public static event Action<RewindRequestPayload> RewindRequested;   // peer asked to rewind
     public static event Action<RewindResponsePayload> RewindResponded;  // peer answered our rewind ask
+    public static event Action<bool> ReadyReceived;                     // peer toggled their lobby Ready state
+    public static event Action<LobbySettingsPayload> LobbySettingsReceived; // host told us the lobby's rules
 
     /// <summary>Call once, right after the NetworkManager singleton is created.</summary>
     public static void EnsureHandlersRegistered()
@@ -184,6 +198,8 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RematchGoMessage, OnRematchGoMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindReqMessage, OnRewindReqMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindRespMessage, OnRewindRespMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(ReadyMessage, OnReadyMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(LobbySettingsMessage, OnLobbySettingsMessage);
         handlersRegistered = true;
     }
 
@@ -317,6 +333,32 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.SendNamedMessage(RematchReqMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
     }
 
+    /// <summary>Tell the peer whether we've readied up in the custom lobby (both must be ready to start).</summary>
+    public static void SendReady(bool ready)
+    {
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null) return;
+        var target = GetPeerClientId();
+        if (target == null) return;   // re-sent on peer connect by the lobby
+        using var writer = new FastBufferWriter(8, Allocator.Temp);
+        writer.WriteValueSafe((byte)(ready ? 1 : 0));
+        nm.CustomMessagingManager.SendNamedMessage(ReadyMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
+    /// <summary>Host: broadcast the lobby's rules to the guest so they can see + apply them before picking.</summary>
+    public static void SendLobbySettings(LobbySettingsPayload p)
+    {
+        if (p == null) return;
+        var nm = NetworkManager.Singleton;
+        if (nm == null || nm.CustomMessagingManager == null) return;
+        var target = GetPeerClientId();
+        if (target == null) return;
+        string json = JsonUtility.ToJson(p);
+        using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(json);
+        nm.CustomMessagingManager.SendNamedMessage(LobbySettingsMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
     /// <summary>Host only: publish the agreed rematch seed so both clients rebuild an
     /// identical new match (same decks, new deal) over the still-open session.</summary>
     public static void SendRematchStart(string seed)
@@ -424,6 +466,20 @@ public static class MatchNetworkSync
     {
         reader.ReadValueSafe(out byte _);
         RematchRequested?.Invoke();
+    }
+
+    private static void OnReadyMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out byte b);
+        ReadyReceived?.Invoke(b != 0);
+    }
+
+    private static void OnLobbySettingsMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        LobbySettingsPayload payload = null;
+        try { payload = JsonUtility.FromJson<LobbySettingsPayload>(json); } catch { /* ignore malformed */ }
+        if (payload != null) LobbySettingsReceived?.Invoke(payload);
     }
 
     private static void OnRematchGoMessage(ulong senderClientId, FastBufferReader reader)
