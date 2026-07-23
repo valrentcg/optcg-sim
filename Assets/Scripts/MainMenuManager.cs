@@ -1115,29 +1115,55 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
-        ("v1.0.20", "Puzzles mode, display options, and bot judgment fixes", "Jul 23, 2026", new (string, string[])[]
+        ("v1.0.20", "Standard & Extra formats, Puzzles mode, deck-builder overhaul, and rules fixes", "Jul 23, 2026", new (string, string[])[]
         {
-            ("New: Puzzles (Solo Play)", new[]
+            ("New: Standard & Extra Regulation", new[]
             {
-                "A new Puzzles tab under Solo Play: 100 hand-crafted lethal puzzles, from easy warm-ups to really hard, each a single board with a guaranteed winning line this turn — find it.",
-                "Every puzzle needs a real decision — spread your DON, clear a Blocker, play around counters, or land a Double Attack / Rush finisher. You can't just swing and win.",
-                "Stuck? Three graduated hints, from a nudge to the exact move. The opponent defends optimally right to the end, so there's one clean solution.",
-                "Puzzles are shuffled and span every colour and leader, so you won't see the same two twice.",
+                "Decks are now checked against the official format rules. Standard uses the in-rotation blocks (2–5); the April 2026 rotation moved Block 1 — OP01–OP04 and ST01–ST09 — to Extra Regulation only.",
+                "Reprints and Manga Rares are handled: a Block-1 card reprinted into a later block, or a Manga / Super-Parallel Rare, stays Standard-legal.",
+                "The shared ban list (banned cards and banned pairs) is enforced in both formats.",
+                "The deck builder shows each deck's Standard/Extra legality under the leader, flags the exact cards that make a deck illegal, and adds filters for format, block number, and legality.",
+                "Casual and Ranked queues grey out decks that aren't Standard-legal so you can't queue an illegal deck.",
+            }),
+            ("New: Puzzles (Solo Play) — early access", new[]
+            {
+                "A new Puzzles tab under Solo Play: single-board lethal puzzles with a guaranteed winning line this turn. Leaders' abilities and counters are all in play — you can't just swing and win.",
+                "Three graduated hints if you're stuck, and a three-strike system that reveals the line if you can't find it. The opponent's hand is hidden and it defends optimally.",
+                "Some puzzles are built from real recorded games. This mode is still in early development — expect rough edges, and right-click a card to report a bug.",
+            }),
+            ("Deck builder", new[]
+            {
+                "Hovering a card shows a large, match-sized preview with the gold glow, placed away from the card you're looking at so it never covers it.",
+                "Right-click a card to add a full playset (4 copies) at once.",
+                "Hovering the Standard / Extra chips marks the exact cards keeping a deck out of that format.",
+                "The filter pills can be collapsed to give the card grid the whole panel.",
+            }),
+            ("Custom lobbies", new[]
+            {
+                "Choose the format (Standard or Extra Regulation) per custom game, with an optional \"Ignore Bans\" toggle.",
+                "A Ready button locks in your deck; the match can't start until both players are ready, and you can un-ready to swap decks.",
+                "The waiting room shows the full match rules — format, ban-list status, rewind, and timing.",
             }),
             ("New: Display options", new[]
             {
                 "Pick your resolution and toggle Fullscreen / Windowed in Settings.",
                 "Windowed mode is now freely resizable — drag the window to any size and the UI scales to fit.",
             }),
+            ("Rules & card fixes", new[]
+            {
+                "[Double Attack] no longer wins against a Leader with 1 Life — the extra damage of a single hit doesn't defeat (official ruling).",
+                "Nefeltari Vivi no longer fires a phantom [When Attacking] effect on every swing.",
+                "Kouzuki Oden's leader buff correctly requires a DON!! attached now, and other DON!!-gated abilities ([On Block], [Activate: Main]) are enforced.",
+                "[Activate: Main] leader abilities (Perona and others) can now be used in Puzzles.",
+            }),
             ("Smarter Advanced bot", new[]
             {
-                "Won't rest an attacker to remove a Character that isn't actually a threat (a spent, do-nothing body).",
-                "Won't trash a live attacker to \"play from trash\" when there's nothing valid to bring back.",
+                "Won't rest an attacker to remove a Character that isn't a threat, or trash a live attacker with nothing valid to bring back.",
                 "Now considers negate effects and sacrifice-to-recur plays it used to ignore.",
             }),
             ("Bug reports", new[]
             {
-                "Reports now capture the full decks in play, so custom-deck issues can be reproduced exactly.",
+                "Reports capture the full decks in play, so custom-deck issues can be reproduced exactly.",
             }),
         }),
         ("v1.0.19", "Five Elders deck, connectivity fixes, and in-game bug reports", "Jul 23, 2026", new (string, string[])[]
