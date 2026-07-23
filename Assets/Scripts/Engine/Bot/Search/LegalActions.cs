@@ -24,6 +24,15 @@ namespace OnePieceTcg.Engine.Bot.Search
                 return list;
             }
 
+            if (state.PendingCharReplace != null && state.PendingCharReplace.Seat == seat)
+            {
+                // 6th-character rule: choose one of my own Characters to trash for the pending play, or skip.
+                foreach (var c in me.CharacterArea.Where(c => c != null))
+                    list.Add(new GameCommand { Type = "charReplace", Seat = seat, Target = c.InstanceId });
+                list.Add(new GameCommand { Type = "charReplace", Seat = seat, Target = "" });
+                return list;
+            }
+
             if (state.DeckLook != null && state.DeckLook.Seat == seat)
             {
                 foreach (var c in state.DeckLook.Cards)
@@ -71,7 +80,8 @@ namespace OnePieceTcg.Engine.Bot.Search
             }
 
             if (state.ActiveSeat == seat && state.Phase == "main"
-                && state.PendingEffects.Count == 0 && state.ActiveChoice == null && state.DeckLook == null)
+                && state.PendingEffects.Count == 0 && state.ActiveChoice == null && state.DeckLook == null
+                && state.PendingCharReplace == null)
             {
                 list.Add(new GameCommand { Type = "endTurn", Seat = seat });
                 int don = GameEngine.ActiveDonCount(me);
@@ -80,6 +90,10 @@ namespace OnePieceTcg.Engine.Bot.Search
                 {
                     var d = CardData.GetCard(c.CardId);
                     if (d == null || d.Type == "leader" || GameEngine.GetCost(state, c) > don) continue;
+                    // Don't waste a pure targeted-removal EVENT (e.g. a K.O. event) when it has no legal target
+                    // — the classic case being an all-immune {Five Elders} board (7+ trash). Burning the card +
+                    // DON for a guaranteed no-op is never right, so drop it from the candidate set.
+                    if (d.Type == "event" && !GameEngine.RemovalEventHasTarget(state, seat, d)) continue;
                     if (d.Type == "character" && !me.CharacterArea.Any(s => s == null))
                     {
                         // Full board: the 6th-Character rule lets you play over an existing Character,

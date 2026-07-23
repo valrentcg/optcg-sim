@@ -246,6 +246,10 @@ namespace OnePieceTcg.Engine
         // Active "look at top N cards of deck" effect (e.g. Jewelry Bonney). Null when none in progress.
         public DeckLookState DeckLook;
 
+        // Active 6th-character replacement: an effect wants to play a Character but the board is full (5),
+        // so the player must pick one of their own Characters to trash for it (or skip). Null when none.
+        public CharReplaceState PendingCharReplace;
+
         // Keyword grants and restriction flags with turn/battle duration.
         // Use AddModifier() / HasModifier() / CleanupXxxModifiers() in GameEngine.
         public List<CardModifier> ActiveModifiers = new List<CardModifier>();
@@ -269,6 +273,10 @@ namespace OnePieceTcg.Engine
         // If a Character is rested by your effect, …" — OP07-031 Bartolomeo, OP10-036 Perona, and any
         // future card with that pattern). Set by the effect-rest-a-target resolvers; cleared each turn.
         public HashSet<string> CharRestedByEffectThisTurn = new HashSet<string>();
+        // Seats that have completed (or had no) start-of-game Leader Stage play (Imu OP13-079's "at the
+        // start of the game, play up to 1 {X} type Stage card from your deck"). Game-setup state — set
+        // once during StartGame, NOT cleared per turn.
+        public HashSet<string> StartStageDoneSeats = new HashSet<string>();
         // Per-seat highest base cost of an Event that seat activated this turn (for "if you have
         // activated an Event with a base cost of N or more during this turn" — OP15-002).
         public Dictionary<string, int> HighestEventCostThisTurn = new Dictionary<string, int>();
@@ -345,6 +353,17 @@ namespace OnePieceTcg.Engine
 
     /// <summary>Mid-resolution state for a "look at top N cards" effect (e.g. Jewelry Bonney)
     /// or a full-deck search effect (e.g. "Search your deck for 1 Character cost ≤ N").</summary>
+    // The player is choosing which of their 5 Characters to trash so an effect-driven Character play
+    // has room to enter (6th-character rule). Held is kept out of every zone (Zone="limbo") meanwhile.
+    public sealed class CharReplaceState
+    {
+        public string Seat;            // whose board is full / who chooses
+        public CardInstance Held;      // the Character waiting to enter play
+        public bool Rested;            // enter play rested?
+        public string SourceName;      // for the prompt/log (the effect that is playing it)
+        public string ReturnZone;      // "hand" | "trash" | "deck" — where Held goes if the player skips
+    }
+
     public sealed class DeckLookState
     {
         public string Seat;
@@ -370,7 +389,13 @@ namespace OnePieceTcg.Engine
         // Play mode: the selected card is PLAYED to the character area instead of added to
         // hand ("Play up to 1 … from your deck" / "Look at N … play up to 1 …" effects).
         public bool PlayMode;
+        public bool GameStartStage;  // Imu OP13-079 start-of-game Stage play — CompleteDeckLook continues setup after.
         public bool PlayRested;      // "play that card rested"
+        public bool FromTrash;       // cards came from the TRASH (OP13-082 Five Elders, Sengoku, …) — unplayed
+                                     // ones return to the trash, not the deck; log reads "from the trash".
+        public bool DifferentNames;  // "with different card names" — each PLAYED card must have a unique name;
+                                     // once a name is played its other copies stop being valid picks.
+        public System.Collections.Generic.List<string> PlayedNames = new System.Collections.Generic.List<string>();
         public int MaxPower = -1;    // "with N power or less" eligibility (printed power)
         public int ExactPower = -1;  // "with N power" (exact printed power, no "or less" — ST30-002 Inazuma)
         public string ColorFilter;   // required card colour, e.g. "green" (OP02-030 "play … green {Land of Wano} …")

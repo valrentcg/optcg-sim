@@ -1,0 +1,17 @@
+name = "optcg-bugreports"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Created with:  wrangler d1 create optcg-bugreports
+# Paste the printed database_id below, then deploy.
+[[d1_databases]]
+binding = "DB"
+database_name = "optcg-bugreports"
+database_id = "edb74f15-c943-41fe-8530-f74f82067da5"
+
+# Two secrets (NOT stored here):
+#   wrangler secret put APP_SECRET     # reuse the SAME value the client sends in X-App-Secret
+#                                      # (also in the gitignored Assets AppConfig.Local.cs) — lets any
+#                                      # player's client SUBMIT a report.
+#   wrangler secret put ADMIN_SECRET   # a STRONGER, client-unknown value — required to LIST/EXPORT
+#                                      # reports and to MARK them addressed. This is what I scrape with.

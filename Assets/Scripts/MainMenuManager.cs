@@ -271,6 +271,7 @@ public partial class MainMenuManager : MonoBehaviour
     private string accountPasswordInput = "";
     private string resetTokenInput = "";
     private string resetNewPasswordInput = "";
+    private string resetNewPasswordConfirmInput = "";
     private bool accountBusy;
     private string accountError;
 
@@ -3754,36 +3755,48 @@ public partial class MainMenuManager : MonoBehaviour
     {
         var header = TextObject("Header", panel, "RESET PASSWORD", 13, Muted, TextAnchor.UpperLeft, monoFont);
         header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+        Stretch(header.rectTransform, new Vector2(0f, 1f), new Vector2(0.55f, 1f), new Vector2(16f, -34f), new Vector2(-8f, -14f));
+
+        // Back to the account summary — top-RIGHT of the panel on the header row (it used to sit at the
+        // very top and overlap the header).
+        var backHolder = PanelObject("Reset Back Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(backHolder, new Vector2(0.55f, 1f), new Vector2(1f, 1f), new Vector2(8f, -42f), new Vector2(-16f, -8f));
+        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        backHlg.childAlignment = TextAnchor.MiddleRight; backHlg.childControlWidth = false; backHlg.childControlHeight = false;
+        AddButton(backHolder, "< Back", () => { accountSettingsResetMode = false; accountError = null; RenderMenu(); }, true, false);
 
         var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
-        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -70f), new Vector2(-16f, -46f));
+        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -76f), new Vector2(-16f, -52f));
 
         var sendHolder = PanelObject("Send Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(sendHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -104f), new Vector2(-16f, -74f));
+        Stretch(sendHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -112f), new Vector2(-16f, -82f));
+        var sendHlg = sendHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        sendHlg.childAlignment = TextAnchor.MiddleLeft; sendHlg.childControlWidth = false; sendHlg.childControlHeight = false;
         AddButton(sendHolder, accountBusy ? "Working..." : "Email Me a Code", RequestPasswordResetClicked, !accountBusy, false);
 
         var tokenField = MakeInput(panel, "Code from email", resetTokenInput, s => resetTokenInput = s, null);
-        Stretch(tokenField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -142f), new Vector2(-16f, -112f));
+        Stretch(tokenField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -160f), new Vector2(-16f, -130f));
 
         var newPasswordField = MakeInput(panel, "New password", resetNewPasswordInput, s => resetNewPasswordInput = s, null,
             InputField.ContentType.Password);
-        Stretch(newPasswordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -178f), new Vector2(-16f, -148f));
+        Stretch(newPasswordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -198f), new Vector2(-16f, -168f));
+
+        var confirmPwField = MakeInput(panel, "Confirm new password", resetNewPasswordConfirmInput, s => resetNewPasswordConfirmInput = s, null,
+            InputField.ContentType.Password);
+        Stretch(confirmPwField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -236f), new Vector2(-16f, -206f));
 
         if (!string.IsNullOrEmpty(accountError))
         {
             var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
             err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 100f));
+            Stretch(err.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -292f), new Vector2(-16f, -246f));
         }
 
         var confirmHolder = PanelObject("Confirm Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(confirmHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
+        Stretch(confirmHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -340f), new Vector2(-16f, -304f));
+        var confHlg = confirmHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+        confHlg.childAlignment = TextAnchor.MiddleLeft; confHlg.childControlWidth = false; confHlg.childControlHeight = false;
         AddButton(confirmHolder, accountBusy ? "Working..." : "Set New Password", ConfirmPasswordResetClicked, !accountBusy, false);
-
-        var switchHolder = PanelObject("Switch Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(switchHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -14f), new Vector2(-16f, 16f));
-        AddButton(switchHolder, "< Back", () => { accountSettingsResetMode = false; accountError = null; RenderMenu(); }, true, false);
     }
 
     private async void ClaimUsernameClicked()
@@ -3991,6 +4004,14 @@ public partial class MainMenuManager : MonoBehaviour
         if (string.IsNullOrWhiteSpace(resetTokenInput) || string.IsNullOrWhiteSpace(resetNewPasswordInput))
         {
             accountError = "Enter the code from your email and a new password.";
+            RenderMenu();
+            return;
+        }
+        string pwProblem = PasswordProblem(resetNewPasswordInput);
+        if (pwProblem != null) { accountError = pwProblem; RenderMenu(); return; }
+        if (resetNewPasswordInput != resetNewPasswordConfirmInput)
+        {
+            accountError = "Passwords don't match.";
             RenderMenu();
             return;
         }

@@ -47,6 +47,17 @@ static class Scenarios
         RemovalImmunityBlocksBounce();
         SaboRevealPlayGatesBuff();
         RestByYourEffectFlagSetAndReset();
+        ImuStartOfGameStagePlay();
+        Op13091TrashCostKoDiag();
+        Op13091PlayedByEffectDiag();
+        Op13099PlayFromHandFullBoardDiag();
+        Op13099SkipReplaceDiag();
+        Op13082FiveEldersActivateDiag();
+        Op13082HandTrashAnyCardDiag();
+        Op13084BasePowerAuraDiag();
+        Op11097CounterTrashAddDiag();
+        Op16060SengokuDiag();
+        RemovalEventTargetGuardDiag();
 
         Console.WriteLine($"\nScenarios: {pass} passed, {fail} failed.");
         return fail > 0 ? 1 : 0;
@@ -1156,6 +1167,380 @@ static class Scenarios
         Check("Fix (b): resting an opponent Character by effect sets CharRestedByEffectThisTurn, resets next turn",
               emptyBefore && victimRested && flagSet && flagReset,
               $"emptyBefore={emptyBefore} victimRested={victimRested} flagSet={flagSet} flagReset={flagReset}  {Tail(st)}");
+    }
+
+    // Imu (OP13-079): "at the start of the game, play up to 1 {Mary Geoise} type Stage card from your
+    // deck." A game-start Stage search must open BEFORE the opening hands are dealt; picking a Stage plays
+    // it to the Stage zone, then the deal + mulligan proceed. Reuses the deck-search overlay (SearchMode +
+    // PlayMode) flagged GameStartStage, with PlayMode extended to place a Stage (not just Characters).
+    static void ImuStartOfGameStagePlay()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "imu" });
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.Leader.CardId = "OP13-079";                                   // Imu / Five Elders
+        var stage = MakeInPlay("OP13-099", "south"); stage.Zone = "deck"; S.Deck.Insert(0, stage);  // {Mary Geoise} Stage
+        st.Status = "setup"; st.FirstPlayer = "south"; st.ActiveSeat = "south";
+
+        GameEngine.StartGame(st);
+
+        // The Stage search opens before the deal — hands are NOT drawn yet.
+        bool overlayOpen = st.DeckLook != null && st.DeckLook.GameStartStage && st.DeckLook.Seat == "south"
+                           && st.DeckLook.PlayMode && st.Status == "setup" && S.Hand.Count == 0;
+
+        var stageInLook = st.DeckLook?.Cards.FirstOrDefault(c => c.CardId == "OP13-099");
+        Apply(st, new GameCommand { Type = "deckLookSelect", Seat = "south", Target = stageInLook?.InstanceId });
+
+        bool stagePlayed = S.Stage != null && S.Stage.CardId == "OP13-099";
+        bool handsDealt = st.Status == "mulligan" && S.Hand.Count == 5 && N.Hand.Count == 5;
+
+        Check("Imu OP13-079: start-of-game Stage search opens before the deal, plays the Stage, then hands deal",
+              overlayOpen && stagePlayed && handsDealt,
+              $"overlayOpen={overlayOpen} stagePlayed={stagePlayed} handsDealt={handsDealt}  {Tail(st)}");
+    }
+
+    // DIAGNOSTIC: OP13-091 St. Marcus Mars "[On Play] You may trash 1 card from your hand: K.O. up to 1
+    // of your opponent's Characters with a base cost of 5 or less." — does the trash-cost + K.O. fire?
+    static void Op13091TrashCostKoDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "mars" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"]; S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"m{i}", Rested = false });
+        var victim = MakeInPlay("OP09-095", "north"); N.CharacterArea[0] = victim;   // Laffitte cost 1 (KO target)
+        var mars = MakeInPlay("OP13-091", "south"); mars.Zone = "hand"; S.Hand.Add(mars);
+        var spare = MakeInPlay("OP09-089", "south"); spare.Zone = "hand"; S.Hand.Add(spare);  // card to trash
+
+        int before = st.EventLog.Count;
+        Apply(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = mars.InstanceId, SlotIndex = 0 });
+        Console.WriteLine("=== OP13-091 diag: play log ===");
+        for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("   " + st.EventLog[i].Message);
+        Console.WriteLine($"   PendingEffects={st.PendingEffects.Count} DeckLook={(st.DeckLook != null)} ActiveChoice={(st.ActiveChoice != null)} handCount={S.Hand.Count}");
+        for (int i = 0; i < st.PendingEffects.Count; i++)
+        { var pe = st.PendingEffects[i]; Console.WriteLine($"   Pending[{i}]: seat={pe.Seat} zone={pe.TargetZone} optional={pe.Optional} text={pe.Text} valid-spare={GameEngine.IsValidEffectTarget(st, pe, spare)} valid-victim={GameEngine.IsValidEffectTarget(st, pe, victim)}"); }
+        // Step 2: select the spare hand card to trash (pay the cost).
+        if (st.PendingEffects.Count > 0)
+        {
+            before = st.EventLog.Count;
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = st.PendingEffects[0].EffectId, Target = spare.InstanceId });
+            Console.WriteLine("   --- after selecting spare to trash ---");
+            for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("      " + st.EventLog[i].Message);
+            // Step 3: if a K.O.-target pending remains, target the victim.
+            if (st.PendingEffects.Count > 0)
+                Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = st.PendingEffects[0].EffectId, Target = victim.InstanceId });
+        }
+        bool koHappened = N.CharacterArea[0] == null;
+        bool spareTrashed = S.Trash.Exists(c => c.CardId == "OP09-089");
+        Check("OP13-091 St. Marcus Mars: On Play 'trash 1 from hand' is a valid hand target, pays, then K.O.s opp base cost ≤5",
+              spareTrashed && koHappened, $"spareTrashed={spareTrashed} koHappened={koHappened}  {Tail(st)}");
+    }
+
+    // REGRESSION: St. Marcus Mars has a STATIC "…gains [Blocker]." clause in front of its [On Play].
+    // When it is played BY AN EFFECT (The Empty Throne) — a path that used to queue the card's FULL
+    // effect text — the static "gains [Blocker]" wording leaked into the On-Play resolver, so the game
+    // asked to "choose a card to gain [Blocker]" instead of running the trash-cost K.O. The queue
+    // chokepoint now normalizes to just the [On Play] clause.
+    static void Op13091PlayedByEffectDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "mars-throne" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"]; S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"mt{i}", Rested = false });
+        S.Leader.CardId = "OP13-079";   // Imu (black) — lets the Throne play a black {Five Elders}
+        var victim = MakeInPlay("OP09-095", "north"); N.CharacterArea[0] = victim;
+        var throne = MakeInPlay("OP13-099", "south"); throne.Zone = "stage"; S.Stage = throne;
+        var mars = MakeInPlay("OP13-091", "south"); mars.Zone = "hand"; S.Hand.Add(mars);
+        var spare = MakeInPlay("OP09-089", "south"); spare.Zone = "hand"; S.Hand.Add(spare);
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = throne.InstanceId });
+        if (st.PendingEffects.Count > 0)
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = st.PendingEffects[0].EffectId, Target = mars.InstanceId });
+
+        bool marsOnBoard = S.CharacterArea.Any(c => c != null && c.CardId == "OP13-091");
+        var onPlay = st.PendingEffects.FirstOrDefault(pe => pe.SourceCardId == "OP13-091");
+        string ptext = onPlay?.Text ?? "";
+        bool notBlocker = ptext.IndexOf("gains [Blocker]", StringComparison.OrdinalIgnoreCase) < 0;
+        bool isKoClause = ptext.IndexOf("K.O.", StringComparison.OrdinalIgnoreCase) >= 0;
+        bool handLit = onPlay != null && GameEngine.IsValidEffectTarget(st, onPlay, spare);   // trash-cost lights a HAND card
+        Console.WriteLine($"=== OP13-091-via-Throne: onBoard={marsOnBoard} onPlayText=<{ptext}> ===");
+        Check("OP13-091 played via effect (The Empty Throne): On-Play queues its trash-cost K.O., not the static [Blocker] grant",
+              marsOnBoard && notBlocker && isKoClause && handLit,
+              $"onBoard={marsOnBoard} notBlocker={notBlocker} isKo={isKoClause} handLit={handLit}  {Tail(st)}");
+    }
+
+    // DIAGNOSTIC: OP13-099 Empty Throne "[Activate: Main] … Play up to 1 black {Five Elders} … Character
+    // from your hand" with a FULL board (5 Characters) — does it prompt to replace, or fail/overwrite?
+    static void Op13099PlayFromHandFullBoardDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "throne" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = MakeInPlay("OP09-095", "south");   // FULL board
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"t{i}", Rested = false });
+        S.Leader.CardId = "OP13-079";   // Imu
+        var throne = MakeInPlay("OP13-099", "south"); throne.Zone = "stage"; S.Stage = throne;
+        var fe = MakeInPlay("OP13-091", "south"); fe.Zone = "hand"; S.Hand.Add(fe);   // a black {Five Elders} char in hand
+
+        int before = st.EventLog.Count;
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = throne.InstanceId });
+        Console.WriteLine("=== OP13-099 diag: activate log (FULL board) ===");
+        for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("   " + st.EventLog[i].Message);
+        int chars = 0; foreach (var c in S.CharacterArea) if (c != null) chars++;
+        Console.WriteLine($"   charAreaCount={chars} PendingEffects={st.PendingEffects.Count} ActiveChoice={(st.ActiveChoice != null)}");
+        // Step 2: select the {Five Elders} card in hand to play — with a FULL board. New behavior: instead of
+        // silently fizzling, the engine raises a 6th-character REPLACE prompt (PendingCharReplace) and holds the
+        // card out of hand while the player chooses which of their own Characters to play over.
+        if (st.PendingEffects.Count > 0)
+        {
+            before = st.EventLog.Count;
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = st.PendingEffects[0].EffectId, Target = fe.InstanceId });
+            Console.WriteLine("   --- after selecting the hand card to play (full board) ---");
+            for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("      " + st.EventLog[i].Message);
+        }
+        bool replacePrompt = st.PendingCharReplace != null && st.PendingCharReplace.Held != null
+                             && st.PendingCharReplace.Held.CardId == "OP13-091";
+        bool feOutOfHand = !S.Hand.Exists(c => c.CardId == "OP13-091");  // held in limbo, not left in hand
+        bool boardIntactSoFar = S.CharacterArea.Count(c => c != null) == 5 && S.CharacterArea.Count(c => c != null && c.CardId == "OP09-095") == 5;
+        Check("OP13-099 Empty Throne @ FULL board: player is prompted to choose a Character to play over (no silent fizzle, no overwrite)",
+              replacePrompt && feOutOfHand && boardIntactSoFar,
+              $"replacePrompt={replacePrompt} feOutOfHand={feOutOfHand} boardIntact={boardIntactSoFar}  {Tail(st)}");
+
+        // Step 3: choose the FIRST original Character to trash → The Empty Throne's card takes that slot; the
+        // chosen Character goes to the trash; the board is still exactly 5 (no free 6th slot ever appears).
+        string victim = S.CharacterArea.First(c => c != null && c.CardId == "OP09-095").InstanceId;
+        before = st.EventLog.Count;
+        Apply(st, new GameCommand { Type = "charReplace", Seat = "south", Target = victim });
+        Console.WriteLine("   --- after choosing which Character to play over ---");
+        for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("      " + st.EventLog[i].Message);
+        int originals = S.CharacterArea.Count(c => c != null && c.CardId == "OP09-095");
+        int total = S.CharacterArea.Count(c => c != null);
+        bool fePlayed = S.CharacterArea.Any(c => c != null && c.CardId == "OP13-091");
+        bool victimTrashed = S.Trash.Exists(c => c.InstanceId == victim);
+        bool cleared = st.PendingCharReplace == null;
+        Check("OP13-099 chosen replacement: the picked Character is trashed and The Empty Throne's Character takes its slot (board stays 5)",
+              total == 5 && originals == 4 && fePlayed && victimTrashed && cleared,
+              $"total={total} originals={originals} fePlayed={fePlayed} victimTrashed={victimTrashed} cleared={cleared}  {Tail(st)}");
+    }
+
+    // Companion: the SKIP branch — at a full board the player may decline; the held card returns to hand and
+    // the board is untouched (nothing is trashed, no 6th slot appears). Guarantees the flow never deadlocks.
+    static void Op13099SkipReplaceDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "throne-skip" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = MakeInPlay("OP09-095", "south");
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"t{i}", Rested = false });
+        S.Leader.CardId = "OP13-079";
+        var throne = MakeInPlay("OP13-099", "south"); throne.Zone = "stage"; S.Stage = throne;
+        var fe = MakeInPlay("OP13-091", "south"); fe.Zone = "hand"; S.Hand.Add(fe);
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = throne.InstanceId });
+        if (st.PendingEffects.Count > 0)
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = st.PendingEffects[0].EffectId, Target = fe.InstanceId });
+        bool prompted = st.PendingCharReplace != null;
+        Apply(st, new GameCommand { Type = "charReplace", Seat = "south", Target = "" });   // SKIP
+        int total = S.CharacterArea.Count(c => c != null);
+        int originals = S.CharacterArea.Count(c => c != null && c.CardId == "OP09-095");
+        bool feBackInHand = S.Hand.Exists(c => c.CardId == "OP13-091");
+        bool nothingTrashed = !S.Trash.Exists(c => c.CardId == "OP09-095");
+        bool cleared = st.PendingCharReplace == null;
+        Check("OP13-099 skip: declining the 6th-character replace returns the card to hand and leaves the board untouched",
+              prompted && total == 5 && originals == 5 && feBackInHand && nothingTrashed && cleared,
+              $"prompted={prompted} total={total} originals={originals} feBackInHand={feBackInHand} nothingTrashed={nothingTrashed} cleared={cleared}  {Tail(st)}");
+    }
+
+    // BUG (playtest 2026-07-22, reported 2×): OP13-082's cost is "trash 1 card from your hand" (ANY card), but
+    // the glow only lit {Five Elders}/Celestial Dragons in hand — the {Five Elders} filter from the PLAY clause
+    // leaked into the hand-cost validation because the "If your Leader is [Imu]," strip left a lowercase "you
+    // may …:" that the case-sensitive cost gate missed. IsValidEffectTarget must accept ANY hand card here.
+    static void Op13082HandTrashAnyCardDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "feCost" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        S.Leader.CardId = "OP13-079";
+        var src = MakeInPlay("OP13-082", "south"); S.CharacterArea[0] = src;
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"c{i}", Rested = false });
+        var nonCd = MakeInPlay("OP09-089", "south"); nonCd.Zone = "hand"; S.Hand.Add(nonCd);   // NOT Celestial Dragons
+        var cd = MakeInPlay("OP13-084", "south"); cd.Zone = "hand"; S.Hand.Add(cd);            // a Five Elders
+        for (int i = 0; i < 6; i++) { var t = MakeInPlay("OP13-091", "south"); t.Zone = "trash"; S.Trash.Add(t); }
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = src.InstanceId });
+        var pe = st.PendingEffects.FirstOrDefault(e => e.SourceCardId == "OP13-082");
+        bool nonCdValid = pe != null && GameEngine.IsValidEffectTarget(st, pe, nonCd);
+        bool cdValid = pe != null && GameEngine.IsValidEffectTarget(st, pe, cd);
+        Check("OP13-082 hand-trash cost accepts ANY hand card (non-Celestial-Dragon glows too), not just {Five Elders}",
+              nonCdValid && cdValid, $"nonCdValid={nonCdValid} cdValid={cdValid} pe={(pe != null)}  {Tail(st)}");
+    }
+
+    // BUG (playtest 2026-07-22): OP13-084 St. Shepherd Ju Peter "[Your Turn] If you have 10+ cards in your trash,
+    // set the base power of all of your {Five Elders} Characters to 7000" wasn't applying — no continuous
+    // base-power-SET aura scan existed.
+    static void Op13084BasePowerAuraDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "juPeter" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        var juPeter = MakeInPlay("OP13-084", "south"); S.CharacterArea[0] = juPeter;   // the aura source (5000)
+        var mars = MakeInPlay("OP13-091", "south"); S.CharacterArea[1] = mars;         // another Five Elders (5000)
+        int powBefore = GameEngine.GetPower(st, mars);
+        for (int i = 0; i < 10; i++) { var t = MakeInPlay("OP09-089", "south"); t.Zone = "trash"; S.Trash.Add(t); }
+        int powWith10 = GameEngine.GetPower(st, mars);
+        int juPeterPow = GameEngine.GetPower(st, juPeter);
+        // On the OPPONENT's turn the [Your Turn] aura should switch off.
+        st.ActiveSeat = "north";
+        int powOppTurn = GameEngine.GetPower(st, mars);
+        Console.WriteLine($"=== OP13-084 aura: before(0 trash)={powBefore} with10={powWith10} juPeter={juPeterPow} oppTurn={powOppTurn} ===");
+        Check("OP13-084: sets all own {Five Elders} base power to 7000 at 10+ trash on your turn (off on opp turn)",
+              powBefore == 5000 && powWith10 == 7000 && juPeterPow == 7000 && powOppTurn == 5000,
+              $"before={powBefore} with10={powWith10} juPeter={juPeterPow} oppTurn={powOppTurn}  {Tail(st)}");
+    }
+
+    // OP13-082 "Five Elders" [Activate: Main]: If Leader is [Imu], (cost) rest 1 DON!! + trash 1 hand card:
+    // Trash all your Characters, then play up to 5 {Five Elders} 5000-power Characters with DIFFERENT names
+    // from your trash. Verifies the cost step, the board-wipe, the interactive trash-play, and that a
+    // duplicate name is rejected while unpicked cards return to the trash.
+    static void Op13082FiveEldersActivateDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "fiveelders" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        S.Leader.CardId = "OP13-079";   // Imu
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        var src = MakeInPlay("OP13-082", "south"); S.CharacterArea[0] = src;      // the activating Character
+        S.CharacterArea[1] = MakeInPlay("OP09-089", "south");                     // filler to be wiped
+        for (int i = 0; i < 12; i++) S.CostArea.Add(new DonInstance { InstanceId = $"fe{i}", Rested = false });
+        var handCard = MakeInPlay("OP09-089", "south"); handCard.Zone = "hand"; S.Hand.Add(handCard);
+        foreach (var id in new[] { "OP13-080", "OP13-083", "OP13-084", "OP13-089", "OP13-091", "OP13-091" })
+        { var t = MakeInPlay(id, "south"); t.Zone = "trash"; S.Trash.Add(t); }   // 5 unique + 1 duplicate Mars
+        { var t = MakeInPlay("OP09-095", "south"); t.Zone = "trash"; S.Trash.Add(t); }   // non-eligible (wrong feature)
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = src.InstanceId });
+        var pe = st.PendingEffects.FirstOrDefault(e => e.SourceCardId == "OP13-082");
+        bool promptedHand = pe != null && pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand;
+        if (pe != null) Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = handCard.InstanceId });
+
+        var dl = st.DeckLook;
+        bool lookOpen = dl != null && dl.FromTrash && dl.DifferentNames && dl.SelectCount == 5;
+        int wiped = S.CharacterArea.Count(c => c != null);
+        int poolCount = dl?.Cards.Count ?? -1;
+        Console.WriteLine($"=== OP13-082 diag: promptedHand={promptedHand} lookOpen={lookOpen} wiped={wiped} pool={poolCount} ===");
+        Check("OP13-082 Five Elders: cost prompts hand-trash, wipes your board, opens a 5-pick different-names trash-play",
+              promptedHand && lookOpen && wiped == 0 && poolCount == 6,
+              $"promptedHand={promptedHand} lookOpen={lookOpen} wiped={wiped} pool={poolCount}  {Tail(st)}");
+
+        if (dl != null)
+        {
+            string mars1 = dl.Cards.First(c => c.CardId == "OP13-091").InstanceId;
+            Apply(st, new GameCommand { Type = "deckLookSelect", Seat = "south", Target = mars1 });
+            var dupMars = st.DeckLook?.Cards.FirstOrDefault(c => c.CardId == "OP13-091");
+            if (dupMars != null) Apply(st, new GameCommand { Type = "deckLookSelect", Seat = "south", Target = dupMars.InstanceId });   // rejected
+            int afterDupBoard = S.CharacterArea.Count(c => c != null);
+            foreach (var id in new[] { "OP13-080", "OP13-083", "OP13-084", "OP13-089" })
+            {
+                var card = st.DeckLook?.Cards.FirstOrDefault(c => c.CardId == id);
+                if (card != null) Apply(st, new GameCommand { Type = "deckLookSelect", Seat = "south", Target = card.InstanceId });
+            }
+            int finalBoard = S.CharacterArea.Count(c => c != null);
+            var ids = S.CharacterArea.Where(c => c != null).Select(c => c.CardId).ToList();
+            bool uniqueNames = ids.Count == ids.Distinct().Count();
+            bool dupBackInTrash = S.Trash.Any(c => c.CardId == "OP13-091");
+            Check("OP13-082 different-names + up-to-5: duplicate Mars rejected, 5 unique Elders played, unplayed dup returns to trash",
+                  afterDupBoard == 1 && finalBoard == 5 && uniqueNames && dupBackInTrash,
+                  $"afterDup={afterDupBoard} final={finalBoard} unique={uniqueNames} dupInTrash={dupBackInTrash} ids=[{string.Join(",", ids)}]  {Tail(st)}");
+        }
+    }
+
+    // OP11-097 "…I'm Losing My Edge!!!" [Counter]: "Up to 1 of your Leader or Character cards gains +1000
+    // … Then, if you have 10 or more cards in your trash, add up to 1 black Character card with a cost of 3
+    // or less from your trash to your hand." User: with 10+ trash, clicking Saint Shalria (black cost 1)
+    // said "condition not met, effect skipped." Reproduce + verify Shalria is addable.
+    static void Op11097CounterTrashAddDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st02", Seed = "losingedge" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 3;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 2; N.TurnsStarted = 2;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        var atk = MakeInPlay("ST01-005", "south"); atk.Rested = false; atk.PlayedOnTurn = 0; S.CharacterArea[0] = atk;
+        var edge = MakeInPlay("OP11-097", "north"); edge.Zone = "hand"; N.Hand.Add(edge);
+        N.CostArea.Add(new DonInstance { InstanceId = "n-don", Rested = false });
+        for (int i = 0; i < 9; i++) { var t = MakeInPlay("OP09-089", "north"); t.Zone = "trash"; N.Trash.Add(t); }
+        var shalria = MakeInPlay("OP13-086", "north"); shalria.Zone = "trash"; N.Trash.Add(shalria);
+        int trashBefore = N.Trash.Count;   // 10 in trash → the "10 or more" condition is met
+
+        Apply(st, new GameCommand { Type = "declareAttack", Seat = "south", Attacker = atk.InstanceId, Target = N.Leader.InstanceId });
+        Apply(st, new GameCommand { Type = "passBlock", Seat = "north" });
+        int before = st.EventLog.Count;
+        Apply(st, new GameCommand { Type = "counterWithCard", Seat = "north", InstanceId = edge.InstanceId });
+        Console.WriteLine($"=== OP11-097 counter diag (trash={trashBefore}) ===");
+        for (int step = 0; step < 8 && st.PendingEffects.Count > 0; step++)
+        {
+            var pe = st.PendingEffects[0];
+            Console.WriteLine($"   pending[{step}]: seat={pe.Seat} zone={pe.TargetZone} opt={pe.Optional} text={pe.Text}");
+            string tgt = null;
+            if (pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash) tgt = shalria.InstanceId;
+            else if (pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Play || pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any) tgt = N.Leader.InstanceId;
+            Apply(st, new GameCommand { Type = "resolveEffect", Seat = "north", EffectId = pe.EffectId, Target = tgt });
+        }
+        for (int i = before; i < st.EventLog.Count; i++) Console.WriteLine("   " + st.EventLog[i].Message);
+        bool shalriaInHand = N.Hand.Any(c => c.CardId == "OP13-086");
+        Check("OP11-097 counter: with 10+ trash, Saint Shalria (black cost 1) is addable from trash to hand",
+              shalriaInHand, $"shalriaInHand={shalriaInHand} trashNow={N.Trash.Count}  {Tail(st)}");
+    }
+
+    // OP16-060 Sengoku leader (Purple): "[Activate: Main] You may return 8 of your active DON!! cards to your
+    // DON!! deck: Play up to 3 {Admiral} type Character cards with different card names from your hand."
+    // (User: "similar-ish" to Five Elders — verify the cost + multi-pick different-names hand-play works.)
+    static void Op16060SengokuDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "sengoku" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; S.TurnsStarted = 4;
+        S.Leader.CardId = "OP16-060";
+        for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
+        for (int i = 0; i < 8; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sg{i}", Rested = false });
+        foreach (var id in new[] { "OP16-063", "OP16-065", "OP16-073", "OP16-063" })
+        { var c = MakeInPlay(id, "south"); c.Zone = "hand"; S.Hand.Add(c); }   // 3 unique Admirals + duplicate Kuzan
+
+        Apply(st, new GameCommand { Type = "activateMain", Seat = "south", Target = S.Leader.InstanceId });
+        int donAfterActivate = S.CostArea.Count(d => !d.Rested);
+        foreach (var id in new[] { "OP16-063", "OP16-065", "OP16-073" })
+        {
+            var pe = st.PendingEffects.FirstOrDefault(e => e.SourceCardId == "OP16-060");
+            if (pe == null) break;
+            var card = S.Hand.FirstOrDefault(c => c.CardId == id);
+            if (card != null) Apply(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = card.InstanceId });
+        }
+        int played = S.CharacterArea.Count(c => c != null);
+        var ids = S.CharacterArea.Where(c => c != null).Select(c => c.CardId).ToList();
+        bool unique = ids.Count == ids.Distinct().Count();
+        bool dupInHand = S.Hand.Any(c => c.CardId == "OP16-063");   // the 2nd Kuzan couldn't be played
+        Console.WriteLine($"=== OP16-060 Sengoku diag: donAfterActivate(active)={donAfterActivate} played={played} ids=[{string.Join(",", ids)}] ===");
+        Check("OP16-060 Sengoku: returns DON as cost, then plays up to 3 different-name {Admiral} from hand (dup rejected)",
+              played == 3 && unique && dupInHand,
+              $"played={played} unique={unique} dupInHand={dupInHand}  {Tail(st)}");
+    }
+
+    // BUG (playtest 2026-07-22): the Advanced bot played Gum-Gum Jet Pistol (ST01-015, "[Main] K.O. up to 1
+    // opponent Character with 6000 power or less") into an all-immune {Five Elders} board (7+ trash) — a wasted
+    // card + DON. RemovalEventHasTarget must report NO legal target there, so the bot drops the play.
+    static void RemovalEventTargetGuardDiag()
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "rmguard" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        var elder = MakeInPlay("OP13-091", "north"); N.CharacterArea[0] = elder;   // 5000-power Five Elders (≤6000)
+        for (int i = 0; i < 8; i++) { var t = MakeInPlay("OP09-089", "north"); t.Zone = "trash"; N.Trash.Add(t); }
+        var gumGum = CardData.GetCard("ST01-015");
+        bool immuneNoTarget = !GameEngine.RemovalEventHasTarget(st, "south", gumGum);   // 8 trash → immune → no target
+        N.Trash.Clear();
+        bool nowHasTarget = GameEngine.RemovalEventHasTarget(st, "south", gumGum);      // immunity gone → target exists
+        Check("Bot guard: Gum-Gum (K.O. ≤6000) has NO target vs immune Five Elders (7+ trash), YES once immunity drops",
+              immuneNoTarget && nowHasTarget, $"immuneNoTarget={immuneNoTarget} nowHasTarget={nowHasTarget}");
     }
 
     static CardInstance MakeInPlay(string cardId, string owner) => new CardInstance

@@ -4359,6 +4359,14 @@ public partial class DeckBuilderManager : MonoBehaviour
         @"(?<qty>\d{1,2})[\s,]*[xX]?[\s,]*(?<code>[A-Za-z]{1,4}\d{0,3}-\d{1,4}(?:-\d{1,3})?)",
         RegexOptions.Compiled);
 
+    // A BARE card code with no leading quantity — for exports that list every copy as its own
+    // token instead of "NxCODE": OnePieceTopDecks' JSON-array export
+    // (["Exported…","OP13-086","OP13-086",…]) or a plain one-code-per-line list. Same code shape as
+    // ImportTokenRegex's <code>; brackets, quotes, commas and header lines are simply not matched.
+    private static readonly Regex ImportBareCodeRegex = new Regex(
+        @"[A-Za-z]{1,4}\d{0,3}-\d{1,4}(?:-\d{1,3})?",
+        RegexOptions.Compiled);
+
     private void OpenImportModal()
     {
         if (importOverlay != null) Destroy(importOverlay.gameObject);
@@ -4381,8 +4389,8 @@ public partial class DeckBuilderManager : MonoBehaviour
 
         var hint = Text_("Hint", box,
             "Paste a deck list from OPTCGSim, EGMan, OnePieceTopDecks, Limitless or a tournament " +
-            "submission — lines like \"4xOP05-069\" or \"4 OP05-069\", one per line or space-separated " +
-            "all work. The leader is detected automatically.",
+            "submission — \"4xOP05-069\" / \"4 OP05-069\" quantity lists AND bare one-code-per-line or " +
+            "JSON-array exports all work. The leader is detected automatically.",
             11, Muted, TextAnchor.UpperLeft);
         hint.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(hint.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f),
@@ -4468,15 +4476,15 @@ public partial class DeckBuilderManager : MonoBehaviour
         var counts = new Dictionary<string, int>();
         var unknown = new List<string>();
 
-        foreach (Match m in ImportTokenRegex.Matches(raw))
+        // Resolve a code to a card (retrying without a trailing alt-art suffix, e.g. "OP09-004-1" →
+        // "OP09-004"), then route it to the leader slot or add `qty` copies to the main-deck counts.
+        // Shared by both parse paths so the quantity and bare-code styles behave identically.
+        void Take(string rawCode, int qty)
         {
-            int qty = int.Parse(m.Groups["qty"].Value);
-            string code = m.Groups["code"].Value.ToUpperInvariant();
-
+            string code = rawCode.ToUpperInvariant();
             var rec = Card(code);
             if (rec == null)
             {
-                // Try again without a trailing alt-art suffix, e.g. "OP09-004-1" → "OP09-004".
                 int lastDash = code.LastIndexOf('-');
                 int firstDash = code.IndexOf('-');
                 if (lastDash > firstDash && firstDash > 0)
@@ -4486,16 +4494,23 @@ public partial class DeckBuilderManager : MonoBehaviour
                     if (strippedRec != null) { rec = strippedRec; code = stripped; }
                 }
             }
-            if (rec == null) { unknown.Add(code); continue; }
-
-            if ((rec.type ?? "").ToLower() == "leader")
-            {
-                newLeaderId = code;   // last leader token wins if more than one appears
-                continue;
-            }
+            if (rec == null) { unknown.Add(code); return; }
+            if ((rec.type ?? "").ToLower() == "leader") { newLeaderId = code; return; }  // last leader wins
             counts.TryGetValue(code, out int cur);
             counts[code] = cur + qty;
         }
+
+        // Two decklist families: (a) QUANTITY style — "4xOP05-069" / "4 OP05-069" (OPTCGSim, EGMan,
+        // tournament text); (b) BARE-CODE style — every copy is its own token with no quantity, e.g.
+        // OnePieceTopDecks' JSON-array export or a plain one-code-per-line list. A JSON array always
+        // lists each copy, so force the bare-code path for it; otherwise prefer quantity tokens when
+        // present, else fall back to counting bare codes.
+        bool looksJsonArray = raw.TrimStart().StartsWith("[");
+        var qtyMatches = looksJsonArray ? null : ImportTokenRegex.Matches(raw);
+        if (qtyMatches != null && qtyMatches.Count > 0)
+            foreach (Match m in qtyMatches) Take(m.Groups["code"].Value, int.Parse(m.Groups["qty"].Value));
+        else
+            foreach (Match m in ImportBareCodeRegex.Matches(raw)) Take(m.Value, 1);
 
         if (newLeaderId == null && counts.Count == 0)
         {

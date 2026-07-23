@@ -22,6 +22,7 @@ namespace OnePieceTcg.Engine.Bot.Search
                 Selected = s.Selected == null ? null : new SelectionRef { InstanceId = s.Selected.InstanceId, Seat = s.Selected.Seat },
                 Battle = CloneBattle(s.Battle),
                 DeckLook = CloneDeckLook(s.DeckLook),
+                PendingCharReplace = CloneCharReplace(s.PendingCharReplace),
                 ActiveChoice = CloneChoice(s.ActiveChoice),
             };
             g.PendingEffects = s.PendingEffects.Select(ClonePE).ToList();
@@ -93,6 +94,11 @@ namespace OnePieceTcg.Engine.Bot.Search
         {
             Seat = c.Seat, ControllerSeat = c.ControllerSeat, SourceInstanceId = c.SourceInstanceId,
             SourceCardId = c.SourceCardId, Timing = c.Timing, OptionA = c.OptionA, OptionB = c.OptionB,
+        };
+
+        private static CharReplaceState CloneCharReplace(CharReplaceState c) => c == null ? null : new CharReplaceState
+        {
+            Seat = c.Seat, Held = CloneCard(c.Held), Rested = c.Rested, SourceName = c.SourceName, ReturnZone = c.ReturnZone,
         };
 
         private static DeckLookState CloneDeckLook(DeckLookState d) => d == null ? null : new DeckLookState

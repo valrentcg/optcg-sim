@@ -438,6 +438,10 @@ namespace OnePieceTcg.Engine.Bot
                 return Try(blacklist, new GameCommand { Type = "resolveChoice", Seat = seat, Target = "B" });
             }
 
+            if (state.PendingCharReplace != null && state.PendingCharReplace.Seat != seat) return null;
+            if (state.PendingCharReplace != null && state.PendingCharReplace.Seat == seat)
+                return DecideCharReplace(state, seat, blacklist);
+
             if (state.DeckLook != null && state.DeckLook.Seat != seat) return null;
             if (state.DeckLook != null && state.DeckLook.Seat == seat)
                 return DecideDeckLook(state, seat, blacklist);
@@ -727,6 +731,26 @@ namespace OnePieceTcg.Engine.Bot
             return null;
         }
 
+        // ---- 6th-character replacement: play over my weakest Character only if the incoming card is
+        // worth more than it; otherwise keep my board (skip). The engine also offers Skip so this never
+        // stalls. ---------------------------------------------------------------------------------------
+        private static GameCommand DecideCharReplace(GameState state, string seat, HashSet<string> blacklist)
+        {
+            var cr = state.PendingCharReplace;
+            var me = state.Players[seat];
+            var mine = me.CharacterArea.Where(c => c != null).ToList();
+            if (cr != null && cr.Held != null && mine.Count > 0)
+            {
+                var weakest = mine.OrderBy(c => Value(state, c)).First();
+                if (Value(state, cr.Held) > Value(state, weakest))
+                {
+                    var cmd = Try(blacklist, new GameCommand { Type = "charReplace", Seat = seat, Target = weakest.InstanceId });
+                    if (cmd != null) return cmd;
+                }
+            }
+            return new GameCommand { Type = "charReplace", Seat = seat, Target = "" };   // skip: keep the board
+        }
+
         // ---- Deck-look resolution (simplified: pick the single best matching card) --
 
         private static GameCommand DecideDeckLook(GameState state, string seat, HashSet<string> blacklist)
@@ -777,7 +801,15 @@ namespace OnePieceTcg.Engine.Bot
                 return false;
             if (!string.IsNullOrEmpty(dl.FeatureFilter) && !def.HasFeature(dl.FeatureFilter)) return false;
             if (dl.MaxCost >= 0 && def.Cost > dl.MaxCost) return false;
+            if (dl.MinCost >= 0 && def.Cost < dl.MinCost) return false;
             if (dl.MaxPower >= 0 && def.Power > dl.MaxPower) return false;
+            if (dl.ExactPower >= 0 && def.Power != dl.ExactPower) return false;
+            if (!string.IsNullOrEmpty(dl.ExcludeName) && GameEngine.NameMatches(state, card, dl.ExcludeName)) return false;
+            if (!string.IsNullOrEmpty(dl.ColorFilter) && (def.Color ?? "").IndexOf(dl.ColorFilter, StringComparison.OrdinalIgnoreCase) < 0) return false;
+            // "with different card names": a name already played this look is no longer eligible.
+            if (dl.DifferentNames && dl.PlayedNames != null
+                && dl.PlayedNames.Any(n => string.Equals(n, GameEngine.GetEffectiveName(state, card), StringComparison.OrdinalIgnoreCase)))
+                return false;
             if (dl.RequireTrigger && string.IsNullOrEmpty(def.Trigger)) return false;
             // "Play mode" search effects reject a Character pick outright when the board is
             // full (the engine re-inserts it and no-ops rather than advancing) — the blacklist
