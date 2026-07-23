@@ -489,12 +489,13 @@ public partial class DeckBuilderManager : MonoBehaviour
         [NonSerialized] public DeckBuilderManager mgr;
         [NonSerialized] public TileView tile;    // set for recycled pool tiles (live id); else null
         [NonSerialized] public string   cardId;  // set for fixed widgets
+        [NonSerialized] public bool     previewOnLeft;  // true for right-side widgets (decklist) → preview docks LEFT
 
         public void OnPointerEnter(PointerEventData e)
         {
             if (mgr == null) return;
             string id = tile != null ? tile.boundId : cardId;
-            mgr.ShowCardPreview(id);
+            mgr.ShowCardPreview(id, previewOnLeft);
         }
 
         public void OnPointerExit(PointerEventData e)
@@ -1015,8 +1016,10 @@ public partial class DeckBuilderManager : MonoBehaviour
 
     // Show the big right-side preview for a card id. No-ops to hidden if the id
     // has no art or record.
-    private void ShowCardPreview(string id)
+    private bool _previewOnLeft;
+    private void ShowCardPreview(string id, bool onLeft = false)
     {
+        _previewOnLeft = onLeft;
         if (previewRoot == null) return;
         var rec = Card(id);
         if (rec == null) { HideCardPreview(); return; }
@@ -1041,8 +1044,16 @@ public partial class DeckBuilderManager : MonoBehaviour
         if (previewRoot == null) return;
         float rightW = (view == View.Editor) ? 320f : 480f;   // matches the decklist panel width per view
         const float prevW = 380f, margin = 16f;               // large, match-sized card
-        Stretch(previewRoot, new Vector2(1f, 0.10f), new Vector2(1f, 0.94f),
-            new Vector2(-(rightW + margin + prevW), 0f), new Vector2(-(rightW + margin), 0f));
+        if (_previewOnLeft)
+            // Hovering the RIGHT decklist → dock the preview JUST LEFT of it (over the middle), so it doesn't
+            // cover the decklist row you're reading.
+            Stretch(previewRoot, new Vector2(1f, 0.10f), new Vector2(1f, 0.94f),
+                new Vector2(-(rightW + margin + prevW), 0f), new Vector2(-(rightW + margin), 0f));
+        else
+            // Hovering the MIDDLE pool (or the LEFT leader) → dock the preview at the far RIGHT (over the
+            // decklist), so it doesn't cover the card you're hovering in the grid.
+            Stretch(previewRoot, new Vector2(1f, 0.10f), new Vector2(1f, 0.94f),
+                new Vector2(-(prevW + margin), 0f), new Vector2(-margin, 0f));
     }
 
     private void HideCardPreview()
@@ -2859,7 +2870,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         Round(row);
         // Hovering a deck row pops the same right-side preview (same as editor BuildDeckRow).
         var rowHov = row.gameObject.AddComponent<HoverPreview>();
-        rowHov.mgr = this; rowHov.cardId = rec.id;
+        rowHov.mgr = this; rowHov.cardId = rec.id; rowHov.previewOnLeft = true;   // right-panel row → preview docks LEFT
 
         // Art bleed (same pattern as editor BuildDeckRow, minus ± controls) -
         // small pre-generated thumbnail tier, this never needs the master.
@@ -3345,7 +3356,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         Round(row);
         // Hovering a deck row pops the same right-side preview.
         var rowHov = row.gameObject.AddComponent<HoverPreview>();
-        rowHov.mgr = this; rowHov.cardId = rec.id;
+        rowHov.mgr = this; rowHov.cardId = rec.id; rowHov.previewOnLeft = true;   // right-panel row → preview docks LEFT
 
         // Hearthstone-style flavour: the card art bleeds in from the right, behind
         // the controls, and fades into the row so the name/cost stay readable.
