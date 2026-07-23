@@ -110,6 +110,182 @@ switch (mode)
         return (block && allow) ? 0 : 1;
     }
 
+    case "puzzlegen":
+    {
+        // Offline certifier: build procedural puzzles, keep only those the exact solver proves are forced-lethal,
+        // spread across difficulty tiers, and emit the verified-seed manifest to paste into PuzzleLibrary.
+        int scanTo = args.Length > 1 ? int.Parse(args[1]) : 60000;
+        int[] targets = { 0, 25, 25, 30, 20 };   // by family difficulty 1..4 (total 100)
+        var full = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 6_000, MaxDepth = 60 };
+        // Pools keyed by (difficulty, family) so selection can vary families within each tier.
+        var pool = new System.Collections.Generic.Dictionary<(int, string), List<int>>();
+        const int poolCap = 44;
+        var sigs = new HashSet<string>();
+        int attempted = 0, lethal = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        int[] tierMin = { 0, 22, 34, 40, 30 };   // pool at least this many per tier (buffer over targets) before stopping
+        for (int seed = 1; seed <= scanTo; seed++)
+        {
+            bool enough = true;
+            for (int d = 1; d <= 4; d++) if (pool.Where(kv => kv.Key.Item1 == d).Sum(kv => kv.Value.Count) < tierMin[d]) enough = false;
+            if (enough && seed > 300) break;
+            if (seed % 1000 == 0) Console.Error.WriteLine($"  [progress] seed {seed}: pooled {pool.Sum(kv => kv.Value.Count)}, D1234=[{string.Join(",", Enumerable.Range(1, 4).Select(d => pool.Where(kv => kv.Key.Item1 == d).Sum(kv => kv.Value.Count)))}], {sw.ElapsedMilliseconds}ms");
+            attempted++;
+            var gp = OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(seed);
+            int diff = Math.Clamp(gp.Difficulty, 1, 4);
+            var key = (diff, gp.Category);
+            if (pool.TryGetValue(key, out var lst0) && lst0.Count >= poolCap) continue;   // pool full — skip solve
+            var res = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(gp.State, "south", full);
+            if (res.Outcome != OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win || res.BudgetHit) continue;
+            lethal++;
+            int attacks = res.PrincipalVariation.Count(c => c.Type == "declareAttack" && (c.Seat == null || c.Seat == "south"));
+            if (attacks < 2) continue;
+            if (!sigs.Add(Signature(gp))) continue;
+            if (!pool.TryGetValue(key, out var lst)) pool[key] = lst = new List<int>();
+            lst.Add(seed);
+        }
+        sw.Stop();
+        // VALIDATE at a higher budget: each must be forced-lethal AND swing-only must LOSE (truly requires a
+        // non-attack action). Cache results so a seed is validated once.
+        var vfull = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 80_000, MaxDepth = 60 };
+        var vswing = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options
+        { WorkBudget = 80_000, MaxDepth = 60, AttackerFilter = c => c.Type == "declareAttack" };
+        var valCache = new System.Collections.Generic.Dictionary<int, bool>();
+        int badLethal = 0, badSwing = 0;
+        bool Valid(int s)
+        {
+            if (valCache.TryGetValue(s, out var v)) return v;
+            var gp = OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(s);
+            bool ok = true;
+            if (OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(gp.State, "south", vfull).Outcome != OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win) { badLethal++; ok = false; }
+            else if (OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(gp.State, "south", vswing).Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win) { badSwing++; ok = false; }
+            valCache[s] = ok; return ok;
+        }
+        // Select balanced 100 by difficulty; round-robin families within each tier for variety (validated only).
+        var chosen = new List<int>[5]; for (int i = 0; i < 5; i++) chosen[i] = new List<int>();
+        var picked = new HashSet<int>();
+        for (int d = 1; d <= 4; d++)
+        {
+            var cats = pool.Where(kv => kv.Key.Item1 == d).Select(kv => kv.Key.Item2).Distinct().ToList();
+            var idx = cats.ToDictionary(c => c, c => 0);
+            while (chosen[d].Count < targets[d] && cats.Count > 0)
+            {
+                bool progressed = false;
+                foreach (var cat in cats.ToList())
+                {
+                    if (chosen[d].Count >= targets[d]) break;
+                    var lst = pool[(d, cat)];
+                    while (idx[cat] < lst.Count)
+                    {
+                        int s = lst[idx[cat]++];
+                        if (Valid(s)) { chosen[d].Add(s); picked.Add(s); progressed = true; break; }
+                    }
+                }
+                if (!progressed) break;
+            }
+        }
+        // Backfill to 100 from any remaining validated seed (any difficulty).
+        var leftovers = pool.SelectMany(kv => kv.Value).Distinct().Where(s => !picked.Contains(s)).ToList();
+        for (int d = 1; d <= 4 && chosen.Sum(c => c.Count) < 100; d++)
+            foreach (var s in leftovers.Where(s => Math.Clamp(OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(s).Difficulty, 1, 4) == d).ToList())
+            {
+                if (chosen.Sum(c => c.Count) >= 100) break;
+                if (chosen[d].Count >= targets[d] + 6) continue;
+                if (!picked.Contains(s) && Valid(s)) { chosen[d].Add(s); picked.Add(s); }
+            }
+        var all = new List<int>(); for (int d = 1; d <= 4; d++) all.AddRange(chosen[d]);
+        var catCount = new System.Collections.Generic.Dictionary<string, int>();
+        foreach (var s in all) { var c = OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(s).Category; catCount[c] = catCount.GetValueOrDefault(c) + 1; }
+        Console.WriteLine($"scanned {attempted}, lethal {lethal}, pooled {pool.Sum(kv => kv.Value.Count)}, selected {all.Count} in {sw.ElapsedMilliseconds} ms (dropped lethal={badLethal} swing={badSwing})");
+        for (int d = 1; d <= 4; d++) Console.WriteLine($"  difficulty {d}: {chosen[d].Count}/{targets[d]}");
+        Console.WriteLine("  families: " + string.Join(", ", catCount.Select(kv => $"{kv.Key}={kv.Value}")));
+        Console.WriteLine("\n// ---- paste into PuzzleLibrary.VerifiedSeeds ----");
+        for (int d = 1; d <= 4; d++)
+            Console.WriteLine($"        /* D{d} */ {string.Join(", ", chosen[d])},");
+        return all.Count >= 100 ? 0 : 2;
+    }
+
+    case "puzzledump":
+    {
+        int seed = args.Length > 1 ? int.Parse(args[1]) : 1;
+        var gp = OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(seed);
+        var st = gp.State; var S = st.Players["south"]; var N = st.Players["north"];
+        string Pw(OnePieceTcg.Engine.CardInstance c) => c == null ? "." : $"{c.CardId}({OnePieceTcg.Engine.GameEngine.GetPower(st, c)}{(c.Rested ? "R" : "")})";
+        Console.WriteLine($"seed {seed} [{gp.Category}] {gp.Title}");
+        Console.WriteLine($"  SOUTH leader {Pw(S.Leader)} don={S.CostArea.Count} chars=[{string.Join(" ", S.CharacterArea.Where(c => c != null).Select(Pw))}] hand=[{string.Join(" ", S.Hand.Select(c => c.CardId))}]");
+        Console.WriteLine($"  NORTH leader {Pw(N.Leader)} life={N.Life.Count} don={N.CostArea.Count} chars=[{string.Join(" ", N.CharacterArea.Where(c => c != null).Select(Pw))}] hand=[{string.Join(" ", N.Hand.Select(c => c.CardId))}]");
+        var cands = OnePieceTcg.Engine.Bot.Search.LegalActions.Validate(st, "south",
+            OnePieceTcg.Engine.Bot.Search.LegalActions.Candidates(st, "south"));
+        Console.WriteLine($"  south legal moves: {string.Join(" | ", cands.Select(kv => $"{kv.Key.Type}:{kv.Key.Attacker ?? kv.Key.Target}"))}");
+        var r = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(st, "south", new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 500_000 });
+        Console.WriteLine($"  => {r.Outcome} work={r.Work}  PV: {string.Join(" | ", r.PrincipalVariation.Select(c => $"{c.Seat}:{c.Type}:{c.Attacker ?? c.Target ?? c.InstanceId}"))}");
+        return 0;
+    }
+
+    case "puzzletime":
+    {
+        int n = args.Length > 1 ? int.Parse(args[1]) : 30;
+        long bud = args.Length > 2 ? long.Parse(args[2]) : 100_000;
+        var o = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = bud, MaxDepth = 60 };
+        int win = 0;
+        for (int seed = 1; seed <= n; seed++)
+        {
+            var gp = OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(seed);
+            var t = System.Diagnostics.Stopwatch.StartNew();
+            var r = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(gp.State, "south", o);
+            t.Stop();
+            if (r.Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win) win++;
+            Console.WriteLine($"seed {seed,4} {gp.Category,-13} {r.Outcome,-8} work={r.Work,9} nodes={r.Nodes,7} {t.ElapsedMilliseconds,6}ms budgetHit={r.BudgetHit}");
+        }
+        Console.WriteLine($"lethal {win}/{n}");
+        return 0;
+    }
+
+    case "puzzlecheck":
+    {
+        // Validate every baked puzzle through the RUNTIME (PuzzleRuntime.Start), which re-solves at the live
+        // budget — catches any that certified offline but would show a false "Failed" at load.
+        var lib = OnePieceTcg.Engine.Puzzles.PuzzleLibrary.All();
+        int ok = 0, bad = 0;
+        foreach (var pz in lib)
+        {
+            var rt = new OnePieceTcg.Engine.Puzzles.PuzzleRuntime();
+            if (!rt.Start(pz.Build(), pz.Attacker))
+            { bad++; Console.WriteLine($"  FAIL(start) {pz.Id} [{pz.Category} D{pz.Difficulty}]: {rt.Message}"); continue; }
+            // Drive adaptively vs the runtime's optimal defence — must reach Solved.
+            for (int g2 = 0; g2 < 60 && rt.Status == OnePieceTcg.Engine.Puzzles.PuzzleRuntime.PuzzleStatus.InProgress; g2++)
+            {
+                var step = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(rt.State, pz.Attacker, rt.SolveOpts);
+                var mv = step.PrincipalVariation.FirstOrDefault(c => c.Seat == pz.Attacker);
+                if (mv == null || !rt.ApplyMove(mv)) break;
+            }
+            if (rt.Status == OnePieceTcg.Engine.Puzzles.PuzzleRuntime.PuzzleStatus.Solved) ok++;
+            else { bad++; Console.WriteLine($"  FAIL(play) {pz.Id} [{pz.Category} D{pz.Difficulty}]: ended {rt.Status}"); }
+        }
+        Console.WriteLine($"puzzlecheck: {ok}/{lib.Count} solved end-to-end vs optimal defence ({bad} bad)");
+        return bad == 0 ? 0 : 1;
+    }
+
+    case "docqtest":
+    {
+        // OP09-090 Doc Q: "rest this Character: K.O. up to 1 opponent Character cost<=1". Don't rest an
+        // attacker to KO a body that poses no threat (Saint Shalria: cost 1, 0 power, spent [On Play], UNRESTED).
+        var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "docq" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        OnePieceTcg.Engine.CardInstance In(string id, string owner, string zone, bool rested = false) => new OnePieceTcg.Engine.CardInstance
+        { InstanceId = $"{owner}-{id}-{System.Guid.NewGuid():N}".Substring(0, 18), CardId = id, Owner = owner, Zone = zone, Rested = rested };
+        var docq = In("OP09-090", "south", "character"); S.CharacterArea[0] = docq;
+        var docqDef = OnePieceTcg.Engine.GameEngine.GetCard(docq);
+        N.CharacterArea[0] = In("OP13-086", "north", "character", rested: false);   // Saint Shalria: unrested, 0 power, spent [On Play]
+        bool skipShalria = OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy.RestCostRemovalHasNoLiveTarget(st, "south", docqDef);
+        N.CharacterArea[0] = In("ST01-003", "north", "character", rested: false);   // Karoo: cost 1, 3000 power -> in-range threat
+        bool skipPowerBody = OnePieceTcg.Engine.Bot.Search.AdvancedActivationPolicy.RestCostRemovalHasNoLiveTarget(st, "south", docqDef);
+        System.Console.WriteLine($"Doc Q rest-removal gate: unrested spent 0-power Shalria -> skip={skipShalria}  cost-1 power body -> allow={!skipPowerBody}");
+        return (skipShalria && !skipPowerBody) ? 0 : 1;
+    }
+
     case "smoke":
     {
         var cfg = new ExperimentConfig
@@ -3267,4 +3443,14 @@ static T LoadJson<T>(string path) where T : class
     if (!File.Exists(path)) { Console.Error.WriteLine($"config not found: {path}"); return null; }
     return JsonSerializer.Deserialize<T>(File.ReadAllText(path),
         new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+}
+
+// Board fingerprint for de-duping generated puzzles: same category + same material on both sides = a dupe.
+static string Signature(OnePieceTcg.Engine.Puzzles.GeneratedPuzzle gp)
+{
+    var s = gp.State; var S = s.Players["south"]; var N = s.Players["north"];
+    string Cards(IEnumerable<OnePieceTcg.Engine.CardInstance> zone) =>
+        string.Join(",", zone.Where(c => c != null).Select(c => c.CardId).OrderBy(x => x, StringComparer.Ordinal));
+    return $"{gp.Category}|SA:{Cards(S.CharacterArea)}|Sd:{S.CostArea.Count}|Sh:{Cards(S.Hand)}"
+         + $"|NA:{Cards(N.CharacterArea)}|Nd:{N.CostArea.Count}|Nh:{Cards(N.Hand)}|NL:{N.Life.Count}";
 }

@@ -105,10 +105,14 @@ namespace OnePieceTcg.Sim.Puzzles
                 {
                     var rt = new PuzzleRuntime();
                     rt.Start(pos, pz.Attacker);               // Start clones pos; GameClone preserves instance ids
-                    foreach (var mv in proof.PrincipalVariation.Where(c => c.Seat == pz.Attacker))
+                    // Drive ADAPTIVELY: re-solve from the live position each step and play the current best
+                    // attacker move. A fixed PV assumes one defence; the runtime plays its OWN strongest
+                    // defence, so the winning line must be recomputed against what the defender actually does.
+                    for (int guard = 0; guard < 40 && rt.Status == PuzzleRuntime.PuzzleStatus.InProgress; guard++)
                     {
-                        if (rt.Status != PuzzleRuntime.PuzzleStatus.InProgress) break;
-                        rt.ApplyMove(mv);
+                        var step = LethalSolver.Solve(rt.State, pz.Attacker, rt.SolveOpts);
+                        var mv = step.PrincipalVariation.FirstOrDefault(c => c.Seat == pz.Attacker);
+                        if (mv == null || !rt.ApplyMove(mv)) break;
                     }
                     solved = rt.Status == PuzzleRuntime.PuzzleStatus.Solved;
                 }

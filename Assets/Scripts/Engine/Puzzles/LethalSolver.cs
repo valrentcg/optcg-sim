@@ -41,6 +41,10 @@ namespace OnePieceTcg.Engine.Puzzles
             public long WorkBudget = 3_000_000;   // legal-move-expansion cap (0 = unlimited). UNKNOWN once spent.
             public int MaxDepth = 60;             // hard cap on command depth within the turn
             public bool UseTransposition = true;
+            /// <summary>Optional restriction on the ATTACKER's moves (defender moves are never filtered, so a
+            /// WIN under a filter is still a real proof against optimal defense). Used to ask counterfactuals
+            /// like "can the attacker win using ONLY attacks?" — the basis of the puzzle difficulty grader.</summary>
+            public Func<GameCommand, bool> AttackerFilter;
         }
 
         private sealed class Ctx
@@ -96,6 +100,8 @@ namespace OnePieceTcg.Engine.Puzzles
             bool attackerToMove = decider == attacker;
 
             var legal = LegalActions.Validate(state, decider, LegalActions.Candidates(state, decider));
+            if (attackerToMove && ctx.Opt.AttackerFilter != null)
+                legal = legal.Where(kv => ctx.Opt.AttackerFilter(kv.Key)).ToList();
             if (legal.Count == 0)
             {
                 var stuck = attackerToMove ? Lethal.NoLethal : Lethal.Unknown;
@@ -153,9 +159,12 @@ namespace OnePieceTcg.Engine.Puzzles
         private static IEnumerable<KeyValuePair<GameCommand, GameState>> Order(
             List<KeyValuePair<GameCommand, GameState>> legal)
         {
+            // Setup-before-attack ordering: real puzzle lethals almost always play/activate/attach FIRST, then
+            // swing. Trying setup moves before attacks lets the OR node hit a winning line without first
+            // exhausting every (losing) pure-attack ordering — a large speedup for the generator's certifier.
             int Rank(GameCommand c) => c.Type switch
             {
-                "declareAttack" => 0, "activateMain" => 1, "playCard" => 2, "attachDon" => 3, "endTurn" => 9, _ => 4,
+                "activateMain" => 0, "playCard" => 1, "attachDon" => 2, "declareAttack" => 3, "endTurn" => 9, _ => 4,
             };
             return legal.OrderBy(kv => Rank(kv.Key));
         }

@@ -51,8 +51,10 @@ namespace OnePieceTcg.Engine.Puzzles
         public int HintsRevealed { get; private set; }
         public IReadOnlyList<GameCommand> PlayerMoves => _playerMoves;
 
-        /// <summary>Options tuning the solver used for live verification/defense (lighter than an offline proof).</summary>
-        public LethalSolver.Options SolveOpts = new LethalSolver.Options { WorkBudget = 1_500_000 };
+        /// <summary>Options for live verification. The budget comfortably exceeds what the baked puzzles need to
+        /// prove lethal (they certify in well under 80k work), so Start never reports a false "Unknown", while
+        /// staying small enough that the solve is snappy.</summary>
+        public LethalSolver.Options SolveOpts = new LethalSolver.Options { WorkBudget = 400_000 };
 
         /// <summary>Begin from a live position. Returns false (and marks Failed) if it is NOT a valid lethal
         /// puzzle — i.e. the solver cannot prove a forced win for the attacker. A valid puzzle must start Win.</summary>
@@ -121,28 +123,24 @@ namespace OnePieceTcg.Engine.Puzzles
             }
         }
 
-        // Pick the defender move that is WORST for the attacker: a defense that REFUTES (NoLethal) is best for
-        // the defender, then one that at least isn't provably lost (Unknown), then any (all lose = Win). This
-        // is what makes a wrong player move actually fail: if the line stopped being lethal, the refuting
-        // defense is the one that gets played.
+        // Always defend OPTIMALLY, right to the end. A defense that REFUTES the attacker (NoLethal — only
+        // possible after the player misplays) is best. Otherwise, among the losing defenses, play the one that
+        // makes the attacker work HARDEST — i.e. actually block and counter to delay lethal instead of passing —
+        // so the puzzle has a single optimal winning line and the bot resists until it takes the final blow.
         private KeyValuePair<GameCommand, GameState> StrongestDefense(GameState s, string defender)
         {
             var legal = LegalActions.Validate(s, defender, LegalActions.Candidates(s, defender));
             if (legal.Count == 0) return default;
             if (legal.Count == 1) return legal[0];
 
-            var defenseOpts = new LethalSolver.Options { WorkBudget = 500_000 };
-            KeyValuePair<GameCommand, GameState> best = default; int bestRank = -1;
+            var defenseOpts = new LethalSolver.Options { WorkBudget = 200_000 };
+            KeyValuePair<GameCommand, GameState> best = default; int bestRank = -1; long bestWork = -1;
             foreach (var kv in legal)
             {
                 var r = LethalSolver.Solve(kv.Value, _attacker, defenseOpts);
-                int rank = r.Outcome switch
-                {
-                    LethalSolver.Lethal.NoLethal => 2,   // defender escapes -> best for defender
-                    LethalSolver.Lethal.Unknown => 1,
-                    _ => 0,                              // attacker still wins
-                };
-                if (rank > bestRank) { bestRank = rank; best = kv; if (rank == 2) break; }
+                int rank = r.Outcome == LethalSolver.Lethal.NoLethal ? 1 : 0;   // refute > any losing defense
+                if (rank > bestRank || (rank == bestRank && r.Work > bestWork))
+                { bestRank = rank; bestWork = r.Work; best = kv; }
             }
             return best;
         }
@@ -154,18 +152,19 @@ namespace OnePieceTcg.Engine.Puzzles
                 bool won = LethalSolver.WinnerOf(_state) == _attacker;
                 Status = won ? PuzzleStatus.Solved : PuzzleStatus.Failed;
                 StillWinning = won;
-                Message = won ? "Solved - that's lethal!" : "That line doesn't win.";
+                Message = won ? "Solved — that's lethal!" : "That line doesn't win.";
                 return;
             }
+            // Turn ended without lethal = the player is out of chances on this puzzle -> a real fail (this is
+            // the ONLY mid-play fail; we deliberately do NOT re-solve after every move and tell the player
+            // "that was wrong", which would hand them the answer like a multiple-choice question).
             if (_state.ActiveSeat != _attacker)
             {
                 Status = PuzzleStatus.Failed; StillWinning = false;
-                Message = "Your turn ended without lethal.";
+                Message = "Out of lethal — your turn ended.";
                 return;
             }
-            var proof = LethalSolver.Solve(_state, _attacker, SolveOpts);
-            StillWinning = proof.Outcome == LethalSolver.Lethal.Win;
-            Message = StillWinning ? "On track." : "Careful - lethal is no longer forced from here.";
+            Message = "Find the lethal line.";
         }
 
         /// <summary>A single graduated hint (1 obscure, 2 targeted, 3 explicit) for the CURRENT position, so

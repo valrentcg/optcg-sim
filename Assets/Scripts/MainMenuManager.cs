@@ -6888,7 +6888,9 @@ public partial class MainMenuManager : MonoBehaviour
         BuildMultiSubTile(subRow, "Versus Self", "soloSelf",   ModeStatus.Ready, 0, 4, 6f);
         BuildMultiSubTile(subRow, "Versus A.I.", "soloAi",     ModeStatus.Ready, 1, 4, 6f);
         BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Ready, 2, 4, 6f);
-        BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Ready, 3, 4, 6f);
+        // Puzzles is playable but still being expanded — show a DEV chip (same treatment as ranked/casual),
+        // while keeping the mode itself launchable.
+        BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Dev,   3, 4, 6f);
     }
 
     // ── Multiplayer sub-tile (centered label + SOON chip below) ──────────────

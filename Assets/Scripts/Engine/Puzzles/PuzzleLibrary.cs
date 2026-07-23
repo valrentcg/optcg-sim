@@ -13,13 +13,48 @@ namespace OnePieceTcg.Engine.Puzzles
         public string Attacker = "south";
         public string Category;      // attack-order / counter-aware / don-allocation ...
         public string Teaches;       // one-line lesson shown after solving
+        public int Difficulty = 1;   // 1 Easy · 2 Medium · 3 Hard · 4 Expert
         public Func<GameState> Build;
     }
 
-    /// <summary>The starter puzzle set. Small, hand-authored, and each teaches one identifiable idea from the
-    /// human lethal framework. Later these are supplemented by puzzles harvested from real matches.</summary>
+    /// <summary>The puzzle set. The bulk is procedurally generated (<see cref="PuzzleGenerator"/>) and every
+    /// entry was certified as EXACTLY forced-lethal offline by the LethalSolver `puzzlegen` pass, so the mode
+    /// never ships an unsolvable "puzzle". A few hand-authored starters teach the core ideas explicitly.</summary>
     public static class PuzzleLibrary
     {
+        /// <summary>Seeds the offline certifier proved are forced-lethal, grouped Easy→Expert. Reproduced
+        /// byte-for-byte by <see cref="PuzzleGenerator.Build"/> in both the client and the headless Sim.</summary>
+        public static readonly int[] VerifiedSeeds =
+        {
+            /* D1 Easy   */ 181, 18, 221, 22, 261, 27, 268, 29, 439, 31, 142, 186, 237, 259, 274, 316, 349, 355, 383, 412, 443, 478,
+            /* D2 Medium */ 1, 21, 205, 6, 73, 314, 7, 99, 364, 8, 130, 407, 11, 172, 456, 19, 194, 490, 37, 295, 493, 62, 405, 505, 97, 126, 128, 246,
+            /* D3 Hard   */ 43, 39, 74, 192, 56, 80, 88, 75, 123, 115, 117, 152, 132, 161, 165, 190, 169, 228, 207, 255, 252, 229, 262, 254, 241, 320, 332, 243, 361, 402,
+            /* D4 Expert */ 2, 91, 32, 4, 108, 102, 16, 135, 103, 26, 141, 171, 30, 157, 226, 57, 158, 275, 58, 166,
+        };
+
+        /// <summary>The full verified puzzle set (100), each built deterministically from its seed. `Build`
+        /// returns a NEW GameState each call so Restart always gets a clean board.</summary>
+        public static List<AuthoredPuzzle> All()
+        {
+            var list = new List<AuthoredPuzzle>(VerifiedSeeds.Length);
+            foreach (var seed in VerifiedSeeds)
+            {
+                int s = seed;                                   // capture per-iteration for the closure
+                var meta = PuzzleGenerator.Build(s);            // title / teaches / difficulty / category
+                list.Add(new AuthoredPuzzle
+                {
+                    Id = "gen-" + s,
+                    Title = meta.Title,
+                    Attacker = meta.AttackerSeat,
+                    Category = meta.Category,
+                    Teaches = meta.Teaches,
+                    Difficulty = meta.Difficulty,
+                    Build = () => PuzzleGenerator.Build(s).State,
+                });
+            }
+            return list;
+        }
+
         public static List<AuthoredPuzzle> Starters() => new List<AuthoredPuzzle>
         {
             new AuthoredPuzzle

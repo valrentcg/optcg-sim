@@ -8,6 +8,7 @@
 // author's sequence. See Assets/Scripts/Engine/Puzzles/ for the solver / hints / runtime.
 
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using OnePieceTcg.Engine;
 using OnePieceTcg.Engine.Puzzles;
@@ -43,7 +44,7 @@ public partial class GameManager
         aiSeat = null;
         isNetworked = false;
 
-        puzzleSet = PuzzleLibrary.Starters();
+        puzzleSet = BuildShuffledPuzzleSet();
         puzzleIndex = 0;
         if (!string.IsNullOrEmpty(PendingPuzzleId))
         {
@@ -51,6 +52,14 @@ public partial class GameManager
             if (idx >= 0) puzzleIndex = idx;
         }
         LoadPuzzle(puzzleIndex);
+    }
+
+    // The full verified set (100), fully shuffled across ALL difficulties so "Next" jumps to a random puzzle of
+    // any difficulty (not a long run of Easy then Medium ...). Random per session (not deterministic).
+    private List<AuthoredPuzzle> BuildShuffledPuzzleSet()
+    {
+        var rng = new System.Random();
+        return PuzzleLibrary.All().OrderBy(_ => rng.Next()).ToList();
     }
 
     private void LoadPuzzle(int idx)
@@ -70,6 +79,10 @@ public partial class GameManager
         puzzleHintGlow.Clear();
         southDisplayName = "You";
         northDisplayName = "Opponent";
+        // Clear any finished-match result overlay left over from the previous (solved) puzzle so Next/Replay
+        // return straight to a live board.
+        finishedResultText = null;
+        matchResultHidden = false;
 
         // Fresh-board animation bookkeeping (mirror NewSandbox) so the first render doesn't fling ghosts.
         mulliganAnimShownKey = null;
@@ -81,6 +94,16 @@ public partial class GameManager
 
         Render();
     }
+
+    // Advance to the next puzzle; after the last one, reshuffle the whole set for a fresh run.
+    private void NextPuzzle()
+    {
+        if (puzzleSet == null || puzzleSet.Count == 0) return;
+        if (puzzleIndex + 1 >= puzzleSet.Count) { puzzleSet = BuildShuffledPuzzleSet(); LoadPuzzle(0); }
+        else LoadPuzzle(puzzleIndex + 1);
+    }
+
+    private static string DifficultyWord(int d) => d switch { 1 => "Easy", 2 => "Medium", 3 => "Hard", _ => "Expert" };
 
     // Player moves are funnelled here from Dispatch() when isPuzzle. Only the attacker's own commands are
     // player moves; the defender's responses are auto-played inside PuzzleRuntime.ApplyMove.
@@ -122,31 +145,36 @@ public partial class GameManager
     private void DrawPuzzleActions(RectTransform body)
     {
         var pz = (puzzleSet != null && puzzleIndex < puzzleSet.Count) ? puzzleSet[puzzleIndex] : null;
-        if (pz != null) AddInfo(body, $"Puzzle {puzzleIndex + 1}/{puzzleSet.Count}: {pz.Title}");
+        if (pz != null)
+        {
+            AddInfo(body, $"Puzzle {puzzleIndex + 1}/{puzzleSet.Count}  ·  {DifficultyWord(pz.Difficulty)}");
+            AddInfo(body, pz.Title);
+        }
 
         var status = puzzleRuntime != null ? puzzleRuntime.Status : PuzzleRuntime.PuzzleStatus.NotStarted;
         if (status == PuzzleRuntime.PuzzleStatus.Solved)
         {
-            AddInfo(body, "Solved - that's lethal!");
+            AddInfo(body, "Solved — that's lethal!");
             if (pz != null && !string.IsNullOrEmpty(pz.Teaches)) AddInfo(body, pz.Teaches);
-            if (puzzleSet != null && puzzleIndex + 1 < puzzleSet.Count)
-                AddButton(body, "Next Puzzle", () => LoadPuzzle(puzzleIndex + 1));
-            AddButton(body, "Replay", () => LoadPuzzle(puzzleIndex));
+            AddButton(body, "Next Puzzle", NextPuzzle, true, false);
+            AddButton(body, "Replay", () => LoadPuzzle(puzzleIndex), true, false);
         }
         else if (status == PuzzleRuntime.PuzzleStatus.Failed)
         {
             AddInfo(body, puzzleRuntime != null ? puzzleRuntime.Message : "That line doesn't win.");
-            AddButton(body, "Try Again", () => LoadPuzzle(puzzleIndex));
+            AddButton(body, "Try Again", () => LoadPuzzle(puzzleIndex), true, false);
+            AddButton(body, "Next Puzzle", NextPuzzle, true, false);
         }
         else
         {
-            bool onTrack = puzzleRuntime == null || puzzleRuntime.StillWinning;
-            AddInfo(body, onTrack ? "There is lethal here. Find the line." : "Careful - lethal is no longer forced from here.");
+            // No "you're off track" tell mid-solve — that would hand over the answer. Just the neutral prompt.
+            AddInfo(body, "There is lethal here. Find the line.");
             AddInfo(body, "Attack, spread your DON!!, and play cards to close it out.");
             if (!string.IsNullOrEmpty(puzzleHintText)) AddInfo(body, "Hint: " + puzzleHintText);
             if (puzzleHintLevel < 3)
                 AddButton(body, puzzleHintLevel == 0 ? "Hint" : "Reveal more", () => RevealHint(puzzleHintLevel + 1), true, false);
-            AddButton(body, "Restart", () => LoadPuzzle(puzzleIndex));
+            AddButton(body, "Restart", () => LoadPuzzle(puzzleIndex), true, false);
+            AddButton(body, "Next Puzzle", NextPuzzle, true, false);
         }
         AddButton(body, "Exit to Menu", ReturnToMenu, true, false);
     }

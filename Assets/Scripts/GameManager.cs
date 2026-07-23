@@ -2009,6 +2009,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (matchResultHidden) DrawMatchResultPeekChip();
             else DrawMatchResultOverlay();
         }
+        // Puzzle fail: the player ended the turn without lethal (out of chances). Only fires at turn-end, never
+        // on an individual wrong move, so it never walks the player through the answer.
+        else if (isPuzzle && !matchResultHidden && puzzleRuntime != null
+                 && puzzleRuntime.Status == PuzzleRuntime.PuzzleStatus.Failed && state != null && state.Status != "finished")
+            DrawPuzzleFailOverlay();
         // Sandbox tools draw last so the editor button + panels overlay the normal board.
         if (isSandbox) DrawSandbox();
         // Restore-from-code POV picker overlays everything until the player chooses a perspective.
@@ -2908,6 +2913,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // routes through ReturnToMenu, which tears down Netcode — the only intended exit.
     private void DrawMatchResultOverlay()
     {
+        // Puzzle mode never "loses" this screen — reaching finished means the player found lethal. Show a
+        // green PUZZLE SOLVED! with puzzle-flow buttons instead of the win/lose match modal.
+        if (isPuzzle) { DrawPuzzleResultOverlay(); return; }
+
         var dim = PanelObject("Match Result Dim", boardRoot, new Color32(8, 10, 14, 210));
         Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         dim.SetAsLastSibling();
@@ -2966,6 +2975,71 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 addFriendState != "sending" && addFriendState != "sent");
         }
         AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); });
+    }
+
+    // Puzzle-mode finish screen: solving a puzzle is a WIN by definition, so this is a celebratory green
+    // "PUZZLE SOLVED!" with the puzzle flow (Next / Replay / View Board / Main Menu) — never a red match modal.
+    private void DrawPuzzleResultOverlay()
+    {
+        var dim = PanelObject("Puzzle Result Dim", boardRoot, new Color32(8, 10, 14, 210));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+
+        Color green = new Color(0.42f, 0.85f, 0.55f);
+        var panel = PanelObject("Puzzle Result Panel", boardRoot, (Color)new Color32(14, 30, 46, 250));
+        Stretch(panel, new Vector2(0.26f, 0.36f), new Vector2(0.74f, 0.64f), Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, green, 2f);
+        panel.SetAsLastSibling();
+
+        var label = TextObject("Puzzle Result Text", panel, "PUZZLE SOLVED!", 28, green, TextAnchor.MiddleCenter, titleFont);
+        label.fontStyle = FontStyle.Bold;
+        Stretch(label.rectTransform, new Vector2(0.04f, 0.54f), new Vector2(0.96f, 0.94f), Vector2.zero, Vector2.zero);
+
+        var pz = (puzzleSet != null && puzzleIndex < puzzleSet.Count) ? puzzleSet[puzzleIndex] : null;
+        string subText = pz != null && !string.IsNullOrEmpty(pz.Teaches) ? pz.Teaches : "That's lethal — nicely done.";
+        var sub = TextObject("Puzzle Result Sub", panel, subText, 12, Muted, TextAnchor.MiddleCenter, monoFont);
+        sub.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(sub.rectTransform, new Vector2(0.06f, 0.40f), new Vector2(0.94f, 0.54f), Vector2.zero, Vector2.zero);
+
+        var buttons = RowObject("Puzzle Result Buttons", panel, 10, TextAnchor.MiddleCenter);
+        Stretch(buttons, new Vector2(0.04f, 0.10f), new Vector2(0.96f, 0.36f), Vector2.zero, Vector2.zero);
+        AddButton(buttons, "NEXT PUZZLE", NextPuzzle, true, false);
+        AddButton(buttons, "REPLAY", () => LoadPuzzle(puzzleIndex), true, false);
+        AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); }, true, false);
+        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, false);
+    }
+
+    // Puzzle fail screen: the player's turn ended without lethal. Amber (not the harsh red loss modal) — a
+    // "not this time" nudge with the retry / move-on options. The board stays reachable via View Board.
+    private void DrawPuzzleFailOverlay()
+    {
+        var dim = PanelObject("Puzzle Fail Dim", boardRoot, new Color32(8, 10, 14, 200));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+
+        Color amber = new Color(0.95f, 0.72f, 0.36f);
+        var panel = PanelObject("Puzzle Fail Panel", boardRoot, (Color)new Color32(30, 24, 16, 250));
+        Stretch(panel, new Vector2(0.26f, 0.36f), new Vector2(0.74f, 0.64f), Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, amber, 2f);
+        panel.SetAsLastSibling();
+
+        var label = TextObject("Puzzle Fail Text", panel, "NO LETHAL THIS TIME", 26, amber, TextAnchor.MiddleCenter, titleFont);
+        label.fontStyle = FontStyle.Bold;
+        Stretch(label.rectTransform, new Vector2(0.04f, 0.54f), new Vector2(0.96f, 0.94f), Vector2.zero, Vector2.zero);
+
+        var sub = TextObject("Puzzle Fail Sub", panel, "Your turn ended before lethal. Try again — there is a forced win in this position.",
+            12, Muted, TextAnchor.MiddleCenter, monoFont);
+        sub.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(sub.rectTransform, new Vector2(0.06f, 0.40f), new Vector2(0.94f, 0.54f), Vector2.zero, Vector2.zero);
+
+        var buttons = RowObject("Puzzle Fail Buttons", panel, 10, TextAnchor.MiddleCenter);
+        Stretch(buttons, new Vector2(0.04f, 0.10f), new Vector2(0.96f, 0.36f), Vector2.zero, Vector2.zero);
+        AddButton(buttons, "TRY AGAIN", () => LoadPuzzle(puzzleIndex), true, false);
+        AddButton(buttons, "NEXT PUZZLE", NextPuzzle, true, false);
+        AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); }, true, false);
+        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, false);
     }
 
     // Async check run once when the result overlay first appears: if the opponent is already a
