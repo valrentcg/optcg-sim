@@ -478,6 +478,20 @@ switch (mode)
         return (ok1 && ok0) ? 0 : 1;
     }
 
+    case "starterlegaltest":
+    {
+        foreach (var kv in OnePieceTcg.Engine.CardData.StarterDecks)
+        {
+            var def = kv.Value;
+            var ids = new List<string> { def.Leader };
+            foreach (var (cid, qty) in def.List) for (int i = 0; i < qty; i++) ids.Add(cid);
+            var std = OnePieceTcg.Engine.FormatLegality.CheckDeck(ids, OnePieceTcg.Engine.GameFormat.Standard);
+            var ext = OnePieceTcg.Engine.FormatLegality.CheckDeck(ids, OnePieceTcg.Engine.GameFormat.ExtraRegulation);
+            System.Console.WriteLine($"{kv.Key,-10} leader={def.Leader}  Standard={(std.Legal ? "LEGAL " : "ILLEGAL")}  Extra={(ext.Legal ? "LEGAL" : "ILLEGAL")}   {(std.Legal ? "" : std.Reasons.FirstOrDefault())}");
+        }
+        return 0;
+    }
+
     case "vivitest":
     {
         // EB03-001 Nefeltari Vivi leader: her ability is [Activate: Main]; it merely REFERENCES the keyword

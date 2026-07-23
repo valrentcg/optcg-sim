@@ -1225,7 +1225,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         badge.sizeDelta = new Vector2(150f, 22f);
         badge.anchoredPosition = new Vector2(100f, 14f);
         Round(badge); AddBorder(badge, ok ? GoodGreen : RedAccent, 1f);
-        var bt = Text_("bt", badge, (ok ? "LEGAL  ·  " : "INVALID  ·  ") + total + "/50", 9,
+        var bt = Text_("bt", badge, (ok ? "VALID  ·  " : "INVALID  ·  ") + total + "/50", 9,
             ok ? GoodGreen : RedAccent, TextAnchor.MiddleCenter, monoFont);
         bt.fontStyle = FontStyle.Bold;
 
@@ -1647,7 +1647,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         Round(badge);
         AddBorder(badge, ok ? GoodGreen : RedAccent, 1f);
         var badgeT = Text_("BT", badge,
-            (ok ? "● LEGAL  ·  " : "● INVALID  ·  ") + total + " / 50",
+            (ok ? "● VALID  ·  " : "● INVALID  ·  ") + total + " / 50",
             10, ok ? GoodGreen : RedAccent, TextAnchor.MiddleCenter, monoFont);
         badgeT.fontStyle = FontStyle.Bold;
         Stretch(badgeT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -2091,7 +2091,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         Round(badge);
         AddBorder(badge, ok ? GoodGreen : RedAccent, 1f);
         var badgeT = Text_("BT", badge,
-            (ok ? "● LEGAL  ·  " : "● INVALID  ·  ") + total + " / 50",
+            (ok ? "● VALID  ·  " : "● INVALID  ·  ") + total + " / 50",
             10, ok ? GoodGreen : RedAccent, TextAnchor.MiddleCenter, monoFont);
         badgeT.fontStyle = FontStyle.Bold;
         Stretch(badgeT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
