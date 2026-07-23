@@ -6824,14 +6824,14 @@ public partial class MainMenuManager : MonoBehaviour
         var southDeck = DeckStore.Get(p1DeckId);
         if (puzzleMode)
         {
-            var desc = TextObject("Puzzle Desc", portal,
+            var puzDesc = TextObject("Puzzle Desc", portal,
                 "Brain teasers\n\nEach puzzle is a real board where a forced win exists this turn - find the line. " +
                 "The opponent always plays its best surviving defense, so a sloppy line loses. Stuck? Three levels " +
                 "of hints: the first is a nudge, the second points at a card, the third spells out the move.",
                 14, Ink, TextAnchor.UpperLeft);
-            desc.horizontalOverflow = HorizontalWrapMode.Wrap;
-            desc.verticalOverflow = VerticalWrapMode.Overflow;
-            Stretch(desc.rectTransform, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.90f),
+            puzDesc.horizontalOverflow = HorizontalWrapMode.Wrap;
+            puzDesc.verticalOverflow = VerticalWrapMode.Overflow;
+            Stretch(puzDesc.rectTransform, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.90f),
                 new Vector2(8f, 0f), new Vector2(-8f, -8f));
         }
         else if (aiMode)
