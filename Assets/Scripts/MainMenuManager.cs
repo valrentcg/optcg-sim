@@ -5369,6 +5369,19 @@ public partial class MainMenuManager : MonoBehaviour
             }
         }
 
+        // Card format: Standard (in-rotation blocks) vs Extra Regulation (the full card pool). Both players'
+        // deck pickers grey out decks that aren't legal for the chosen format. Bottom-anchored so it doesn't
+        // disturb the timing stack above.
+        var fmtLabel = TextObject("Format Label", panel, "Card format", 11, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(fmtLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 142f), new Vector2(-16f, 160f));
+        var fmtRow = PanelObject("Format Row", panel, new Color(0, 0, 0, 0));
+        Stretch(fmtRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 106f), new Vector2(-16f, 140f));
+        var fmtHlg = fmtRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        fmtHlg.spacing = 8f; fmtHlg.childAlignment = TextAnchor.MiddleLeft;
+        fmtHlg.childControlWidth = false; fmtHlg.childControlHeight = false;
+        BuildFormatOption(fmtRow, "Standard", "standard");
+        BuildFormatOption(fmtRow, "Extra Regulation", "extra");
+
         if (!string.IsNullOrEmpty(lobbyError))
         {
             var err = TextObject("Error", panel, lobbyError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
@@ -5399,6 +5412,24 @@ public partial class MainMenuManager : MonoBehaviour
     // Host-side toggle: whether this custom lobby runs in Forgiveness Mode (enables the in-match
     // rewind toggle). Value travels to the guest inside MatchStartPayload at Start Match.
     private bool lobbyForgiveness;
+
+    // Custom-lobby format: "standard" (in-rotation blocks, default) or "extra" (full pool, Extra Regulation).
+    // Extra Regulation is custom-only for now — casual/ranked are always Standard. Static so it survives the
+    // menu destroy/rebuild cycle; travels to the guest inside MatchStartPayload.
+    private static string lobbyFormat = "standard";
+    private OnePieceTcg.Engine.GameFormat LobbyGameFormat() =>
+        (lobbyMode == "custom" && lobbyFormat == "extra")
+            ? OnePieceTcg.Engine.GameFormat.ExtraRegulation
+            : OnePieceTcg.Engine.GameFormat.Standard;
+
+    // One-line "what's allowed" for a format: block pool + the banned cards (name + OPXX-XXX). Shown on the
+    // deck picker / queue so players know the block range and ban list before choosing a deck.
+    private string FormatInfoLine(OnePieceTcg.Engine.GameFormat f)
+    {
+        string bans = string.Join(", ",
+            OnePieceTcg.Engine.FormatLegality.BannedCards.Select(kv => $"{kv.Value} ({kv.Key})"));
+        return OnePieceTcg.Engine.FormatLegality.PoolDescription(f) + "  ·  Banned: " + bans + " (+ banned pairs).";
+    }
 
     // Custom-lobby timing selection. Static so it survives the menu destroy/rebuild cycle.
     private static string lobbyTimingMode = "standard";   // standard | ranked | blitz
@@ -5523,6 +5554,22 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var btn = tile.gameObject.AddComponent<Button>();
         btn.onClick.AddListener(() => { lobbyForgiveness = forgivenessOption; RenderMenu(); });
+    }
+
+    private void BuildFormatOption(RectTransform parent, string label, string fmt)
+    {
+        bool selected = lobbyFormat == fmt;
+        var tile = PanelObject(label + " Format Option", parent,
+            selected ? new Color(Accent.r, Accent.g, Accent.b, 0.16f) : new Color32(20, 30, 42, 200));
+        float w = fmt == "extra" ? 152 : 120;
+        SetPreferred(tile, new Vector2(w, 30));
+        tile.sizeDelta = new Vector2(w, 30);
+        Round(tile);
+        AddRoundedCardBorder(tile, selected ? Accent : MenuB, selected ? 1.6f : 1f);
+        var t = TextObject("Text", tile, label, 11, selected ? Ink : Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = tile.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { lobbyFormat = fmt; RenderMenu(); });
     }
 
     private void BuildJoinLobbyPanel(RectTransform panel)
@@ -5705,7 +5752,9 @@ public partial class MainMenuManager : MonoBehaviour
         CancelInvoke();
         UnsubscribeFromSessionEvents();
         if (canvas != null) canvas.gameObject.SetActive(false);
-        DeckBuilderManager.OpenPicker("CHOOSE YOUR DECK", "for this online match — pick a deck, then confirm",
+        DeckBuilderManager.OpenPicker("CHOOSE YOUR DECK",
+            (LobbyGameFormat() == OnePieceTcg.Engine.GameFormat.ExtraRegulation ? "Extra Regulation · " : "Standard · ")
+                + FormatInfoLine(LobbyGameFormat()),
             chosenId =>
             {
                 lobbyDeckId = chosenId;
@@ -5713,7 +5762,8 @@ public partial class MainMenuManager : MonoBehaviour
                 ShareLobbyDeck();
                 EnsureMenu();
             },
-            () => { reopenLobbyAfterPicker = true; EnsureMenu(); });
+            () => { reopenLobbyAfterPicker = true; EnsureMenu(); },
+            LobbyGameFormat());
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
     }
@@ -5776,6 +5826,7 @@ public partial class MainMenuManager : MonoBehaviour
             ranked = lobbyRanked,                                  // true only from the ranked queue
             mode = lobbyMode,                                      // ranked | casual | custom
             forgiveness = lobbyMode == "custom" && lobbyForgiveness,  // rewind toggle; custom lobbies only
+            format = lobbyMode == "custom" ? lobbyFormat : "standard", // card format; casual/ranked are Standard
             blitz = lobbyMode == "custom" ? LobbyBlitzConfig() : null, // timed-match settings; custom lobbies only
             build = UpdateChecker.CurrentBuildNumber,               // guest aborts on a version mismatch (anti-desync)
         };
@@ -6740,7 +6791,9 @@ public partial class MainMenuManager : MonoBehaviour
     {
         CancelInvoke();
         if (canvas != null) canvas.gameObject.SetActive(false);
-        DeckBuilderManager.OpenPicker("CHOOSE YOUR DECK", "the deck you will queue with — pick, then confirm",
+        // Casual/Ranked are Standard-only, so the picker greys out decks that aren't Standard-legal.
+        DeckBuilderManager.OpenPicker("CHOOSE YOUR DECK",
+            "Casual / Ranked · " + FormatInfoLine(OnePieceTcg.Engine.GameFormat.Standard),
             chosenId =>
             {
                 duelDeckId = chosenId;
@@ -6748,7 +6801,8 @@ public partial class MainMenuManager : MonoBehaviour
                 lobbyDeckId = chosenId;
                 EnsureMenu();
             },
-            EnsureMenu);
+            EnsureMenu,
+            OnePieceTcg.Engine.GameFormat.Standard);
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
     }

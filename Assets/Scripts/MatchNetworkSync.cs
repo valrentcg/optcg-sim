@@ -70,6 +70,7 @@ public class MatchStartPayload
     public bool ranked;         // true = a Ranked-queue match that counts toward the bounty ladder
     public string mode;         // "ranked" | "casual" | "custom" — the game type for stats/history
     public bool forgiveness;    // custom lobby: enable the in-match rewind toggle (opponent-approved)
+    public string format;       // "standard" | "extra" — card-format legality (custom lobby; casual/ranked = standard)
     public BlitzConfig blitz;   // custom lobby: timed-match settings (null/Standard = untimed)
     // Host's build number (UpdateChecker.CurrentBuildNumber). The guest aborts if it differs from
     // its own — two builds can have divergent engine logic, and both clients replay the SAME

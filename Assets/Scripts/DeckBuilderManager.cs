@@ -763,14 +763,18 @@ public partial class DeckBuilderManager : MonoBehaviour
     private static string pickerSubtitle;
     private static Action<string> pickerCallback;
     private static Action pickerCancel;
+    // When set, the picker greys out (and blocks) decks that aren't legal for this format.
+    private static OnePieceTcg.Engine.GameFormat? pickerFormat;
 
-    public static void OpenPicker(string title, string subtitle, Action<string> onChosen, Action onCancel)
+    public static void OpenPicker(string title, string subtitle, Action<string> onChosen, Action onCancel,
+                                  OnePieceTcg.Engine.GameFormat? format = null)
     {
         pickerActive = true;
         pickerTitle = title;
         pickerSubtitle = subtitle;
         pickerCallback = onChosen;
         pickerCancel = onCancel;
+        pickerFormat = format;
         _openAsSelect = true;
         new GameObject("DeckBuilderManager").AddComponent<DeckBuilderManager>();
     }
@@ -2619,6 +2623,20 @@ public partial class DeckBuilderManager : MonoBehaviour
             star.rectTransform.pivot = new Vector2(0.5f, 1f);
             star.rectTransform.sizeDelta = new Vector2(0f, 18f);
             star.rectTransform.anchoredPosition = new Vector2(0f, 0f);
+        }
+
+        // Format grey-out: in a format-gated picker (queueing / a formatted lobby), a deck with banned or
+        // out-of-rotation cards is dimmed and unselectable.
+        if (pickerActive && pickerFormat.HasValue && !deck.Check(pickerFormat.Value).Legal)
+        {
+            var dim = Panel("IllegalDim", cell, new Color(4f / 255f, 8f / 255f, 12f / 255f, 0.66f));
+            var dimImg = dim.GetComponent<Image>();
+            dimImg.sprite = hexSp; dimImg.type = Image.Type.Simple; dimImg.raycastTarget = true;   // eats clicks
+            Stretch(dim, Vector2.zero, Vector2.one, new Vector2(pad, pad), new Vector2(-pad, -pad));
+            var illegalLbl = Text_("Illegal", cell, "NOT\nLEGAL", HexFont(12), RedAccent, TextAnchor.MiddleCenter, monoFont);
+            illegalLbl.fontStyle = FontStyle.Bold;
+            Stretch(illegalLbl.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            return;   // no select button, no drag — unselectable
         }
 
         // Click → select AND lock this deck in as the active deck (no Play button).
