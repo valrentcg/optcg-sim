@@ -456,6 +456,7 @@ public partial class DeckBuilderManager : MonoBehaviour
     private string filterBlock  = "";  // "" = all | "1".."5"
     private bool   colorLock    = true; // only show cards matching the leader's colours
     private bool   archetypeLock;       // only show cards sharing an archetype/feature tag with the leader
+    private bool   filtersCollapsed;    // hide the filter pills to give the card grid the whole panel
 
     // ── Virtualised card grid ──────────────────────────────────────────────────
     // A small fixed pool of tiles is recycled as you scroll, so the GameObject
@@ -481,7 +482,7 @@ public partial class DeckBuilderManager : MonoBehaviour
     // For recycled pool tiles it reads the tile's live boundId; for fixed widgets
     // (deck rows, leader slot) it uses a captured id. Attach to any raycastable
     // graphic (the widget's background Image).
-    private sealed class HoverPreview : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    private sealed class HoverPreview : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler, IPointerClickHandler
     {
         // Runtime-only wiring — never serialized (avoids UAC1001 on the plain
         // TileView class and keeps these out of the inspector).
@@ -499,6 +500,14 @@ public partial class DeckBuilderManager : MonoBehaviour
         public void OnPointerExit(PointerEventData e)
         {
             if (mgr != null) mgr.HideCardPreview();
+        }
+
+        // Right-click a card (pool tile or decklist row) → add a full playset (4 copies).
+        public void OnPointerClick(PointerEventData e)
+        {
+            if (mgr == null || e.button != PointerEventData.InputButton.Right) return;
+            string id = tile != null ? tile.boundId : cardId;
+            mgr.AddPlayset(id);
         }
     }
 
@@ -710,6 +719,7 @@ public partial class DeckBuilderManager : MonoBehaviour
     // solo-vs-self ShowPreview popup. Built once and reused; shown while a card
     // is hovered anywhere in the builder (pool tiles, deck rows, leader slot).
     private RectTransform previewRoot;
+    private RectTransform previewGlow;
     private Image previewImage;
     private Text  previewName;
 
@@ -932,26 +942,26 @@ public partial class DeckBuilderManager : MonoBehaviour
         BuildPreviewOverlay();
     }
 
-    // ── Floating card preview (right side) — like solo-vs-self ShowPreview ───────
+    // ── Floating card preview — a LARGE card (like in a match) docked left of the decklist, no name caption,
+    //    wrapped in a soft gold hover glow. Size/position are set per-view by PositionPreview. ──────────────
     private void BuildPreviewOverlay()
     {
         previewRoot = Panel("Card Preview Overlay", canvas.transform, new Color(0, 0, 0, 0));
-        Stretch(previewRoot, new Vector2(0.725f, 0.16f), new Vector2(0.985f, 0.84f), Vector2.zero, Vector2.zero);
+        Stretch(previewRoot, new Vector2(1f, 0.12f), new Vector2(1f, 0.92f), new Vector2(-800f, 0f), new Vector2(-500f, 0f));
         previewRoot.GetComponent<Image>().raycastTarget = false;
         var group = previewRoot.gameObject.AddComponent<CanvasGroup>();
         group.blocksRaycasts = false;   // never eats hover/clicks meant for the cards behind it
         group.interactable   = false;
 
-        // Card art region (upper ~82%), name caption below.
-        var region = Panel("Preview Region", previewRoot, new Color(0, 0, 0, 0));
-        Stretch(region, new Vector2(0.05f, 0.14f), new Vector2(0.95f, 0.99f), Vector2.zero, Vector2.zero);
-        region.GetComponent<Image>().raycastTarget = false;
-        previewImage = MakeRoundedCard(region, true, out _);
-
-        previewName = Text_("Preview Name", previewRoot, "", 17, Ink, TextAnchor.UpperCenter, titleFontOrNull());
-        Stretch(previewName.rectTransform, new Vector2(0.02f, 0.0f), new Vector2(0.98f, 0.13f), Vector2.zero, Vector2.zero);
-        previewName.horizontalOverflow = HorizontalWrapMode.Wrap;
-        previewName.fontStyle = FontStyle.Bold;
+        // Card art fills the whole overlay (aspect-fitted). Grab the holder so we can wrap it in a gold glow.
+        previewImage = MakeRoundedCard(previewRoot, true, out var holder);
+        previewGlow = Panel("PreviewGlow", holder, new Color(Gold.r, Gold.g, Gold.b, 0.9f));
+        Stretch(previewGlow, Vector2.zero, Vector2.one, new Vector2(-5f, -5f), new Vector2(5f, 5f));
+        previewGlow.GetComponent<Image>().raycastTarget = false;
+        previewGlow.SetAsFirstSibling();   // behind the card art
+        RoundBig(previewGlow);
+        AddBorder(holder, Gold, 2.5f);   // crisp gold rim over the soft halo
+        previewName = null;   // no name caption
 
         previewRoot.gameObject.SetActive(false);
     }
@@ -986,8 +996,8 @@ public partial class DeckBuilderManager : MonoBehaviour
     {
         if (previewRoot == null) return;
         float rightW = (view == View.Editor) ? 320f : 480f;   // matches the decklist panel width per view
-        const float prevW = 300f, margin = 14f;
-        Stretch(previewRoot, new Vector2(1f, 0.16f), new Vector2(1f, 0.84f),
+        const float prevW = 380f, margin = 16f;               // large, match-sized card
+        Stretch(previewRoot, new Vector2(1f, 0.10f), new Vector2(1f, 0.94f),
             new Vector2(-(rightW + margin + prevW), 0f), new Vector2(-(rightW + margin), 0f));
     }
 
@@ -3345,6 +3355,21 @@ public partial class DeckBuilderManager : MonoBehaviour
         cc.rectTransform.sizeDelta = new Vector2(40f, 24f);
         cc.rectTransform.anchoredPosition = new Vector2(-34f, 0f);
         StepButton(row, "+", -6f, () => { AddCard(rec.id, +1); });
+
+        // Format-legality flag on the LEFT edge: a stripe marks cards that keep the deck out of a format, so
+        // it's easy to see WHICH cards are the problem — GOLD = rotated out of Standard (Extra-only), RED =
+        // banned in both. Standard-legal cards get none.
+        var leg = OnePieceTcg.Engine.FormatLegality.Legality(rec.id);
+        if (leg != OnePieceTcg.Engine.CardLegality.LegalBoth)
+        {
+            var mark = Panel("LegMark", row, leg == OnePieceTcg.Engine.CardLegality.Banned ? RedAccent : Gold);
+            mark.anchorMin = new Vector2(0f, 0.12f); mark.anchorMax = new Vector2(0f, 0.88f);
+            mark.pivot = new Vector2(0f, 0.5f);
+            mark.sizeDelta = new Vector2(5f, 0f);
+            mark.anchoredPosition = new Vector2(1f, 0f);
+            Round(mark);
+            mark.GetComponent<Image>().raycastTarget = false;
+        }
     }
 
     // One directional fade scrim (row colour) over a sub-region of the art clip.
@@ -3376,15 +3401,27 @@ public partial class DeckBuilderManager : MonoBehaviour
     // ── Right: searchable card pool ─────────────────────────────────────────────
     private void BuildPoolPanel(RectTransform panel)
     {
-        // search field
+        // search field (shrunk to make room for the result count + the Filters collapse toggle on its right)
         var search = MakeInput(panel, "Search by name or text…", filterText,
             s => { filterText = s; RefreshGrid(); }, null);
-        Stretch(search, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -52f), new Vector2(-150f, -16f));
+        Stretch(search, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -52f), new Vector2(-280f, -16f));
 
         resultCountText = Text_("Results", panel, "", 10, Muted, TextAnchor.MiddleRight, monoFont);
         Stretch(resultCountText.rectTransform, new Vector2(1f, 1f), new Vector2(1f, 1f),
-            new Vector2(-140f, -52f), new Vector2(-16f, -16f));
+            new Vector2(-272f, -52f), new Vector2(-176f, -16f));
 
+        // Filters collapse toggle — hides all the pill rows so the card grid gets the whole panel.
+        var fToggle = Panel("FiltersToggle", panel, filtersCollapsed ? (Color)new Color32(20, 34, 48, 230) : (Color)Accent);
+        Stretch(fToggle, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-166f, -52f), new Vector2(-16f, -16f));
+        Round(fToggle); AddBorder(fToggle, filtersCollapsed ? MenuB : Accent2, 1f);
+        var ftT = Text_("t", fToggle, filtersCollapsed ? "▸ SHOW FILTERS" : "▾ HIDE FILTERS", 10,
+            filtersCollapsed ? Muted : BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        ftT.fontStyle = FontStyle.Bold;
+        Stretch(ftT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        fToggle.gameObject.AddComponent<Button>().onClick.AddListener(() => { filtersCollapsed = !filtersCollapsed; Render(); });
+
+        if (!filtersCollapsed)
+        {
         // colour filter chips
         var colorRow = Row("Colors", panel, 6, TextAnchor.MiddleLeft);
         Stretch(colorRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -86f), new Vector2(-16f, -60f));
@@ -3456,20 +3493,23 @@ public partial class DeckBuilderManager : MonoBehaviour
                 _ => { filterFormat = filterFormat == vv ? "" : vv; Render(); }, cch, lab.Length * 7.5f + 20f);
         }
 
-        // block-number filter chips
-        var blockRow = Row("Block", panel, 5, TextAnchor.MiddleLeft);
-        Stretch(blockRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -236f), new Vector2(-16f, -210f));
-        ChipToggle(blockRow, "BLOCK·ALL", "", filterBlock == "", _ => { filterBlock = ""; Render(); }, Muted);
+        // block-number filters SHARE the format row (both gate the pool) — saves a whole row of height and
+        // uses the format row's spare horizontal space.
+        ChipToggle(fmtRow, "BLK", "", filterBlock == "", _ => { filterBlock = ""; Render(); }, Muted, 34f);
         foreach (var b in new[] { "1", "2", "3", "4", "5" })
         {
             var bb = b;
-            ChipToggle(blockRow, b, b, filterBlock == b,
-                _ => { filterBlock = filterBlock == bb ? "" : bb; Render(); }, Accent2, 34f);
+            ChipToggle(fmtRow, b, b, filterBlock == b,
+                _ => { filterBlock = filterBlock == bb ? "" : bb; Render(); }, Accent2, 30f);
         }
+        }   // end: if (!filtersCollapsed)
 
-        // grid scroll (top pushed down to make room for the format + block filter rows)
+        // grid scroll — top sits below the filter rows when shown, and reclaims that space when collapsed
         var gridArea = Panel("Grid Area", panel, new Color(0, 0, 0, 0));
-        Stretch(gridArea, Vector2.zero, new Vector2(1f, 1f), new Vector2(10f, 12f), new Vector2(-8f, -264f));
+        // Collapsed: grid starts just under the search bar. Expanded: below the 5 filter rows (colour/type/
+        // cost/lock/format+block).
+        float gridTop = filtersCollapsed ? -60f : -210f;
+        Stretch(gridArea, Vector2.zero, new Vector2(1f, 1f), new Vector2(10f, 12f), new Vector2(-8f, gridTop));
         poolContent  = MakeScroll(gridArea);
         poolViewport = (RectTransform)poolContent.parent;
         var sr = gridArea.GetComponent<ScrollRect>();
@@ -4120,6 +4160,24 @@ public partial class DeckBuilderManager : MonoBehaviour
         filterType = "";
         // returning to the build view; refresh everything
         Render();
+    }
+
+    // Right-click: add a full playset (up to 4 copies), capped by the per-card limit and the 50-card deck size.
+    private void AddPlayset(string id)
+    {
+        var rec = Card(id);
+        if (rec == null) return;
+        if ((rec.type ?? "").ToLower() == "leader") { SetLeader(id); return; }
+        int cur = editing.CountOf(id);
+        int maxCopies = MaxCopiesFor(id);
+        int room = 50 - editing.MainCount();
+        if (room <= 0) { Flash("Deck is full (50)"); return; }
+        if (cur >= maxCopies) { Flash($"Max {maxCopies} copies of a card"); return; }
+        editing.SetCount(id, Mathf.Min(maxCopies, cur + room));
+        RefreshDeckList();
+        RefreshValidity();
+        RefreshStats();
+        RefreshBadges();
     }
 
     private void AddCard(string id, int delta)
