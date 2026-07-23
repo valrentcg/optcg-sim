@@ -165,6 +165,7 @@ public partial class GameManager
     // ── Side-panel action content for puzzle mode (replaces DrawContextActions' normal body) ──
     private void DrawPuzzleActions(RectTransform body)
     {
+        AddInfo(body, "EARLY DEV — Puzzles is still being built; expect rough edges. Right-click a card to report a bug.");
         var pz = (puzzleSet != null && puzzleIndex < puzzleSet.Count) ? puzzleSet[puzzleIndex] : null;
         if (pz != null)
         {

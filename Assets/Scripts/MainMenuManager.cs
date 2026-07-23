@@ -7057,21 +7057,24 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(desc.rectTransform, new Vector2(0f, 1f), Vector2.one,
             new Vector2(18f, -78f), new Vector2(-18f, -52f));
 
-        // Timing cycle (Standard → Bullet → Blitz → Rapid): applies to both Versus Self (hotseat)
-        // and Versus A.I. so Blitz is locally testable. See GameManager.Blitz.cs / BlitzConfig.
-        // (Restore Code lives on the Custom Room screen now, not here.)
-        bool timed = soloTimingPreset != "standard";
-        var timeBtn = PanelObject("Timing Btn", portal, timed ? new Color(0.62f, 0.42f, 0.12f, 0.85f) : (Color)new Color32(10, 22, 32, 220));
-        timeBtn.anchorMin = timeBtn.anchorMax = new Vector2(1f, 1f);
-        timeBtn.pivot = new Vector2(1f, 1f);
-        timeBtn.sizeDelta = new Vector2(158f, 30f);
-        timeBtn.anchoredPosition = new Vector2(-16f, -16f);
-        Round(timeBtn);
-        AddRoundedCardBorder(timeBtn, timed ? Gold : MenuB, 1.2f);
-        var tbT = TextObject("t", timeBtn, "⏱ " + SoloTimingLabel(), 11, timed ? Gold : Muted, TextAnchor.MiddleCenter, monoFont);
-        tbT.fontStyle = FontStyle.Bold;
-        Stretch(tbT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        timeBtn.gameObject.AddComponent<Button>().onClick.AddListener(CycleSoloTiming);
+        // Timing cycle (Standard → Bullet → Blitz → Rapid): applies to Versus Self (hotseat) and Versus A.I.
+        // only, so Blitz is locally testable. NOT shown for Puzzles (single-turn, untimed) or Sandbox
+        // (free-form editing) — a game-mode clock is meaningless there. See GameManager.Blitz.cs / BlitzConfig.
+        if (selectedId != "soloPuzzle" && selectedId != "soloSandbox")
+        {
+            bool timed = soloTimingPreset != "standard";
+            var timeBtn = PanelObject("Timing Btn", portal, timed ? new Color(0.62f, 0.42f, 0.12f, 0.85f) : (Color)new Color32(10, 22, 32, 220));
+            timeBtn.anchorMin = timeBtn.anchorMax = new Vector2(1f, 1f);
+            timeBtn.pivot = new Vector2(1f, 1f);
+            timeBtn.sizeDelta = new Vector2(158f, 30f);
+            timeBtn.anchoredPosition = new Vector2(-16f, -16f);
+            Round(timeBtn);
+            AddRoundedCardBorder(timeBtn, timed ? Gold : MenuB, 1.2f);
+            var tbT = TextObject("t", timeBtn, "⏱ " + SoloTimingLabel(), 11, timed ? Gold : Muted, TextAnchor.MiddleCenter, monoFont);
+            tbT.fontStyle = FontStyle.Bold;
+            Stretch(tbT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            timeBtn.gameObject.AddComponent<Button>().onClick.AddListener(CycleSoloTiming);
+        }
 
         // Two stacked deck panels. Versus Self: NORTH/SOUTH (both yours).
         // Versus A.I.: BASIC BOT (top, AI-piloted) / YOUR DECK (bottom).
@@ -7082,6 +7085,16 @@ public partial class MainMenuManager : MonoBehaviour
         var southDeck = DeckStore.Get(p1DeckId);
         if (puzzleMode)
         {
+            var puzDev = TextObject("Puzzle Dev Flag", portal,
+                "EARLY DEVELOPMENT  —  Puzzles is a new mode still being built and tuned. Expect rough edges and " +
+                "the occasional bad puzzle. Right-click any card to report a bug — it helps a lot.",
+                11, Accent2, TextAnchor.UpperLeft);
+            puzDev.fontStyle = FontStyle.Bold;
+            puzDev.horizontalOverflow = HorizontalWrapMode.Wrap;
+            puzDev.verticalOverflow = VerticalWrapMode.Overflow;
+            Stretch(puzDev.rectTransform, new Vector2(0.028f, 0.74f), new Vector2(0.972f, 0.90f),
+                new Vector2(8f, 0f), new Vector2(-8f, -8f));
+
             var puzDesc = TextObject("Puzzle Desc", portal,
                 "Brain teasers\n\nEach puzzle is a real board where a forced win exists this turn - find the line. " +
                 "The opponent always plays its best surviving defense, so a sloppy line loses. Stuck? Three levels " +
@@ -7089,7 +7102,7 @@ public partial class MainMenuManager : MonoBehaviour
                 14, Ink, TextAnchor.UpperLeft);
             puzDesc.horizontalOverflow = HorizontalWrapMode.Wrap;
             puzDesc.verticalOverflow = VerticalWrapMode.Overflow;
-            Stretch(puzDesc.rectTransform, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.90f),
+            Stretch(puzDesc.rectTransform, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.72f),
                 new Vector2(8f, 0f), new Vector2(-8f, -8f));
         }
         else if (aiMode)
