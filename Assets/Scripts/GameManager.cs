@@ -2030,7 +2030,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Puzzle fail: the player ended the turn without lethal (out of chances). Only fires at turn-end, never
         // on an individual wrong move, so it never walks the player through the answer.
         else if (isPuzzle && !matchResultHidden && puzzleRuntime != null
-                 && puzzleRuntime.Status == PuzzleRuntime.PuzzleStatus.Failed && state != null && state.Status != "finished")
+                 && puzzleRuntime.Status == OnePieceTcg.Engine.Puzzles.PuzzleRuntime.PuzzleStatus.Failed && state != null && state.Status != "finished")
             DrawPuzzleFailOverlay();
         // Sandbox tools draw last so the editor button + panels overlay the normal board.
         if (isSandbox) DrawSandbox();
