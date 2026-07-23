@@ -5873,13 +5873,16 @@ public partial class MainMenuManager : MonoBehaviour
         if (showingLobbyHub) RenderMenu();
     }
 
-    // The host commits the match the moment both players are ready (guarded to fire once).
+    // The host commits the match the moment both players are ready — but ONLY once it has actually received
+    // the guest's shared deck (lobbyPeerDeck). The ready message and the deck-share ride different reliable
+    // channels, so a "ready" can arrive before the deck; committing then would drop the guest into a starter
+    // default. So we wait for the deck; OnPeerDeckShared re-runs this the instant it lands. Guarded to fire once.
     private void TryLobbyAutoStart()
     {
         if (lobbyMode != "custom" || hostAutoStarted) return;
         var s = LobbyManager.CurrentSession;
         if (s == null || !s.IsHost) return;
-        if (localReady && peerReady && !lobbyBusy)
+        if (localReady && peerReady && lobbyPeerDeck != null && !lobbyBusy)
         {
             hostAutoStarted = true;
             StartMatchClicked();
@@ -5890,6 +5893,9 @@ public partial class MainMenuManager : MonoBehaviour
     private void ToggleLobbyReady()
     {
         localReady = !localReady;
+        // Re-share our deck alongside readying so the peer definitely has our real pick before the match
+        // commits (guards the "selected a deck but got the starter default" race).
+        if (localReady) ShareLobbyDeck();
         MatchNetworkSync.SendReady(localReady);
         RenderMenu();
         TryLobbyAutoStart();
@@ -5899,6 +5905,8 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyPeerDeck = deck;
         MarkRankedGuestReady();               // any inbound guest message = guest can receive ours
+        TryHostLaunch();                      // ranked/casual: the deck may arrive AFTER the name — launch now
+        TryLobbyAutoStart();                  // custom: deck may arrive AFTER "ready"; commit now that we have it
         if (showingLobbyHub) RenderMenu();   // live-update the "OPPONENT DECK" line
     }
 
@@ -6186,6 +6194,11 @@ public partial class MainMenuManager : MonoBehaviour
         if (s == null || !s.IsHost) return;
         if (!MatchNetworkSync.IsPeerConnected) return;   // wait for the guest's Netcode connection
         if (!rankedGuestReady) return;                   // …and for proof its receive handlers are up
+        // Wait for the guest's actual DECK before launching — rankedGuestReady can flip on the name message,
+        // which arrives on a different reliable channel than the (fragmented) deck share, so launching here
+        // could drop the guest onto a starter default. OnPeerDeckShared re-runs this once the deck lands. The
+        // queue requires a resolvable deck to enter, so the guest always shares one — this can't deadlock.
+        if (lobbyPeerDeck == null) return;
         rankedLaunching = true;
         rankedQueueActive = false;
         lobbyRanked = lobbyMode == "ranked";   // casual must NOT count toward the bounty ladder
