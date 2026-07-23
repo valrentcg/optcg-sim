@@ -120,8 +120,10 @@ namespace OnePieceTcg.Engine
             public readonly List<string> Reasons = new List<string>();   // human-readable, deck-builder ready
         }
 
-        /// <summary>Check a whole deck (leader id + every card id, duplicates allowed) against a format.</summary>
-        public static DeckCheck CheckDeck(IEnumerable<string> cardIds, GameFormat format)
+        /// <summary>Check a whole deck (leader id + every card id, duplicates allowed) against a format.
+        /// <paramref name="ignoreBans"/> (custom lobbies only) skips the banned-card and banned-pair checks —
+        /// block rotation still applies.</summary>
+        public static DeckCheck CheckDeck(IEnumerable<string> cardIds, GameFormat format, bool ignoreBans = false)
         {
             var chk = new DeckCheck();
             var present = new HashSet<string>();
@@ -130,18 +132,19 @@ namespace OnePieceTcg.Engine
                 string id = BaseId(raw);
                 if (id.Length == 0) continue;
                 present.Add(id);
-                if (IsBanned(id))
+                if (!ignoreBans && IsBanned(id))
                     Fail(chk, $"{Name(id)} ({id}) is banned");
                 else if (format == GameFormat.Standard && !InStandardPool(id))
                     Fail(chk, $"{Name(id)} ({id}) is Extra Regulation only (rotated out of Standard)");
             }
-            foreach (var (a, b) in BannedPairs)
-                if (present.Contains(a) && present.Contains(b))
-                    Fail(chk, $"{Name(a)} ({a}) + {Name(b)} ({b}) is a banned pair");
+            if (!ignoreBans)
+                foreach (var (a, b) in BannedPairs)
+                    if (present.Contains(a) && present.Contains(b))
+                        Fail(chk, $"{Name(a)} ({a}) + {Name(b)} ({b}) is a banned pair");
             return chk;
         }
 
-        public static bool IsDeckLegal(IEnumerable<string> cardIds, GameFormat format) => CheckDeck(cardIds, format).Legal;
+        public static bool IsDeckLegal(IEnumerable<string> cardIds, GameFormat format, bool ignoreBans = false) => CheckDeck(cardIds, format, ignoreBans).Legal;
 
         // ── Format descriptions for the "what's allowed" panels ──────────────────
         public static string PoolDescription(GameFormat format) => format == GameFormat.Standard

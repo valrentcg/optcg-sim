@@ -87,6 +87,7 @@ public class LobbySettingsPayload
     public string format = "standard";   // "standard" | "extra"
     public bool forgiveness;             // rewind toggle enabled
     public string timing = "Untimed";    // human-readable timing summary (per-player clocks etc.)
+    public bool ignoreBans;              // custom lobby: deck pickers allow banned cards/pairs
 }
 
 // Lightweight "what am I looking at" state each client streams to its opponent while

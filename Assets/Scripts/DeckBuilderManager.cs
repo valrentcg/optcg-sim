@@ -66,9 +66,10 @@ public class DeckData
         if (cards != null) foreach (var e in cards) if (e.count > 0) yield return e.id;
     }
 
-    /// <summary>Format-legality result for this deck (banned cards, banned pairs, out-of-rotation cards).</summary>
-    public OnePieceTcg.Engine.FormatLegality.DeckCheck Check(OnePieceTcg.Engine.GameFormat format) =>
-        OnePieceTcg.Engine.FormatLegality.CheckDeck(AllCardIds(), format);
+    /// <summary>Format-legality result for this deck (banned cards, banned pairs, out-of-rotation cards).
+    /// ignoreBans (custom lobbies) skips the ban checks; rotation still applies.</summary>
+    public OnePieceTcg.Engine.FormatLegality.DeckCheck Check(OnePieceTcg.Engine.GameFormat format, bool ignoreBans = false) =>
+        OnePieceTcg.Engine.FormatLegality.CheckDeck(AllCardIds(), format, ignoreBans);
 
     public void SetCount(string cardId, int count)
     {
@@ -796,9 +797,11 @@ public partial class DeckBuilderManager : MonoBehaviour
     private static Action pickerCancel;
     // When set, the picker greys out (and blocks) decks that aren't legal for this format.
     private static OnePieceTcg.Engine.GameFormat? pickerFormat;
+    // Custom lobby "ignore ban list" — the format-gated picker allows banned cards/pairs (rotation still applies).
+    private static bool pickerIgnoreBans;
 
     public static void OpenPicker(string title, string subtitle, Action<string> onChosen, Action onCancel,
-                                  OnePieceTcg.Engine.GameFormat? format = null)
+                                  OnePieceTcg.Engine.GameFormat? format = null, bool ignoreBans = false)
     {
         pickerActive = true;
         pickerTitle = title;
@@ -806,6 +809,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         pickerCallback = onChosen;
         pickerCancel = onCancel;
         pickerFormat = format;
+        pickerIgnoreBans = ignoreBans;
         _openAsSelect = true;
         new GameObject("DeckBuilderManager").AddComponent<DeckBuilderManager>();
     }
@@ -2747,7 +2751,7 @@ public partial class DeckBuilderManager : MonoBehaviour
 
         // Format grey-out: in a format-gated picker (queueing / a formatted lobby), a deck with banned or
         // out-of-rotation cards is dimmed and unselectable.
-        if (pickerActive && pickerFormat.HasValue && !deck.Check(pickerFormat.Value).Legal)
+        if (pickerActive && pickerFormat.HasValue && !deck.Check(pickerFormat.Value, pickerIgnoreBans).Legal)
         {
             var dim = Panel("IllegalDim", cell, new Color(4f / 255f, 8f / 255f, 12f / 255f, 0.66f));
             var dimImg = dim.GetComponent<Image>();

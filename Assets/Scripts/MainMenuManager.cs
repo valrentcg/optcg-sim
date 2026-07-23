@@ -5392,6 +5392,7 @@ public partial class MainMenuManager : MonoBehaviour
         fmtHlg.childControlWidth = false; fmtHlg.childControlHeight = false;
         BuildFormatOption(fmtRow, "Standard", "standard");
         BuildFormatOption(fmtRow, "Extra Regulation", "extra");
+        BuildIgnoreBansOption(fmtRow);
 
         if (!string.IsNullOrEmpty(lobbyError))
         {
@@ -5423,6 +5424,28 @@ public partial class MainMenuManager : MonoBehaviour
     // Host-side toggle: whether this custom lobby runs in Forgiveness Mode (enables the in-match
     // rewind toggle). Value travels to the guest inside MatchStartPayload at Start Match.
     private bool lobbyForgiveness;
+
+    // Host-side toggle: custom lobby "ignore ban list" — both players' deck pickers allow banned cards/pairs
+    // (block rotation still applies). Synced to the guest via LobbySettingsPayload like the format.
+    private static bool lobbyIgnoreBans;
+
+    // A rules toggle (on/off) for the create-lobby panel — gold when ON. Distinct from the mutually-exclusive
+    // format tiles.
+    private void BuildIgnoreBansOption(RectTransform parent)
+    {
+        bool on = lobbyIgnoreBans;
+        var tile = PanelObject("IgnoreBans Option", parent,
+            on ? new Color(Gold.r, Gold.g, Gold.b, 0.18f) : (Color)new Color32(20, 30, 42, 200));
+        SetPreferred(tile, new Vector2(150, 30));
+        tile.sizeDelta = new Vector2(150, 30);
+        Round(tile);
+        AddRoundedCardBorder(tile, on ? Gold : MenuB, on ? 1.6f : 1f);
+        var t = TextObject("Text", tile, on ? "Ignore Bans: ON" : "Ignore Bans: OFF", 10,
+            on ? Gold : Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var btn = tile.gameObject.AddComponent<Button>();
+        btn.onClick.AddListener(() => { lobbyIgnoreBans = !lobbyIgnoreBans; RenderMenu(); });
+    }
 
     // Custom-lobby format: "standard" (in-rotation blocks, default) or "extra" (full pool, Extra Regulation).
     // Extra Regulation is custom-only for now — casual/ranked are always Standard. Static so it survives the
@@ -5728,7 +5751,8 @@ public partial class MainMenuManager : MonoBehaviour
         y -= 24f;
         string fmtName = (lobbyMode == "custom" && lobbyFormat == "extra") ? "Extra Regulation (all blocks)" : "Standard (Blocks 2–5)";
         string timingName = session.IsHost ? LobbyTimingSummary() : lobbyTimingSummary;
-        string rules = $"Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}";
+        string rules = $"Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}"
+            + (lobbyIgnoreBans ? "     Ban list: IGNORED" : "");
         var rulesText = TextObject("Rules", panel, rules, 11, Accent2, TextAnchor.UpperLeft, monoFont);
         rulesText.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(rulesText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 34f), new Vector2(-16f, y));
@@ -5788,7 +5812,7 @@ public partial class MainMenuManager : MonoBehaviour
         if (canvas != null) canvas.gameObject.SetActive(false);
         DeckBuilderManager.OpenPicker("CHOOSE YOUR DECK",
             (LobbyGameFormat() == OnePieceTcg.Engine.GameFormat.ExtraRegulation ? "Extra Regulation · " : "Standard · ")
-                + FormatInfoLine(LobbyGameFormat()),
+                + FormatInfoLine(LobbyGameFormat()) + (lobbyIgnoreBans ? "  ·  BAN LIST IGNORED" : ""),
             chosenId =>
             {
                 lobbyDeckId = chosenId;
@@ -5798,7 +5822,7 @@ public partial class MainMenuManager : MonoBehaviour
                 EnsureMenu();
             },
             () => { reopenLobbyAfterPicker = true; EnsureMenu(); },
-            LobbyGameFormat());
+            LobbyGameFormat(), lobbyIgnoreBans);
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
     }
@@ -5851,6 +5875,7 @@ public partial class MainMenuManager : MonoBehaviour
             format = lobbyFormat,
             forgiveness = lobbyForgiveness,
             timing = LobbyTimingSummary(),
+            ignoreBans = lobbyIgnoreBans,
         });
         MatchNetworkSync.SendReady(localReady);
     }
@@ -5870,6 +5895,7 @@ public partial class MainMenuManager : MonoBehaviour
         lobbyFormat = p.format == "extra" ? "extra" : "standard";
         lobbyForgiveness = p.forgiveness;
         lobbyTimingSummary = string.IsNullOrEmpty(p.timing) ? "Untimed" : p.timing;
+        lobbyIgnoreBans = p.ignoreBans;
         if (showingLobbyHub) RenderMenu();
     }
 
