@@ -511,6 +511,24 @@ public partial class DeckBuilderManager : MonoBehaviour
         }
     }
 
+    // Hovering a Standard/Extra legality chip flags the decklist cards that are illegal for THAT format.
+    private sealed class FormatChipHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        [NonSerialized] public DeckBuilderManager mgr;
+        [NonSerialized] public OnePieceTcg.Engine.GameFormat format;
+        public void OnPointerEnter(PointerEventData e) { if (mgr != null) mgr.FlagFormatViolators(format); }
+        public void OnPointerExit(PointerEventData e)  { if (mgr != null) mgr.FlagFormatViolators(null); }
+    }
+
+    // Registered per decklist row: shows/hides that row's "!" violation badge for the hovered format.
+    private readonly List<System.Action<OnePieceTcg.Engine.GameFormat?>> deckFmtFlaggers =
+        new List<System.Action<OnePieceTcg.Engine.GameFormat?>>();
+
+    private void FlagFormatViolators(OnePieceTcg.Engine.GameFormat? fmt)
+    {
+        foreach (var f in deckFmtFlaggers) f(fmt);
+    }
+
     // Drag a deck hex to any slot to reorder the roster. A plain click still
     // selects (drag only kicks in past the EventSystem threshold), so this
     // composes with the existing click-to-lock-in Button on the same cell.
@@ -719,7 +737,6 @@ public partial class DeckBuilderManager : MonoBehaviour
     // solo-vs-self ShowPreview popup. Built once and reused; shown while a card
     // is hovered anywhere in the builder (pool tiles, deck rows, leader slot).
     private RectTransform previewRoot;
-    private RectTransform previewGlow;
     private Image previewImage;
     private Text  previewName;
 
@@ -953,17 +970,44 @@ public partial class DeckBuilderManager : MonoBehaviour
         group.blocksRaycasts = false;   // never eats hover/clicks meant for the cards behind it
         group.interactable   = false;
 
-        // Card art fills the whole overlay (aspect-fitted). Grab the holder so we can wrap it in a gold glow.
+        // Card art fills the whole overlay (aspect-fitted). Wrap it in the SAME animated gold rim glow used
+        // in a match (UI/CardHoverGlow) rather than a flat border.
         previewImage = MakeRoundedCard(previewRoot, true, out var holder);
-        previewGlow = Panel("PreviewGlow", holder, new Color(Gold.r, Gold.g, Gold.b, 0.9f));
-        Stretch(previewGlow, Vector2.zero, Vector2.one, new Vector2(-5f, -5f), new Vector2(5f, 5f));
-        previewGlow.GetComponent<Image>().raycastTarget = false;
-        previewGlow.SetAsFirstSibling();   // behind the card art
-        RoundBig(previewGlow);
-        AddBorder(holder, Gold, 2.5f);   // crisp gold rim over the soft halo
+        AddCardGlow(holder);
         previewName = null;   // no name caption
 
         previewRoot.gameObject.SetActive(false);
+    }
+
+    private static Shader _cardGlowShader;
+
+    // Animated gold "ethereal mist" rim glow around a card holder — the rectangular twin of AddHexSelectionGlow,
+    // using the in-match UI/CardHoverGlow shader (driven by HexRimGlowDriver, which sets the same size params).
+    private void AddCardGlow(RectTransform holder)
+    {
+        if (_cardGlowShader == null) _cardGlowShader = Shader.Find("UI/CardHoverGlow");
+        if (_cardGlowShader == null) { AddBorder(holder, Gold, 2.5f); return; }   // shader missing → plain rim
+        const float glowExpand = 0.28f;
+        var rimGo = new GameObject("PreviewGlow");
+        rimGo.transform.SetParent(holder, false);
+        var rimRt = rimGo.AddComponent<RectTransform>();
+        rimRt.anchorMin = new Vector2(-glowExpand, -glowExpand);
+        rimRt.anchorMax = new Vector2(1f + glowExpand, 1f + glowExpand);
+        rimRt.offsetMin = rimRt.offsetMax = Vector2.zero;
+        rimRt.SetAsFirstSibling();   // behind the card art
+        var rimImg = rimGo.AddComponent<RawImage>();
+        rimImg.texture = Texture2D.whiteTexture;
+        rimImg.raycastTarget = false;
+        var m = new Material(_cardGlowShader);
+        m.SetColor("_GlowColor", new Color(1.00f, 0.59f, 0.10f, 1f) * 1.28f);
+        m.SetColor("_CoreColor", new Color(1.00f, 0.80f, 0.38f, 1f) * 1.12f);
+        m.SetColor("_OuterColor", new Color(0.82f, 0.29f, 0.04f, 1f) * 1.05f);
+        m.SetFloat("_Speed", 0.55f);
+        m.SetFloat("_NoiseScale", 3.0f);
+        m.SetFloat("_Pulse", 0.22f);
+        m.SetFloat("_CornerPx", 18f);   // rounded-rect corner (HexRimGlowDriver doesn't set this — hexes have none)
+        rimImg.material = m;
+        rimGo.AddComponent<HexRimGlowDriver>().Init(rimImg, glowExpand);
     }
 
     // The builder has no separate title font; fall back to the default UI font.
@@ -1688,8 +1732,8 @@ public partial class DeckBuilderManager : MonoBehaviour
         fmtRow.pivot = new Vector2(0.5f, 1f);
         fmtRow.sizeDelta = new Vector2(230f, FMT_H);
         fmtRow.anchoredPosition = new Vector2(0f, fmtY);
-        AddFormatChip(fmtRow, "STANDARD", deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal);
-        AddFormatChip(fmtRow, "EXTRA REG", deck.Check(OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal);
+        AddFormatChip(fmtRow, "STANDARD", deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal, OnePieceTcg.Engine.GameFormat.Standard);
+        AddFormatChip(fmtRow, "EXTRA REG", deck.Check(OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal, OnePieceTcg.Engine.GameFormat.ExtraRegulation);
 
         // ── Primary action: in picker mode (Solo/PvP deck selection) this deck
         // can be used directly - copy it into DeckStore (so match setup can
@@ -2132,8 +2176,8 @@ public partial class DeckBuilderManager : MonoBehaviour
         fmtRow.pivot = new Vector2(0.5f, 1f);
         fmtRow.sizeDelta = new Vector2(230f, 22f);
         fmtRow.anchoredPosition = new Vector2(0f, fmtY);
-        AddFormatChip(fmtRow, "STANDARD", deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal);
-        AddFormatChip(fmtRow, "EXTRA REG", deck.Check(OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal);
+        AddFormatChip(fmtRow, "STANDARD", deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal, OnePieceTcg.Engine.GameFormat.Standard);
+        AddFormatChip(fmtRow, "EXTRA REG", deck.Check(OnePieceTcg.Engine.GameFormat.ExtraRegulation).Legal, OnePieceTcg.Engine.GameFormat.ExtraRegulation);
 
         // ── EDIT + DELETE buttons (no Play — selecting a deck already locks it in) ─
         float btnY = fmtY - 22f - GAP;
@@ -2726,6 +2770,7 @@ public partial class DeckBuilderManager : MonoBehaviour
     private void BuildSelectDecklist(RectTransform panel, DeckData deck)
     {
         const float PX = 26f, PT = 28f;
+        deckFmtFlaggers.Clear();   // rebuilt per row below; driven by hovering the Standard/Extra chips
 
         // Header row
         var hdrRow = Row("DLHdr", panel, 8f, TextAnchor.MiddleLeft);
@@ -2881,6 +2926,26 @@ public partial class DeckBuilderManager : MonoBehaviour
         cc.rectTransform.pivot = new Vector2(1f, 0.5f);
         cc.rectTransform.sizeDelta = new Vector2(46f, 24f);
         cc.rectTransform.anchoredPosition = new Vector2(-6f, 0f);
+
+        // Format-violation "!" badge (top-left corner), hidden until you hover a format chip this card breaks.
+        var vio = Panel("Vio", row, RedAccent);
+        vio.anchorMin = vio.anchorMax = new Vector2(0f, 1f);
+        vio.pivot = new Vector2(0f, 1f);
+        vio.sizeDelta = new Vector2(15f, 15f);
+        vio.anchoredPosition = new Vector2(2f, -1f);
+        RoundCircle(vio); AddBorder(vio, BadgeInk, 1f);
+        var vt = Text_("!", vio, "!", 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        vt.fontStyle = FontStyle.Bold;
+        Stretch(vt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        vio.GetComponent<Image>().raycastTarget = false;
+        vio.gameObject.SetActive(false);
+        vio.transform.SetAsLastSibling();
+        string cid = rec.id;
+        deckFmtFlaggers.Add(fmt =>
+        {
+            if (vio != null)
+                vio.gameObject.SetActive(fmt.HasValue && !OnePieceTcg.Engine.FormatLegality.IsCardLegal(cid, fmt.Value));
+        });
 
         // Showcase cross-highlight: rows select the matching board stack.
         if (view == View.Showcase)
@@ -3168,7 +3233,7 @@ public partial class DeckBuilderManager : MonoBehaviour
     // non-raycast so they never block the leader slot's tap-to-change button.
     // Standard / Extra Regulation legality chip: green when the deck is legal in that format, red when it
     // holds a card that isn't (banned, or an Extra-only card in a Standard deck).
-    private void AddFormatChip(RectTransform parent, string label, bool legal)
+    private void AddFormatChip(RectTransform parent, string label, bool legal, OnePieceTcg.Engine.GameFormat format)
     {
         var col = legal ? GoodGreen : RedAccent;
         var chip = Panel(label + " FmtChip", parent, new Color(col.r, col.g, col.b, 0.16f));
@@ -3176,11 +3241,14 @@ public partial class DeckBuilderManager : MonoBehaviour
         chip.sizeDelta = new Vector2(chipW, 20f);
         SetPref(chip, new Vector2(chipW, 20f));
         Round(chip);
-        chip.GetComponent<Image>().raycastTarget = false;
         AddBorder(chip, col, 1f);
         var t = Text_("t", chip, "● " + label, 9, col, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(4, 0), new Vector2(-4, 0));
+        t.raycastTarget = false;
+        // Hover this chip → flag the decklist cards that make the deck illegal for THIS format with a "!" badge.
+        var fh = chip.gameObject.AddComponent<FormatChipHover>();
+        fh.mgr = this; fh.format = format;
     }
 
     private void AddPreviewChip(RectTransform parent, string label, bool primary)
