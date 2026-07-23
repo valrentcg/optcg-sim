@@ -322,6 +322,7 @@ public class CardRec
     public string rarity;
     public string effect;
     public string feature;
+    public string block;       // regulation block ("1".."5"); drives Standard/Extra format legality
 
     // cached derived
     [NonSerialized] public string[] colors;
@@ -852,7 +853,24 @@ public partial class DeckBuilderManager : MonoBehaviour
         var wrap = JsonUtility.FromJson<CardLibFile>("{\"cards\":" + json + "}");
         library = wrap?.cards ?? new CardRec[0];
         byId = new Dictionary<string, CardRec>();
-        foreach (var c in library) if (c != null && !string.IsNullOrEmpty(c.id)) byId[c.id] = c;
+        foreach (var c in library)
+        {
+            if (c == null || string.IsNullOrEmpty(c.id)) continue;
+            byId[c.id] = c;
+            // Feed the shared CardData too — FormatLegality (block rotation) and the deck grey-out read
+            // CardData.GetCard(...).Block, but in the MENU nothing else populates CardData (only GameManager
+            // does, during a match). Without this, every card's block was empty, so format checks reported
+            // ALL decks Standard-legal (ST01 showed Standard green; illegal decks weren't greyed). Only fill it
+            // when the block is still missing, so we never degrade the FULL data a match already loaded.
+            var existing = OnePieceTcg.Engine.CardData.GetCard(c.id);
+            if (existing == null || string.IsNullOrEmpty(existing.Block))
+                OnePieceTcg.Engine.CardData.UpsertCard(
+                    c.id, c.name, c.type, c.color, c.cost, c.power,
+                    c.life > 0 ? c.life : (int?)null, c.counter,
+                    null, c.effect ?? "", null,
+                    string.IsNullOrEmpty(c.feature) ? null : c.feature.Split('/'),
+                    c.rarity, c.attribute, c.block);
+        }
     }
 
     // WebGL/CDN: library arrives over HTTP after Awake's synchronous init; the
