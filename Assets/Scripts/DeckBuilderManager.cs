@@ -451,6 +451,8 @@ public partial class DeckBuilderManager : MonoBehaviour
     private string filterColor = "";   // "" = all
     private string filterType  = "";   // "" = all  (character/event/stage/leader)
     private int    filterCost  = -1;   // -1 = all, 10 = 10+
+    private string filterFormat = "";  // "" = all | "std" | "extra" | "extraonly" | "banned"
+    private string filterBlock  = "";  // "" = all | "1".."5"
     private bool   colorLock    = true; // only show cards matching the leader's colours
     private bool   archetypeLock;       // only show cards sharing an archetype/feature tag with the leader
 
@@ -3366,9 +3368,33 @@ public partial class DeckBuilderManager : MonoBehaviour
             SetPref(hint.rectTransform, new Vector2(340f, 22f));
         }
 
-        // grid scroll
+        // format-legality filter chips
+        var fmtRow = Row("Format", panel, 6, TextAnchor.MiddleLeft);
+        Stretch(fmtRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -206f), new Vector2(-16f, -180f));
+        ChipToggle(fmtRow, "FORMAT·ALL", "", filterFormat == "", _ => { filterFormat = ""; RefreshGrid(); }, Muted);
+        foreach (var (lab, val, cch) in new[] {
+            ("STANDARD", "std", GoodGreen), ("EXTRA", "extra", Accent2),
+            ("EXTRA-ONLY", "extraonly", Gold), ("BANNED", "banned", RedAccent) })
+        {
+            var vv = val;
+            ChipToggle(fmtRow, lab, val, filterFormat == val,
+                _ => { filterFormat = filterFormat == vv ? "" : vv; RefreshGrid(); }, cch, lab.Length * 7.5f + 20f);
+        }
+
+        // block-number filter chips
+        var blockRow = Row("Block", panel, 5, TextAnchor.MiddleLeft);
+        Stretch(blockRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -236f), new Vector2(-16f, -210f));
+        ChipToggle(blockRow, "BLOCK·ALL", "", filterBlock == "", _ => { filterBlock = ""; RefreshGrid(); }, Muted);
+        foreach (var b in new[] { "1", "2", "3", "4", "5" })
+        {
+            var bb = b;
+            ChipToggle(blockRow, b, b, filterBlock == b,
+                _ => { filterBlock = filterBlock == bb ? "" : bb; RefreshGrid(); }, Accent2, 34f);
+        }
+
+        // grid scroll (top pushed down to make room for the format + block filter rows)
         var gridArea = Panel("Grid Area", panel, new Color(0, 0, 0, 0));
-        Stretch(gridArea, Vector2.zero, new Vector2(1f, 1f), new Vector2(10f, 12f), new Vector2(-8f, -204f));
+        Stretch(gridArea, Vector2.zero, new Vector2(1f, 1f), new Vector2(10f, 12f), new Vector2(-8f, -264f));
         poolContent  = MakeScroll(gridArea);
         poolViewport = (RectTransform)poolContent.parent;
         var sr = gridArea.GetComponent<ScrollRect>();
@@ -3420,6 +3446,20 @@ public partial class DeckBuilderManager : MonoBehaviour
                 if (filterCost == 10) { if (c.cost < 10) continue; }
                 else if (c.cost != filterCost) continue;
             }
+            if (filterFormat.Length > 0)
+            {
+                var leg = OnePieceTcg.Engine.FormatLegality.Legality(c.id);
+                bool keep = filterFormat switch
+                {
+                    "std"       => leg == OnePieceTcg.Engine.CardLegality.LegalBoth,   // Standard-legal (in rotation, not banned)
+                    "extra"     => leg != OnePieceTcg.Engine.CardLegality.Banned,      // Extra-Regulation-legal (anything not banned)
+                    "extraonly" => leg == OnePieceTcg.Engine.CardLegality.ExtraOnly,   // rotated out of Standard
+                    "banned"    => leg == OnePieceTcg.Engine.CardLegality.Banned,      // illegal / not legal anywhere
+                    _ => true,
+                };
+                if (!keep) continue;
+            }
+            if (filterBlock.Length > 0 && (OnePieceTcg.Engine.CardData.GetCard(c.id)?.Block ?? "") != filterBlock) continue;
             if (txt.Length > 0)
             {
                 bool hit = (c.name ?? "").ToLowerInvariant().Contains(txt)
@@ -4649,6 +4689,7 @@ public partial class DeckBuilderManager : MonoBehaviour
     private void ResetFilters()
     {
         filterText = ""; filterColor = ""; filterType = ""; filterCost = -1;
+        filterFormat = ""; filterBlock = "";
         colorLock = true; archetypeLock = false;
     }
 
