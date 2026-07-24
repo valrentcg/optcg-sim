@@ -178,6 +178,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // only appear once it lands. Both reset when the coin-flip phase ends so the next match re-spins.
     private bool coinFlipRevealed;
     private bool coinFlipSpinStarted;
+
+    // True while ANY animation a full Render() would destroy is playing: the coin-flip spin, an
+    // opening/redraw hand deal, or in-flight zone ghosts (the opening life deal, turn draws, plays…).
+    // The Update()-loop re-renders (CDN art arriving, a settled resize) MUST defer until this clears —
+    // Render() tears down the board and every ghost these coroutines drive, so an ill-timed one makes
+    // the animation silently vanish and the result just snap onto the screen (the reported "sometimes
+    // no coin flip / hand deal", which correlates with art still streaming in on the first match). The
+    // deferred re-render still fires the next frame once things settle, picking up any freshly-loaded art.
+    private bool AnimationBusy =>
+        (state != null && state.Status == "coinflip" && !coinFlipRevealed)
+        || handDealAnimating
+        || mulliganDealAnimating > 0
+        || activeMoveGhosts > 0;
     // Which seat renders at the bottom/top of THIS client's screen. "south" for hotseat and
     // Versus Self (unchanged, matches every existing hardcoded assumption in this file) -
     // for a networked match, the locally-controlled seat is always drawn at the bottom
@@ -218,7 +231,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private readonly Dictionary<string, RectTransform> deckLookCardRects = new Dictionary<string, RectTransform>();
     private readonly Dictionary<string, RectTransform> boardDeckPileRects = new Dictionary<string, RectTransform>();
     private readonly Dictionary<string, RectTransform> handCardRects = new Dictionary<string, RectTransform>();
-    private readonly Dictionary<string, RectTransform> stageZoneRects = new Dictionary<string, RectTransform>();  // per-seat Stage zone (for Blitz clock placement)
+    private readonly Dictionary<string, RectTransform> leaderZoneRects = new Dictionary<string, RectTransform>(); // exact timed-clock vertical anchor
+    private readonly Dictionary<string, RectTransform> lifeZoneRects = new Dictionary<string, RectTransform>();   // exact timed-clock horizontal-gap anchor
     private readonly Dictionary<string, RectTransform> cardTargetRects = new Dictionary<string, RectTransform>();
     private RectTransform southHandRow;
     private RectTransform northHandRow;
@@ -450,7 +464,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Coalesced re-render when async CDN card art/definitions arrive: many
         // fetches can complete in one frame — rebuild once, and never mid-drag
         // (Render() would destroy the dragged object under the EventSystem).
-        if (_artRefreshQueued && !isDraggingHandCard && !isDraggingAttack)
+        if (_artRefreshQueued && !isDraggingHandCard && !isDraggingAttack && !AnimationBusy)
         {
             _artRefreshQueued = false;
             Render();
@@ -466,7 +480,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         if (_resizeSettleAt > 0f && Time.unscaledTime >= _resizeSettleAt
             && (_seenW != _renderedW || _seenH != _renderedH)
-            && !isDraggingHandCard && !isDraggingAttack && boardRoot != null)
+            && !isDraggingHandCard && !isDraggingAttack && boardRoot != null && !AnimationBusy)
         {
             _resizeSettleAt = 0f; _renderedW = _seenW; _renderedH = _seenH;
             Render();
@@ -1375,6 +1389,72 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             && t.IndexOf("Characters", System.StringComparison.OrdinalIgnoreCase) < 0;
     }
 
+    // A pending ①/②/... cost is paid by resting active cost-area DON!! at every supported timing
+    // ([On Play], [When Attacking], [On Your Opponent's Attack], [End of Your Turn], etc.).
+    // The engine treats them as fungible and pays the count atomically; expose that payment on the
+    // board so the player is never sent into a generic card-target prompt (originally OP06-118 Zoro).
+    private int PendingDonRestCost(string seat)
+    {
+        if (state == null || state.PendingEffects.Count == 0) return 0;
+        var pe = state.PendingEffects[0];
+        if (pe.Seat != seat) return 0;
+        // [Activate: Main] commits and pays from the selected-card action before its body is queued.
+        if (string.Equals(pe.Timing, "activateMain", System.StringComparison.OrdinalIgnoreCase)) return 0;
+        if ((isNetworked && seat != localSeat) || (aiSeat != null && seat == aiSeat)) return 0;
+        int circled = CircledDonCost(pe.Text);
+        if (circled > 0) return circled;
+
+        // Some official reprints spell the exact same cost out instead of using a circled glyph
+        // (OP07-019: "You may rest 1 of your DON!! cards:"). Treat both printings identically.
+        string bare = System.Text.RegularExpressions.Regex.Replace(pe.Text ?? "",
+            @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+        var explicitCost = System.Text.RegularExpressions.Regex.Match(bare,
+            @"^You (?:may|can) rest (\d+) of your DON!! cards?\s*:",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!explicitCost.Success)
+            explicitCost = System.Text.RegularExpressions.Regex.Match(bare,
+                @"^Rest (\d+) of your DON!! cards? and you may rest this Character\s*:",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        return explicitCost.Success && int.TryParse(explicitCost.Groups[1].Value, out int n) ? n : 0;
+    }
+
+    private bool CanPayPendingDonRestCost(string seat)
+    {
+        int cost = PendingDonRestCost(seat);
+        return cost > 0 && state.Players.TryGetValue(seat, out var player) &&
+            player.CostArea.Count(d => !d.Rested) >= cost;
+    }
+
+    // Circled DON!! costs are counts, not identity-sensitive targets. While an [Activate: Main]
+    // card with such a cost is selected, active cost-area DON!! become a direct payment affordance:
+    // clicking any glowing one activates the selected ability and the engine atomically rests N.
+    private int SelectedActivateMainCircledDonCost(string seat)
+    {
+        if (state == null || string.IsNullOrEmpty(selectedId) || selectedSeat != seat ||
+            state.Status != "active" || state.Phase != "main" || state.Battle != null ||
+            state.PendingEffects.Count > 0 || state.DeckLook != null || state.ActiveChoice != null ||
+            state.ActiveSeat != seat || (isNetworked && seat != localSeat) ||
+            (aiSeat != null && seat == aiSeat) || !state.Players.TryGetValue(seat, out var player))
+            return 0;
+
+        var selected = FindAny(seat, selectedId);
+        if (selected == null || player.AbilityUsedThisTurn.Contains(selected.InstanceId)) return 0;
+        string clause = ExtractActivateMainClause(GameEngine.GetCard(selected).Effect);
+        if (clause.IndexOf("[Activate: Main]", System.StringComparison.OrdinalIgnoreCase) < 0) return 0;
+        int cost = CircledDonCost(clause);
+        return cost > 0 && player.CostArea.Count(d => !d.Rested) >= cost ? cost : 0;
+    }
+
+    private static int CircledDonCost(string text)
+    {
+        foreach (char c in text ?? "")
+        {
+            if (c >= '\u2460' && c <= '\u2469') return (c - '\u2460') + 1;
+            if (c >= '\u2780' && c <= '\u2789') return (c - '\u2780') + 1;
+        }
+        return 0;
+    }
+
     // Return a specific ATTACHED DON!! to the deck as one step of a DON!! −N payment (the engine
     // detaches it — attached DON!! on your field are valid targets for the return).
     private void ReturnAttachedDon(string seat, string donId)
@@ -1418,6 +1498,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId, Target = instanceId });
                 return;
             }
+            // Circled DON!! costs use a count rather than a particular DON identity. Clicking any glowing
+            // active DON commits to the effect; the engine rests the printed number atomically.
+            if (!don.Rested && CanPayPendingDonRestCost(seat))
+            {
+                Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId });
+                return;
+            }
+        }
+
+        if (!don.Rested && SelectedActivateMainCircledDonCost(seat) > 0)
+        {
+            string activateTarget = selectedId;
+            Dispatch(new GameCommand { Type = "activateMain", Seat = seat, Target = activateTarget });
+            return;
         }
 
         if (!CanSelectDon(seat, don)) return;
@@ -1661,6 +1755,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             // Valid pick for a "give rested DON!! to your Leader" effect — standard GREEN rim glow
             // (AddUsableGlow), matching every other valid target, not the gold selection outline.
+            AddUsableGlow(holder);
+            holder.SetAsLastSibling();
+        }
+        else if (!don.Rested && CanPayPendingDonRestCost(seat))
+        {
+            // Valid payment affordance for a triggered ①/②/... cost. The cards are fungible, so any glowing
+            // active DON click commits and the engine rests the required count.
+            AddUsableGlow(holder);
+            holder.SetAsLastSibling();
+        }
+        else if (!don.Rested && SelectedActivateMainCircledDonCost(seat) > 0)
+        {
+            // Same affordance for a selected [Activate: Main] ①/②/... ability.
             AddUsableGlow(holder);
             holder.SetAsLastSibling();
         }
@@ -1933,6 +2040,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (resultPeekChip != null) { Destroy(resultPeekChip.gameObject); resultPeekChip = null; }
         handCardRects.Clear();
         boardDeckPileRects.Clear();
+        leaderZoneRects.Clear();
+        lifeZoneRects.Clear();
         cardTargetRects.Clear();
         presenceGlowRects.Clear();
         donMoveRects.Clear();
@@ -5358,23 +5467,36 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         dim.SetAsLastSibling();
         mulliganOverlay = dim;
 
-        // Title: centered, tight above the card row.
-        string who = isNetworked ? "Your opening hand" : (p.Name + "'s opening hand");
+        // Use the same real display name shown on the board/chat rather than the engine's stable
+        // "South"/"North" seat name. Keep the title close to the top edge of the five-card row.
+        string mulliganPlayerName = DisplayName(seat);
+        string possessiveName = mulliganPlayerName.EndsWith("s", System.StringComparison.OrdinalIgnoreCase)
+            ? mulliganPlayerName + "'" : mulliganPlayerName + "'s";
+        string who = possessiveName + " opening hand";
         var title = TextObject("Mulligan Title", dim,
             who + " — keep these 5, or mulligan once for a fresh 5", 22, Ink, TextAnchor.LowerCenter);
-        Stretch(title.rectTransform, new Vector2(0.10f, 0.845f), new Vector2(0.90f, 0.92f), Vector2.zero, Vector2.zero);
+        Stretch(title.rectTransform, new Vector2(0.10f, 0.710f), new Vector2(0.90f, 0.770f), Vector2.zero, Vector2.zero);
 
-        // Going first / second — shown on the mulligan screen so the keep-or-mulligan call has context.
+        // Going first / second is a primary mulligan decision input, so present it as a large,
+        // high-contrast status pill instead of the old 16px floating caption.
         bool mulGoingFirst = seat == state.FirstPlayer;
-        var orderLabel = TextObject("Mulligan Order", dim,
-            (isNetworked ? "You're going " : (p.Name + " goes ")) + (mulGoingFirst ? "FIRST" : "SECOND"),
-            16, Accent, TextAnchor.LowerCenter, monoFont);
+        var orderPill = PanelObject("Mulligan Order Pill", dim, new Color32(17, 43, 58, 248));
+        Stretch(orderPill, new Vector2(0.34f, 0.835f), new Vector2(0.66f, 0.912f), Vector2.zero, Vector2.zero);
+        RoundBig(orderPill);
+        AddRoundedCardBorder(orderPill, Accent, 2.2f);
+        var orderLabel = TextObject("Mulligan Order", orderPill,
+            mulliganPlayerName.ToUpperInvariant() + "  GOES  " + (mulGoingFirst ? "FIRST" : "SECOND"),
+            28, Accent, TextAnchor.MiddleCenter, titleFont);
         orderLabel.fontStyle = FontStyle.Bold;
-        Stretch(orderLabel.rectTransform, new Vector2(0.10f, 0.923f), new Vector2(0.90f, 0.968f), Vector2.zero, Vector2.zero);
+        orderLabel.resizeTextForBestFit = true;
+        orderLabel.resizeTextMinSize = 19;
+        orderLabel.resizeTextMaxSize = 28;
+        Stretch(orderLabel.rectTransform, new Vector2(0.035f, 0.08f), new Vector2(0.965f, 0.92f), Vector2.zero, Vector2.zero);
+        AddOutline(orderLabel.gameObject, new Color(0f, 0f, 0f, 0.82f), 1.5f);
 
         var dragHint = TextObject("Mulligan Drag Hint", dim,
             "drag cards to arrange your hand", 11, Muted, TextAnchor.UpperCenter, monoFont);
-        Stretch(dragHint.rectTransform, new Vector2(0.30f, 0.805f), new Vector2(0.70f, 0.842f), Vector2.zero, Vector2.zero);
+        Stretch(dragHint.rectTransform, new Vector2(0.30f, 0.650f), new Vector2(0.70f, 0.680f), Vector2.zero, Vector2.zero);
         dragHint.raycastTarget = false;
 
         // The 5 dealt cards — slot-positioned (not a layout group) so they can be
@@ -5429,10 +5551,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Decision buttons — condensed, side by side, directly under the cards;
         // the board-view toggle centered beneath them (matches the sketch).
         string capSeat = seat;
-        AddOverlayButton(dim, "KEEP HAND", new Vector2(0.335f, 0.125f), new Vector2(0.495f, 0.185f),
+        AddOverlayButton(dim, "KEEP HAND", new Vector2(0.335f, 0.232f), new Vector2(0.495f, 0.292f),
             () => Dispatch(new GameCommand { Type = "mulliganDecision", Seat = capSeat, Mulligan = false }));
         var capP = p;
-        AddOverlayButton(dim, "MULLIGAN", new Vector2(0.505f, 0.125f), new Vector2(0.665f, 0.185f),
+        AddOverlayButton(dim, "MULLIGAN", new Vector2(0.505f, 0.232f), new Vector2(0.665f, 0.292f),
             () =>
             {
                 if (mulliganDealAnimating > 0) return;   // ignore taps mid-animation
@@ -5440,14 +5562,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // draws the fresh 5, itself animated via mulliganRedrawSeat / AnimateMulliganDeal).
                 StartCoroutine(AnimateMulliganReturnAndShuffle(capSeat, new List<CardInstance>(capP.Hand)));
             });
-        AddOverlayButton(dim, "VIEW BOARD / HAND", new Vector2(0.40f, 0.052f), new Vector2(0.60f, 0.112f),
+        AddOverlayButton(dim, "VIEW BOARD / HAND", new Vector2(0.40f, 0.164f), new Vector2(0.60f, 0.219f),
             () => { mulliganPeeking = true; Render(); });
 
         // Hotseat courtesy note: whose turn to decide next.
         if (!isNetworked && !state.Players[OtherSeatLocal(seat)].MulliganDecided && seat == "south")
         {
             var next = TextObject("Mulligan Next", dim, DisplayName(OtherSeatLocal(seat)) + " decides next", 11, Muted, TextAnchor.MiddleCenter, monoFont);
-            Stretch(next.rectTransform, new Vector2(0.35f, 0.012f), new Vector2(0.65f, 0.042f), Vector2.zero, Vector2.zero);
+            Stretch(next.rectTransform, new Vector2(0.35f, 0.195f), new Vector2(0.65f, 0.225f), Vector2.zero, Vector2.zero);
         }
     }
 
@@ -6460,6 +6582,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var leaderMin = top ? new Vector2(0.445f, 0.36f) : new Vector2(0.445f, 0.34f);
         var leaderMax = top ? new Vector2(0.555f, 0.66f) : new Vector2(0.555f, 0.64f);
         var leader = MatZone(half, "LEADER", leaderMin, leaderMax, new Color32(217, 224, 210, 235), top);
+        leaderZoneRects[seat] = leader;
         moveZoneAnchors["cost:" + seat] = cost;
         // The cost-area DON!! row is created HERE (a sibling drawn after the leader zone) so
         // DON!! attached to the Leader tuck UNDER the cost-area DON cards — but stay ABOVE the
@@ -6485,6 +6608,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             DrawGroupedDonRow(donRow, p.CostArea, seat, top, opponentPresence.donGroups);
         else
             DrawFittedDonRow(donRow, p.CostArea, seat, top);
+
+        // DON!! count bubble on the Cost Area — available (unrested) / total, like the pile count chips.
+        AddDonCountBadge(half, costMin, costMax, p.CostArea.Count(d => !d.Rested), p.CostArea.Count);
+
         AddCardToZone(leader, p.Leader, seat, true, top);
         var leaderSz = FittedCardSize(leader);
         SnugZone(leader, leaderMin, leaderMax, leaderSz.x * 1.06f, leaderSz.y * 1.06f);
@@ -6544,6 +6671,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var lifeMin = top ? new Vector2(0.85f, 0.03f) : new Vector2(0.02f, 0.40f);
         var lifeMax = top ? new Vector2(0.98f, 0.60f) : new Vector2(0.15f, 0.97f);
         var life = MatZone(half, "LIFE", lifeMin, lifeMax, new Color32(226, 230, 216, 235), top);
+        lifeZoneRects[seat] = life;
         moveZoneAnchors["life:" + seat] = life;
         // At the end of the match, reveal BOTH players' remaining Life cards face-up (View Board);
         // during play they stay hidden.
@@ -7427,6 +7555,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
     }
 
+    // "Available / total DON!!" pill at the Cost Area's top-right corner (e.g. "2/7"), same cyan
+    // chip style as the pile counts. Parented to `half` at the cost zone's corner and drawn LAST so
+    // it sits above the DON!! card row (which can reach that corner when the cost area is full).
+    private void AddDonCountBadge(RectTransform parent, Vector2 zoneMin, Vector2 zoneMax, int active, int total)
+    {
+        var badge = PanelObject("DON Count Badge", parent, Accent);
+        badge.anchorMin = badge.anchorMax = new Vector2(zoneMax.x, zoneMax.y);
+        badge.pivot = new Vector2(1f, 1f);
+        badge.sizeDelta = new Vector2(42f, 21f);
+        badge.anchoredPosition = new Vector2(-5f, -5f);
+        RoundBig(badge);
+        badge.SetAsLastSibling();
+        var t = TextObject("Count", badge, $"{active}/{total}", 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        t.fontStyle = FontStyle.Bold;
+        Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+    }
+
     private RectTransform AddPileCardToZone(RectTransform zone, string label, int count, bool faceDown, CardInstance topCard, bool inverted = false)
     {
         var holder = new GameObject(label + " Card Holder").AddComponent<RectTransform>();
@@ -7594,7 +7739,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         x += step;
 
         var stage = ZonePanel(root, "Stage", new Vector2(x, yMin), new Vector2(x + 0.076f, yMax));
-        stageZoneRects[seat] = stage;   // Blitz clock anchors beside this
         if (p.Stage != null) AddCardToZone(stage, p.Stage, seat, true);
         else AddCenteredText(stage, "Stage");
         x += step;
@@ -8719,9 +8863,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     AddEffectCardVisual(body, selected.CardId);
                     string mainClause = CleanEffectText(ExtractActivateMainClause(selDef.Effect));
                     if (!string.IsNullOrEmpty(mainClause)) AddScaledInfo(body, mainClause);
-                    AddButton(body, abilUsed ? "Activate: Main (used)" : "Activate: Main",
+                    int activeMainDonCost = CircledDonCost(mainClause);
+                    bool canPayMainDonCost = activeMainDonCost == 0 ||
+                        state.Players[selectedSeat].CostArea.Count(d => !d.Rested) >= activeMainDonCost;
+                    if (!abilUsed && activeMainDonCost > 0)
+                        AddInfo(body, canPayMainDonCost
+                            ? $"Rest {activeMainDonCost} active DON!! to activate. Click any glowing active DON!! or use the button."
+                            : $"Needs {activeMainDonCost} active DON!! to activate.");
+                    string activateMainLabel = abilUsed ? "Activate: Main (used)" :
+                        activeMainDonCost > 0 ? $"Activate: Main (rest {activeMainDonCost} DON!!)" : "Activate: Main";
+                    AddButton(body, activateMainLabel,
                         () => Dispatch(new GameCommand { Type = "activateMain", Seat = selectedSeat, Target = selectedId }),
-                        !abilUsed);
+                        !abilUsed && canPayMainDonCost);
                 }
 
                 // DON!! are attached by DRAGGING them onto a card, not from the action window — the
@@ -8785,6 +8938,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // target resolves the step — no separate wall-of-text "Resolve" bubble. If not, it's a
         // plain use/skip decision.
         bool donGive = DonGivePickActive(effect.Seat);
+        int donRestCost = PendingDonRestCost(effect.Seat);
+        if (donRestCost > 0)
+        {
+            bool canPay = CanPayPendingDonRestCost(effect.Seat);
+            AddInfo(body, canPay
+                ? $"Rest {donRestCost} active DON!! to use this effect. Click any glowing active DON!! or use the button."
+                : $"Needs {donRestCost} active DON!! to use this effect.");
+            AddButton(body, $"Use Effect (rest {donRestCost} DON!!)",
+                () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }),
+                canPay);
+            AddButton(body, "Skip",
+                () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }),
+                effect.Optional);
+            return;
+        }
         if (EffectHasValidTarget(effect) || donGive)
         {
             AddInfo(body, donGive ? "Click a rested DON!! to give to your Leader." : EffectTargetPrompt(effect));
@@ -9941,17 +10109,33 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // The glow overflows the card, and a leader sits in a snug zone hemmed in by other zones that
         // are drawn LATER in the same half (stage, deck, trash, ...). Those later siblings paint over
-        // the overflow, so the ring looks clipped/masked by the board. Lift the target's zone (and its
-        // half) to the top of the board draw order while the indicator is shown; a SiblingRestore on
-        // the glow puts them back the instant the indicator is destroyed.
+        // the overflow, so the ring looks clipped/masked by the board. Lift only the target's direct
+        // zone and its known playmat half while the indicator is shown; a SiblingRestore on the glow
+        // puts them back the instant the indicator is destroyed.
+        //
+        // Do not infer these ancestors by indexing backward from boardRoot. The card hierarchy also
+        // contains Reference Playmat and Play Area, so that approach could raise Reference Playmat
+        // above the external hand panels and make every cost-area DON!! render in front of the hand.
         var restore = glow.gameObject.AddComponent<SiblingRestore>();
-        var path = new System.Collections.Generic.List<Transform>();
-        var t = (Transform)cardRect;
-        while (t != null && t != boardRoot) { path.Add(t); t = t.parent; }
-        if (path.Count >= 3)
+        RectTransform targetHalf = null;
+        for (Transform ancestor = cardRect; ancestor != null && ancestor != boardRoot; ancestor = ancestor.parent)
         {
-            restore.Remember(path[path.Count - 3]); // zone (child of half)
-            restore.Remember(path[path.Count - 2]); // half (child of mat)
+            if (ancestor == northHalfRect || ancestor == southHalfRect)
+            {
+                targetHalf = ancestor as RectTransform;
+                break;
+            }
+        }
+
+        if (targetHalf != null)
+        {
+            Transform targetZone = cardRect;
+            while (targetZone != null && targetZone.parent != targetHalf)
+                targetZone = targetZone.parent;
+
+            if (targetZone != null && targetZone.parent == targetHalf)
+                restore.Remember(targetZone);
+            restore.Remember(targetHalf);
             restore.RaiseAll();
         }
         return glow;

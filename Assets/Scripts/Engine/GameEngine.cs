@@ -1677,9 +1677,9 @@ namespace OnePieceTcg.Engine
                 || HasPrintedKeywordGrant(state, instance, "Unblockable")
                 || HasKeywordModifier(state, instance, "Unblockable"));
 
-        // Extract the DON!! cost encoded as circled Unicode digits in Activate:Main effect text.
+        // Extract the DON!! cost encoded as circled Unicode digits in any effect text.
         // Two series: U+2460-U+2469 (①-⑩) and U+2780-U+2789 (➀-➉).
-        private static int ParseActivateMainCost(string text)
+        private static int ParseCircledDonCost(string text)
         {
             foreach (char c in text)
             {
@@ -1688,6 +1688,14 @@ namespace OnePieceTcg.Engine
             }
             return 0;
         }
+
+        // Once a pending circled cost is committed, remove only its glyph/reminder prefix from the
+        // current resolver text. OriginalText remains untouched for the action-panel ledger. This
+        // prevents a later target click or continuation from charging the same cost a second time.
+        private static string StripCircledDonCost(string text) =>
+            new System.Text.RegularExpressions.Regex(
+                @"[①-⑩➀-➉]\s*(?:\([^)]*\))?\s*:?\s*")
+                .Replace(text ?? "", "", 1).Trim();
 
         // Extract N from "DON!! −N (You may return the specified number of DON!! cards from
         // your field to your DON!! deck.)" — a return-DON!!-to-deck cost (purple staple).
@@ -2760,7 +2768,9 @@ namespace OnePieceTcg.Engine
                     PayDonCost(p, 3);
                     if (oncePerTurn) p.AbilityUsedThisTurn.Add(instanceId);
                     // TargetZone.Hand routes hand-card clicks to resolveEffect in the UI layer.
-                    QueueEffect(state, seat, card, "activateMain", def.Effect, false, EffectScope.Instant, EffectTargetZone.Hand);
+                    QueueEffect(state, seat, card, "activateMain",
+                        StripCircledDonCost(ExtractTimedClause(def.Effect, "Activate: Main")),
+                        false, EffectScope.Instant, EffectTargetZone.Hand);
                     break;
 
                 // Jewelry Bonney: cost = rest 1 active DON!! + rest this Character. Look at top 5,
@@ -2800,7 +2810,7 @@ namespace OnePieceTcg.Engine
                         Log(state, seat, $"Not enough DON!! on your field (need {donMinusReq}) to activate {NameId(def)}.");
                         return;
                     }
-                    int genericCost = ParseActivateMainCost(mainClause);
+                    int genericCost = ParseCircledDonCost(mainClause);
                     if (genericCost > 0 && ActiveDonCount(p) < genericCost)
                     {
                         Log(state, seat, $"Not enough active DON!! (need {genericCost}) to activate {NameId(def)}.");
@@ -2856,7 +2866,11 @@ namespace OnePieceTcg.Engine
                     else
                     {
                         EffectTargetZone zone = InferTargetZone(mainClause);
-                        QueueEffect(state, seat, card, "activateMain", mainClause, true, EffectScope.Instant, zone);
+                        // The circled cost was paid above. Never leave its glyph on a pending
+                        // target-selection body or the UI would offer a second payment.
+                        string mainResolutionClause = genericCost > 0 ? StripCircledDonCost(mainClause) : mainClause;
+                        QueueEffect(state, seat, card, "activateMain", mainResolutionClause, true,
+                            EffectScope.Instant, zone);
                         // Choosing "Activate: Main" IS the commit — resolve immediately so a "You may
                         // <cost>: <body>" ability pays its own cost (e.g. trash this Character) and
                         // steps into the body, instead of popping a SECOND "Use Effect / Skip" prompt
@@ -6343,14 +6357,24 @@ namespace OnePieceTcg.Engine
             var effect = FindPendingEffect(state, seat, effectId);
             if (effect == null) return;
 
-            // "[When Attacking] ①: …" effects carry a circled-digit DON!! cost that is paid when
-            // the player chooses to resolve (Activate:Main costs are paid in ActivateMain instead).
-            int donCost = effect.Timing == "whenAttacking" ? ParseActivateMainCost(effect.Text ?? "") : 0;
+            // Circled-digit costs exist at several timings: [On Play], [When Attacking],
+            // [On Your Opponent's Attack], and [End of Your Turn]. The first resolve interaction
+            // commits to the optional effect: pay before entering its body/target selection and
+            // strip the marker so subsequent target clicks cannot charge it twice.
+            // [Activate: Main] is excluded because ActivateMain pays its circled cost up front.
+            int donCost = string.Equals(effect.Timing, "activateMain", StringComparison.OrdinalIgnoreCase)
+                ? 0 : ParseCircledDonCost(effect.Text ?? "");
             if (donCost > 0 && ActiveDonCount(Player(state, effect.Seat)) < donCost)
             {
                 state.PendingEffects.Remove(effect);
                 Log(state, effect.Seat, $"Not enough active DON!! (need {donCost}) — {NameId(CardData.GetCard(effect.SourceCardId))} effect fizzles.");
                 return;
+            }
+            if (donCost > 0)
+            {
+                PayDonCost(Player(state, effect.Seat), donCost);
+                effect.Text = StripCircledDonCost(effect.Text);
+                Log(state, effect.Seat, $"{NameId(CardData.GetCard(effect.SourceCardId))}: rests {donCost} DON!! (circled cost).");
             }
 
             // "DON!! −N (…): body" costs (return N DON!! from field to DON!! deck — Shanks
@@ -6439,9 +6463,6 @@ namespace OnePieceTcg.Engine
                 var tail = ExtractHandDisposalTail(effect.Text);
                 if (tail != null) state.DeckLook.PostLookClause = tail;
             }
-            if (result == EffectResolution.Resolved && donCost > 0)
-                PayDonCost(Player(state, effect.Seat), donCost);
-
             // A [Once Per Turn] triggered effect is consumed only now that it RESOLVED (was used) —
             // never on a skip — so declining re-prompts on the next attack until it's actually used.
             if (result == EffectResolution.Resolved && !string.IsNullOrEmpty(effect.OnceKey))
@@ -7588,7 +7609,10 @@ namespace OnePieceTcg.Engine
                 SourceCardId = source.CardId,
                 Timing = timing,
                 Text = text.Trim(),
-                Optional = optional,
+                // A circled DON!! payment is always an activation cost: the player may decline it
+                // even when the body itself has mandatory wording (notably OP05-032 Pica).
+                Optional = optional || (!string.Equals(timing, "activateMain", StringComparison.OrdinalIgnoreCase)
+                    && ParseCircledDonCost(text) > 0),
                 Scope = scope,
                 TargetZone = targetZone,
                 // Progress ledger (task B): a fresh queue captures the full text as OriginalText;
@@ -7617,6 +7641,9 @@ namespace OnePieceTcg.Engine
             text = NormalizeQueuedClause(timing, text);   // clean clause drives BOTH the queue and the auto-resolve decision below
             QueueEffect(state, seat, source, timing, text, optional, scope, targetZone, originalText, doneParts,
                 skippedParts, finalizesActivatedTrigger);
+            // Never auto-pay a circled activation cost. It must remain pending so the owning player
+            // can explicitly click glowing active DON!! (or the equivalent action-panel button).
+            if (ParseCircledDonCost(text) > 0) return;
             // Only explicit "you may" wording is a real opt-in decision — those wait for the
             // player. Everything else auto-resolves: mandatory effects (including "If <cond>,
             // ..." — the CONDITION decides, not the player, e.g. Kikunojo's set-Leader-active)
@@ -17039,7 +17066,8 @@ namespace OnePieceTcg.Engine
                 // is EXCLUDED here — the free self-recover would drop BOTH the DON cost and the ". Then," [Blocker]
                 // grant; it falls through to the full resolver (QueueAndAutoResolve) which pays the DON, sets active,
                 // and grants [Blocker].
-                if (ContainsAll(eoyClause, "Set this", "as active") && c.Rested && ParseDonMinusCost(eoyClause) == 0)
+                if (ContainsAll(eoyClause, "Set this", "as active") && c.Rested
+                    && ParseDonMinusCost(eoyClause) == 0 && ParseCircledDonCost(eoyClause) == 0)
                 {
                     var setCondM = System.Text.RegularExpressions.Regex.Match(eoyClause, @"^If ([^,]+),",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -17089,7 +17117,8 @@ namespace OnePieceTcg.Engine
                 // on the leading If, auto-pick valid rested targets honoring the {tag}/cost filter and freeze (#291).
                 // Excludes "DON!!" (those auto-resolve via IsAutomatedEffectPattern) and the self "Set this …" form.
                 if (System.Text.RegularExpressions.Regex.IsMatch(eoyClause, @"[Ss]et up to \d+ (?:of your )?(?:\{[^}]+\} type )?Characters?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
-                    && ContainsAll(eoyClause, "as active") && !ContainsAll(eoyClause, "DON!!") && !ContainsAll(eoyClause, "opponent"))
+                    && ContainsAll(eoyClause, "as active") && !ContainsAll(eoyClause, "DON!!")
+                    && !ContainsAll(eoyClause, "opponent") && ParseCircledDonCost(eoyClause) == 0)
                 {
                     var saCondM = System.Text.RegularExpressions.Regex.Match(eoyClause, @"^If ([^,]+),",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase);

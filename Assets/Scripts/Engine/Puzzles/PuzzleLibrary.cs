@@ -18,6 +18,9 @@ namespace OnePieceTcg.Engine.Puzzles
         public string DifficultyEvidence;
         public int PlayerTurnLimit = 1; // 1 = lethal this turn; 2+ = forced win spanning turn boundaries
         public string Objective = "Win this turn.";
+        // A fair public clue (revealed Life, active DON!!, or worst-case counter assumption) that never exposes
+        // the opponent's exact hidden hand.
+        public string PublicInformation;
         public string[] Mechanics = Array.Empty<string>();
         public Func<GameState> Build;
     }

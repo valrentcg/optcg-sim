@@ -626,12 +626,14 @@ public partial class DeckBuilderManager : MonoBehaviour
         private Material mat;
         private RectTransform rt;
         private float expand;
+        private bool cardStyle;
         private float current;
-        public void Init(RawImage image, float expandFraction)
+        public void Init(RawImage image, float expandFraction, bool useCardStyle = false)
         {
             rt = image.rectTransform;
             mat = image.material;
             expand = expandFraction;
+            cardStyle = useCardStyle;
             current = 0f;
             if (mat != null) mat.SetFloat(IntensityID, 0f);
         }
@@ -641,14 +643,18 @@ public partial class DeckBuilderManager : MonoBehaviour
             Vector2 g = rt.rect.size;
             if (g.x > 1f && g.y > 1f)
             {
-                Vector2 hex = g / (1f + 2f * expand);
-                float mn = hex.y;
+                Vector2 shape = g / (1f + 2f * expand);
+                // Card previews use the exact proportions from GameManager.CardRimGlow. Hexes retain
+                // their broader selection bloom, but a tall card must measure its glow from its
+                // shorter edge or the same fractions become much larger than they are in a match.
+                float mn = cardStyle ? Mathf.Min(shape.x, shape.y) : shape.y;
                 mat.SetVector("_GlowSize", new Vector4(g.x, g.y, 0f, 0f));
-                mat.SetVector("_CardSize", new Vector4(hex.x, hex.y, 0f, 0f));
+                mat.SetVector("_CardSize", new Vector4(shape.x, shape.y, 0f, 0f));
+                if (cardStyle) mat.SetFloat("_CornerPx", mn * 0.06f);
                 mat.SetFloat("_BleedPx", mn * 0.05f);
-                mat.SetFloat("_GlowWidthPx", mn * 0.11f);
-                mat.SetFloat("_CoreWidthPx", Mathf.Max(1.5f, mn * 0.025f));
-                mat.SetFloat("_WispPx", mn * 0.08f);
+                mat.SetFloat("_GlowWidthPx", mn * (cardStyle ? 0.075f : 0.11f));
+                mat.SetFloat("_CoreWidthPx", Mathf.Max(1.5f, mn * (cardStyle ? 0.02f : 0.025f)));
+                mat.SetFloat("_WispPx", mn * (cardStyle ? 0.06f : 0.08f));
             }
             current = Mathf.MoveTowards(current, 1f, 6.5f * Time.unscaledDeltaTime);
             mat.SetFloat(IntensityID, current);
@@ -1012,7 +1018,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         m.SetFloat("_Pulse", 0.22f);
         m.SetFloat("_CornerPx", 18f);   // rounded-rect corner (HexRimGlowDriver doesn't set this — hexes have none)
         rimImg.material = m;
-        rimGo.AddComponent<HexRimGlowDriver>().Init(rimImg, glowExpand);
+        rimGo.AddComponent<HexRimGlowDriver>().Init(rimImg, glowExpand, useCardStyle: true);
     }
 
     // The builder has no separate title font; fall back to the default UI font.
@@ -1047,7 +1053,7 @@ public partial class DeckBuilderManager : MonoBehaviour
     {
         if (previewRoot == null) return;
         float rightW = (view == View.Editor) ? 320f : 480f;   // matches the decklist panel width per view
-        const float prevW = 380f, margin = 16f;               // large, match-sized card
+        const float prevW = 380f, margin = 44f;               // matches the in-game preview card's right-edge inset
         if (_previewOnLeft)
             // Hovering the RIGHT decklist → dock the preview JUST LEFT of it (over the middle), so it doesn't
             // cover the decklist row you're reading.

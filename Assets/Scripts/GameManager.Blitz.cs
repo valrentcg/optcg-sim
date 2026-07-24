@@ -399,7 +399,8 @@ public partial class GameManager
         blitzRoot.SetAsLastSibling();
 
         string owner = BlitzOwner();
-        // Two clock chips: top player and bottom player, on the right edge above the side panel gap.
+        // Two clock chips: top player in the upper-left Leader/Life gap and bottom player in
+        // the corresponding lower-left gap.
         DrawBlitzClock(TopSeat, owner, true);
         DrawBlitzClock(BottomSeat, owner, false);
 
@@ -450,9 +451,10 @@ public partial class GameManager
             : (Color)Ink;
         Color border = isOwner ? (Color)Gold : (Color)new Color32(90, 100, 116, 110);
 
-        // Parent the clock into the player's board HALF and pin it to the fraction that sits between the
-        // Stage (x≈0.152) and Deck (x≈0.246) zones (see DrawCoreZones), vertically on that zone row.
-        // The half rects are always available (set in DrawReferencePlaymat), so this never falls back.
+        // Parent the clock into the player's board half. Vertically it shares the exact centerline
+        // of the Leader card. Horizontally it uses the midpoint of the Leader-to-Life gap for the
+        // bottom player; the opponent's equivalent gap is reflected to the upper-left as requested
+        // (their mirrored Life stack itself lives on the right side of the current playmat).
         RectTransform half = top ? northHalfRect : southHalfRect;
         var chip = PanelObject("Blitz Clock " + seat, half != null ? (Transform)half : blitzRoot.transform,
             isOwner ? (Color)new Color32(30, 40, 56, 250) : (Color)new Color32(16, 20, 28, 225));
@@ -460,19 +462,23 @@ public partial class GameManager
         if (half != null)
         {
             chip.pivot = new Vector2(0.5f, 0.5f);
-            if (stageZoneRects.TryGetValue(seat, out var sr) && sr != null
-                && boardDeckPileRects.TryGetValue(seat, out var dr) && dr != null)
+            if (leaderZoneRects.TryGetValue(seat, out var leaderRect) && leaderRect != null
+                && lifeZoneRects.TryGetValue(seat, out var lifeRect) && lifeRect != null)
             {
-                // EXACT: the midpoint of the Stage and Deck zone centers, in the half's local space —
-                // horizontally equidistant and vertically level with those cards, for each player.
-                Vector2 sLocal = half.InverseTransformPoint(sr.TransformPoint((Vector3)sr.rect.center));
-                Vector2 dLocal = half.InverseTransformPoint(dr.TransformPoint((Vector3)dr.rect.center));
+                Vector2 leaderLocal = half.InverseTransformPoint(
+                    leaderRect.TransformPoint((Vector3)leaderRect.rect.center));
+                Vector2 lifeLocal = half.InverseTransformPoint(
+                    lifeRect.TransformPoint((Vector3)lifeRect.rect.center));
+                float halfGap = Mathf.Abs(lifeLocal.x - leaderLocal.x) * 0.5f;
+                float clockX = top ? leaderLocal.x - halfGap : (leaderLocal.x + lifeLocal.x) * 0.5f;
                 chip.anchorMin = chip.anchorMax = new Vector2(0.5f, 0.5f);
-                chip.anchoredPosition = (sLocal + dLocal) * 0.5f;
+                chip.anchoredPosition = new Vector2(clockX, leaderLocal.y);
             }
             else
             {
-                chip.anchorMin = chip.anchorMax = new Vector2(0.199f, 0.435f);   // fallback fraction
+                // Geometry is normally always available; this preserves the same intended placement
+                // during a transient first-frame layout before the zone dictionaries are populated.
+                chip.anchorMin = chip.anchorMax = new Vector2(0.2925f, top ? 0.51f : 0.49f);
                 chip.anchoredPosition = Vector2.zero;
             }
             chip.SetAsLastSibling();   // above the zone cards

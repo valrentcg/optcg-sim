@@ -543,6 +543,8 @@ public partial class MainMenuManager : MonoBehaviour
         BootUpdateAndAssetsOnce();
         // Restore the saved display mode + resolution (see DisplaySettings) — safe to call unconditionally.
         DisplaySettings.RestoreSaved();
+        // Apply the custom golden-spearhead cursor at the saved size/rotation (no-op if art missing).
+        CursorManager.Init();
     }
 
     // Launch-time update check + CDN asset index, once per app run. On WebGL a
@@ -3511,23 +3513,118 @@ public partial class MainMenuManager : MonoBehaviour
         else if (AccountManager.HasEmailLinked) BuildEmailLinkedSummary(panel);
         else BuildLinkEmailFields(panel);
 
+        // App preferences (display / cursor / audio) live in one tidy card below the account
+        // content. Only on the non-form views — the reset/recovery/link forms keep the focus on
+        // their inputs (audio was never essential there).
+        if (wideSettings) BuildPreferencesSection(panel);
+    }
+
+    // A single bordered "Preferences" card, anchored just below the account/guest content, grouping
+    // Display + Cursor + Audio into aligned rows. Replaces the old trio of full-width, bottom-anchored
+    // strips whose pills sprayed edge-to-edge (HorizontalLayoutGroup force-expand) with big empty gaps.
+    private void BuildPreferencesSection(RectTransform panel)
+    {
+        var card = PanelObject("Preferences Card", panel, new Color32(8, 16, 26, 200));
+        Stretch(card, new Vector2(0.22f, 1f), new Vector2(0.78f, 1f), new Vector2(0f, -648f), new Vector2(0f, -392f));
+        Round(card);
+        AddRoundedCardBorder(card, MenuB, 1f);
+
+        var cardTitle = TextObject("Prefs Title", card, "PREFERENCES", 12, Ink, TextAnchor.LowerLeft, monoFont);
+        cardTitle.fontStyle = FontStyle.Bold;
+        Stretch(cardTitle.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -34f), new Vector2(-24f, -14f));
+
+        // ── Display ── label on the left, pills packed next to it (no force-expand spread).
+        var displayLbl = TextObject("Display Label", card, "DISPLAY", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(displayLbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -64f), new Vector2(-24f, -44f));
+        var displayRow = LeftPackedRow(card, new Vector2(120f, -66f), new Vector2(-24f, -40f));
+        bool isFullscreen = DisplaySettings.Fullscreen;
+        AddDisplayModePill(displayRow, "FULLSCREEN", isFullscreen, () => SetDisplayMode(true));
+        AddDisplayModePill(displayRow, "WINDOWED", !isFullscreen, () => SetDisplayMode(false));
+        var modes = DisplaySettings.Available();
+        var (cw, ch) = modes[Mathf.Clamp(DisplaySettings.CurrentIndex(), 0, modes.Count - 1)];
+        AddDisplayModePill(displayRow, $"{cw}x{ch}", false, () =>
+        {
+            var list = DisplaySettings.Available();
+            int next = (DisplaySettings.CurrentIndex() + 1) % list.Count;
+            DisplaySettings.ApplyResolution(list[next].w, list[next].h);
+            RenderMenu();
+        });
+
+        // ── Cursor size ── label + live px value on one band, full-width slider below.
+        var cursorLbl = TextObject("Cursor Label", card, "CURSOR SIZE", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(cursorLbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -92f), new Vector2(-24f, -76f));
+        var cursorVal = TextObject("Cursor Value", card, $"{CursorSettings.SizePx}px", 10, Muted, TextAnchor.LowerRight, monoFont);
+        Stretch(cursorVal.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -92f), new Vector2(-24f, -76f));
+        AddSlider(card, new Vector2(24f, -118f), new Vector2(-24f, -100f),
+            CursorSettings.MinSize, CursorSettings.MaxSize, true, CursorSettings.SizePx, v =>
+            {
+                CursorSettings.SizePx = Mathf.RoundToInt(v);
+                cursorVal.text = $"{CursorSettings.SizePx}px";
+                CursorManager.Apply();
+            });
+
+        // ── Cursor rotate ── label on the left, controls packed at the shared x=120 column (like Display).
+        var rotLbl = TextObject("Rotate Label", card, "ROTATE", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(rotLbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -144f), new Vector2(-24f, -128f));
+        var rotRow = LeftPackedRow(card, new Vector2(120f, -146f), new Vector2(-24f, -122f));
+        AddDisplayModePill(rotRow, "◄", false, () => { CursorSettings.NudgeRotation(1); CursorManager.Apply(); RenderMenu(); });
+        AddDisplayModePill(rotRow, "►", false, () => { CursorSettings.NudgeRotation(-1); CursorManager.Apply(); RenderMenu(); });
+        var degField = MakeInput(rotRow, "deg", Mathf.RoundToInt(CursorSettings.RotationDegrees).ToString(), null,
+            s =>
+            {
+                if (float.TryParse(s, out float deg)) CursorSettings.RotationDegrees = deg;
+                CursorManager.Apply();
+                RenderMenu();
+            });
+        SetPreferred(degField, new Vector2(56f, 24f));
+        degField.sizeDelta = new Vector2(56f, 24f);
+
+        // ── Cursor colour ── label on the left, a cycle pill through the ported metal variants.
+        var colorLbl = TextObject("Cursor Color Label", card, "COLOR", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(colorLbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -176f), new Vector2(-24f, -160f));
+        var colorRow = LeftPackedRow(card, new Vector2(120f, -178f), new Vector2(-24f, -154f));
+        AddDisplayModePill(colorRow, CursorSettings.ColorName.ToUpperInvariant() + "  ▸", true, () =>
+        {
+            CursorSettings.CycleColor();
+            CursorManager.Apply();
+            RenderMenu();
+        });
+
         // ── Audio ── SFX volume (shared with the in-game slider via PlayerPrefs).
-        // Bottom-anchored with a fixed pixel offset — shifted +50px up from where this used to
-        // sit (y 34-84) so it clears the Sign Out button below (AddSignOutRow, y 24-64), which
-        // it was quietly overlapping (34-54 fully inside 24-64) even before the Display section
-        // was added above it.
-        var audioLbl = TextObject("Audio Label", panel, "AUDIO — SFX VOLUME", 10, Muted, TextAnchor.LowerLeft, monoFont);
-        Stretch(audioLbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 114f), new Vector2(-24f, 134f));
-        var track = PanelObject("SFX Track", panel, new Color(1f, 1f, 1f, 0.08f));
-        Stretch(track, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 84f), new Vector2(-24f, 104f));
+        var audioLbl = TextObject("Audio Label", card, "AUDIO — SFX VOLUME", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(audioLbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -208f), new Vector2(-24f, -192f));
+        AddSlider(card, new Vector2(24f, -234f), new Vector2(-24f, -216f),
+            0f, 1f, false, GameManager.SfxVolume, v => GameManager.SfxVolume = v);
+    }
+
+    // A transparent, top-anchored row that packs its children from the left (used for pill groups).
+    private RectTransform LeftPackedRow(RectTransform parent, Vector2 offMin, Vector2 offMax)
+    {
+        var row = PanelObject("Row", parent, new Color(0, 0, 0, 0));
+        Stretch(row, new Vector2(0f, 1f), new Vector2(1f, 1f), offMin, offMax);
+        var hlg = row.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 8f;
+        hlg.childAlignment = TextAnchor.MiddleLeft;
+        hlg.childControlWidth = false;
+        hlg.childControlHeight = false;
+        hlg.childForceExpandWidth = false;   // pack left instead of spraying across the row
+        hlg.childForceExpandHeight = false;
+        return row;
+    }
+
+    // Builds a slider (track + fill + handle) top-anchored across the parent by the given offsets.
+    private Slider AddSlider(RectTransform parent, Vector2 offMin, Vector2 offMax,
+        float min, float max, bool whole, float value, UnityEngine.Events.UnityAction<float> onChanged)
+    {
+        var track = PanelObject("Track", parent, new Color(1f, 1f, 1f, 0.08f));
+        Stretch(track, new Vector2(0f, 1f), new Vector2(1f, 1f), offMin, offMax);
         Round(track);
         var fillArea = PanelObject("Fill Area", track, new Color(0f, 0f, 0f, 0f));
         Stretch(fillArea, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         fillArea.GetComponent<Image>().raycastTarget = false;
         var fill = PanelObject("Fill", fillArea, Accent);
-        // Explicit anchors: fresh rects default to a centred 100×100 block otherwise.
         fill.anchorMin = new Vector2(0f, 0f);
-        fill.anchorMax = new Vector2(0f, 1f);   // Slider drives anchorMax.x = value
+        fill.anchorMax = new Vector2(0f, 1f);
         fill.pivot = new Vector2(0f, 0.5f);
         fill.sizeDelta = Vector2.zero;
         fill.anchoredPosition = Vector2.zero;
@@ -3538,7 +3635,7 @@ public partial class MainMenuManager : MonoBehaviour
         handleArea.GetComponent<Image>().raycastTarget = false;
         var handle = PanelObject("Handle", handleArea, new Color32(230, 240, 248, 255));
         handle.anchorMin = new Vector2(0f, 0f);
-        handle.anchorMax = new Vector2(0f, 1f);   // Slider drives anchor x = value
+        handle.anchorMax = new Vector2(0f, 1f);
         handle.pivot = new Vector2(0.5f, 0.5f);
         handle.sizeDelta = new Vector2(16f, 6f);
         handle.anchoredPosition = Vector2.zero;
@@ -3547,39 +3644,12 @@ public partial class MainMenuManager : MonoBehaviour
         slider.transition = Selectable.Transition.None;
         slider.fillRect = fill;
         slider.handleRect = handle;
-        slider.minValue = 0f;
-        slider.maxValue = 1f;
-        slider.value = GameManager.SfxVolume;
-        slider.onValueChanged.AddListener(v => GameManager.SfxVolume = v);
-
-        // ── Display — Fullscreen / Windowed ── stacked just above the audio block, same
-        // bottom-anchored-with-fixed-pixel-offset convention.
-        var displayLbl = TextObject("Display Label", panel, "DISPLAY", 10, Muted, TextAnchor.LowerLeft, monoFont);
-        Stretch(displayLbl.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 174f), new Vector2(-24f, 194f));
-
-        var displayRow = PanelObject("Display Row", panel, new Color(0, 0, 0, 0));
-        Stretch(displayRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 144f), new Vector2(-24f, 170f));
-        var displayHlg = displayRow.gameObject.AddComponent<HorizontalLayoutGroup>();
-        displayHlg.spacing = 8f;
-        displayHlg.childAlignment = TextAnchor.MiddleLeft;
-        displayHlg.childControlWidth = false;
-        displayHlg.childControlHeight = false;
-
-        bool isFullscreen = DisplaySettings.Fullscreen;
-        AddDisplayModePill(displayRow, "FULLSCREEN", isFullscreen, () => SetDisplayMode(true));
-        AddDisplayModePill(displayRow, "WINDOWED", !isFullscreen, () => SetDisplayMode(false));
-
-        // Resolution cycle pill (16:9 modes that fit the display). Click cycles to the next size.
-        var modes = DisplaySettings.Available();
-        int cur = DisplaySettings.CurrentIndex();
-        var (cw, ch) = modes[Mathf.Clamp(cur, 0, modes.Count - 1)];
-        AddDisplayModePill(displayRow, $"{cw}x{ch}", false, () =>
-        {
-            var list = DisplaySettings.Available();
-            int next = (DisplaySettings.CurrentIndex() + 1) % list.Count;
-            DisplaySettings.ApplyResolution(list[next].w, list[next].h);
-            RenderMenu();
-        });
+        slider.minValue = min;
+        slider.maxValue = max;
+        slider.wholeNumbers = whole;
+        slider.value = value;
+        slider.onValueChanged.AddListener(onChanged);
+        return slider;
     }
 
     // Applies immediately and persists across launches (PlayerPrefs, same "optcg.xxx"

@@ -35,6 +35,7 @@ public partial class MainMenuManager
     private bool showingProfile;
     private string profileTab = "overview";      // "overview" | "decks" | "seasonal"
     private string profileSelDeck;               // selected leader id in Deck History
+    private bool profileDeckMatrixOpen;           // selected deck's matchup-matrix submenu
     private string profileSeasonMode = "casual"; // "casual" | "ranked"
     private string profileDeckMode = "ranked";   // Deck History split: "ranked" | "casual"
     private bool profilePrivacyOpen;
@@ -86,6 +87,7 @@ public partial class MainMenuManager
         // Opening resets to Overview / no deck / Casual, per the handoff.
         profileTab = "overview";
         profileSelDeck = null;
+        profileDeckMatrixOpen = false;
         profileSeasonMode = "casual";
         profilePrivacyOpen = false;
         profileViewAs = "me";
@@ -279,6 +281,7 @@ public partial class MainMenuManager
         {
             profileTab = value;
             profileSelDeck = null;
+            profileDeckMatrixOpen = false;
             RenderMenu();
         });
     }
@@ -316,7 +319,16 @@ public partial class MainMenuManager
         string mainLeader = TopOwnLeaderId(b);
         var banner = PanelObject("Hero Banner", hero, RowBg);
         Stretch(banner, Vector2.zero, new Vector2(0.42f, 1f), Vector2.zero, Vector2.zero);
-        if (mainLeader != null) BuildLeaderBanner(banner, mainLeader, 680f, 186f, darkLeft: false);
+        // Identity copy lives on the left, so the art must darken toward the left.
+        if (mainLeader != null) BuildLeaderBanner(banner, mainLeader, 680f, 186f, darkLeft: true);
+
+        // A stable information plate keeps white card art and busy illustrations
+        // from swallowing the leader name, id, games, and ranked tier.
+        var identityPlate = PanelObject("Hero Identity Plate", hero, new Color32(7, 16, 25, 218));
+        Stretch(identityPlate, new Vector2(0.018f, 0.12f), new Vector2(0.405f, 0.9f),
+            Vector2.zero, Vector2.zero);
+        RoundBig(identityPlate);
+        AddRoundedCardBorder(identityPlate, new Color(1f, 1f, 1f, 0.16f), 1f);
 
         // Real ranked standing (server-authoritative, PvP-only). No client-derived
         // ELO/bounty anymore — the hidden rating is never shown, and the tier comes
@@ -329,27 +341,29 @@ public partial class MainMenuManager
             : ("Unranked", Muted);
 
         var heroName = TextObject("Hero Name", hero,
-            mainLeader != null ? (MenuCard(mainLeader)?.name ?? mainLeader) : "No matches yet",
-            22, Ink, TextAnchor.UpperLeft);
+            mainLeader != null ? ProfileLeaderLabel(mainLeader) : "No matches yet",
+            21, Color.white, TextAnchor.UpperLeft);
         heroName.fontStyle = FontStyle.Bold;
-        Stretch(heroName.rectTransform, new Vector2(0.02f, 0.55f), new Vector2(0.42f, 0.92f),
-            new Vector2(12f, 0f), Vector2.zero);
+        FitProfileLabel(heroName, 13, 21);
+        Stretch(heroName.rectTransform, new Vector2(0.035f, 0.57f), new Vector2(0.39f, 0.86f),
+            Vector2.zero, Vector2.zero);
 
         var heroSub = TextObject("Hero Sub", hero,
             mainLeader != null ? $"MAIN LEADER  ·  {OwnLeaderGames(b, mainLeader)} GAMES" : "PLAY A MATCH TO START YOUR LOG",
-            10, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(heroSub.rectTransform, new Vector2(0.02f, 0.36f), new Vector2(0.42f, 0.55f),
-            new Vector2(12f, 0f), Vector2.zero);
+            10, new Color32(196, 216, 228, 255), TextAnchor.UpperLeft, monoFont);
+        heroSub.fontStyle = FontStyle.Bold;
+        Stretch(heroSub.rectTransform, new Vector2(0.035f, 0.39f), new Vector2(0.39f, 0.57f),
+            Vector2.zero, Vector2.zero);
 
         // Tier chip
-        var tierChip = PanelObject("Tier Chip", hero, new Color(tier.color.r, tier.color.g, tier.color.b, 0.14f));
-        tierChip.anchorMin = tierChip.anchorMax = new Vector2(0.02f, 0.2f);
+        var tierChip = PanelObject("Tier Chip", hero, new Color(tier.color.r, tier.color.g, tier.color.b, 0.28f));
+        tierChip.anchorMin = tierChip.anchorMax = new Vector2(0.035f, 0.23f);
         tierChip.pivot = new Vector2(0f, 0.5f);
         tierChip.sizeDelta = new Vector2(24f + tier.name.Length * 7.4f, 22f);
-        tierChip.anchoredPosition = new Vector2(12f, 0f);
+        tierChip.anchoredPosition = Vector2.zero;
         Round(tierChip);
-        AddRoundedCardBorder(tierChip, new Color(tier.color.r, tier.color.g, tier.color.b, 0.5f), 1f);
-        var tierText = TextObject("t", tierChip, tier.name.ToUpperInvariant(), 9, tier.color, TextAnchor.MiddleCenter, monoFont);
+        AddRoundedCardBorder(tierChip, new Color(tier.color.r, tier.color.g, tier.color.b, 0.9f), 1.2f);
+        var tierText = TextObject("t", tierChip, tier.name.ToUpperInvariant(), 9, Color.white, TextAnchor.MiddleCenter, monoFont);
         tierText.fontStyle = FontStyle.Bold;
         Stretch(tierText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
@@ -477,15 +491,39 @@ public partial class MainMenuManager
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(18f, 0f), Vector2.zero);
     }
 
+    // Leader names are not unique in OPTCG. Profile statistics must always carry
+    // the printed card id so two versions of (for example) Luffy never collapse
+    // into an apparently duplicated or contradictory row.
+    private string ProfileLeaderLabel(string leaderId)
+    {
+        if (string.IsNullOrEmpty(leaderId)) return "Unknown Leader";
+        var rec = MenuCard(leaderId);
+        return string.IsNullOrEmpty(rec?.name) ? leaderId : $"{rec.name} [{leaderId}]";
+    }
+
+    private string ProfileLeaderMatrixLabel(string leaderId)
+    {
+        if (string.IsNullOrEmpty(leaderId)) return "Unknown\n[—]";
+        var rec = MenuCard(leaderId);
+        return string.IsNullOrEmpty(rec?.name) ? leaderId : $"{rec.name}\n[{leaderId}]";
+    }
+
+    private void FitProfileLabel(Text label, int minSize, int maxSize)
+    {
+        label.resizeTextForBestFit = true;
+        label.resizeTextMinSize = minSize;
+        label.resizeTextMaxSize = maxSize;
+    }
+
     private void BuildLeaderStatCard(RectTransform card, LeaderStat stat)
     {
         var banner = PanelObject("Art", card, RowBg);
         Stretch(banner, Vector2.zero, new Vector2(0.38f, 1f), Vector2.zero, Vector2.zero);
         BuildLeaderBanner(banner, stat.leaderId, 200f, 140f, darkLeft: false);
 
-        var rec = MenuCard(stat.leaderId);
-        var name = TextObject("Name", card, rec?.name ?? stat.leaderId, 15, Ink, TextAnchor.UpperLeft);
+        var name = TextObject("Name", card, ProfileLeaderLabel(stat.leaderId), 15, Ink, TextAnchor.UpperLeft);
         name.fontStyle = FontStyle.Bold;
+        FitProfileLabel(name, 10, 15);
         Stretch(name.rectTransform, new Vector2(0.42f, 0.62f), Vector2.one, Vector2.zero, new Vector2(-10f, -14f));
 
         float wr = stat.games > 0 ? (float)stat.wins / stat.games : 0f;
@@ -518,10 +556,10 @@ public partial class MainMenuManager
         res.fontStyle = FontStyle.Bold;
         Stretch(res.rectTransform, Vector2.zero, new Vector2(0.07f, 1f), new Vector2(16f, 0f), Vector2.zero);
 
-        var you = MenuCard(m.youLeaderId); var opp = MenuCard(m.oppLeaderId);
         var matchup = TextObject("Mu", row,
-            $"{you?.name ?? m.youLeaderId ?? "?"}  vs  {opp?.name ?? m.oppLeaderId ?? "?"}",
+            $"{ProfileLeaderLabel(m.youLeaderId)}  vs  {ProfileLeaderLabel(m.oppLeaderId)}",
             13, Ink, TextAnchor.MiddleLeft);
+        FitProfileLabel(matchup, 9, 13);
         Stretch(matchup.rectTransform, new Vector2(0.07f, 0f), new Vector2(0.52f, 1f), Vector2.zero, Vector2.zero);
 
         // Game-type chip (RANKED / CASUAL / CUSTOM / BOT / SELF).
@@ -617,11 +655,25 @@ public partial class MainMenuManager
         Stretch(list, new Vector2(0f, 0f), new Vector2(0f, 1f), Vector2.zero, new Vector2(300f, 0f));
         RoundBig(list);
         AddRoundedCardBorder(list, MenuB, 1f);
+
+        var listViewport = PanelObject("Deck List Viewport", list, new Color(0, 0, 0, 0));
+        Stretch(listViewport, Vector2.zero, Vector2.one,
+            new Vector2(8f, 8f), new Vector2(-8f, -8f));
+        listViewport.gameObject.AddComponent<RectMask2D>();
+
+        var listContent = PanelObject("Deck List Content", listViewport, new Color(0, 0, 0, 0));
+        listContent.anchorMin = new Vector2(0f, 1f);
+        listContent.anchorMax = new Vector2(1f, 1f);
+        listContent.pivot = new Vector2(0.5f, 1f);
+        listContent.anchoredPosition = Vector2.zero;
+        listContent.sizeDelta = new Vector2(0f, 10f + decks.Count * 66f);
+        listContent.GetComponent<Image>().raycastTarget = false;
+
         float ly = -10f;
-        foreach (var d in decks.Take(12))
+        foreach (var d in decks)
         {
             bool sel = d.leaderId == profileSelDeck;
-            var row = PanelObject("Deck " + d.leaderId, list,
+            var row = PanelObject("Deck " + d.leaderId, listContent,
                 sel ? new Color(Accent.r, Accent.g, Accent.b, 0.13f) : new Color(0, 0, 0, 0));
             Stretch(row, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(8f, ly - 60f), new Vector2(-8f, ly));
             Round(row);
@@ -634,9 +686,10 @@ public partial class MainMenuManager
             dot.anchoredPosition = new Vector2(12f, 0f);
             RoundCircle(dot);
 
-            var rec = MenuCard(d.leaderId);
-            var name = TextObject("Name", row, rec?.name ?? d.leaderId, 13, sel ? Ink : (Color)new Color32(198, 211, 220, 255), TextAnchor.LowerLeft);
+            var name = TextObject("Name", row, ProfileLeaderLabel(d.leaderId), 13,
+                sel ? Ink : (Color)new Color32(198, 211, 220, 255), TextAnchor.LowerLeft);
             name.fontStyle = sel ? FontStyle.Bold : FontStyle.Normal;
+            FitProfileLabel(name, 9, 13);
             Stretch(name.rectTransform, new Vector2(0f, 0.5f), Vector2.one, new Vector2(30f, 2f), new Vector2(-8f, -6f));
 
             float wr = d.games > 0 ? (float)d.wins / d.games : 0f;
@@ -646,15 +699,30 @@ public partial class MainMenuManager
 
             string id = d.leaderId;
             var btn = row.gameObject.AddComponent<Button>();
-            btn.onClick.AddListener(() => { profileSelDeck = id; RenderMenu(); });
+            btn.onClick.AddListener(() =>
+            {
+                profileSelDeck = id;
+                profileDeckMatrixOpen = false;
+                RenderMenu();
+            });
             ly -= 66f;
         }
+
+        var listScroll = listViewport.gameObject.AddComponent<ScrollRect>();
+        listScroll.content = listContent;
+        listScroll.viewport = listViewport;
+        listScroll.horizontal = false;
+        listScroll.vertical = true;
+        listScroll.movementType = ScrollRect.MovementType.Clamped;
+        listScroll.inertia = true;
+        listScroll.scrollSensitivity = 28f;
 
         // ── Right: detail for selected deck ──────────────────────────────────
         var detail = PanelObject("Deck Detail", content, new Color(0, 0, 0, 0));
         Stretch(detail, Vector2.zero, Vector2.one, new Vector2(316f, 0f), Vector2.zero);
         var selStat = decks.First(d => d.leaderId == profileSelDeck);
-        BuildDeckDetail(detail, selStat, dm);
+        if (profileDeckMatrixOpen) BuildDeckMatchupMatrixView(detail, selStat, dm);
+        else BuildDeckDetail(detail, selStat, dm);
     }
 
     // Small Ranked/Casual toggle for the Deck History tab.
@@ -669,13 +737,18 @@ public partial class MainMenuManager
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var btn = tab.gameObject.AddComponent<Button>();
-        btn.onClick.AddListener(() => { profileDeckMode = value; profileSelDeck = null; RenderMenu(); });
+        btn.onClick.AddListener(() =>
+        {
+            profileDeckMode = value;
+            profileSelDeck = null;
+            profileDeckMatrixOpen = false;
+            RenderMenu();
+        });
     }
 
     private void BuildDeckDetail(RectTransform area, LeaderStat stat, string mode)
     {
         var b = profileLifetime;
-        var rec = MenuCard(stat.leaderId);
         float wr = stat.games > 0 ? (float)stat.wins / stat.games : 0f;
 
         // Header card
@@ -686,16 +759,33 @@ public partial class MainMenuManager
         var banner = PanelObject("Art", head, RowBg);
         Stretch(banner, Vector2.zero, new Vector2(0.16f, 1f), Vector2.zero, Vector2.zero);
         BuildLeaderBanner(banner, stat.leaderId, 220f, 84f, darkLeft: false);
-        var name = TextObject("Name", head, rec?.name ?? stat.leaderId, 18, Ink, TextAnchor.UpperLeft);
+        var name = TextObject("Name", head, ProfileLeaderLabel(stat.leaderId), 18, Ink, TextAnchor.UpperLeft);
         name.fontStyle = FontStyle.Bold;
+        FitProfileLabel(name, 12, 18);
         Stretch(name.rectTransform, new Vector2(0.18f, 0.45f), new Vector2(0.6f, 1f), Vector2.zero, new Vector2(0f, -14f));
         var line = TextObject("Line", head,
             $"{stat.games} GAMES  ·  {stat.wins}W–{stat.games - stat.wins}L  ·  {Mathf.RoundToInt(wr * 100f)}% WIN RATE",
             10, ProfileWrColor(wr, stat.games), TextAnchor.UpperLeft, monoFont);
         Stretch(line.rectTransform, new Vector2(0.18f, 0.12f), new Vector2(0.7f, 0.45f), Vector2.zero, Vector2.zero);
 
+        var matrixButton = PanelObject("Open Matchup Matrix", head,
+            new Color(Accent.r, Accent.g, Accent.b, 0.13f));
+        Stretch(matrixButton, new Vector2(0.76f, 0.24f), new Vector2(0.98f, 0.76f), Vector2.zero, Vector2.zero);
+        Round(matrixButton);
+        AddRoundedCardBorder(matrixButton, new Color(Accent.r, Accent.g, Accent.b, 0.55f), 1f);
+        var matrixButtonText = TextObject("Text", matrixButton, "MATCHUP MATRIX  ›",
+            9, Accent, TextAnchor.MiddleCenter, monoFont);
+        matrixButtonText.fontStyle = FontStyle.Bold;
+        Stretch(matrixButtonText.rectTransform, Vector2.zero, Vector2.one,
+            new Vector2(5f, 0f), new Vector2(-5f, 0f));
+        matrixButton.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+        {
+            profileDeckMatrixOpen = true;
+            RenderMenu();
+        });
+
         // ── Lifetime chart: monthly games bars + win-rate markers ────────────
-        BuildSectionLabel(area, "LIFETIME PLAYRATE & WIN RATE", -100f);
+        BuildSectionLabel(area, "MONTHLY RESULTS", -100f);
         var chart = PanelObject("DD Chart", area, RowBg);
         Stretch(chart, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -126f - 240f), new Vector2(0f, -126f));
         Round(chart);
@@ -724,14 +814,193 @@ public partial class MainMenuManager
         }
     }
 
-    // Design adaptation: the handoff's SVG bars+line become UGUI bars (games,
-    // leader color @55% alpha) with a small green marker at the month's win-rate
-    // height. A dashed 50% reference line is approximated with a 1px hairline.
+    private void BuildDeckMatchupMatrixView(RectTransform area, LeaderStat stat, string mode)
+    {
+        float wr = stat.games > 0 ? (float)stat.wins / stat.games : 0f;
+
+        var head = PanelObject("Matrix Head", area, RowBg);
+        Stretch(head, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -84f), Vector2.zero);
+        Round(head);
+        AddRoundedCardBorder(head, MenuB, 1f);
+
+        var banner = PanelObject("Art", head, RowBg);
+        Stretch(banner, Vector2.zero, new Vector2(0.16f, 1f), Vector2.zero, Vector2.zero);
+        BuildLeaderBanner(banner, stat.leaderId, 220f, 84f, darkLeft: false);
+
+        var name = TextObject("Name", head, ProfileLeaderLabel(stat.leaderId),
+            18, Ink, TextAnchor.UpperLeft);
+        name.fontStyle = FontStyle.Bold;
+        FitProfileLabel(name, 12, 18);
+        Stretch(name.rectTransform, new Vector2(0.18f, 0.45f), new Vector2(0.68f, 1f),
+            Vector2.zero, new Vector2(0f, -14f));
+
+        var record = TextObject("Record", head,
+            $"{mode.ToUpperInvariant()}  ·  {stat.wins}W–{stat.games - stat.wins}L  ·  {Mathf.RoundToInt(wr * 100f)}%",
+            10, ProfileWrColor(wr, stat.games), TextAnchor.UpperLeft, monoFont);
+        Stretch(record.rectTransform, new Vector2(0.18f, 0.12f), new Vector2(0.7f, 0.45f),
+            Vector2.zero, Vector2.zero);
+
+        var back = PanelObject("Back To Deck Summary", head, new Color(1f, 1f, 1f, 0.05f));
+        Stretch(back, new Vector2(0.76f, 0.24f), new Vector2(0.98f, 0.76f), Vector2.zero, Vector2.zero);
+        Round(back);
+        AddRoundedCardBorder(back, MenuB, 1f);
+        var backText = TextObject("Text", back, "‹  DECK SUMMARY",
+            9, Accent, TextAnchor.MiddleCenter, monoFont);
+        backText.fontStyle = FontStyle.Bold;
+        Stretch(backText.rectTransform, Vector2.zero, Vector2.one,
+            new Vector2(5f, 0f), new Vector2(-5f, 0f));
+        back.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+        {
+            profileDeckMatrixOpen = false;
+            RenderMenu();
+        });
+
+        BuildSectionLabel(area, "MATCHUP MATRIX", -100f);
+
+        var matchups = (profileLifetime.matchupsMode ?? new List<ModeMatchupStat>())
+            .Where(m => m != null && m.mode == mode &&
+                        m.ownLeaderId == stat.leaderId && m.games > 0)
+            .GroupBy(m => m.oppLeaderId)
+            .Select(g => new MatchupStat
+            {
+                ownLeaderId = stat.leaderId,
+                oppLeaderId = g.Key,
+                games = g.Sum(m => m.games),
+                wins = g.Sum(m => m.wins),
+            })
+            .OrderByDescending(m => m.games)
+            .ThenBy(m => m.oppLeaderId, StringComparer.Ordinal)
+            .ToList();
+
+        if (matchups.Count == 0)
+        {
+            var empty = PanelObject("No Matrix Data", area, RowBg);
+            Stretch(empty, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(0f, -234f), new Vector2(0f, -126f));
+            Round(empty);
+            AddRoundedCardBorder(empty, MenuB, 1f);
+            var none = TextObject("Text", empty,
+                $"No {mode} matchups have been recorded for {ProfileLeaderLabel(stat.leaderId)} yet.",
+                11, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(none.rectTransform, Vector2.zero, Vector2.one,
+                new Vector2(16f, 0f), new Vector2(-16f, 0f));
+            return;
+        }
+
+        var panel = PanelObject("Deck Matchup Matrix", area, RowBg);
+        Stretch(panel, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(0f, -338f), new Vector2(0f, -126f));
+        Round(panel);
+        AddRoundedCardBorder(panel, MenuB, 1f);
+
+        var guide = TextObject("Guide", panel,
+            $"YOUR DECK = ROW  ·  OPPONENT LEADERS = COLUMNS  ·  {matchups.Count} FACED  ·  DRAG HORIZONTALLY",
+            8, new Color32(111, 134, 150, 255), TextAnchor.MiddleLeft, monoFont);
+        Stretch(guide.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(12f, -26f), new Vector2(-12f, -4f));
+
+        var viewport = PanelObject("Matrix Viewport", panel, new Color(0, 0, 0, 0));
+        Stretch(viewport, Vector2.zero, Vector2.one,
+            new Vector2(8f, 8f), new Vector2(-8f, -30f));
+        viewport.gameObject.AddComponent<RectMask2D>();
+
+        const float RowHeaderW = 210f;
+        const float HeaderH = 72f;
+        const float CellH = 66f;
+        float cellW = matchups.Count <= 3 ? 180f :
+            (matchups.Count <= 6 ? 145f : (matchups.Count <= 10 ? 120f : 108f));
+        float contentW = RowHeaderW + matchups.Count * cellW;
+        float contentH = HeaderH + CellH;
+
+        var content = PanelObject("Matrix Content", viewport, new Color(0, 0, 0, 0));
+        content.anchorMin = content.anchorMax = new Vector2(0f, 1f);
+        content.pivot = new Vector2(0f, 1f);
+        content.anchoredPosition = Vector2.zero;
+        content.sizeDelta = new Vector2(contentW, contentH);
+        content.GetComponent<Image>().raycastTarget = false;
+
+        var corner = PanelObject("Corner", content, new Color(1f, 1f, 1f, 0.05f));
+        PlaceProfileMatrixItem(corner, 0f, 0f, RowHeaderW - 3f, HeaderH - 3f);
+        Round(corner);
+        var cornerText = TextObject("Text", corner, "OPPONENT LEADER  →",
+            9, Muted, TextAnchor.MiddleLeft, monoFont);
+        cornerText.fontStyle = FontStyle.Bold;
+        Stretch(cornerText.rectTransform, Vector2.zero, Vector2.one,
+            new Vector2(10f, 0f), new Vector2(-6f, 0f));
+
+        for (int c = 0; c < matchups.Count; c++)
+        {
+            var matchup = matchups[c];
+            Color opponentColor = MenuLeaderColor(matchup.oppLeaderId);
+            var column = PanelObject("Opponent " + matchup.oppLeaderId, content,
+                new Color(opponentColor.r, opponentColor.g, opponentColor.b, 0.14f));
+            PlaceProfileMatrixItem(column, RowHeaderW + c * cellW, 0f, cellW - 3f, HeaderH - 3f);
+            Round(column);
+            AddRoundedCardBorder(column,
+                new Color(opponentColor.r, opponentColor.g, opponentColor.b, 0.45f), 1f);
+            var columnText = TextObject("Text", column,
+                ProfileLeaderMatrixLabel(matchup.oppLeaderId),
+                10, Ink, TextAnchor.MiddleCenter, monoFont);
+            columnText.fontStyle = FontStyle.Bold;
+            FitProfileLabel(columnText, 7, 10);
+            Stretch(columnText.rectTransform, Vector2.zero, Vector2.one,
+                new Vector2(5f, 3f), new Vector2(-5f, -3f));
+        }
+
+        Color ownColor = MenuLeaderColor(stat.leaderId);
+        var rowHead = PanelObject("Your Deck", content,
+            new Color(ownColor.r, ownColor.g, ownColor.b, 0.14f));
+        PlaceProfileMatrixItem(rowHead, 0f, HeaderH, RowHeaderW - 3f, CellH - 3f);
+        Round(rowHead);
+        AddRoundedCardBorder(rowHead, new Color(ownColor.r, ownColor.g, ownColor.b, 0.45f), 1f);
+        var rowText = TextObject("Text", rowHead, ProfileLeaderMatrixLabel(stat.leaderId),
+            10, Ink, TextAnchor.MiddleLeft, monoFont);
+        rowText.fontStyle = FontStyle.Bold;
+        FitProfileLabel(rowText, 7, 10);
+        Stretch(rowText.rectTransform, Vector2.zero, Vector2.one,
+            new Vector2(10f, 3f), new Vector2(-6f, -3f));
+
+        for (int c = 0; c < matchups.Count; c++)
+        {
+            var matchup = matchups[c];
+            var cell = PanelObject("Result " + matchup.oppLeaderId, content,
+                MatrixCellColor(matchup));
+            PlaceProfileMatrixItem(cell, RowHeaderW + c * cellW, HeaderH,
+                cellW - 3f, CellH - 3f);
+            Round(cell);
+
+            int losses = matchup.games - matchup.wins;
+            float matchupWr = (float)matchup.wins / matchup.games;
+            var pct = TextObject("Win Rate", cell, $"{Mathf.RoundToInt(matchupWr * 100f)}%",
+                14, Ink, TextAnchor.UpperCenter, monoFont);
+            pct.fontStyle = FontStyle.Bold;
+            Stretch(pct.rectTransform, new Vector2(0f, 0.42f), Vector2.one,
+                new Vector2(2f, 3f), new Vector2(-2f, -5f));
+            var cellRecord = TextObject("Record", cell,
+                $"{matchup.wins}W–{losses}L · {matchup.games}G",
+                8, new Color32(210, 222, 230, 255), TextAnchor.UpperCenter, monoFont);
+            Stretch(cellRecord.rectTransform, Vector2.zero, new Vector2(1f, 0.48f),
+                new Vector2(2f, 3f), new Vector2(-2f, 0f));
+        }
+
+        var scroll = viewport.gameObject.AddComponent<ScrollRect>();
+        scroll.content = content;
+        scroll.viewport = viewport;
+        scroll.horizontal = true;
+        scroll.vertical = false;
+        scroll.movementType = ScrollRect.MovementType.Clamped;
+        scroll.inertia = true;
+        scroll.scrollSensitivity = 28f;
+    }
+
+    // Monthly results use one shared games axis. Green and red segments explain
+    // the record without mixing a game-count axis with a percentage axis.
     private void BuildDeckTimelineChart(RectTransform chart, string leaderId, string mode)
     {
         var months = (profileLifetime.monthsMode ?? new List<ModeMonthStat>())
             .Where(m => m != null && m.mode == mode && m.leaderId == leaderId && m.games > 0)
             .OrderBy(m => m.ym, StringComparer.Ordinal).ToList();
+        if (months.Count > 5) months = months.Skip(months.Count - 5).ToList();
         if (months.Count == 0)
         {
             var none = TextObject("None", chart,
@@ -741,44 +1010,59 @@ public partial class MainMenuManager
             return;
         }
 
-        var plot = PanelObject("Plot", chart, new Color(0, 0, 0, 0));
-        Stretch(plot, Vector2.zero, Vector2.one, new Vector2(16f, 30f), new Vector2(-16f, -14f));
+        int scaleGames = ProfileGameScale(months.Max(m => m.games));
+        var legend = TextObject("Legend", chart,
+            $"LAST {months.Count} MONTH{(months.Count == 1 ? "" : "S")}   ·   BAR LENGTH = GAMES (0–{scaleGames})   ·   GREEN = WINS   ·   RED = LOSSES",
+            8, new Color32(111, 134, 150, 255), TextAnchor.MiddleLeft, monoFont);
+        Stretch(legend.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(14f, -28f), new Vector2(-12f, -6f));
 
-        // 50% win-rate reference hairline
-        var refLine = PanelObject("Ref50", plot, new Color(1f, 1f, 1f, 0.10f));
-        Stretch(refLine, new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(0f, 0f), new Vector2(0f, 1f));
-
-        int maxGames = Mathf.Max(1, months.Max(m => m.games));
-        var barColor = MenuLeaderColor(leaderId); barColor.a = 0.55f;
-        int n = months.Count;
-        float slot = 1f / Mathf.Max(n, 6); // keep bars readable when few months exist
-        for (int i = 0; i < n; i++)
+        float y = -34f;
+        for (int i = 0; i < months.Count; i++)
         {
             var m = months[i];
-            float x0 = i * slot, x1 = x0 + slot;
-            float h = (float)m.games / maxGames;
-            var bar = PanelObject("Bar " + m.ym, plot, barColor);
-            Stretch(bar, new Vector2(x0, 0f), new Vector2(x1, Mathf.Max(h, 0.03f)),
-                new Vector2(4f, 0f), new Vector2(-4f, 0f));
-            Round(bar);
+            var row = PanelObject("Month " + m.ym, chart, new Color(0, 0, 0, 0));
+            Stretch(row, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(12f, y - 32f), new Vector2(-12f, y));
 
-            float mwr = (float)m.wins / m.games;
-            var marker = PanelObject("WR " + m.ym, plot, GoodGreen);
-            Stretch(marker, new Vector2(x0, Mathf.Clamp01(mwr)), new Vector2(x1, Mathf.Clamp01(mwr)),
-                new Vector2(6f, -1.5f), new Vector2(-6f, 1.5f));
+            var month = TextObject("Label", row, MonthLabel(m.ym).ToUpperInvariant(),
+                9, Muted, TextAnchor.MiddleLeft, monoFont);
+            Stretch(month.rectTransform, Vector2.zero, new Vector2(0.16f, 1f), new Vector2(2f, 0f), Vector2.zero);
 
-            // Month label just below the plot band.
-            var lab = TextObject("L " + m.ym, plot, MonthLabel(m.ym), 8, Muted, TextAnchor.MiddleCenter, monoFont);
-            var lrt = lab.rectTransform;
-            lrt.anchorMin = lrt.anchorMax = new Vector2(Mathf.Lerp(x0, x1, 0.5f), 0f);
-            lrt.pivot = new Vector2(0.5f, 1f);
-            lrt.sizeDelta = new Vector2(60f, 16f);
-            lrt.anchoredPosition = new Vector2(0f, -4f);
+            var track = PanelObject("Games", row, new Color(1f, 1f, 1f, 0.07f));
+            Stretch(track, new Vector2(0.16f, 0.3f), new Vector2(0.79f, 0.7f), Vector2.zero, Vector2.zero);
+            Round(track);
+
+            float winEnd = Mathf.Clamp01((float)m.wins / scaleGames);
+            float gameEnd = Mathf.Clamp01((float)m.games / scaleGames);
+            if (m.wins > 0)
+            {
+                var wins = PanelObject("Wins", track, GoodGreen);
+                Stretch(wins, Vector2.zero, new Vector2(winEnd, 1f), Vector2.zero, Vector2.zero);
+                Round(wins);
+            }
+            int losses = m.games - m.wins;
+            if (losses > 0)
+            {
+                var loss = PanelObject("Losses", track, RedAccent);
+                Stretch(loss, new Vector2(winEnd, 0f), new Vector2(gameEnd, 1f), Vector2.zero, Vector2.zero);
+                Round(loss);
+            }
+
+            float wr = (float)m.wins / m.games;
+            var result = TextObject("Result", row,
+                $"{m.wins}W–{losses}L  ·  {Mathf.RoundToInt(wr * 100f)}%",
+                9, ProfileWrColor(wr, m.games), TextAnchor.MiddleRight, monoFont);
+            Stretch(result.rectTransform, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, new Vector2(-2f, 0f));
+            y -= 38f;
         }
+    }
 
-        var legend = TextObject("Legend", chart, "BARS = GAMES / MONTH   ·   MARKER = WIN RATE (LINE AT 50%)",
-            8, new Color32(111, 134, 150, 255), TextAnchor.LowerRight, monoFont);
-        Stretch(legend.rectTransform, Vector2.zero, Vector2.one, new Vector2(0f, 4f), new Vector2(-10f, 0f));
+    private int ProfileGameScale(int maxGames)
+    {
+        if (maxGames <= 5) return 5;
+        if (maxGames <= 10) return 10;
+        return Mathf.CeilToInt(maxGames / 5f) * 5;
     }
 
     private void BuildMatchupRow(RectTransform area, MatchupStat m, float y)
@@ -788,8 +1072,8 @@ public partial class MainMenuManager
         Round(row);
         AddRoundedCardBorder(row, MenuB, 1f);
 
-        var rec = MenuCard(m.oppLeaderId);
-        var name = TextObject("Name", row, "VS  " + (rec?.name ?? m.oppLeaderId), 11, Ink, TextAnchor.MiddleLeft);
+        var name = TextObject("Name", row, "VS  " + ProfileLeaderLabel(m.oppLeaderId), 11, Ink, TextAnchor.MiddleLeft);
+        FitProfileLabel(name, 8, 11);
         Stretch(name.rectTransform, Vector2.zero, new Vector2(0.3f, 1f), new Vector2(12f, 0f), Vector2.zero);
 
         // Green/red split bar sized by wins vs losses (flex-grow equivalent).
@@ -864,16 +1148,26 @@ public partial class MainMenuManager
     private void BuildSeasonCasual(RectTransform area, int seasonId)
     {
         var s = profileSeason ?? new StatsBucket();
+        const string mode = "casual";
+        var usageAll = (s.byOwnLeaderMode ?? new List<ModeLeaderStat>())
+            .Where(l => l != null && l.mode == mode && l.games > 0)
+            .Select(l => new LeaderStat { leaderId = l.leaderId, games = l.games, wins = l.wins })
+            .OrderByDescending(l => l.games).ToList();
+        int modeGames = usageAll.Sum(l => l.games);
+        int modeWins = usageAll.Sum(l => l.wins);
+        int modeLosses = modeGames - modeWins;
+        float modeWinRate = modeGames > 0 ? (float)modeWins / modeGames : 0f;
         float y = 0f;
 
-        // 4 stat cards
+        // All four cards describe the selected mode. The previous version used
+        // whole-season totals here, so Casual silently included Ranked/Custom.
         var cards = new (string label, string val, Color color)[]
         {
-            ("GAMES", s.games.ToString(), Ink),
-            ("RECORD", $"{s.wins}W – {s.losses}L", Ink),
-            ("WIN RATE", s.games > 0 ? $"{Mathf.RoundToInt(s.WinRate * 100f)}%" : "—", ProfileWrColor(s.WinRate, s.games)),
-            ("STREAK", s.currentStreak == 0 ? "—" : (s.currentStreak > 0 ? $"{s.currentStreak}W" : $"{-s.currentStreak}L"),
-                s.currentStreak >= 0 ? GoodGreen : RedAccent),
+            ("CASUAL GAMES", modeGames.ToString(), Ink),
+            ("RECORD", $"{modeWins}W – {modeLosses}L", Ink),
+            ("WIN RATE", modeGames > 0 ? $"{Mathf.RoundToInt(modeWinRate * 100f)}%" : "—",
+                ProfileWrColor(modeWinRate, modeGames)),
+            ("LEADERS PLAYED", usageAll.Count.ToString(), Accent),
         };
         for (int i = 0; i < cards.Length; i++)
         {
@@ -892,7 +1186,7 @@ public partial class MainMenuManager
         y -= 100f;
 
         // Deck usage this season (gated by decks)
-        BuildSectionLabel(area, "DECK USAGE THIS SEASON", y); y -= 26f;
+        BuildSectionLabel(area, "DECK RESULTS · BAR LENGTH = MATCHES · GREEN WINS · RED LOSSES", y); y -= 26f;
         if (!ProfileCanSeeDecks())
         {
             BuildLockCard(area, y, 84f, "decks",
@@ -901,8 +1195,7 @@ public partial class MainMenuManager
         }
         else
         {
-            var usage = (s.byOwnLeader ?? new List<LeaderStat>())
-                .Where(l => l != null && l.games > 0).OrderByDescending(l => l.games).Take(4).ToList();
+            var usage = usageAll.Take(5).ToList();
             if (usage.Count == 0)
             {
                 var none = TextObject("None", area, seasonId > 0 ? "No games this season yet." : "Season play hasn't started.",
@@ -919,17 +1212,28 @@ public partial class MainMenuManager
                     Stretch(row, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, y - 34f), new Vector2(0f, y));
                     Round(row);
                     AddRoundedCardBorder(row, MenuB, 1f);
-                    var rec = MenuCard(u.leaderId);
-                    var name = TextObject("N", row, rec?.name ?? u.leaderId, 11, Ink, TextAnchor.MiddleLeft);
+                    var name = TextObject("N", row, ProfileLeaderLabel(u.leaderId), 11, Ink, TextAnchor.MiddleLeft);
+                    FitProfileLabel(name, 8, 11);
                     Stretch(name.rectTransform, Vector2.zero, new Vector2(0.3f, 1f), new Vector2(12f, 0f), Vector2.zero);
                     var barBg = PanelObject("Bar", row, new Color(1f, 1f, 1f, 0.07f));
                     Stretch(barBg, new Vector2(0.32f, 0.32f), new Vector2(0.8f, 0.68f), Vector2.zero, Vector2.zero);
                     Round(barBg);
-                    var fill = PanelObject("Fill", barBg, MenuLeaderColor(u.leaderId));
-                    Stretch(fill, Vector2.zero, new Vector2((float)u.games / maxG, 1f), Vector2.zero, Vector2.zero);
-                    Round(fill);
+                    float winEnd = (float)u.wins / maxG;
+                    float gameEnd = (float)u.games / maxG;
+                    if (u.wins > 0)
+                    {
+                        var wins = PanelObject("Wins", barBg, GoodGreen);
+                        Stretch(wins, Vector2.zero, new Vector2(winEnd, 1f), Vector2.zero, Vector2.zero);
+                        Round(wins);
+                    }
+                    if (u.games > u.wins)
+                    {
+                        var losses = PanelObject("Losses", barBg, RedAccent);
+                        Stretch(losses, new Vector2(winEnd, 0f), new Vector2(gameEnd, 1f), Vector2.zero, Vector2.zero);
+                        Round(losses);
+                    }
                     float uwr = (float)u.wins / u.games;
-                    var lab = TextObject("L", row, $"{u.games} G · {Mathf.RoundToInt(uwr * 100f)}%",
+                    var lab = TextObject("L", row, $"{u.wins}W–{u.games - u.wins}L · {Mathf.RoundToInt(uwr * 100f)}%",
                         10, ProfileWrColor(uwr, u.games), TextAnchor.MiddleRight, monoFont);
                     Stretch(lab.rectTransform, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, new Vector2(-12f, 0f));
                     y -= 40f;
@@ -938,30 +1242,191 @@ public partial class MainMenuManager
         }
         y -= 12f;
 
-        // Head-to-head vs leaders (gated by replays)
-        BuildSectionLabel(area, "HEAD-TO-HEAD VS LEADERS", y); y -= 26f;
-        if (!ProfileCanSeeReplays())
+    }
+
+    private void BuildSeasonMatchupMatrix(RectTransform area, string mode, float y, float height)
+    {
+        BuildSectionLabel(area, "MATCHUP MATRIX", y);
+        y -= 26f;
+
+        if (!ProfileCanSeeDecks() || !ProfileCanSeeReplays())
         {
-            BuildLockCard(area, y, 84f, "replays",
-                $"Replays shared with {profilePrivacy.replays} only.", null);
+            string hidden = !ProfileCanSeeDecks() ? "decks" : "replays";
+            string scope = hidden == "decks" ? profilePrivacy.decks : profilePrivacy.replays;
+            BuildLockCard(area, y, 84f, hidden,
+                $"{hidden.Substring(0, 1).ToUpperInvariant() + hidden.Substring(1)} shared with {scope} only.", null);
             return;
         }
-        var h2h = (s.byOpponentLeader ?? new List<LeaderStat>())
-            .Where(l => l != null && l.games > 0).OrderByDescending(l => l.games).Take(6).ToList();
-        if (h2h.Count == 0)
-        {
-            var none = TextObject("NoH2H", area, "No opponents faced this season yet.", 11, Muted, TextAnchor.UpperLeft, monoFont);
-            Stretch(none.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(4f, y - 26f), new Vector2(0f, y));
-            return;
-        }
-        foreach (var o in h2h)
-        {
-            BuildMatchupRow(area, new MatchupStat
+
+        var bucket = profileSeason ?? new StatsBucket();
+        var pairs = (bucket.matchupsMode ?? new List<ModeMatchupStat>())
+            .Where(m => m != null && m.mode == mode && m.games > 0)
+            .GroupBy(m => m.ownLeaderId + "\u001F" + m.oppLeaderId)
+            .Select(g =>
             {
-                ownLeaderId = "*", oppLeaderId = o.leaderId, games = o.games, wins = o.wins,
-            }, y);
-            y -= 40f;
+                var first = g.First();
+                return new MatchupStat
+                {
+                    ownLeaderId = first.ownLeaderId,
+                    oppLeaderId = first.oppLeaderId,
+                    games = g.Sum(m => m.games),
+                    wins = g.Sum(m => m.wins),
+                };
+            }).ToList();
+
+        if (pairs.Count == 0)
+        {
+            var none = TextObject("No Matrix", area,
+                $"No {mode} matchups recorded this season yet.",
+                11, Muted, TextAnchor.UpperLeft, monoFont);
+            Stretch(none.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(4f, y - 28f), new Vector2(0f, y));
+            return;
         }
+
+        var ownIds = pairs.GroupBy(m => m.ownLeaderId)
+            .OrderByDescending(g => g.Sum(m => m.games))
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => g.Key).ToList();
+        var oppIds = pairs.GroupBy(m => m.oppLeaderId)
+            .OrderByDescending(g => g.Sum(m => m.games))
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => g.Key).ToList();
+
+        var panel = PanelObject("Matchup Matrix Panel", area, RowBg);
+        Stretch(panel, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(0f, y - height), new Vector2(0f, y));
+        Round(panel);
+        AddRoundedCardBorder(panel, MenuB, 1f);
+
+        var guide = TextObject("Guide", panel,
+            "ROWS = YOUR LEADER   ·   COLUMNS = OPPONENT   ·   CELL = WIN RATE + RECORD   ·   DRAG TO EXPLORE",
+            8, new Color32(111, 134, 150, 255), TextAnchor.MiddleLeft, monoFont);
+        Stretch(guide.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(12f, -26f), new Vector2(-12f, -4f));
+
+        var viewport = PanelObject("Matrix Viewport", panel, new Color(0, 0, 0, 0));
+        Stretch(viewport, Vector2.zero, Vector2.one, new Vector2(8f, 8f), new Vector2(-8f, -30f));
+        viewport.gameObject.AddComponent<RectMask2D>();
+
+        const float RowHeaderW = 210f;
+        const float HeaderH = 58f;
+        const float CellH = 54f;
+        float cellW = oppIds.Count <= 3 ? 180f : (oppIds.Count <= 6 ? 145f : (oppIds.Count <= 10 ? 120f : 104f));
+        float contentW = RowHeaderW + oppIds.Count * cellW;
+        float contentH = HeaderH + ownIds.Count * CellH;
+
+        var content = PanelObject("Matrix Content", viewport, new Color(0, 0, 0, 0));
+        content.anchorMin = content.anchorMax = new Vector2(0f, 1f);
+        content.pivot = new Vector2(0f, 1f);
+        content.anchoredPosition = Vector2.zero;
+        content.sizeDelta = new Vector2(contentW, contentH);
+        content.GetComponent<Image>().raycastTarget = false;
+
+        var corner = PanelObject("Matrix Corner", content, new Color(1f, 1f, 1f, 0.05f));
+        PlaceProfileMatrixItem(corner, 0f, 0f, RowHeaderW, HeaderH);
+        Round(corner);
+        var cornerText = TextObject("Corner Text", corner, "YOUR LEADER  ↓\nOPPONENT  →",
+            9, Muted, TextAnchor.MiddleLeft, monoFont);
+        cornerText.fontStyle = FontStyle.Bold;
+        Stretch(cornerText.rectTransform, Vector2.zero, Vector2.one,
+            new Vector2(12f, 2f), new Vector2(-8f, -2f));
+
+        for (int c = 0; c < oppIds.Count; c++)
+        {
+            string leaderId = oppIds[c];
+            Color leaderColor = MenuLeaderColor(leaderId);
+            var head = PanelObject("Opponent " + leaderId, content,
+                new Color(leaderColor.r, leaderColor.g, leaderColor.b, 0.14f));
+            PlaceProfileMatrixItem(head, RowHeaderW + c * cellW, 0f, cellW - 3f, HeaderH - 3f);
+            Round(head);
+            AddRoundedCardBorder(head, new Color(leaderColor.r, leaderColor.g, leaderColor.b, 0.45f), 1f);
+            var label = TextObject("Label", head, ProfileLeaderMatrixLabel(leaderId),
+                10, Ink, TextAnchor.MiddleCenter, monoFont);
+            label.fontStyle = FontStyle.Bold;
+            FitProfileLabel(label, 7, 10);
+            Stretch(label.rectTransform, Vector2.zero, Vector2.one,
+                new Vector2(5f, 3f), new Vector2(-5f, -3f));
+        }
+
+        var lookup = pairs.ToDictionary(
+            m => m.ownLeaderId + "\u001F" + m.oppLeaderId,
+            m => m);
+        for (int r = 0; r < ownIds.Count; r++)
+        {
+            string ownId = ownIds[r];
+            Color ownColor = MenuLeaderColor(ownId);
+            var rowHead = PanelObject("Your " + ownId, content,
+                new Color(ownColor.r, ownColor.g, ownColor.b, 0.12f));
+            PlaceProfileMatrixItem(rowHead, 0f, HeaderH + r * CellH, RowHeaderW - 3f, CellH - 3f);
+            Round(rowHead);
+            AddRoundedCardBorder(rowHead, new Color(ownColor.r, ownColor.g, ownColor.b, 0.4f), 1f);
+            var rowLabel = TextObject("Label", rowHead, ProfileLeaderLabel(ownId),
+                10, Ink, TextAnchor.MiddleLeft, monoFont);
+            rowLabel.fontStyle = FontStyle.Bold;
+            FitProfileLabel(rowLabel, 7, 10);
+            Stretch(rowLabel.rectTransform, Vector2.zero, Vector2.one,
+                new Vector2(10f, 2f), new Vector2(-6f, -2f));
+
+            for (int c = 0; c < oppIds.Count; c++)
+            {
+                string key = ownId + "\u001F" + oppIds[c];
+                lookup.TryGetValue(key, out var matchup);
+                Color cellColor = MatrixCellColor(matchup);
+                var cell = PanelObject($"Cell {r} {c}", content, cellColor);
+                PlaceProfileMatrixItem(cell, RowHeaderW + c * cellW, HeaderH + r * CellH,
+                    cellW - 3f, CellH - 3f);
+                Round(cell);
+
+                if (matchup == null)
+                {
+                    var dash = TextObject("No Data", cell, "—", 12, Muted, TextAnchor.MiddleCenter, monoFont);
+                    Stretch(dash.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+                    continue;
+                }
+
+                int losses = matchup.games - matchup.wins;
+                float wr = (float)matchup.wins / matchup.games;
+                var pct = TextObject("Win Rate", cell, $"{Mathf.RoundToInt(wr * 100f)}%",
+                    13, Ink, TextAnchor.UpperCenter, monoFont);
+                pct.fontStyle = FontStyle.Bold;
+                Stretch(pct.rectTransform, new Vector2(0f, 0.42f), Vector2.one,
+                    new Vector2(2f, 2f), new Vector2(-2f, -4f));
+                var record = TextObject("Record", cell, $"{matchup.wins}W–{losses}L · {matchup.games}G",
+                    8, new Color32(210, 222, 230, 255), TextAnchor.UpperCenter, monoFont);
+                Stretch(record.rectTransform, Vector2.zero, new Vector2(1f, 0.48f),
+                    new Vector2(2f, 2f), new Vector2(-2f, 0f));
+            }
+        }
+
+        var scroll = viewport.gameObject.AddComponent<ScrollRect>();
+        scroll.content = content;
+        scroll.viewport = viewport;
+        // Always enable both axes: ScrollRect naturally clamps when content fits,
+        // and this avoids guessing the viewport's eventual pixel width while the
+        // destroy-and-rebuild layout is still being assembled.
+        scroll.horizontal = true;
+        scroll.vertical = true;
+        scroll.movementType = ScrollRect.MovementType.Clamped;
+        scroll.inertia = true;
+        scroll.scrollSensitivity = 28f;
+    }
+
+    private Color MatrixCellColor(MatchupStat matchup)
+    {
+        if (matchup == null || matchup.games <= 0) return new Color(1f, 1f, 1f, 0.035f);
+        float wr = (float)matchup.wins / matchup.games;
+        Color baseColor = wr > 0.5f ? GoodGreen : (wr < 0.5f ? RedAccent : ProfileAmber);
+        float confidence = Mathf.Clamp01(matchup.games / 5f);
+        return new Color(baseColor.r, baseColor.g, baseColor.b, Mathf.Lerp(0.18f, 0.52f, confidence));
+    }
+
+    private void PlaceProfileMatrixItem(RectTransform item, float x, float y, float width, float height)
+    {
+        item.anchorMin = item.anchorMax = new Vector2(0f, 1f);
+        item.pivot = new Vector2(0f, 1f);
+        item.anchoredPosition = new Vector2(x, -y);
+        item.sizeDelta = new Vector2(width, height);
     }
 
     // Live Bounty ladder standing (replaces the old "ranked hasn't set sail" card).
@@ -1089,21 +1554,66 @@ public partial class MainMenuManager
 
         // ── Ladder strip, current tier lit ──
         BuildSectionLabel(area, "BOUNTY LADDER", y); y -= 24f;
-        var strip = PanelObject("Tier Strip", area, new Color(0, 0, 0, 0));
-        Stretch(strip, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 46f), new Vector2(0f, y));
+        var strip = PanelObject("Tier Strip", area, new Color32(8, 18, 29, 235));
+        Stretch(strip, new Vector2(0f, 1f), new Vector2(1f, 1f),
+            new Vector2(0f, y - 66f), new Vector2(0f, y));
+        Round(strip);
+        AddRoundedCardBorder(strip, new Color(1f, 1f, 1f, 0.14f), 1f);
+
+        // A saturated spectrum rail makes the full progression readable even at
+        // a glance; reached tiers remain bright while future tiers recede.
+        var spectrum = PanelObject("Tier Spectrum", strip, new Color(0, 0, 0, 0));
+        Stretch(spectrum, new Vector2(0.008f, 0.08f), new Vector2(0.992f, 0.17f),
+            Vector2.zero, Vector2.zero);
         for (int i = 0; i < ProfileTiers.Length; i++)
         {
             float x0 = (float)i / ProfileTiers.Length, x1 = (float)(i + 1) / ProfileTiers.Length;
             var (tname, tcolor, _) = ProfileTiers[i];
             bool cur = i == tIndex;
-            var chip = PanelObject("Tier " + tname, strip, new Color(tcolor.r, tcolor.g, tcolor.b, cur ? 0.30f : 0.10f));
-            Stretch(chip, new Vector2(x0, 0f), new Vector2(x1, 1f),
-                new Vector2(i == 0 ? 0f : 3f, 0f), new Vector2(i == ProfileTiers.Length - 1 ? 0f : -3f, 0f));
+            bool reached = i < tIndex;
+
+            var spectrumSegment = PanelObject("Spectrum " + tname, spectrum,
+                new Color(tcolor.r, tcolor.g, tcolor.b, i <= tIndex ? 0.95f : 0.32f));
+            Stretch(spectrumSegment, new Vector2(x0, 0f), new Vector2(x1, 1f),
+                new Vector2(i == 0 ? 0f : 1f, 0f),
+                new Vector2(i == ProfileTiers.Length - 1 ? 0f : -1f, 0f));
+
+            float bgAlpha = cur ? 0.68f : (reached ? 0.34f : 0.15f);
+            float borderAlpha = cur ? 1f : (reached ? 0.72f : 0.38f);
+            var chip = PanelObject("Tier " + tname, strip,
+                new Color(tcolor.r, tcolor.g, tcolor.b, bgAlpha));
+            Stretch(chip, new Vector2(x0, 0.22f), new Vector2(x1, 0.95f),
+                new Vector2(i == 0 ? 5f : 4f, 0f),
+                new Vector2(i == ProfileTiers.Length - 1 ? -5f : -4f, 0f));
             Round(chip);
-            AddRoundedCardBorder(chip, new Color(tcolor.r, tcolor.g, tcolor.b, cur ? 1f : 0.35f), cur ? 1.6f : 1f);
-            var t = TextObject("t", chip, tname.ToUpperInvariant(), cur ? 8 : 7, tcolor, TextAnchor.MiddleCenter, monoFont);
+            AddRoundedCardBorder(chip,
+                new Color(tcolor.r, tcolor.g, tcolor.b, borderAlpha), cur ? 2.2f : 1.1f);
+            if (cur)
+                AddRadialGlow(chip, new Color(tcolor.r, tcolor.g, tcolor.b, 0.22f),
+                    Vector2.zero, Vector2.one);
+
+            var topStripe = PanelObject("Accent", chip,
+                new Color(tcolor.r, tcolor.g, tcolor.b, cur ? 1f : (reached ? 0.82f : 0.45f)));
+            Stretch(topStripe, new Vector2(0.05f, 0.84f), new Vector2(0.95f, 0.94f),
+                Vector2.zero, Vector2.zero);
+            Round(topStripe);
+
+            Color nameColor = cur ? Color.white :
+                (reached ? Color.Lerp(Color.white, tcolor, 0.42f) : Color.Lerp(Muted, tcolor, 0.35f));
+            var t = TextObject("t", chip, tname.ToUpperInvariant(), cur ? 9 : 8,
+                nameColor, TextAnchor.MiddleCenter, monoFont);
             t.fontStyle = FontStyle.Bold;
-            Stretch(t.rectTransform, Vector2.zero, Vector2.one, new Vector2(2f, 0f), new Vector2(-2f, 0f));
+            FitProfileLabel(t, 6, cur ? 9 : 8);
+            Stretch(t.rectTransform, new Vector2(0f, 0.31f), new Vector2(1f, 0.82f),
+                new Vector2(3f, 0f), new Vector2(-3f, 0f));
+
+            string state = cur ? "CURRENT" : (reached ? "REACHED" : "AHEAD");
+            Color stateColor = cur ? Color.white : (reached ? GoodGreen : Muted);
+            var stateText = TextObject("State", chip, state, 7, stateColor,
+                TextAnchor.UpperCenter, monoFont);
+            stateText.fontStyle = FontStyle.Bold;
+            Stretch(stateText.rectTransform, Vector2.zero, new Vector2(1f, 0.35f),
+                new Vector2(2f, 2f), new Vector2(-2f, 0f));
         }
     }
 

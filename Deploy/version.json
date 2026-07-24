@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.21",
-  "buildNumber": 20,
+  "buildVersion": "1.0.22",
+  "buildNumber": 21,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Puzzles rebuilt around real decisions: 500 graded challenges across 12 tactical families and 478 distinct board states, including 10 Expert puzzles that span two of your turns. Harder positions reject any-order attack lines, legacy shallow harvests stay out of rotation, the opponent's hand remains hidden, and titles no longer reveal the tactic. Difficulty is proof-based: 108 Easy, 142 Medium, 165 Hard, and 85 Expert, with mechanics and grading evidence shown after solving. Official keyword and timing fixes: Rush: Character no longer behaves like full Rush or attacks active Characters; Trigger cards move correctly and finish before Double Attack continues; printed Unblockable is recognized; Once Per Turn resets after field re-entry; Counter Events can buff another eligible friendly card; and the exact End of Your Opponent's Turn timing works. Hovering a face-up Life card now previews its face instead of the card back.",
+  "notes": "Customizable cursor: pick from six metal finishes (Gold, Bronze, Silver, Gunmetal, Platinum, Rose Gold) and fine-tune its size and angle in Settings. Circled DON!! costs (①/②/...) are now paid by clicking a glowing active DON!! right on the board at every timing, instead of dropping you into a confusing card-target prompt (fixes OP06-118 Zoro, OP07-019, and similar). Fixed the intermittent missing coin flip and opening hand deal that happened when card art was still streaming in on the first match. Blitz clocks now sit in the Leader-to-Life gap for both players. Puzzle mode: refreshed the certified puzzle catalog with a new gold-standard library.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

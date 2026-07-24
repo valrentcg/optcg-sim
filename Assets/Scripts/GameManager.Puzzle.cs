@@ -170,6 +170,10 @@ public partial class GameManager
         {
             AddInfo(body, $"Puzzle {puzzleIndex + 1}/{puzzleSet.Count}  ·  {DifficultyWord(pz.Difficulty)}");
             AddInfo(body, pz.Title);
+            if (!string.IsNullOrWhiteSpace(pz.Objective))
+                AddInfo(body, "Objective: " + pz.Objective);
+            if (!string.IsNullOrWhiteSpace(pz.PublicInformation))
+                AddInfo(body, "Public read: " + pz.PublicInformation);
         }
 
         var status = puzzleRuntime != null ? puzzleRuntime.Status : PuzzleRuntime.PuzzleStatus.NotStarted;

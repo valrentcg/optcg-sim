@@ -1319,6 +1319,25 @@ namespace OnePieceTcg.Engine.Bot
                     if (weakest < 0 || d.Power <= weakestPow) continue;   // not worth trashing a stronger body
                     cmd = Try(blacklist, new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId, SlotIndex = weakest });
                 }
+                else if (d != null && d.Type == "stage" && p.Stage != null)
+                {
+                    // Playing a Stage while one is already out TRASHES the current Stage (engine stage
+                    // replacement). Guard it so duplicates don't churn away for nothing — the reported bug
+                    // where the bot played all four Fullaleads across two turns, trashing three for no gain.
+                    bool sameCard = p.Stage.CardId == c.CardId;
+                    bool incomingHasOnPlay = d.Effect != null
+                        && d.Effect.IndexOf("[On Play]", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (sameCard)
+                    {
+                        // An identical copy only re-triggers value if it has an [On Play] ETB; without one
+                        // (Fullalead's search is [Activate: Main]) replacing it is pure card loss.
+                        if (!incomingHasOnPlay) continue;
+                    }
+                    // A different Stage: only swap when the incoming Stage's net value clearly beats the
+                    // one it evicts, so a genuine upgrade still happens but a sidegrade/downgrade doesn't.
+                    else if (MainPlayValue(state, seat, c) <= Value(state, p.Stage)) continue;
+                    cmd = Try(blacklist, new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
+                }
                 else
                 {
                     cmd = Try(blacklist, new GameCommand { Type = "playCard", Seat = seat, InstanceId = c.InstanceId });
