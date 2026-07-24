@@ -1762,8 +1762,12 @@ public partial class DeckBuilderManager : MonoBehaviour
         // to the picker. Outside picker mode it's just COPY TO MY DECKS, since
         // starter decks aren't user-owned data and can't be played from here. ──
         float btnY = fmtY - FMT_H - GAP;
-        // In picker mode nothing is saved, so the roster limit doesn't apply.
-        bool canAdd = pickerActive || DeckStore.CanAddNew();
+        // In picker mode nothing is saved, so the roster limit doesn't apply — but a format-gated
+        // picker (Casual/Ranked = Standard) must still refuse a deck that isn't legal for that format.
+        // ST01–ST09 are Block 1 (rotated out of Standard), so this is a real case, not a corner one.
+        bool pickerFmtLegal = !pickerActive || !pickerFormat.HasValue
+            || deck.Check(pickerFormat.Value, pickerIgnoreBans).Legal;
+        bool canAdd = (pickerActive || DeckStore.CanAddNew()) && pickerFmtLegal;
         var copyBtn = Panel("Copy", panel, canAdd ? (Color)Accent : (Color)new Color32(40, 60, 78, 220));
         copyBtn.anchorMin = copyBtn.anchorMax = new Vector2(0.5f, 0.5f);
         copyBtn.pivot = new Vector2(0f, 1f);
@@ -1771,7 +1775,10 @@ public partial class DeckBuilderManager : MonoBehaviour
         copyBtn.anchoredPosition = new Vector2(-110f, btnY);
         Round(copyBtn);
         if (!canAdd) AddBorder(copyBtn, MenuB, 1f);
-        string btnLabel = canAdd ? (pickerActive ? "USE THIS DECK ▸" : "COPY TO MY DECKS") : "DECK LIMIT REACHED";
+        string btnLabel = !pickerFmtLegal
+                ? (pickerFormat.Value == OnePieceTcg.Engine.GameFormat.Standard ? "NOT STANDARD-LEGAL" : "NOT LEGAL HERE")
+            : canAdd ? (pickerActive ? "USE THIS DECK ▸" : "COPY TO MY DECKS")
+            : "DECK LIMIT REACHED";
         var copyT = Text_("t", copyBtn, btnLabel, 13,
             canAdd ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
         copyT.fontStyle = FontStyle.Bold;
@@ -2000,6 +2007,23 @@ public partial class DeckBuilderManager : MonoBehaviour
             var mono = Text_("Mono", artMask, init, HexFont(32),
                 new Color(1f, 1f, 1f, 0.16f), TextAnchor.MiddleCenter);
             Stretch(mono.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+
+        // Format grey-out (queueing / a formatted lobby): a starter that isn't legal for the gated
+        // format is dimmed with a NOT-LEGAL flag — same as the saved-deck grid. ST01–ST09 are Block 1
+        // (rotated out of Standard), so several starters are illegal in a Standard picker. The dim does
+        // NOT eat clicks (preview still works); the USE THIS DECK button is what blocks actually using it.
+        if (pickerActive && pickerFormat.HasValue
+            && !FromStarterDef(def).Check(pickerFormat.Value, pickerIgnoreBans).Legal)
+        {
+            var dim = Panel("IllegalDim", cell, new Color(4f / 255f, 8f / 255f, 12f / 255f, 0.62f));
+            var dimImg = dim.GetComponent<Image>();
+            dimImg.sprite = hexSp; dimImg.type = Image.Type.Simple; dimImg.raycastTarget = false;
+            Stretch(dim, Vector2.zero, Vector2.one, new Vector2(pad, pad), new Vector2(-pad, -pad));
+            dim.SetAsLastSibling();
+            var illegalLbl = Text_("Illegal", cell, "NOT\nLEGAL", HexFont(12), RedAccent, TextAnchor.MiddleCenter, monoFont);
+            Stretch(illegalLbl.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            illegalLbl.transform.SetAsLastSibling();
         }
 
         // Click -> preview only. No HexDragReorder component: starter-deck hexes

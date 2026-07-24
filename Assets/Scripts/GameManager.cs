@@ -278,6 +278,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // module the contract router applies (midrange→activation, control→pressure). Default midrange.
     private string aiArchetype = "midrange";
     private int aiLastTurnSeen = -1;
+    // Advanced tier only: the rollout search runs several full-game playouts per decision (~hundreds of
+    // ms on CoreCLR, multiples of that under the shipped Mono runtime — worst on the opening turns, where
+    // playouts are longest). Running it inline on the frame loop froze the window ("Not Responding") for
+    // the search's duration on every bot action. So the decision is computed on a BACKGROUND thread over a
+    // CLONE of the state (the bot/engine is pure C# with no Unity API) and dispatched on a later tick once
+    // ready; the frame loop keeps running while it thinks. advancedThinkActivated holds the copy of the
+    // activation loop-guard handed to the worker, merged back on completion (AdvancedContractBot.Decide
+    // writes to it — see AdvancedActivationPolicy). advancedThinkTurn guards against a stale result landing
+    // after the turn has moved on.
+    private System.Threading.Tasks.Task<GameCommand> advancedThinkTask;
+    private int advancedThinkTurn = -1;
+    private HashSet<string> advancedThinkActivated;
     private int lastBannerTurn = -1;          // last (turn, seat) a turn banner was shown for
     private string lastBannerSeat;
     private string mulliganAnimShownKey;      // seat+hand fingerprint already dealt-animated (re-animates after a mulligan redraw)
@@ -510,8 +522,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         //                    ApplyBotDifficultyKnobs): it still pressures Life (the main lesson) but plays DON!!
         //                    and counters sloppily, so it is clearly beatable while never looking brain-dead.
         //   (ChampionBot.cs is retired from the ladder — it predates the wins and now loses to the core.)
+        // Hold the bot until the coin-flip animation has landed. Otherwise, when the BOT wins, its
+        // chooseTurnOrder dispatches mid-spin, flips the status off "coinflip", and tears the overlay
+        // down before the flip is visible — so the player only ever SAW the coin flip when THEY won
+        // (the reported "animation only happens when you win"). The RNG itself is fair (~50/50).
+        bool coinFlipSpinning = state != null && state.Status == "coinflip" && !coinFlipRevealed;
         if (aiSeat != null && !isReplayMode && state != null && state.Status != "finished"
-            && Time.unscaledTime >= aiNextActionAt)
+            && !coinFlipSpinning && Time.unscaledTime >= aiNextActionAt)
         {
             ApplyBotDifficultyKnobs();
             bool acted = aiDifficulty == "advanced" ? AdvancedAiTick()
@@ -726,6 +743,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         aiTriedThisTurn.Clear();
         aiActivatedThisTurn.Clear();
         aiLastTurnSeen = -1;
+        // Drop any background think left over from a previous match so its result can't dispatch into this one.
+        advancedThinkTask = null;
+        advancedThinkActivated = null;
+        advancedThinkTurn = -1;
         // Fresh match: stale animation bookkeeping from the previous game must not
         // suppress the new game's opening-deal / Life-deal animations.
         mulliganAnimShownKey = null;
@@ -3736,31 +3757,38 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddRoundedCardBorder(panel, MenuB, 1f);
 
         var header = PanelObject("Header", panel, new Color(0, 0, 0, 0));
-        Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(12f, -64f), new Vector2(-40f, -8f));
+        Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(12f, -98f), new Vector2(-40f, -8f));
         var title = TextObject("Title", header, "MATCH TIMELINE", 12, Ink, TextAnchor.UpperLeft, monoFont);
         title.fontStyle = FontStyle.Bold;
-        Stretch(title.rectTransform, new Vector2(0f, 0.55f), Vector2.one, Vector2.zero, Vector2.zero);
+        Stretch(title.rectTransform, new Vector2(0f, 0.74f), Vector2.one, Vector2.zero, Vector2.zero);
 
-        // Compact pills (not AddButton's fixed 118px) so all three fit across this 320px-wide
-        // panel's usable width — "Close" is a small corner icon button (mirroring the control
-        // bar's collapse arrow) instead of competing for row space. "Main Menu" lives here
-        // (rather than as an EXIT pill on the control bar) since leaving a replay is a
-        // navigation action, and this is the panel already showing the match overview.
-        var toolsRow = PanelObject("Tools", header, new Color(0, 0, 0, 0));
-        Stretch(toolsRow, new Vector2(0f, 0f), new Vector2(1f, 0.55f), Vector2.zero, Vector2.zero);
-        var trHlg = toolsRow.gameObject.AddComponent<HorizontalLayoutGroup>();
-        trHlg.spacing = 5f; trHlg.childAlignment = TextAnchor.MiddleLeft;
-        trHlg.childControlWidth = false; trHlg.childControlHeight = false;
-        trHlg.childForceExpandWidth = false; trHlg.childForceExpandHeight = false;
-        AddCompactPill(toolsRow, "Export Position", ExportReplayPosition);
-        AddCompactPill(toolsRow, "Expand All", () => { replayCollapsedTurns.Clear(); Render(); });
-        AddCompactPill(toolsRow, "Collapse All", () =>
+        // Compact pills across TWO rows. Four tools no longer fit on one ~268px-wide row (the 320px panel
+        // minus header insets), so "Main Menu" was overflowing off the right edge and became almost
+        // unclickable. Row 1 = actions (Export Position, Main Menu); row 2 = list view (Expand/Collapse All).
+        // "Close" is a small corner icon button (mirroring the control bar's collapse arrow) so it never
+        // competes for row space. "Main Menu" lives here (rather than as an EXIT pill on the control bar)
+        // since leaving a replay is a navigation action, and this is the panel already showing the overview.
+        RectTransform MakeToolsRow(float yMin, float yMax)
+        {
+            var row = PanelObject("Tools", header, new Color(0, 0, 0, 0));
+            Stretch(row, new Vector2(0f, yMin), new Vector2(1f, yMax), Vector2.zero, Vector2.zero);
+            var hlg = row.gameObject.AddComponent<HorizontalLayoutGroup>();
+            hlg.spacing = 5f; hlg.childAlignment = TextAnchor.MiddleLeft;
+            hlg.childControlWidth = false; hlg.childControlHeight = false;
+            hlg.childForceExpandWidth = false; hlg.childForceExpandHeight = false;
+            return row;
+        }
+        var toolsRow1 = MakeToolsRow(0.38f, 0.70f);
+        AddCompactPill(toolsRow1, "Export Position", ExportReplayPosition);
+        AddCompactPill(toolsRow1, "Main Menu", () => ExitReplayToMenu());
+        var toolsRow2 = MakeToolsRow(0.02f, 0.34f);
+        AddCompactPill(toolsRow2, "Expand All", () => { replayCollapsedTurns.Clear(); Render(); });
+        AddCompactPill(toolsRow2, "Collapse All", () =>
         {
             replayCollapsedTurns.Clear();
             if (replayActions != null) foreach (var a in replayActions) replayCollapsedTurns.Add(a.Turn);
             Render();
         });
-        AddCompactPill(toolsRow, "Main Menu", () => ExitReplayToMenu());
 
         var closeBtn = PanelObject("Close", panel, new Color(0, 0, 0, 0));
         closeBtn.anchorMin = new Vector2(1f, 1f); closeBtn.anchorMax = new Vector2(1f, 1f);
@@ -3791,7 +3819,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         var listArea = PanelObject("List Area", panel, new Color(0, 0, 0, 0));
-        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(8f, 8f), new Vector2(-8f, -72f));
+        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(8f, 8f), new Vector2(-8f, -106f));
 
         if (replayActions == null || replayActions.Count == 0)
         {
@@ -5065,6 +5093,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // Spawn-then-wait (not precomputed delays): a long frame (scene-load hitch)
                 // used to consume several delays at once, launching the first cards together.
                 StartCoroutine(AnimateCardFromDeck(ghost, holders[i], GetCardSprite(cards[i].CardId), 0f, duration));
+                // Mark this hand as dealt-animated once the FIRST card is airborne. A teardown BEFORE this
+                // (e.g. the coin-flip outro, before any card flew) still replays so the deal isn't lost;
+                // a teardown MID-deal no longer restarts from zero (the "double deal on going second" bug —
+                // a dispatch-driven Render rebuilding the overlay) and instead pops the remaining cards in.
+                if (i == 0) mulliganAnimShownKey = dealKey;
                 yield return new WaitForSeconds(stagger);
             }
             yield return new WaitForSeconds(0.5f);   // let the last card land before the bot may act
@@ -5541,10 +5574,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         if (animateDeal)
         {
-            // NOTE: mulliganAnimShownKey is set by the coroutine on COMPLETION, not here —
-            // if a re-render tears the overlay down mid-deal (coin-flip outro, a bot
-            // dispatch), the rebuilt overlay restarts the deal instead of popping the
-            // cards in fully visible.
+            // NOTE: mulliganAnimShownKey is set by the coroutine once the FIRST card is airborne (not
+            // here). A teardown BEFORE that (e.g. the coin-flip outro, before any card flew) replays the
+            // deal so it isn't lost; a teardown mid-deal pops the remaining cards in rather than restarting
+            // the whole deal — which was the visible "double deal" when going second.
             StartCoroutine(AnimateMulliganDeal(seat, dealCards, dealHolders, cardSize, dim, dealKey));
         }
 
@@ -9467,10 +9500,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Drives Engine/Bot/Search/SearchBot.cs — the every-legal-action rollout search bot (beats the
     // Champion ~87% head-to-head). Same per-tick adapter; SearchBot returns the same command shapes
     // so IntermediateBot's SnapshotFor/Succeeded/Signature key the no-op blacklist correctly.
-    // NOTE: a single SearchBot decision runs several full playouts on cloned state (~hundreds of ms)
-    // on this (main) thread. The tick loop pauses between actions so it fires at most once per tick;
-    // if it visibly hitches the UI, move the SearchBot.DecideOneCommand call onto a worker thread and
-    // Dispatch its result on the next tick.
+    // The rollout search is heavy (several full-game playouts per decision), so it runs on a BACKGROUND
+    // thread over a clone of the state rather than inline on the frame loop — otherwise the window freezes
+    // ("Not Responding") for the search's duration on every bot action. See the advancedThink* fields.
     private bool AdvancedAiTick()
     {
         var p = state.Players.ContainsKey(aiSeat) ? state.Players[aiSeat] : null;
@@ -9478,6 +9510,38 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (activeMoveGhosts > 0) return false;
         if (handDealAnimating) return false;
         if (mulliganDealAnimating > 0) return false;
+
+        // A background think is in flight: wait for it (UI keeps ticking), then dispatch its result here
+        // on the main thread. Everything that touches Unity or the live GameState stays on this thread.
+        if (advancedThinkTask != null)
+        {
+            if (!advancedThinkTask.IsCompleted) return false;   // still thinking — do not block the frame
+
+            var task = advancedThinkTask;
+            advancedThinkTask = null;
+            GameCommand cmd = null;
+            if (task.Status == System.Threading.Tasks.TaskStatus.RanToCompletion) cmd = task.Result;
+            else if (task.IsFaulted && task.Exception != null)
+                Debug.LogWarning($"[AdvancedAI] background think failed, skipping action: {task.Exception.GetBaseException().Message}");
+
+            // Merge the worker's activation-guard writes back into the live set so a repeatable
+            // [Activate: Main] ability still cannot loop across ticks.
+            if (advancedThinkActivated != null) { aiActivatedThisTurn.UnionWith(advancedThinkActivated); advancedThinkActivated = null; }
+
+            // Drop a stale result: the match ended, or the turn advanced, while we were thinking. Do NOT
+            // gate on Status == "active": the bot's mulligan and turn-order choices happen BEFORE the game
+            // is "active", and gating them out left the AI stuck at "Waiting for opponent". ApplyCommand
+            // re-validates, so even a subtly stale command self-corrects to a no-op + blacklist below.
+            if (cmd == null || state == null || state.Status == "finished" || state.TurnNumber != advancedThinkTurn)
+                return false;
+
+            object before = IntermediateBot.SnapshotFor(state, cmd);
+            Dispatch(cmd);
+            if (!IntermediateBot.Succeeded(state, cmd, before))
+                aiTriedThisTurn.Add(IntermediateBot.Signature(cmd));
+            return true;
+        }
+
         if (state.TurnNumber != aiLastTurnSeen)
         {
             aiLastTurnSeen = state.TurnNumber;
@@ -9490,17 +9554,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             }
         }
 
-        // Advanced tier = the full validated contract (contract-v2, ported from Tools/Sim): IntermediateBot
-        // base, with the activation module on midrange main turns, the pressure module on control main turns,
-        // SearchBot's rollout on tactical/resolution branches, and greedy everywhere else. aiArchetype gates it.
-        var cmd = OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.Decide(
-            state, aiSeat, aiTriedThisTurn, aiActivatedThisTurn, aiArchetype);
-        if (cmd == null) return false;
-        object before = IntermediateBot.SnapshotFor(state, cmd);
-        Dispatch(cmd);
-        if (!IntermediateBot.Succeeded(state, cmd, before))
-            aiTriedThisTurn.Add(IntermediateBot.Signature(cmd));
-        return true;
+        // Kick off the decision on a background thread over a CLONE of the state. Advanced tier = the full
+        // validated contract (contract-v2, ported from Tools/Sim): IntermediateBot base, with the activation
+        // module on midrange main turns, the pressure module on control main turns, SearchBot's rollout on
+        // tactical/resolution branches, and greedy everywhere else. aiArchetype gates it. The clone means the
+        // worker never races the main thread's reads/renders; copies of the per-turn guards are passed so the
+        // main thread can't mutate them under the worker (activation writes are merged back on completion).
+        var snapshot = OnePieceTcg.Engine.Bot.Search.GameClone.Clone(state);
+        string seat = aiSeat;
+        string archetype = aiArchetype;
+        var tried = new HashSet<string>(aiTriedThisTurn);
+        var activated = new HashSet<string>(aiActivatedThisTurn);
+        advancedThinkActivated = activated;
+        advancedThinkTurn = state.TurnNumber;
+        advancedThinkTask = System.Threading.Tasks.Task.Run(() =>
+            OnePieceTcg.Engine.Bot.Search.AdvancedContractBot.Decide(snapshot, seat, tried, activated, archetype));
+        return false;
     }
 
     // ── Basic Bot decision core ──────────────────────────────────────────────

@@ -141,10 +141,12 @@ async function handleReport(req: Request, env: Env): Promise<Response> {
     return json({ status: existing.status, profile: publicProfile(playerId, p, username) });
   }
 
-  // Opponent's half in yet?
+  // Opponent's half in yet? (Also pull the opponent's own reported username so BOTH profiles get a
+  // name at settlement — otherwise whoever reported FIRST is saved with null and shows as "Unknown
+  // Pirate" on the Most Wanted board.)
   const opp = await env.DB.prepare(
-    "SELECT result, opponent_id FROM match_reports WHERE match_id = ? AND reporter_id = ?",
-  ).bind(matchId, opponentId).first<{ result: string; opponent_id: string }>();
+    "SELECT result, opponent_id, username FROM match_reports WHERE match_id = ? AND reporter_id = ?",
+  ).bind(matchId, opponentId).first<{ result: string; opponent_id: string; username: string | null }>();
 
   if (!opp) {
     const p = await loadProfile(env, playerId);
@@ -179,9 +181,11 @@ async function handleReport(req: Request, env: Env): Promise<Response> {
     applyMatch(w, true, lPreR, lPreRd, season);
     applyMatch(l, false, wPreR, wPreRd, season);
 
-    // usernames: prefer each player's own reported name.
-    const winnerName = winnerId === playerId ? username : null;
-    const loserName = loserId === playerId ? username : null;
+    // usernames: each player's OWN reported name — this settling report for one side, the opponent's
+    // stored match_reports row for the other. Both sides get named so neither shows as "Unknown Pirate".
+    const oppUsername = opp.username ?? null;
+    const winnerName = winnerId === playerId ? username : oppUsername;
+    const loserName = loserId === playerId ? username : oppUsername;
     await env.DB.batch([
       upsertStmt(env, winnerId, w, winnerName, now),
       upsertStmt(env, loserId, l, loserName, now),

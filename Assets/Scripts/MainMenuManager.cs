@@ -6172,6 +6172,20 @@ public partial class MainMenuManager : MonoBehaviour
         if (!RankedStore.IsConfigured) { lobbyError = "Matchmaking isn't available yet."; RenderMenu(); return; }
         if (AccountManager.IsGuest) { showingAccountGate = true; RenderMenu(); return; }
 
+        // Casual and Ranked are Standard-only. Enforce it HERE — the single chokepoint every queue path
+        // funnels through — so a Standard-illegal deck can never enter, not just when it's picked. The
+        // picker greys illegal decks out, but a persisted duelDeckId (picked while legal, then edited to
+        // add a banned/rotated card) or a direct StartQueue call could otherwise slip an illegal deck in.
+        var queueDeck = DeckStore.Get(lobbyDeckId);
+        if (queueDeck == null || !queueDeck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal)
+        {
+            lobbyError = queueDeck == null
+                ? "Pick a deck before queueing."
+                : "That deck isn't Standard-legal — Casual and Ranked require a Standard-legal deck. Edit it or pick another.";
+            RenderMenu();
+            return;
+        }
+
         rankedQueueActive = true;
         rankedStatus = "connecting";
         rankedStartTime = Time.realtimeSinceStartup;
@@ -7014,10 +7028,18 @@ public partial class MainMenuManager : MonoBehaviour
         BuildDeckPanel(portal, new Vector2(0.028f, 0.225f), new Vector2(0.972f, 0.90f),
             "YOUR DECK", duelDeckId, PickDuelDeck, enterAlert && deck == null);
 
+        // Casual/Ranked require a Standard-legal deck (Custom chooses its format in the lobby). Reflect it
+        // in the caption + CTA so an illegal persisted deck reads as blocked here, not only on click.
+        bool queueIsCustom = selectedId == "privateRoom";
+        bool deckLegalForMode = deck != null
+            && (queueIsCustom || deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal);
+
         // Status caption under the panel.
         var cap = TextObject("Deck Caption", portal,
-            deck == null ? "Select a deck to continue" : deck.name + " — ready to queue",
-            10, deck == null ? Muted : Accent, TextAnchor.MiddleCenter, monoFont);
+            deck == null ? "Select a deck to continue"
+                : !deckLegalForMode ? deck.name + " — not Standard-legal (Casual/Ranked need a Standard deck)"
+                : deck.name + " — ready to queue",
+            10, deckLegalForMode ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
         Stretch(cap.rectTransform, new Vector2(0f, 0.185f), new Vector2(1f, 0.222f),
             new Vector2(12f, 0f), new Vector2(-12f, 0f));
 

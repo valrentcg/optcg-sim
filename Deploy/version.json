@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.22",
+  "buildVersion": "1.0.23",
   "buildNumber": 21,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Customizable cursor: pick from six metal finishes (Gold, Bronze, Silver, Gunmetal, Platinum, Rose Gold) and fine-tune its size and angle in Settings. Circled DON!! costs (①/②/...) are now paid by clicking a glowing active DON!! right on the board at every timing, instead of dropping you into a confusing card-target prompt (fixes OP06-118 Zoro, OP07-019, and similar). Fixed the intermittent missing coin flip and opening hand deal that happened when card art was still streaming in on the first match. Blitz clocks now sit in the Leader-to-Life gap for both players. Puzzle mode: refreshed the certified puzzle catalog with a new gold-standard library.",
+  "notes": "Advanced AI no longer freezes the game: its search now runs in the background, so the window stays responsive while the bot thinks (previously it could hang on 'Not Responding', worst on the opening turns). Fixed the Advanced AI getting stuck at 'Waiting for opponent' after you kept your hand. The coin-flip animation now plays whether you win OR lose the flip (before, a bot win cut it short so you only ever saw it on your own wins) — the flip itself was always a fair 50/50. Casual and Ranked now correctly block Standard-illegal decks: illegal starter decks are greyed out in the picker and can't be queued. Replay viewer: the Main Menu button is no longer clipped off the edge of the Match Timeline panel. Fixed the opening hand deal animating twice when going second.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

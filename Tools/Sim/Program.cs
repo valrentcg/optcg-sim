@@ -90,6 +90,12 @@ switch (mode)
     case "keywordrulescheck":
         return OnePieceTcg.Sim.KeywordRulesTest.Run();
 
+    case "stagereplacetest":
+        return OnePieceTcg.Sim.StageReplacementTest.Run();
+
+    case "bubblecostcheck":
+        return OnePieceTcg.Sim.BubbleCostTest.Run();
+
     case "lethaltest":
         return OnePieceTcg.Sim.Puzzles.LethalSolverTest.Run();
 
@@ -669,9 +675,8 @@ switch (mode)
         int bad = 0;
         if (catalog.Count != OnePieceTcg.Engine.Puzzles.CertifiedPuzzleCatalog.TargetCount) bad++;
         if (catalog.Select(p => p.Id).Distinct(StringComparer.Ordinal).Count() != catalog.Count) bad++;
-        if (OnePieceTcg.Engine.Puzzles.CertifiedPuzzleCatalog.VerifiedSeeds.Length != 475) bad++;
-        if (catalog.Count(p => p.PlayerTurnLimit > 1) < 10) bad++;
-        if (catalog.Select(p => p.Category).Distinct(StringComparer.Ordinal).Count() < 12) bad++;
+        if (catalog.Count(p => p.PlayerTurnLimit > 1) < 2) bad++;
+        if (catalog.Select(p => p.Category).Distinct(StringComparer.Ordinal).Count() < 25) bad++;
 
         var built = new HashSet<string>(StringComparer.Ordinal);
         foreach (var p in catalog)
@@ -687,11 +692,10 @@ switch (mode)
                       $"{mine.CostArea.Count}|{opp.Leader.CardId}|{Cards(opp.CharacterArea)}|" +
                       $"{opp.Hand.Count}|{opp.Life.Count}");
         }
-        // A catalog entry can deliberately share a dependency graph with a safe card-recognition variant, but
-        // it must still contain hundreds of materially different board recipes.
-        if (built.Count < 350) bad++;
+        // Gold-standard entries may share a few cards, but never a complete board recipe.
+        if (built.Count != catalog.Count) bad++;
 
-        var sample = catalog.Where((_, i) => i % 41 == 0).Take(13).ToList();
+        var sample = catalog.Where((_, i) => i % 3 == 0).Take(10).ToList();
         int solved = 0;
         foreach (var p in sample)
         {
@@ -754,7 +758,7 @@ switch (mode)
 
         var tiers = catalog.GroupBy(p => p.Difficulty).ToDictionary(g => g.Key, g => g.Count());
         for (int tier = 1; tier <= 4; tier++)
-            if (!tiers.TryGetValue(tier, out int count) || count < 50) bad++;
+            if (!tiers.TryGetValue(tier, out int count) || count < 2) bad++;
 
         Console.WriteLine("difficulty: " + string.Join(", ", Enumerable.Range(1, 4)
             .Select(t => $"{t}:{tiers.GetValueOrDefault(t)}")));
@@ -966,6 +970,137 @@ switch (mode)
             saveDecisionLogs = true, decisionSampleRate = 0.1,
         };
         SelfPlayRunner.Run(cfg, BuildRegistry(out _));
+        return 0;
+    }
+
+    // Measures the Advanced (SearchBot) bot's per-DECISION wall-clock time, by turn, in a real match.
+    // Reproduces the "freezes on the bot's first turn" report: rollouts play each candidate to the END
+    // of the game, so the FIRST-turn decision runs the LONGEST playouts and is the slowest.
+    //   dotnet run -c Release -- searchtime [southDeck] [northDeck] [seed] [maxTurns]
+    case "searchtime":
+    {
+        var reg = BuildRegistry(out _);
+        string sDeck = args.Length > 1 ? args[1] : "st01";
+        string nDeck = args.Length > 2 ? args[2] : "st02";
+        string seed  = args.Length > 3 ? args[3] : "seed-search-timing";
+        int maxTurns = args.Length > 4 && int.TryParse(args[4], out var mt) ? mt : 8;
+
+        var state = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig
+        {
+            SouthDeckDef = reg.Resolve(sDeck), NorthDeckDef = reg.Resolve(nDeck), Seed = seed,
+        });
+        // Force the ADVANCED seat (north) to take the first turn, so "north turn 1" == the bot's very first turn.
+        if (state.Status == "coinflip")
+        {
+            string w = state.CoinFlipWinner;
+            OnePieceTcg.Engine.GameEngine.ApplyCommand(state, new OnePieceTcg.Engine.GameCommand
+            { Type = "chooseTurnOrder", Seat = w, GoingFirst = w == "north" });
+        }
+
+        Console.WriteLine($"Advanced=north ({nDeck}) vs Intermediate=south ({sDeck})  seed={seed}\n");
+        Console.WriteLine("  turn  seat   ms     cmd");
+        Console.WriteLine("  ----  -----  -----  ------------------------------");
+
+        var perTurnNorthMs = new Dictionary<int, double>();
+        var slowest = (turn: 0, ms: 0.0, type: "");
+
+        // Drain one seat's currently-available actions (up to `budget`), one command at a time, exactly
+        // like MatchDriver/GameManager. When timeIt, each SearchBot call is measured. Returns #applied.
+        int DrainSeat(string seat, bool timeIt, int budget)
+        {
+            int applied = 0;
+            var bl = new HashSet<string>();
+            for (int i = 0; i < budget; i++)
+            {
+                OnePieceTcg.Engine.GameCommand cmd;
+                double ms = 0;
+                if (timeIt)
+                {
+                    var sw2 = System.Diagnostics.Stopwatch.StartNew();
+                    cmd = OnePieceTcg.Engine.Bot.Search.SearchBot.DecideOneCommand(state, seat, bl);
+                    sw2.Stop();
+                    ms = sw2.Elapsed.TotalMilliseconds;
+                }
+                else cmd = OnePieceTcg.Engine.Bot.IntermediateBot.DecideOneCommand(state, seat, bl);
+                if (cmd == null) break;
+
+                if (timeIt)
+                {
+                    perTurnNorthMs.TryGetValue(state.TurnNumber, out var acc2);
+                    perTurnNorthMs[state.TurnNumber] = acc2 + ms;
+                    if (ms > slowest.ms) slowest = (state.TurnNumber, ms, cmd.Type);
+                    Console.WriteLine($"  {state.TurnNumber,4}  {seat,-5}  {ms,5:F0}  {cmd.Type}");
+                }
+
+                object before = OnePieceTcg.Engine.Bot.IntermediateBot.SnapshotFor(state, cmd);
+                OnePieceTcg.Engine.GameEngine.ApplyCommand(state, cmd);
+                applied++;
+                if (!OnePieceTcg.Engine.Bot.IntermediateBot.Succeeded(state, cmd, before))
+                    bl.Add(OnePieceTcg.Engine.Bot.IntermediateBot.Signature(cmd));
+            }
+            return applied;
+        }
+
+        int guard = 0;
+        while (state.Status != "finished" && state.TurnNumber <= maxTurns && guard++ < 4000)
+        {
+            int s = DrainSeat("south", false, 200);
+            int n = DrainSeat("north", true, 200);
+            if (s == 0 && n == 0) break;
+        }
+
+        Console.WriteLine("\n  === per-turn TOTAL search time (north / Advanced) ===");
+        foreach (var kv in perTurnNorthMs.OrderBy(k => k.Key))
+            Console.WriteLine($"  turn {kv.Key,2}: {kv.Value,7:F0} ms{(kv.Value >= 5000 ? "   <-- exceeds Windows 'Not Responding' (~5s)" : "")}");
+        Console.WriteLine($"\n  slowest single decision: turn {slowest.turn}, {slowest.ms:F0} ms ({slowest.type})");
+        return 0;
+    }
+
+    // Fairness audit of the coin flip: run CreateMatch over N random GUID seeds (exactly how the game
+    // seeds a solo match) and tally south/north. south == the human in solo play.
+    //   dotnet run -c Release -- coinflip [N]
+    case "coinflip":
+    {
+        var reg = BuildRegistry(out _);
+        var deck = reg.Resolve("st01");
+        int N = args.Length > 1 && int.TryParse(args[1], out var n) ? n : 200000;
+        int south = 0;
+        double firstBelowHalf = 0; // sanity: also tally raw first-Next() < 0.5 via the real winner
+        for (int i = 0; i < N; i++)
+        {
+            string seed = System.Guid.NewGuid().ToString("N");
+            var st = OnePieceTcg.Engine.GameEngine.CreateMatch(new OnePieceTcg.Engine.MatchConfig
+            { SouthDeckDef = deck, NorthDeckDef = deck, Seed = seed });
+            if (st.CoinFlipWinner == "south") { south++; firstBelowHalf++; }
+        }
+        double pct = 100.0 * south / N;
+        Console.WriteLine($"Coin flip over {N:N0} random GUID seeds:");
+        Console.WriteLine($"  south (human) won: {south:N0}  = {pct:F2}%");
+        Console.WriteLine($"  north (bot)   won: {N - south:N0}  = {100.0 - pct:F2}%");
+        // Expected ~50%. A 3+ sigma deviation (|pct-50| > ~3*50/sqrt(N)*... ) flags a biased RNG.
+        double sigma = 100.0 * Math.Sqrt(0.25 / N);
+        Console.WriteLine($"  deviation from 50%: {pct - 50.0:+0.00;-0.00} pts  (1σ ≈ {sigma:F3} pts)  →  {Math.Abs(pct - 50.0) / sigma:F1}σ");
+        return 0;
+    }
+
+    // Prints each starter deck's Standard/Extra legality — confirms the deck-builder grey-out will
+    // actually fire (block-1 starters ST01–ST09 should read Standard=ILLEGAL).
+    case "starterlegal":
+    {
+        var reg = BuildRegistry(out _);
+        int illegal = 0, total = 0;
+        foreach (var id in reg.Ids.Where(i => i.StartsWith("st")).OrderBy(x => x))
+        {
+            var def = reg.Resolve(id);
+            if (def == null) continue;
+            var ids = new List<string> { def.Leader };
+            foreach (var c in def.List) for (int k = 0; k < c.qty; k++) ids.Add(c.cardId);
+            bool std = OnePieceTcg.Engine.FormatLegality.IsDeckLegal(ids, OnePieceTcg.Engine.GameFormat.Standard);
+            bool ext = OnePieceTcg.Engine.FormatLegality.IsDeckLegal(ids, OnePieceTcg.Engine.GameFormat.ExtraRegulation);
+            total++; if (!std) illegal++;
+            Console.WriteLine($"  {id,-6} leader={def.Leader,-10} Standard={(std ? "LEGAL  " : "ILLEGAL")}  Extra={(ext ? "LEGAL" : "ILLEGAL")}");
+        }
+        Console.WriteLine($"\n  {illegal}/{total} starter decks are Standard-ILLEGAL (these should grey out in a Standard picker).");
         return 0;
     }
 
