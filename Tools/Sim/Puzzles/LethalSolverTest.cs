@@ -27,6 +27,11 @@ namespace OnePieceTcg.Sim.Puzzles
             RuntimeFailsOnEarlyEndTurn();
             RuntimeRejectsNonLethalStart();
 
+            // --- quality gate + defender completeness ---
+            QualityRejectsAnyOrderAlphaStrike();
+            QualityAcceptsExactDonSplit();
+            CounterEventIsEnumerated();
+
             // --- starter library: every authored puzzle must be a real, solvable lethal ---
             StarterPuzzlesAreLethalAndSolvable();
 
@@ -89,6 +94,53 @@ namespace OnePieceTcg.Sim.Puzzles
             Report("Runtime: a non-lethal position is rejected as a puzzle", ok, $"started={started} status={rt.Status}");
         }
 
+        // Three ready attackers vs one Life + one 1K counter wins in essentially any attack order. It is a
+        // valid lethal position, but it is not a puzzle and must never enter the harvested Hard/Expert set.
+        static void QualityRejectsAnyOrderAlphaStrike()
+        {
+            var b = new Builder().Life(1).Counter().Char("ST01-013").Char("ST01-013");
+            var proof = LethalSolver.Solve(b.St, "south");
+            var q = PuzzleQualityAnalyzer.Analyze(b.St, "south", proof);
+            Report("Quality: rejects any-order alpha strike", proof.Outcome == LethalSolver.Lethal.Win && !q.Passed,
+                $"passed={q.Passed} reason='{q.Reason}' first={q.WinningFirstMoves}/{q.LegalFirstMoves}");
+        }
+
+        // Rested Leader, two 5K attackers, two DON, opponent at one Life with one 1K counter. The only plan is
+        // one DON on EACH attacker; attacking early or stacking both DON on one body loses.
+        static void QualityAcceptsExactDonSplit()
+        {
+            var b = new Builder().Life(1).Counter().RestLeader()
+                .Char("ST01-013").Char("ST01-013").Don(2);
+            var proof = LethalSolver.Solve(b.St, "south");
+            var q = PuzzleQualityAnalyzer.Analyze(b.St, "south", proof);
+            Report("Quality: accepts exact DON split with two critical decisions",
+                proof.Outcome == LethalSolver.Lethal.Win && q.Passed,
+                $"passed={q.Passed} reason='{q.Reason}' critical={q.CriticalDecisions} first={q.WinningFirstMoves}/{q.LegalFirstMoves}");
+        }
+
+        // Regression for the handover's highest-priority concern: Iron Body must appear in the solver's legal
+        // counter actions and spend its two DON when chosen.
+        static void CounterEventIsEnumerated()
+        {
+            var b = new Builder().Life(0).NorthCounterEvent("OP07-095").NorthDon(2);
+            var s = GameEngine.ApplyCommand(b.St, new GameCommand
+            {
+                Type = "declareAttack", Seat = "south",
+                Attacker = b.SouthLeaderId, Target = b.NorthLeaderId,
+            });
+            s = GameEngine.ApplyCommand(s, new GameCommand { Type = "passBlock", Seat = "north" });
+            var legal = OnePieceTcg.Engine.Bot.Search.LegalActions.Validate(
+                s, "north", OnePieceTcg.Engine.Bot.Search.LegalActions.Candidates(s, "north"));
+            var iron = legal.FirstOrDefault(kv => kv.Key.Type == "counterWithCard"
+                && kv.Value.Players["north"].Trash.Any(c => c.CardId == "OP07-095"));
+            bool ok = iron.Key != null
+                && iron.Value.Battle != null
+                && iron.Value.Battle.CounterPower >= 4000
+                && GameEngine.ActiveDonCount(iron.Value.Players["north"]) == 0;
+            Report("Defense: Iron Body counter event is enumerated and paid", ok,
+                $"legal={legal.Count} found={iron.Key != null}");
+        }
+
         // Each authored starter must (a) verify as a forced win by the solver, and (b) be solvable through
         // the RUNTIME by playing the solver's proven attacker line — driven against the runtime's own
         // strongest-defense auto-play, so this also confirms the line beats optimal defense end-to-end.
@@ -143,6 +195,7 @@ namespace OnePieceTcg.Sim.Puzzles
                 S.TurnsStarted = 4; N.TurnsStarted = 4;
                 for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
                 S.Hand.Clear(); N.Hand.Clear(); S.CostArea.Clear();
+                N.CostArea.Clear();
                 S.Leader.Rested = false; S.Leader.PlayedOnTurn = 0;
                 N.Leader.Rested = false; N.Leader.PlayedOnTurn = 0;
                 N.Life.Clear();
@@ -151,6 +204,22 @@ namespace OnePieceTcg.Sim.Puzzles
             public Builder Life(int n) { N.Life.Clear(); for (int i = 0; i < n; i++) N.Life.Add(In("ST01-006", "north", "life")); return this; }
             public Builder Char(string id) { S.CharacterArea[slot++] = In(id, "south"); return this; }
             public Builder Counter() { N.Hand.Add(In("ST01-002", "north", "hand")); return this; }   // Usopp, counter 1000
+            public Builder RestLeader() { S.Leader.Rested = true; return this; }
+            public Builder Don(int n)
+            {
+                for (int i = 0; i < n; i++)
+                    S.CostArea.Add(new DonInstance { InstanceId = $"south-test-don-{i}", Rested = false });
+                return this;
+            }
+            public Builder NorthDon(int n)
+            {
+                for (int i = 0; i < n; i++)
+                    N.CostArea.Add(new DonInstance { InstanceId = $"north-test-don-{i}", Rested = false });
+                return this;
+            }
+            public Builder NorthCounterEvent(string id) { N.Hand.Add(In(id, "north", "hand")); return this; }
+            public string SouthLeaderId => S.Leader.InstanceId;
+            public string NorthLeaderId => N.Leader.InstanceId;
 
             private static CardInstance In(string cardId, string owner, string zone = "character") => new CardInstance
             {

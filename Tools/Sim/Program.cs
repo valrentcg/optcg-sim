@@ -87,8 +87,103 @@ if (args.Contains("--sick-aware"))
 
 switch (mode)
 {
+    case "keywordrulescheck":
+        return OnePieceTcg.Sim.KeywordRulesTest.Run();
+
     case "lethaltest":
         return OnePieceTcg.Sim.Puzzles.LethalSolverTest.Run();
+
+    case "puzzlesynth":
+    {
+        // Solution-first generation: compose multi-constraint positions, then try to disprove their quality by
+        // solving every alternative at the first several attacker decisions. Only selective plans survive.
+        int scan = args.Length > 1 ? int.Parse(args[1]) : 90;
+        var passed = new List<(int seed, OnePieceTcg.Engine.Puzzles.PuzzleSynthesizer.Family family,
+            OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Report quality)>();
+        var reasons = new Dictionary<string, int>();
+        for (int seed = 1; seed <= scan; seed++)
+        {
+            var candidate = OnePieceTcg.Engine.Puzzles.PuzzleSynthesizer.Build(seed);
+            var proof = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(candidate.State, candidate.Attacker,
+                new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 180_000, MaxDepth = 60 });
+            var q = OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Analyze(
+                candidate.State, candidate.Attacker, proof,
+                OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.StrictHarvest());
+            if (q.Passed)
+            {
+                passed.Add((seed, candidate.Kind, q));
+                Console.WriteLine($"  PASS seed={seed,-4} family={candidate.Kind,-16} critical={q.CriticalDecisions} " +
+                                  $"first={q.WinningFirstMoves}/{q.LegalFirstMoves} attackOnly={q.AttackOnlyOutcome}");
+            }
+            else
+            {
+                string reason = q.Reason ?? "unknown";
+                reasons[reason] = reasons.GetValueOrDefault(reason) + 1;
+            }
+        }
+        Console.WriteLine($"puzzlesynth: {passed.Count}/{scan} candidates passed strict quality");
+        foreach (var group in passed.GroupBy(x => x.family).OrderBy(g => g.Key))
+            Console.WriteLine($"  {group.Key}: {group.Count()}  seeds=[{string.Join(", ", group.Select(x => x.seed).Take(20))}]");
+        foreach (var reason in reasons.OrderByDescending(kv => kv.Value).Take(8))
+            Console.WriteLine($"  reject {reason.Value,3}: {reason.Key}");
+        return passed.Count > 0 ? 0 : 2;
+    }
+
+    case "puzzlequalityscan":
+    {
+        // Diagnostic for catalog work: measure how often the broad procedural generator produces genuinely
+        // selective positions. This does not publish anything; it prints seeds that survive the exact quality
+        // gate so a reviewed manifest can be baked separately.
+        int scan = args.Length > 1 ? int.Parse(args[1]) : 200;
+        int target = args.Length > 2 ? int.Parse(args[2]) : 25;
+        int startSeed = args.Length > 3 ? int.Parse(args[3]) : 1;
+        long solveBudget = args.Length > 4 ? long.Parse(args[4]) : 60_000;
+        string familyFilter = args.Length > 5 ? args[5] : null;
+        var accepted = new List<(int seed, string family, int critical, int legal, int winning)>();
+        var rejected = new Dictionary<string, int>();
+        for (int seed = startSeed; seed < startSeed + scan && accepted.Count < target; seed++)
+        {
+            var gp = OnePieceTcg.Engine.Puzzles.PuzzleGenerator.Build(seed);
+            if (!string.IsNullOrEmpty(familyFilter)
+                && !string.Equals(gp.Category, familyFilter, StringComparison.Ordinal))
+                continue;
+            var quality = OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Analyze(
+                gp.State, gp.AttackerSeat, options: new OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Options
+                {
+                    SolveBudget = solveBudget,
+                    MaxDecisionDepth = 5,
+                    MinCriticalDecisions = 2,
+                    MinAttackerMoves = 3,
+                    MinLegalMovesAtRoot = 3,
+                    MaxLegalMovesPerDecision = 64,
+                });
+            if (quality.Passed)
+            {
+                accepted.Add((seed, gp.Category, quality.CriticalDecisions, quality.LegalFirstMoves,
+                    quality.WinningFirstMoves));
+                Console.WriteLine($"PASS {seed,5} {gp.Category,-15} critical={quality.CriticalDecisions} " +
+                                  $"first={quality.WinningFirstMoves}/{quality.LegalFirstMoves}");
+                Console.Out.Flush(); // checkpoint redirected batch logs immediately
+            }
+            else
+            {
+                string reason = quality.Reason ?? "unknown";
+                rejected[reason] = rejected.GetValueOrDefault(reason) + 1;
+            }
+            if ((seed - startSeed + 1) % 25 == 0)
+            {
+                Console.Error.WriteLine($"progress seed={seed} accepted={accepted.Count}");
+                Console.Error.Flush();
+            }
+        }
+        Console.WriteLine($"puzzlequalityscan: accepted {accepted.Count}/{scan} from seed {startSeed}");
+        Console.WriteLine($"seeds=[{string.Join(", ", accepted.Select(x => x.seed))}]");
+        foreach (var family in accepted.GroupBy(x => x.family).OrderBy(x => x.Key))
+            Console.WriteLine($"  {family.Key}: {family.Count()}");
+        foreach (var reason in rejected.OrderByDescending(x => x.Value).Take(8))
+            Console.WriteLine($"  reject {reason.Value,4}: {reason.Key}");
+        return accepted.Count >= target ? 0 : 2;
+    }
 
     case "kuzantest":
     {
@@ -148,8 +243,13 @@ switch (mode)
         // VALIDATE at a higher budget: each must be forced-lethal AND swing-only must LOSE (truly requires a
         // non-attack action). Cache results so a seed is validated once.
         var vfull = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 80_000, MaxDepth = 60 };
-        var vswing = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options
-        { WorkBudget = 80_000, MaxDepth = 60, AttackerFilter = c => c.Type == "declareAttack" };
+            var vswing = new OnePieceTcg.Engine.Puzzles.LethalSolver.Options
+            {
+                WorkBudget = 80_000, MaxDepth = 60,
+                // Keep mandatory [When Attacking]/choice resolution commands. The old declareAttack-only
+                // filter mistook rich-leader alpha strikes for setup puzzles because it blocked their effects.
+                AttackerFilter = OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.IsAttackLineAction,
+            };
         var valCache = new System.Collections.Generic.Dictionary<int, bool>();
         int badLethal = 0, badSwing = 0;
         bool Valid(int s)
@@ -232,10 +332,164 @@ switch (mode)
         var one = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(st, "south", new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 500_000 });
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var m2 = OnePieceTcg.Engine.Puzzles.Mate2Solver.Solve(st, "south", new OnePieceTcg.Engine.Puzzles.Mate2Solver.Options { WorkBudget = 3_000_000 });
+        var forced = OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Solve(st, "south",
+            new OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Options
+            {
+                WorkBudget = 3_000_000,
+                MaxPlayerTurns = 2,
+            });
         sw.Stop();
-        Console.WriteLine($"mate2test: one-turn={one.Outcome} (want NoLethal), mate-in-2={m2} (want Win)  [{sw.ElapsedMilliseconds}ms]");
+        Console.WriteLine($"mate2test: one-turn={one.Outcome} (want NoLethal), old-mate2={m2} (want Win), " +
+                          $"forced={forced.Outcome} work={forced.Work} playerDecisions={forced.PlayerDecisionNodes} " +
+                          $"oppBranches={forced.OpponentBranches} (want Win)  [{sw.ElapsedMilliseconds}ms]");
         return (one.Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.NoLethal
-             && m2 == OnePieceTcg.Engine.Puzzles.Mate2Solver.Mate.Win) ? 0 : 1;
+             && m2 == OnePieceTcg.Engine.Puzzles.Mate2Solver.Mate.Win
+             && forced.Outcome == OnePieceTcg.Engine.Puzzles.ForcedWinSolver.ForcedWin.Win) ? 0 : 1;
+    }
+
+    case "mechanicpuzzlecheck":
+    {
+        // Certify the deliberately different mechanic families. Multi-turn entries must fail the one-turn
+        // oracle and pass the adversarial cross-turn oracle; this prevents a labelled "setup" puzzle from
+        // secretly being another attack-everything lethal.
+        var puzzles = OnePieceTcg.Engine.Puzzles.MechanicPuzzleLibrary.All();
+        if (args.Length > 1)
+            puzzles = puzzles.Where(p => p.Id == args[1]).ToList();
+        int bad = 0;
+        foreach (var pz in puzzles)
+        {
+            var st = pz.Build();
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var one = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(st, pz.Attacker,
+                new OnePieceTcg.Engine.Puzzles.LethalSolver.Options
+                {
+                    WorkBudget = 1_500_000,
+                    MaxDepth = 100,
+                });
+
+            string outcome;
+            long work;
+            int playerDecisions;
+            long opponentBranches;
+            int turnsReached;
+            IEnumerable<OnePieceTcg.Engine.GameCommand> pv;
+            bool certified;
+            string qualityText = "";
+            if (pz.PlayerTurnLimit <= 1)
+            {
+                var quality = OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Analyze(st, pz.Attacker, one,
+                    new OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Options
+                    {
+                        SolveBudget = 1_500_000,
+                        MaxDecisionDepth = 6,
+                        MinCriticalDecisions = 2,
+                        MinAttackerMoves = 3,
+                        MinLegalMovesAtRoot = 3,
+                        MaxLegalMovesPerDecision = 64,
+                    });
+                outcome = one.Outcome.ToString();
+                work = one.Work;
+                playerDecisions = 0;
+                opponentBranches = 0;
+                turnsReached = 1;
+                pv = one.PrincipalVariation;
+                certified = one.Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win && quality.Passed;
+                qualityText = $" quality={quality.Passed}:{quality.Reason} critical={quality.CriticalDecisions}";
+            }
+            else
+            {
+                var forced = OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Solve(st, pz.Attacker,
+                    new OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Options
+                    {
+                        WorkBudget = 5_000_000,
+                        MaxDepth = 180,
+                        MaxPlayerTurns = pz.PlayerTurnLimit,
+                    });
+                outcome = forced.Outcome.ToString();
+                work = forced.Work;
+                playerDecisions = forced.PlayerDecisionNodes;
+                opponentBranches = forced.OpponentBranches;
+                turnsReached = forced.PlayerTurnsReached;
+                pv = forced.PrincipalVariation;
+                var quality = OnePieceTcg.Engine.Puzzles.ForcedWinQualityAnalyzer.Analyze(
+                    st, pz.Attacker, pz.PlayerTurnLimit,
+                    new OnePieceTcg.Engine.Puzzles.ForcedWinQualityAnalyzer.Options
+                    {
+                        RootBudget = 5_000_000,
+                        AlternativeBudget = 40_000,
+                        MaxDepth = 180,
+                        MaxPlayerDecisionsAudited = 10,
+                        MinCriticalDecisions = 2,
+                        MinDistinctPlayerActionTypes = 5,
+                    });
+                certified = one.Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.NoLethal
+                         && forced.Outcome == OnePieceTcg.Engine.Puzzles.ForcedWinSolver.ForcedWin.Win
+                         && forced.PlayerTurnsReached >= 2
+                         && quality.Passed;
+                qualityText = $" quality={quality.Passed}:{quality.Reason} critical={quality.CriticalDecisions} types={quality.DistinctPlayerActionTypes}";
+            }
+            sw.Stop();
+
+            string line = string.Join(" | ", pv.Select(c =>
+                $"{c.Seat}:{c.Type}:{c.Attacker ?? c.InstanceId ?? c.Blocker ?? c.Target ?? c.EffectId}"));
+            Console.WriteLine($"  {(certified ? "PASS" : "FAIL")} {pz.Id}: one={one.Outcome}, " +
+                              $"forced={outcome}, work={work}, playerDecisions={playerDecisions}, " +
+                              $"oppBranches={opponentBranches}, turns={turnsReached}{qualityText} [{sw.ElapsedMilliseconds}ms]");
+            Console.WriteLine("       " + line);
+            if (!certified) bad++;
+        }
+        Console.WriteLine($"mechanicpuzzlecheck: {puzzles.Count - bad}/{puzzles.Count} certified ({bad} bad)");
+        return bad == 0 ? 0 : 1;
+    }
+
+    case "mechanictrace":
+    {
+        if (args.Length < 2)
+        {
+            Console.WriteLine("usage: mechanictrace <puzzle-id> [legal-index ...]");
+            return 2;
+        }
+        var pz = OnePieceTcg.Engine.Puzzles.MechanicPuzzleLibrary.All()
+            .FirstOrDefault(p => p.Id == args[1]);
+        if (pz == null) { Console.WriteLine("unknown mechanic puzzle"); return 2; }
+        var st = pz.Build();
+        string Label(OnePieceTcg.Engine.CardInstance c) =>
+            c == null ? "." : $"{c.CardId}/{c.InstanceId}";
+        void Dump(int step)
+        {
+            var decider = OnePieceTcg.Engine.Puzzles.LethalSolver.DecidingSeat(st, pz.Attacker);
+            var legal = OnePieceTcg.Engine.Bot.Search.LegalActions.Validate(st, decider,
+                OnePieceTcg.Engine.Bot.Search.LegalActions.Candidates(st, decider));
+            Console.WriteLine($"step={step} active={st.ActiveSeat} phase={st.Phase} decider={decider} " +
+                              $"battle={st.Battle?.Step ?? "-"} pending={st.PendingEffects.Count} status={st.Status}");
+            foreach (var seat in new[] { "south", "north" })
+            {
+                var p = st.Players[seat];
+                Console.WriteLine($"  {seat}: leader={Label(p.Leader)} life={p.Life.Count} hand=[{string.Join(",", p.Hand.Select(Label))}] " +
+                                  $"chars=[{string.Join(",", p.CharacterArea.Where(c => c != null).Select(Label))}] " +
+                                  $"don={p.CostArea.Count(d => !d.Rested)}/{p.CostArea.Count}");
+            }
+            for (int i = 0; i < legal.Count; i++)
+            {
+                var c = legal[i].Key;
+                Console.WriteLine($"  [{i}] {c.Seat}:{c.Type} inst={c.InstanceId} atk={c.Attacker} " +
+                                  $"target={c.Target} blocker={c.Blocker} effect={c.EffectId} amount={c.Amount}");
+            }
+            if (st.PendingEffects.Count > 0)
+                Console.WriteLine("  effect: " + st.PendingEffects[0].Text.Replace("\n", " "));
+        }
+        for (int step = 0; ; step++)
+        {
+            Dump(step);
+            if (step + 2 >= args.Length) break;
+            string decider = OnePieceTcg.Engine.Puzzles.LethalSolver.DecidingSeat(st, pz.Attacker);
+            var legal = OnePieceTcg.Engine.Bot.Search.LegalActions.Validate(st, decider,
+                OnePieceTcg.Engine.Bot.Search.LegalActions.Candidates(st, decider));
+            int index = int.Parse(args[step + 2]);
+            if (index < 0 || index >= legal.Count) { Console.WriteLine("index out of range"); return 2; }
+            st = legal[index].Value;
+        }
+        return 0;
     }
 
     case "formattest":
@@ -337,26 +591,183 @@ switch (mode)
 
     case "puzzlecheck":
     {
-        // Validate every baked puzzle through the RUNTIME (PuzzleRuntime.Start), which re-solves at the live
+        // Validate every baked puzzle through the strict decision gate and RUNTIME, which re-solves at the live
         // budget — catches any that certified offline but would show a false "Failed" at load.
         var lib = OnePieceTcg.Engine.Puzzles.PuzzleLibrary.All();
         int ok = 0, bad = 0;
         foreach (var pz in lib)
         {
+            var position = pz.Build();
+            bool qualityPassed;
+            string qualityReason;
+            if (pz.PlayerTurnLimit <= 1)
+            {
+                var quality = OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Analyze(position, pz.Attacker,
+                    options: new OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Options
+                    {
+                        SolveBudget = 1_500_000, MaxDecisionDepth = 6, MinCriticalDecisions = 2,
+                        MinAttackerMoves = 3, MinLegalMovesAtRoot = 3, MaxLegalMovesPerDecision = 64,
+                    });
+                qualityPassed = quality.Passed;
+                qualityReason = quality.Reason;
+            }
+            else
+            {
+                var quality = OnePieceTcg.Engine.Puzzles.ForcedWinQualityAnalyzer.Analyze(
+                    position, pz.Attacker, pz.PlayerTurnLimit,
+                    new OnePieceTcg.Engine.Puzzles.ForcedWinQualityAnalyzer.Options
+                    {
+                        RootBudget = 5_000_000, AlternativeBudget = 40_000,
+                        MinCriticalDecisions = 2, MinDistinctPlayerActionTypes = 5,
+                    });
+                qualityPassed = quality.Passed;
+                qualityReason = quality.Reason;
+            }
+            if (!qualityPassed)
+            {
+                bad++;
+                Console.WriteLine($"  FAIL(quality) {pz.Id} [{pz.Category} D{pz.Difficulty}]: {qualityReason}");
+                continue;
+            }
             var rt = new OnePieceTcg.Engine.Puzzles.PuzzleRuntime();
-            if (!rt.Start(pz.Build(), pz.Attacker))
+            if (!rt.Start(position, pz.Attacker, pz.PlayerTurnLimit))
             { bad++; Console.WriteLine($"  FAIL(start) {pz.Id} [{pz.Category} D{pz.Difficulty}]: {rt.Message}"); continue; }
             // Drive adaptively vs the runtime's optimal defence — must reach Solved.
-            for (int g2 = 0; g2 < 60 && rt.Status == OnePieceTcg.Engine.Puzzles.PuzzleRuntime.PuzzleStatus.InProgress; g2++)
+            for (int g2 = 0; g2 < 100 && rt.Status == OnePieceTcg.Engine.Puzzles.PuzzleRuntime.PuzzleStatus.InProgress; g2++)
             {
-                var step = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(rt.State, pz.Attacker, rt.SolveOpts);
-                var mv = step.PrincipalVariation.FirstOrDefault(c => c.Seat == pz.Attacker);
+                OnePieceTcg.Engine.GameCommand mv;
+                if (pz.PlayerTurnLimit <= 1)
+                {
+                    var step = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(rt.State, pz.Attacker, rt.SolveOpts);
+                    mv = step.PrincipalVariation.FirstOrDefault(c => c.Seat == pz.Attacker);
+                }
+                else
+                {
+                    var step = OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Solve(rt.State, pz.Attacker,
+                        new OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Options
+                        {
+                            WorkBudget = rt.ForcedSolveOpts.WorkBudget,
+                            MaxDepth = rt.ForcedSolveOpts.MaxDepth,
+                            MaxPlayerTurns = pz.PlayerTurnLimit,
+                            FinalPlayerTurnsStarted = rt.FinalPlayerTurnsStarted,
+                        });
+                    mv = step.PrincipalVariation.FirstOrDefault(c => c.Seat == pz.Attacker);
+                }
                 if (mv == null || !rt.ApplyMove(mv)) break;
             }
             if (rt.Status == OnePieceTcg.Engine.Puzzles.PuzzleRuntime.PuzzleStatus.Solved) ok++;
             else { bad++; Console.WriteLine($"  FAIL(play) {pz.Id} [{pz.Category} D{pz.Difficulty}]: ended {rt.Status}"); }
         }
-        Console.WriteLine($"puzzlecheck: {ok}/{lib.Count} solved end-to-end vs optimal defence ({bad} bad)");
+        Console.WriteLine($"puzzlecheck: {ok}/{lib.Count} passed strict quality and solved end-to-end vs optimal defence ({bad} bad)");
+        return bad == 0 ? 0 : 1;
+    }
+
+    case "catalogcheck":
+    {
+        var catalog = OnePieceTcg.Engine.Puzzles.PuzzleLibrary.All();
+        var caps = OnePieceTcg.Engine.Puzzles.PuzzleCardCapabilities.Current;
+        int bad = 0;
+        if (catalog.Count != OnePieceTcg.Engine.Puzzles.CertifiedPuzzleCatalog.TargetCount) bad++;
+        if (catalog.Select(p => p.Id).Distinct(StringComparer.Ordinal).Count() != catalog.Count) bad++;
+        if (OnePieceTcg.Engine.Puzzles.CertifiedPuzzleCatalog.VerifiedSeeds.Length != 475) bad++;
+        if (catalog.Count(p => p.PlayerTurnLimit > 1) < 10) bad++;
+        if (catalog.Select(p => p.Category).Distinct(StringComparer.Ordinal).Count() < 12) bad++;
+
+        var built = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var p in catalog)
+        {
+            var state = p.Build();
+            if (state == null || state.Status != "active") { bad++; continue; }
+            var mine = state.Players[p.Attacker];
+            string oppSeat = p.Attacker == "south" ? "north" : "south";
+            var opp = state.Players[oppSeat];
+            string Cards(IEnumerable<OnePieceTcg.Engine.CardInstance> cards) =>
+                string.Join(",", cards.Where(c => c != null).Select(c => c.CardId));
+            built.Add($"{p.Category}|{mine.Leader.CardId}|{Cards(mine.CharacterArea)}|{Cards(mine.Hand)}|" +
+                      $"{mine.CostArea.Count}|{opp.Leader.CardId}|{Cards(opp.CharacterArea)}|" +
+                      $"{opp.Hand.Count}|{opp.Life.Count}");
+        }
+        // A catalog entry can deliberately share a dependency graph with a safe card-recognition variant, but
+        // it must still contain hundreds of materially different board recipes.
+        if (built.Count < 350) bad++;
+
+        var sample = catalog.Where((_, i) => i % 41 == 0).Take(13).ToList();
+        int solved = 0;
+        foreach (var p in sample)
+        {
+            var state = p.Build();
+            bool win;
+            if (p.PlayerTurnLimit <= 1)
+            {
+                var proof = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(state, p.Attacker,
+                    new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 1_500_000, MaxDepth = 80 });
+                win = proof.Outcome == OnePieceTcg.Engine.Puzzles.LethalSolver.Lethal.Win && !proof.BudgetHit;
+            }
+            else
+            {
+                var proof = OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Solve(state, p.Attacker,
+                    new OnePieceTcg.Engine.Puzzles.ForcedWinSolver.Options
+                    {
+                        WorkBudget = 5_000_000, MaxDepth = 180, MaxPlayerTurns = p.PlayerTurnLimit,
+                    });
+                win = proof.Outcome == OnePieceTcg.Engine.Puzzles.ForcedWinSolver.ForcedWin.Win;
+            }
+            if (win) solved++; else bad++;
+        }
+
+        Console.WriteLine($"catalog: {catalog.Count} entries, {built.Count} board signatures, " +
+                          $"{catalog.Select(p => p.Category).Distinct().Count()} families, " +
+                          $"{catalog.Count(p => p.PlayerTurnLimit > 1)} multi-turn");
+        Console.WriteLine("families: " + string.Join(", ", catalog.GroupBy(p => p.Category)
+            .OrderBy(g => g.Key).Select(g => $"{g.Key}={g.Count()}")));
+        Console.WriteLine($"database: {caps.UniqueCards} unique, {caps.Leaders} leaders, " +
+                          $"{caps.Characters} characters, {caps.Events} events, {caps.Stages} stages; " +
+                          $"Blocker={caps.Blockers}, Rush={caps.Rush}, DoubleAttack={caps.DoubleAttack}, " +
+                          $"Banish={caps.Banish}, Restand={caps.Restand}, KO={caps.KoRemoval}, " +
+                          $"CounterEvent={caps.CounterEvents}, Life={caps.LifeEffects}, DON-active={caps.DonReactivation}");
+        Console.WriteLine($"sample exact proofs: {solved}/{sample.Count}; errors={bad}");
+        return bad == 0 ? 0 : 1;
+    }
+
+    case "catalogdump":
+    {
+        foreach (var p in OnePieceTcg.Engine.Puzzles.PuzzleLibrary.All())
+            Console.WriteLine($"{p.Id}\t{p.Category}\t{p.Difficulty}\t{p.PlayerTurnLimit}");
+        return 0;
+    }
+
+    case "puzzlegradecheck":
+    {
+        var catalog = OnePieceTcg.Engine.Puzzles.PuzzleLibrary.All();
+        int bad = 0;
+        foreach (var p in catalog)
+        {
+            if (p.Difficulty < 1 || p.Difficulty > 4
+                || p.DifficultyScore <= 0
+                || string.IsNullOrWhiteSpace(p.DifficultyEvidence))
+                bad++;
+            if (p.Difficulty != OnePieceTcg.Engine.Puzzles.PuzzleDifficultyGrader.TierFor(p.DifficultyScore))
+                bad++;
+            if (p.PlayerTurnLimit > 1 && p.Difficulty != 4)
+                bad++;
+        }
+
+        var tiers = catalog.GroupBy(p => p.Difficulty).ToDictionary(g => g.Key, g => g.Count());
+        for (int tier = 1; tier <= 4; tier++)
+            if (!tiers.TryGetValue(tier, out int count) || count < 50) bad++;
+
+        Console.WriteLine("difficulty: " + string.Join(", ", Enumerable.Range(1, 4)
+            .Select(t => $"{t}:{tiers.GetValueOrDefault(t)}")));
+        foreach (var family in catalog.GroupBy(p => p.Category).OrderBy(g => g.Key))
+            Console.WriteLine($"  {family.Key,-36} " + string.Join("  ", Enumerable.Range(1, 4)
+                .Select(t => $"D{t}={family.Count(p => p.Difficulty == t)}")));
+        foreach (int tier in Enumerable.Range(1, 4))
+        {
+            var group = catalog.Where(p => p.Difficulty == tier).ToList();
+            Console.WriteLine($"  tier {tier}: score {group.Min(p => p.DifficultyScore):0.00}.." +
+                              $"{group.Max(p => p.DifficultyScore):0.00}, count={group.Count}");
+        }
+        Console.WriteLine($"puzzlegradecheck: {catalog.Count} graded, errors={bad}");
         return bad == 0 ? 0 : 1;
     }
 
@@ -439,12 +850,29 @@ switch (mode)
         {
             var rt = new OnePieceTcg.Engine.Puzzles.PuzzleRuntime();
             bool started;
-            try { started = rt.Start(puz.Build(), puz.Attacker); }
+            OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Report quality;
+            try
+            {
+                var built = puz.Build();
+                started = rt.Start(built, puz.Attacker);
+                var proof = OnePieceTcg.Engine.Puzzles.LethalSolver.Solve(
+                    built, puz.Attacker,
+                    new OnePieceTcg.Engine.Puzzles.LethalSolver.Options { WorkBudget = 150_000 });
+                quality = OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.Analyze(
+                    built, puz.Attacker, proof,
+                    OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.StrictHarvest());
+            }
             catch (Exception e) { Console.WriteLine($"  THREW {puz.Id}: {e.Message}"); bad++; continue; }
-            Console.WriteLine($"  {(started ? "OK  " : "BAD ")} {puz.Id} D{puz.Difficulty} start={started}");
-            if (started) ok++; else bad++;
+            bool stamped = puz.Quality != null
+                && puz.Quality.Version >= OnePieceTcg.Engine.Puzzles.PuzzleQualityAnalyzer.CurrentVersion
+                && puz.Quality.Passed;
+            bool valid = started && quality.Passed && stamped;
+            Console.WriteLine($"  {(valid ? "OK  " : "BAD ")} {puz.Id} D{puz.Difficulty} start={started} " +
+                              $"quality={quality.Passed} stamped={stamped} critical={quality.CriticalDecisions} " +
+                              $"first={quality.WinningFirstMoves}/{quality.LegalFirstMoves} reason='{quality.Reason}'");
+            if (valid) ok++; else bad++;
         }
-        Console.WriteLine($"harvestcheck: {ok}/{ok + bad} harvested puzzles are valid forced-lethal ({bad} bad)");
+        Console.WriteLine($"harvestcheck: {ok}/{ok + bad} harvested puzzles are lethal AND quality-certified ({bad} bad)");
         return bad == 0 ? 0 : 1;
     }
 

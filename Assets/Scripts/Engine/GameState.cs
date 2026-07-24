@@ -182,6 +182,9 @@ namespace OnePieceTcg.Engine
         // must NOT consume the once-per-turn, so it re-prompts on the next attack until used. Null =
         // no once-per-turn tracking.
         public string OnceKey;
+        // This is the body of an activated Life [Trigger]. When its final clause
+        // finishes, resume any remaining damage from the same hit.
+        public bool FinalizesActivatedTrigger;
     }
 
     /// <summary>A serializable player action. Optional fields are used per command type.</summary>
@@ -260,6 +263,9 @@ namespace OnePieceTcg.Engine
         // Active "Choose one" branch — non-null when a card effect needs the player to pick A or B.
         // Resolved via the "resolveChoice" command with Target = "A" or "B".
         public ChoiceState ActiveChoice;
+        // A Trigger body opened a nested choice/deck-look/pending effect. The Trigger
+        // must finish before remaining damage from the same hit resumes.
+        public string DeferredActivatedTriggerSeat;
 
         // How many attacks each card (by InstanceId) has declared this turn.
         // Double Attack cards may attack twice (count < 2); others are blocked after 1.

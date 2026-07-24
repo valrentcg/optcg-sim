@@ -30,6 +30,9 @@ namespace OnePieceTcg.Engine.Puzzles
         public List<CardQty> SouthDeck = new List<CardQty>();
         public List<CardQty> NorthDeck = new List<CardQty>();
         public List<SerialCmd> Commands = new List<SerialCmd>();
+        // A harvested position is not shipped merely because lethal exists. Versioned quality metadata proves
+        // it passed the line-selectivity audit (multiple consequential decisions, not an any-order alpha strike).
+        public PuzzleQualityStamp Quality;
 
         /// <summary>Rebuild the exact position by recreating the match and replaying the command prefix.</summary>
         public GameState Build()
@@ -53,7 +56,8 @@ namespace OnePieceTcg.Engine.Puzzles
         };
 
         public static HarvestedPuzzle FromRecipe(string id, string title, string teaches, int difficulty,
-            string attacker, string seed, string firstPlayer, DeckDef south, DeckDef north, List<GameCommand> prefix)
+            string attacker, string seed, string firstPlayer, DeckDef south, DeckDef north, List<GameCommand> prefix,
+            PuzzleQualityAnalyzer.Report quality)
             => new HarvestedPuzzle
             {
                 Id = id, Title = title, Teaches = teaches, Difficulty = difficulty, Attacker = attacker,
@@ -62,12 +66,42 @@ namespace OnePieceTcg.Engine.Puzzles
                 SouthDeck = south.List.Select(t => new CardQty { id = t.cardId, qty = t.qty }).ToList(),
                 NorthDeck = north.List.Select(t => new CardQty { id = t.cardId, qty = t.qty }).ToList(),
                 Commands = prefix.Select(SerialCmd.From).ToList(),
+                Quality = PuzzleQualityStamp.From(quality),
             };
     }
 
     [Serializable] public sealed class HarvestedPuzzleSet { public List<HarvestedPuzzle> puzzles = new List<HarvestedPuzzle>(); }
 
     [Serializable] public sealed class CardQty { public string id; public int qty; }
+
+    [Serializable]
+    public sealed class PuzzleQualityStamp
+    {
+        public int Version;
+        public bool Passed;
+        public string Reason;
+        public string AttackOnlyOutcome;
+        public int AttackerMoves;
+        public int SetupMovesBeforeFirstAttack;
+        public int CriticalDecisions;
+        public int LegalFirstMoves;
+        public int WinningFirstMoves;
+        public int LosingFirstMoves;
+
+        public static PuzzleQualityStamp From(PuzzleQualityAnalyzer.Report r) => r == null ? null : new PuzzleQualityStamp
+        {
+            Version = r.Version,
+            Passed = r.Passed,
+            Reason = r.Reason,
+            AttackOnlyOutcome = r.AttackOnlyOutcome.ToString(),
+            AttackerMoves = r.AttackerMoves,
+            SetupMovesBeforeFirstAttack = r.SetupMovesBeforeFirstAttack,
+            CriticalDecisions = r.CriticalDecisions,
+            LegalFirstMoves = r.LegalFirstMoves,
+            WinningFirstMoves = r.WinningFirstMoves,
+            LosingFirstMoves = r.LosingFirstMoves,
+        };
+    }
 
     /// <summary>A JsonUtility-friendly GameCommand (nullable ints/bools flattened to value + Has-flag, matching
     /// the client's SerializableCommand shape so replay commands round-trip identically).</summary>

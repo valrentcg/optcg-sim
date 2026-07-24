@@ -40,6 +40,7 @@ namespace OnePieceTcg.Sim.Search
                 Battle = CloneBattle(s.Battle),
                 DeckLook = CloneDeckLook(s.DeckLook),
                 ActiveChoice = CloneChoice(s.ActiveChoice),
+                DeferredActivatedTriggerSeat = s.DeferredActivatedTriggerSeat,
             };
             g.PendingEffects = s.PendingEffects.Select(ClonePE).ToList();
             // append-only, never mutated in place → shallow list copy is correct (and skippable in search)
@@ -96,6 +97,7 @@ namespace OnePieceTcg.Sim.Search
             Timing = e.Timing, Text = e.Text, Optional = e.Optional, Scope = e.Scope, TargetZone = e.TargetZone,
             DonPaymentRemaining = e.DonPaymentRemaining, SelectionsRemaining = e.SelectionsRemaining,
             RemainingBudget = e.RemainingBudget, FirstPickId = e.FirstPickId, PendingContinuation = e.PendingContinuation,
+            FinalizesActivatedTrigger = e.FinalizesActivatedTrigger,
         };
 
         private static CardModifier CloneCM(CardModifier m) => new CardModifier

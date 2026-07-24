@@ -174,12 +174,36 @@ namespace OnePieceTcg.Engine.Bot.Search
                      + s.TurnNumber * 17 + (s.Phase == null ? 0 : s.Phase.GetHashCode()) + (s.ActiveSeat == null ? 0 : s.ActiveSeat.GetHashCode())
                      + (s.ActiveChoice != null ? 29 : 0) + (s.DeckLook == null ? 0 : s.DeckLook.Cards.Count * 37)
                      + (s.Battle == null || s.Battle.Step == null ? 0 : s.Battle.Step.GetHashCode()) + (s.Status == "finished" ? 999999999L : 0);
+            // Pending effects can advance without changing their COUNT: a target may receive a cost/keyword
+            // modifier and a ". Then," remainder replaces the first clause with the second. Counting only the
+            // queue made those perfectly legal target selections look like no-ops, so search could not reason
+            // about cards such as EB01-046 Brook or OP06-101 O-Nami.
+            foreach (var e in s.PendingEffects)
+            {
+                h = h * 31 + (e.EffectId?.GetHashCode() ?? 0);
+                h = h * 31 + (e.Text?.GetHashCode() ?? 0);
+                h = h * 31 + e.SelectionsRemaining;
+                h = h * 31 + e.RemainingBudget;
+            }
+            foreach (var m in s.ActiveModifiers)
+            {
+                h = h * 31 + (m.TargetInstanceId?.GetHashCode() ?? 0);
+                h = h * 31 + (m.ModifierType?.GetHashCode() ?? 0);
+                h = h * 31 + (m.Keyword?.GetHashCode() ?? 0);
+                h = h * 31 + (m.Duration?.GetHashCode() ?? 0);
+            }
             foreach (var p in s.Players.Values)
             {
                 h = h * 31 + p.Hand.Count * 7 + p.CharacterArea.Count(c => c != null) * 11
                     + p.Trash.Count * 3 + p.Life.Count * 5 + GameEngine.ActiveDonCount(p) * 2 + p.Deck.Count * 101;
                 foreach (var c in p.CharacterArea) if (c != null) h = h * 17 + GameEngine.GetPower(s, c) + (c.Rested ? 1 : 0);
                 if (p.Leader != null) h = h * 17 + GameEngine.GetPower(s, p.Leader) + (p.Leader.Rested ? 1 : 0);
+                foreach (var c in p.CharacterArea.Where(c => c != null).Concat(new[] { p.Leader }.Where(c => c != null)))
+                {
+                    h = h * 31 + c.AttachedDonIds.Count;
+                    foreach (var m in c.Modifiers)
+                        h = h * 31 + m.PowerDelta * 3 + m.CostDelta * 5 + (m.ExpiresAt?.GetHashCode() ?? 0);
+                }
             }
             return h;
         }

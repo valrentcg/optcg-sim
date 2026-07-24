@@ -79,6 +79,53 @@ namespace OnePieceTcg.Engine.Puzzles
             return hints;
         }
 
+        /// <summary>Graduated hints for a proven multi-turn line. These frame the setup/defense/finish phases
+        /// without pretending the puzzle is a one-turn damage-count exercise.</summary>
+        public static List<Hint> GenerateForced(GameState pos, string player, ForcedWinSolver.Result solved)
+        {
+            var hints = new List<Hint>();
+            if (solved == null || solved.Outcome != ForcedWinSolver.ForcedWin.Win) return hints;
+
+            var mine = solved.PrincipalVariation
+                .Where(c => c != null && (c.Seat == null || c.Seat == player) && IsPlayerFacing(c))
+                .ToList();
+            if (mine.Count == 0) return hints;
+
+            int pass = mine.FindIndex(c => c.Type == "endTurn");
+            bool hasDefense = mine.Any(c => c.Type == "counterWithCard" || c.Type == "blockAttack"
+                                         || c.Type == "useTrigger" || c.Type == "passCounter");
+            string phaseText = pass >= 0
+                ? "The winning sequence crosses a turn boundary: build the next-turn position before passing, then preserve the resources that make the finish forced."
+                : "The forced win spans more than one turn. Treat survival, board development and the eventual lethal as one sequence.";
+            if (hasDefense) phaseText += " Your defensive choice during their turn is part of the solution.";
+            hints.Add(new Hint { Level = 1, Text = phaseText });
+
+            var key = mine.FirstOrDefault(c => c.Type != "endTurn") ?? mine[0];
+            string keyId = MoveCardInstance(key);
+            string keyName = CardData.GetCard(InstanceCardId(pos, keyId))?.Name ?? "your first key piece";
+            var h2 = new Hint
+            {
+                Level = 2,
+                Text = $"Start by identifying what {keyName} preserves or enables for the following turn. Spending that resource in the obvious way may lose the forced finish.",
+            };
+            if (keyId != null) h2.HighlightInstanceIds.Add(keyId);
+            hints.Add(h2);
+
+            var firstMoves = mine.Take(Math.Min(3, mine.Count)).ToList();
+            var h3 = new Hint
+            {
+                Level = 3,
+                Text = "Begin with: " + string.Join(", then ", firstMoves.Select(m => DescribeMove(pos, player, m))) + ".",
+            };
+            foreach (var m in firstMoves)
+            {
+                var id = MoveCardInstance(m);
+                if (id != null) h3.HighlightInstanceIds.Add(id);
+            }
+            hints.Add(h3);
+            return hints;
+        }
+
         private static string KeyCardInstance(List<GameCommand> mine, List<GameCommand> attacks)
         {
             var setup = mine.FirstOrDefault(c => c.Type == "activateMain" || c.Type == "playCard" || c.Type == "attachDon");
@@ -92,6 +139,7 @@ namespace OnePieceTcg.Engine.Puzzles
             "attachDon" => c.Target,
             "activateMain" => c.Target,
             "playCard" => c.InstanceId,
+            "blockAttack" => c.Blocker,
             _ => c.InstanceId ?? c.Target,
         };
 
@@ -99,6 +147,30 @@ namespace OnePieceTcg.Engine.Puzzles
         /// the answer after the player strikes out (3 losses). Names resolve against the STARTING position
         /// (every instance the line references exists there). Returns null if no forced win is found.</summary>
         public static string DescribeSolution(GameState pos, string attacker)
+            => DescribeSolution(pos, attacker, 1);
+
+        public static string DescribeSolution(GameState pos, string attacker, int playerTurnLimit)
+        {
+            if (playerTurnLimit <= 1) return DescribeOneTurnSolution(pos, attacker);
+            var proof = ForcedWinSolver.Solve(pos, attacker, new ForcedWinSolver.Options
+            {
+                WorkBudget = 2_000_000,
+                MaxPlayerTurns = playerTurnLimit,
+            });
+            if (proof.Outcome != ForcedWinSolver.ForcedWin.Win) return null;
+            var mine = proof.PrincipalVariation
+                .Where(c => (c.Seat == null || c.Seat == attacker) && IsPlayerFacing(c))
+                .ToList();
+            if (mine.Count == 0) return null;
+            return string.Join("\n", mine.Select((m, i) => $"{i + 1}. " + Cap(DescribeMove(pos, attacker, m))));
+        }
+
+        private static bool IsPlayerFacing(GameCommand c) => c.Type == "playCard"
+            || c.Type == "activateMain" || c.Type == "attachDon" || c.Type == "declareAttack"
+            || c.Type == "counterWithCard" || c.Type == "blockAttack" || c.Type == "useTrigger"
+            || c.Type == "passCounter" || c.Type == "passBlock" || c.Type == "endTurn";
+
+        private static string DescribeOneTurnSolution(GameState pos, string attacker)
         {
             var proof = LethalSolver.Solve(pos, attacker, new LethalSolver.Options { WorkBudget = 400_000 });
             if (proof.Outcome != LethalSolver.Lethal.Win) return null;
@@ -125,6 +197,12 @@ namespace OnePieceTcg.Engine.Puzzles
                 case "attachDon": return $"give a DON!! to {Name(c.Target)}";
                 case "activateMain": return $"use {Name(c.Target)}'s ability";
                 case "playCard": return $"play {Name(c.InstanceId)}";
+                case "counterWithCard": return $"counter with {Name(c.InstanceId)}";
+                case "blockAttack": return $"block with {Name(c.Blocker)}";
+                case "useTrigger": return "use the revealed Trigger";
+                case "passCounter": return "take no further Counter";
+                case "passBlock": return "do not block";
+                case "endTurn": return "end your turn";
                 default: return c.Type;
             }
         }

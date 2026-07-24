@@ -1115,6 +1115,34 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.21", "Deeper Puzzles, multi-turn challenges, and official keyword fixes", "Jul 23, 2026", new (string, string[])[]
+        {
+            ("Puzzles rebuilt around real decisions", new[]
+            {
+                "Puzzle mode now shuffles 500 graded challenges across 12 tactical families, with 478 distinct board states instead of repeating the same all-out attack.",
+                "Harder positions are built from a required solution and reject any-order attack lines. Legacy harvested positions no longer enter the rotation just because a basic lethal exists.",
+                "Ten Expert puzzles span two of your turns: develop or control the board, survive the opponent's best reply, then finish the forced win.",
+                "The opponent's hand stays hidden, titles no longer reveal the tactic, and ending a setup turn is separate from giving up the attempt.",
+            }),
+            ("Difficulty you can trust", new[]
+            {
+                "Every puzzle is scored from its proof: consequential decisions, attack order, defensive branches, resource precision, counters, setup plays, and multi-turn depth.",
+                "The catalog is classified as 108 Easy, 142 Medium, 165 Hard, and 85 Expert.",
+                "After solving, the result shows the mechanics involved and the evidence behind its difficulty grade.",
+            }),
+            ("Official keyword & timing fixes", new[]
+            {
+                "[Rush: Character] now does exactly what it says: it can attack Characters on the turn it is played, but it is not full [Rush] and cannot attack active Characters.",
+                "Activated [Trigger] cards go to the correct zone, and a Trigger — including \"Play this card\" plus its On Play choices — finishes before [Double Attack] continues to the next Life.",
+                "Printed [Unblockable] is recognized reliably, [Once Per Turn] resets when that card leaves and re-enters the field, and Counter Events can buff another eligible friendly card.",
+                "The exact official [End of Your Opponent's Turn] timing is supported, while direct trashing remains distinct from K.O.",
+            }),
+            ("Card visibility", new[]
+            {
+                "Hovering a face-up Life card now previews that card's face instead of showing the card back.",
+                "Puzzle Life and the opponent's hand follow normal hidden-information rules even though the solver can verify the configured defense.",
+            }),
+        }),
         ("v1.0.20", "Standard & Extra formats, Puzzles mode, deck-builder overhaul, and rules fixes", "Jul 23, 2026", new (string, string[])[]
         {
             ("New: Standard & Extra Regulation", new[]

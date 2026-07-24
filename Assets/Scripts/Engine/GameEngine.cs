@@ -238,7 +238,7 @@ namespace OnePieceTcg.Engine
                 case "declareAttack": DeclareAttack(state, actor, command.Attacker, command.Target); break;
                 case "blockAttack": BlockAttack(state, actor, command.Blocker); break;
                 case "passBlock": PassBlock(state, actor); break;
-                case "counterWithCard": CounterWithCard(state, actor, command.InstanceId); break;
+                case "counterWithCard": CounterWithCard(state, actor, command.InstanceId, command.Target); break;
                 case "passCounter": PassCounter(state, actor); break;
                 case "resolveAttack": ResolveAttack(state, actor); break;
                 case "useTrigger": UseTrigger(state, actor); break;
@@ -1414,6 +1414,20 @@ namespace OnePieceTcg.Engine
                 string.Equals(m.Keyword, keyword, StringComparison.OrdinalIgnoreCase));
         }
 
+        // Some newly imported cards have the keyword printed in their effect text but no entry in the
+        // JSON keywords array (notably OP16's printed [Unblockable] cards and [Rush: Character]).
+        // Match only a real clause-leading tag so an inline reference such as "without a [Blocker]"
+        // never grants the referenced keyword.
+        private static bool HasStandaloneKeyword(CardInstance instance, string keyword)
+        {
+            if (instance == null) return false;
+            string text = GetCard(instance)?.Effect ?? "";
+            return System.Text.RegularExpressions.Regex.IsMatch(
+                text,
+                @"(?:^|\n)\s*\[" + System.Text.RegularExpressions.Regex.Escape(keyword) + @"\](?:\s|$)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
         private static void CleanupTurnModifiers(GameState state)
         {
             state.ActiveModifiers.RemoveAll(m => m.Duration == "thisTurn");
@@ -1546,6 +1560,7 @@ namespace OnePieceTcg.Engine
         // State-aware overload also checks CardModifiers (Rush granted by an effect).
         public static bool HasRush(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Rush")
+                || HasStandaloneKeyword(instance, "Rush")
                 || (instance.CardId == "ST01-004" && instance.AttachedDonIds.Count >= 2)
                 || HasPrintedKeywordGrant(state, instance, "Rush")
                 || HasKeywordModifier(state, instance, "Rush"));
@@ -1557,6 +1572,7 @@ namespace OnePieceTcg.Engine
         // Double Attack: deals 2 damage to Life in a single leader hit (see ResolveAttack).
         public static bool HasDoubleAttack(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Double Attack")
+                || HasStandaloneKeyword(instance, "Double Attack")
                 || HasPrintedKeywordGrant(state, instance, "Double Attack")
                 || HasKeywordModifier(state, instance, "Double Attack")
                 || HasModifier(state, instance, "doubleAttack"));
@@ -1564,6 +1580,7 @@ namespace OnePieceTcg.Engine
         // [Blocker]: can be activated to redirect an attack to itself (printed, granted, or modifier).
         public static bool HasBlocker(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Blocker")
+                || HasStandaloneKeyword(instance, "Blocker")
                 || HasKeywordModifier(state, instance, "Blocker")
                 || HasPrintedKeywordGrant(state, instance, "Blocker"));
 
@@ -1647,6 +1664,7 @@ namespace OnePieceTcg.Engine
         // going to hand and no Trigger step occurs.
         public static bool HasBanish(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Banish")
+                || HasStandaloneKeyword(instance, "Banish")
                 || HasPrintedKeywordGrant(state, instance, "Banish")
                 || HasKeywordModifier(state, instance, "Banish"));
 
@@ -1655,6 +1673,7 @@ namespace OnePieceTcg.Engine
         // (auto-pass, manual block, UI shield-cross) which previously omitted the printed/aura grant.
         public static bool IsUnblockable(GameState state, CardInstance instance) =>
             instance != null && (HasKeyword(instance, "Unblockable")
+                || HasStandaloneKeyword(instance, "Unblockable")
                 || HasPrintedKeywordGrant(state, instance, "Unblockable")
                 || HasKeywordModifier(state, instance, "Unblockable"));
 
@@ -2041,7 +2060,11 @@ namespace OnePieceTcg.Engine
             if (!p.Hand.Any(c => c.InstanceId == instance.InstanceId)) return false;
             var def = GetCard(instance);
             if (def == null) return false;
-            if (AutomatedCounterPower(instance) <= 0) return false;
+            // Some Counter Events have no flat boost in their primary clause; their value is supplied by a
+            // queued choice/secondary effect (ST07-016 Power Mochi is the canonical example). CounterWithCard
+            // already handles these correctly, so the legal-action gate must not hide them from the solver.
+            bool counterEvent = def.Type == "event" && HasTiming(def.Effect, "Counter");
+            if (AutomatedCounterPower(instance) <= 0 && !counterEvent) return false;
             if (def.Type == "event" && ActiveDonCount(p) < def.Cost) return false;
             return true;
         }
@@ -2423,6 +2446,7 @@ namespace OnePieceTcg.Engine
             if (ActiveDonCount(p) < playCost) { Log(state, seat, $"Not enough active DON!! to play {NameId(def)}."); return; }
             PayDonCost(p, playCost);
             p.Hand.RemoveAt(index);
+            ResetOncePerTurnIdentity(state, instance);
             instance.PlayedOnTurn = state.TurnNumber;
 
             if (def.Type == "character")
@@ -3024,6 +3048,7 @@ namespace OnePieceTcg.Engine
             int slot = p.CharacterArea.FindIndex(c => c == null);
             if (slot < 0) slot = Math.Min(idx, p.CharacterArea.Count - 1);
             held.Zone = "character";
+            ResetOncePerTurnIdentity(state, held);
             held.PlayedOnTurn = state.TurnNumber;
             held.Rested = cr.Rested;
             if (slot >= 0 && slot < p.CharacterArea.Count) p.CharacterArea[slot] = held;
@@ -3247,6 +3272,7 @@ namespace OnePieceTcg.Engine
                         return;
                     }
                     taken.Zone = "character";
+                    ResetOncePerTurnIdentity(state, taken);
                     taken.PlayedOnTurn = state.TurnNumber;
                     taken.Rested = dl.PlayRested;
                     p.CharacterArea[slotPM] = taken;
@@ -3279,6 +3305,7 @@ namespace OnePieceTcg.Engine
                     // trashed, since only one may occupy the zone.
                     if (p.Stage != null) { p.Stage.Zone = "trash"; p.Trash.Add(p.Stage); }
                     taken.Zone = "stage";
+                    ResetOncePerTurnIdentity(state, taken);
                     taken.PlayedOnTurn = state.TurnNumber;
                     p.Stage = taken;
                     Log(state, seat, $"{p.Name} plays {NameId(def)} from the deck.");
@@ -3375,11 +3402,16 @@ namespace OnePieceTcg.Engine
                 if (!OpenNextStartOfGameStage(state)) DealOpeningHands(state);
                 return;
             }
-            if (dl == null || string.IsNullOrEmpty(dl.PostLookClause)) return;
+            if (dl == null || string.IsNullOrEmpty(dl.PostLookClause))
+            {
+                TryFinalizeDeferredActivatedTrigger(state);
+                return;
+            }
             var src = FindCardInstance(state, dl.SourceInstanceId);
             if (src != null)
                 QueueAndAutoResolve(state, dl.Seat, src, "main", dl.PostLookClause,
                     IsOptionalEffectText(dl.PostLookClause), EffectScope.Instant, EffectTargetZone.Hand);
+            TryFinalizeDeferredActivatedTrigger(state);
         }
 
         // Capture a TRAILING "trash N card(s) from your hand" from a deck-look clause — the part the
@@ -4631,7 +4663,7 @@ namespace OnePieceTcg.Engine
             }
         }
 
-        private static void CounterWithCard(GameState state, string defenderSeat, string instanceId)
+        private static void CounterWithCard(GameState state, string defenderSeat, string instanceId, string targetId = null)
         {
             if (state.Battle == null || state.Battle.Step != "counter" || state.Battle.TargetSeat != defenderSeat) return;
             var defender = Player(state, defenderSeat);
@@ -4639,6 +4671,18 @@ namespace OnePieceTcg.Engine
             if (index < 0) return;
             var counterCard = defender.Hand[index];
             var counterDef = GetCard(counterCard);
+            // Official General Rules Q&A permits a Counter to increase an own Leader/Character
+            // other than the card currently being attacked. Existing clients omit Target and keep
+            // the normal battle-target default; explicit commands may select any own in-play card.
+            var counterTarget = string.IsNullOrEmpty(targetId)
+                ? FindInPlay(defender, state.Battle.TargetId)
+                : FindInPlay(defender, targetId);
+            var counterTargetDef = GetCard(counterTarget);
+            if (counterTarget == null || (counterTargetDef.Type != "leader" && counterTargetDef.Type != "character"))
+            {
+                Log(state, defenderSeat, "A Counter must target one of your Leader or Character cards.");
+                return;
+            }
             int counterPower = AutomatedCounterPower(counterCard);
             // OP08-096 [Counter]: "Trash 1 card from the top of your deck. If the trashed card has a cost of N or
             // more, up to 1 of your Leader or Character cards gains +M power during this battle." The +M is
@@ -4727,9 +4771,19 @@ namespace OnePieceTcg.Engine
             defender.Hand.RemoveAt(index);
             counterCard.Zone = "trash";
             defender.Trash.Add(counterCard);
-            state.Battle.CounterPower += counterPower;
-            state.Battle.DefensePower += counterPower;
-            Log(state, defenderSeat, $"{defender.Name} counters with {NameId(GetCard(counterCard))} (+{counterPower}).");
+            if (counterTarget.InstanceId == state.Battle.TargetId)
+            {
+                state.Battle.CounterPower += counterPower;
+                state.Battle.DefensePower += counterPower;
+            }
+            else if (counterPower != 0)
+            {
+                state.Battle.BattlePowerBonus.TryGetValue(counterTarget.InstanceId, out int otherCounterBonus);
+                state.Battle.BattlePowerBonus[counterTarget.InstanceId] = otherCounterBonus + counterPower;
+                RegisterPowerModifier(counterTarget, NameId(counterDef), counterPower, "endOfBattle");
+            }
+            Log(state, defenderSeat, $"{defender.Name} counters with {NameId(GetCard(counterCard))}, giving " +
+                $"{NameId(counterTargetDef)} +{counterPower} power.");
             // ST05-017 Union Armada: "…gains +4000 power during this battle. If that card is a Character, that
             // Character cannot be K.O.'d during this turn." The flat-boost path applies the +N to DefensePower but
             // DROPS the per-card K.O.-immunity rider (the buff resolver that handles it is never reached for a
@@ -4738,7 +4792,7 @@ namespace OnePieceTcg.Engine
             if (counterDef.Type == "event"
                 && ContainsAll(counterDef.Effect ?? "", "that Character cannot be K.O.'d during this turn"))
             {
-                var savedTarget = FindInPlay(defender, state.Battle.TargetId);
+                var savedTarget = counterTarget;
                 if (savedTarget != null && GetCard(savedTarget)?.Type == "character"
                     && CardPassesFeatureFilter(ExtractTimedClause(counterDef.Effect ?? "", "Counter") ?? "", GetCard(savedTarget)))
                 {
@@ -4960,6 +5014,57 @@ namespace OnePieceTcg.Engine
             state.Phase = "main";
             CleanupBattleModifiers(state, endedBattleId);
             FireOnLifeBecomesZero(state, defenderSeat);   // OP05-098 Enel recovery when Life just hit 0
+        }
+
+        // Complete a Trigger that the player ACTIVATED. Unlike declining [Trigger], the revealed
+        // Life card is trashed after the effect resolves unless that effect explicitly moved it
+        // elsewhere (Comprehensive Rules 10-1-5-3). Preserve the same multi-damage continuation
+        // used by FinalizeTrigger so a first-damage Trigger resolves before Double Attack's second
+        // damage without cancelling that remaining damage.
+        private static void FinalizeActivatedTrigger(GameState state, string defenderSeat)
+        {
+            var p = Player(state, defenderSeat);
+            var cardFromLife = state.Battle?.RevealedLife;
+            if (cardFromLife != null)
+            {
+                cardFromLife.Zone = "trash";
+                cardFromLife.FaceUp = false;
+                if (!p.Trash.Any(c => c.InstanceId == cardFromLife.InstanceId))
+                    p.Trash.Add(cardFromLife);
+            }
+            if (state.Battle != null && state.Battle.PendingLifeDamage > 0)
+            {
+                state.Battle.PendingLifeDamage--;
+                state.Battle.RevealedLife = null;
+                RevealLifeAndStartTrigger(state, defenderSeat, canDefeat: false);
+                return;
+            }
+            string endedBattleId = state.Battle?.Id;
+            state.Battle = null;
+            state.Phase = "main";
+            CleanupBattleModifiers(state, endedBattleId);
+            FireOnLifeBecomesZero(state, defenderSeat);
+        }
+
+        private static void FinalizeOrDeferActivatedTrigger(GameState state, string defenderSeat)
+        {
+            if (state.DeckLook != null || state.ActiveChoice != null || state.PendingEffects.Count > 0)
+            {
+                state.DeferredActivatedTriggerSeat = defenderSeat;
+                return;
+            }
+            state.DeferredActivatedTriggerSeat = null;
+            FinalizeActivatedTrigger(state, defenderSeat);
+        }
+
+        private static void TryFinalizeDeferredActivatedTrigger(GameState state)
+        {
+            string seat = state.DeferredActivatedTriggerSeat;
+            if (string.IsNullOrEmpty(seat) || state.DeckLook != null || state.ActiveChoice != null
+                || state.PendingEffects.Count > 0)
+                return;
+            state.DeferredActivatedTriggerSeat = null;
+            FinalizeActivatedTrigger(state, seat);
         }
 
         // Banish N Life cards in one hit (no Trigger step); finishes the game if Life runs out.
@@ -6363,7 +6468,7 @@ namespace OnePieceTcg.Engine
                 if (contSrc != null)
                     QueueAndAutoResolve(state, effect.Seat, contSrc, effect.Timing, cont,
                         IsOptionalEffectText(cont), effect.Scope, InferTargetZone(cont),
-                        effect.OriginalText, done, effect.SkippedParts);
+                        effect.OriginalText, done, effect.SkippedParts, effect.FinalizesActivatedTrigger);
                 return;
             }
 
@@ -6373,6 +6478,10 @@ namespace OnePieceTcg.Engine
                 var source = CardData.GetCard(effect.SourceCardId);
                 Log(state, effect.Seat, $"{source.Name} effect acknowledged for manual resolution: {effect.Text}");
             }
+            if (effect.FinalizesActivatedTrigger)
+                FinalizeOrDeferActivatedTrigger(state, effect.Seat);
+            else
+                TryFinalizeDeferredActivatedTrigger(state);
         }
 
         private static void PassEffect(GameState state, string seat, string effectId)
@@ -6463,6 +6572,7 @@ namespace OnePieceTcg.Engine
             //  • "If you do, …" depended on the skipped action → also criteria-not-met (RED), does not run.
             //  • Any other "Then, …" clause is independent → it STILL resolves; carry the red ledger so the
             //    skipped clause stays visible (red) while the rest of the card plays out.
+            bool triggerContinuationQueued = false;
             if (!string.IsNullOrWhiteSpace(cont))
             {
                 if (ContinuationDependsOnPreviousAction(cont))
@@ -6473,11 +6583,18 @@ namespace OnePieceTcg.Engine
                 {
                     var contSrc = FindCardInstance(state, effect.SourceInstanceId);
                     if (contSrc != null)
+                    {
                         QueueAndAutoResolve(state, effect.Seat, contSrc, effect.Timing, cont,
                             IsOptionalEffectText(cont), effect.Scope, InferTargetZone(cont),
-                            effect.OriginalText, effect.DoneParts, skipped);
+                            effect.OriginalText, effect.DoneParts, skipped, effect.FinalizesActivatedTrigger);
+                        triggerContinuationQueued = effect.FinalizesActivatedTrigger;
+                    }
                 }
             }
+            if (effect.FinalizesActivatedTrigger && !triggerContinuationQueued)
+                FinalizeOrDeferActivatedTrigger(state, effect.Seat);
+            else
+                TryFinalizeDeferredActivatedTrigger(state);
         }
 
         // A "Then, …" remainder that begins "If you do[ so], …" is contingent on the clause the
@@ -6498,7 +6615,11 @@ namespace OnePieceTcg.Engine
             if (ch == null || ch.Seat != seat) return;
             string chosen = (choice == "C") ? ch.OptionC : (choice == "B") ? ch.OptionB : ch.OptionA;
             state.ActiveChoice = null;
-            if (string.IsNullOrWhiteSpace(chosen)) return;
+            if (string.IsNullOrWhiteSpace(chosen))
+            {
+                TryFinalizeDeferredActivatedTrigger(state);
+                return;
+            }
             // The chosen option always resolves FOR the effect's controller — even when the
             // OPPONENT made the choice ("Your opponent chooses one:") — because option texts
             // are written from the controller's perspective ("your opponent's Life", …).
@@ -6511,6 +6632,7 @@ namespace OnePieceTcg.Engine
                 QueueAndAutoResolve(state, resolveSeat, src, ch.Timing, chosen.Trim(), false, EffectScope.Instant, zone);
             }
             Log(state, seat, $"Chose: {chosen.Trim()}");
+            TryFinalizeDeferredActivatedTrigger(state);
         }
 
         // Derive the EffectTargetZone a sub-effect needs based on its text.
@@ -6568,6 +6690,7 @@ namespace OnePieceTcg.Engine
                 DoneParts      = src.DoneParts != null ? new List<string>(src.DoneParts) : new List<string>(),
                 SkippedParts   = src.SkippedParts != null ? new List<string>(src.SkippedParts) : new List<string>(),
                 OnceKey        = src.OnceKey,
+                FinalizesActivatedTrigger = src.FinalizesActivatedTrigger,
             };
 
         // Returns the index of "Then," that begins a second clause ("<sentence>. Then, <rest>").
@@ -7451,7 +7574,8 @@ namespace OnePieceTcg.Engine
 
         private static void QueueEffect(GameState state, string seat, CardInstance source, string timing, string text, bool optional,
             EffectScope scope = EffectScope.Instant, EffectTargetZone targetZone = EffectTargetZone.Play,
-            string originalText = null, List<string> doneParts = null, List<string> skippedParts = null)
+            string originalText = null, List<string> doneParts = null, List<string> skippedParts = null,
+            bool finalizesActivatedTrigger = false)
         {
             if (source == null || string.IsNullOrWhiteSpace(text)) return;
             text = NormalizeQueuedClause(timing, text);   // strip any leading clause merged in front of the timing tag
@@ -7472,6 +7596,7 @@ namespace OnePieceTcg.Engine
                 OriginalText = string.IsNullOrEmpty(originalText) ? text.Trim() : originalText,
                 DoneParts = doneParts != null ? new List<string>(doneParts) : new List<string>(),
                 SkippedParts = skippedParts != null ? new List<string>(skippedParts) : new List<string>(),
+                FinalizesActivatedTrigger = finalizesActivatedTrigger,
             });
             Log(state, seat, $"{NameId(GetCard(source))} {TimingLabel(timing)} effect is pending.");
         }
@@ -7486,10 +7611,12 @@ namespace OnePieceTcg.Engine
         // required (EffectResolution.WaitingForTarget short-circuits before removal).
         private static void QueueAndAutoResolve(GameState state, string seat, CardInstance source, string timing, string text, bool optional,
             EffectScope scope = EffectScope.Instant, EffectTargetZone targetZone = EffectTargetZone.Play,
-            string originalText = null, List<string> doneParts = null, List<string> skippedParts = null)
+            string originalText = null, List<string> doneParts = null, List<string> skippedParts = null,
+            bool finalizesActivatedTrigger = false)
         {
             text = NormalizeQueuedClause(timing, text);   // clean clause drives BOTH the queue and the auto-resolve decision below
-            QueueEffect(state, seat, source, timing, text, optional, scope, targetZone, originalText, doneParts, skippedParts);
+            QueueEffect(state, seat, source, timing, text, optional, scope, targetZone, originalText, doneParts,
+                skippedParts, finalizesActivatedTrigger);
             // Only explicit "you may" wording is a real opt-in decision — those wait for the
             // player. Everything else auto-resolves: mandatory effects (including "If <cond>,
             // ..." — the CONDITION decides, not the player, e.g. Kikunojo's set-Leader-active)
@@ -7702,6 +7829,7 @@ namespace OnePieceTcg.Engine
                         {
                             var hd = GetCard(h);
                             p.Hand.Remove(h);
+                            ResetOncePerTurnIdentity(state, h);
                             h.PlayedOnTurn = state.TurnNumber;
                             if (hd != null && hd.Type == "stage")
                             {
@@ -8629,7 +8757,7 @@ namespace OnePieceTcg.Engine
                 case "onBlock":             return "[On Block]";
                 case "onOpponentsAttack":   return "[On Your Opponent's Attack]";
                 case "endOfYourTurn":       return "[End of Your Turn]";
-                case "endOfOpponentsTurn":  return "[End of Opponent's Turn]";
+                case "endOfOpponentsTurn":  return "[End of Your Opponent's Turn]";
                 case "startOfYourTurn":     return "[Start of Your Turn]";
                 case "counter":             return "[Counter]";
                 default:                    return timing ?? "Effect";
@@ -8952,6 +9080,7 @@ namespace OnePieceTcg.Engine
                 }
                 Shift(owner.Deck);
                 rpCard.Zone = "character";
+                ResetOncePerTurnIdentity(state, rpCard);
                 rpCard.PlayedOnTurn = state.TurnNumber;
                 rpCard.Rested = ContainsAll(text, "rested");
                 owner.CharacterArea[rpSlot] = rpCard;
@@ -9624,7 +9753,9 @@ namespace OnePieceTcg.Engine
                 if (matches && revDef.Type == "character" && slot >= 0)
                 {
                     owner.Life.RemoveAt(owner.Life.Count - 1);
-                    revealed.Zone = "character"; revealed.FaceUp = false; revealed.PlayedOnTurn = state.TurnNumber;
+                    revealed.Zone = "character"; revealed.FaceUp = false;
+                    ResetOncePerTurnIdentity(state, revealed);
+                    revealed.PlayedOnTurn = state.TurnNumber;
                     owner.CharacterArea[slot] = revealed;
                     Log(state, effect.Seat, $"{sourceName}: plays {NameId(revDef)} from Life.");
                     if (HasTiming(revDef.Effect, "On Play"))
@@ -10411,6 +10542,7 @@ namespace OnePieceTcg.Engine
                 if (slot86 < 0) { Log(state, effect.Seat, "No open character slot."); return EffectResolution.Resolved; }
                 owner.Trash.RemoveAt(c86);
                 t86.Zone = "character";
+                ResetOncePerTurnIdentity(state, t86);
                 t86.PlayedOnTurn = state.TurnNumber;
                 t86.Rested = effect.SelectionsRemaining == 1;   // the second pick comes in rested
                 owner.CharacterArea[slot86] = t86;
@@ -10901,6 +11033,7 @@ namespace OnePieceTcg.Engine
                                 if (dzH >= 0) owner.Hand.RemoveAt(dzH); else owner.Trash.RemoveAt(dzT);
                                 dzCard.Zone = "character";
                                 dzCard.Rested = ContainsAll(text, "rested");
+                                ResetOncePerTurnIdentity(state, dzCard);
                                 dzCard.PlayedOnTurn = state.TurnNumber;
                                 owner.CharacterArea[dzSlot] = dzCard;
                                 Log(state, effect.Seat, $"{sourceName}: plays {NameId(dzDef)} from {(dzH >= 0 ? "hand" : "trash")}.");
@@ -11473,6 +11606,7 @@ namespace OnePieceTcg.Engine
                     var reviv = owner.Trash[selfIdx];
                     owner.Trash.RemoveAt(selfIdx);
                     reviv.Zone = "character";
+                    ResetOncePerTurnIdentity(state, reviv);
                     reviv.PlayedOnTurn = state.TurnNumber;
                     // Honor a "…from your trash rested" qualifier (OP03-013, OP09-052, ST30-008 enter rested;
                     // OP14-120/OP16-014 enter active). Was always active — the rested qualifier was dropped.
@@ -13049,6 +13183,7 @@ namespace OnePieceTcg.Engine
                         {
                             Shift(owner.Deck);
                             revealed.Zone = "character";
+                            ResetOncePerTurnIdentity(state, revealed);
                             revealed.PlayedOnTurn = state.TurnNumber;
                             revealed.Rested = restedRv;
                             owner.CharacterArea[slotRv] = revealed;
@@ -14569,6 +14704,7 @@ namespace OnePieceTcg.Engine
                 }
                 // Play for free (no DON cost); characters go to a slot, others to trash.
                 p.Hand.RemoveAt(handIdx);
+                ResetOncePerTurnIdentity(state, handCard);
                 handCard.PlayedOnTurn = state.TurnNumber;
                 if (handDef.Type == "character")
                 {
@@ -14789,6 +14925,7 @@ namespace OnePieceTcg.Engine
                 }
                 // Play for free (no DON!! cost).
                 pH.Hand.RemoveAt(hIdx2);
+                ResetOncePerTurnIdentity(state, playCard);
                 playCard.PlayedOnTurn = state.TurnNumber;
                 if (playDef.Type == "character")
                 {
@@ -15072,9 +15209,9 @@ namespace OnePieceTcg.Engine
                 return EffectResolution.Resolved;
             }
 
-            // Grant Rush to a Leader or Character this turn.
-            // "[Rush: Character]" = [Rush] + may attack the opponent's ACTIVE Characters, this turn
-            // (EB04-007 Zoro: "this Character gains [Rush: Character] during this turn").
+            // [Rush: Character] only waives the played-this-turn restriction when attacking an
+            // opponent's Character. It is not full [Rush], and it does not make active Characters
+            // legal targets (Comprehensive Rules 10-1-6).
             if (ContainsAll(text, "gains [Rush: Character]"))
             {
                 bool rcSelf = ContainsAll(text, "this Character gains") || ContainsAll(text, "this card gains")
@@ -15094,8 +15231,7 @@ namespace OnePieceTcg.Engine
                     return EffectResolution.WaitingForTarget;
                 }
                 var rcSrc = FindAnyInPlay(state, effect.SourceInstanceId, out _);
-                AddModifier(state, rcSrc, rcTarget, "keyword", "thisTurn", "Rush");
-                AddModifier(state, rcSrc, rcTarget, "canAttackActive", "thisTurn", null, effect.Seat);
+                AddModifier(state, rcSrc, rcTarget, "rushCharacters", "thisTurn", null, effect.Seat);
                 Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(rcTarget))} gains [Rush: Character] this turn.");
                 return EffectResolution.Resolved;
             }
@@ -15407,6 +15543,7 @@ namespace OnePieceTcg.Engine
                 pRt.Trash.RemoveAt(rtIdx);
                 backCard.Zone = "character";
                 backCard.Rested = ContainsAll(text, "rested");
+                ResetOncePerTurnIdentity(state, backCard);
                 backCard.PlayedOnTurn = state.TurnNumber;
                 backCard.Modifiers.Clear();
                 pRt.CharacterArea[rtSlot] = backCard;
@@ -15457,6 +15594,7 @@ namespace OnePieceTcg.Engine
                 if (dtSlot < 0) { Log(state, effect.Seat, $"No open slot — {NameId(dtDef)} stays in trash."); return EffectResolution.WaitingForTarget; }
                 if (dtHigh) effect.RemainingBudget--;
                 p4d.Trash.RemoveAt(dti);
+                ResetOncePerTurnIdentity(state, dtCard);
                 dtCard.PlayedOnTurn = state.TurnNumber;
                 dtCard.Zone = "character";
                 dtCard.Rested = ContainsAll(text, "from your trash rested") || ContainsAll(text, "from the trash rested"); // recur enters rested
@@ -15561,6 +15699,7 @@ namespace OnePieceTcg.Engine
                     return EffectResolution.WaitingForTarget;
                 }
                 p4.Trash.RemoveAt(trashIdx);
+                ResetOncePerTurnIdentity(state, trashCard);
                 trashCard.PlayedOnTurn = state.TurnNumber;
                 if (trashDef.Type == "character")
                 {
@@ -16093,7 +16232,7 @@ namespace OnePieceTcg.Engine
                         Log(state, defenderSeat, $"{NameId(def)} Trigger: draws {dn} card(s).");
                     }
                     else Log(state, defenderSeat, $"{NameId(def)} Trigger condition not met — no draw.");
-                    FinalizeTrigger(state, defenderSeat);   // the card returns to hand, battle ends
+                    FinalizeActivatedTrigger(state, defenderSeat);
                     return true;
                 }
             }
@@ -16142,14 +16281,16 @@ namespace OnePieceTcg.Engine
                     if (trigDonMinus > 0) PayDonMinus(state, defenderSeat, trigDonMinus);
                     if (defender.Stage != null) { defender.Stage.Zone = "trash"; defender.Trash.Add(defender.Stage); }
                     cardFromLife.Zone = "stage";
+                    ResetOncePerTurnIdentity(state, cardFromLife);
                     cardFromLife.PlayedOnTurn = state.TurnNumber;
                     defender.Stage = cardFromLife;
                     Log(state, defenderSeat, $"{NameId(def)} Trigger plays this Stage to the field.");
-                    state.Battle = null;
-                    state.Phase = "main";
+                    if (state.Battle != null) state.Battle.RevealedLife = null; // effect moved the Trigger card
                     if (HasTiming(def.Effect, "On Play"))
                         QueueAndAutoResolve(state, defenderSeat, cardFromLife, "onPlay", def.Effect, true,
-                            EffectScope.Instant, InferTargetZone(def.Effect));
+                            EffectScope.Instant, InferTargetZone(def.Effect), finalizesActivatedTrigger: true);
+                    else
+                        FinalizeOrDeferActivatedTrigger(state, defenderSeat);
                     return true;
                 }
                 if (condOk)
@@ -16171,25 +16312,31 @@ namespace OnePieceTcg.Engine
                             Log(state, defenderSeat, $"{defender.Name} trashes {trigLifeN} Life card(s) (Trigger cost).");
                         }
                         cardFromLife.Zone = "character";
+                        ResetOncePerTurnIdentity(state, cardFromLife);
                         cardFromLife.PlayedOnTurn = state.TurnNumber;
                         defender.CharacterArea[openSlot] = cardFromLife;
                         Log(state, defenderSeat, $"{NameId(def)} Trigger plays this card to the field.");
-                        state.Battle = null;
-                        state.Phase = "main";
-                        if (HasTiming(def.Effect, "On Play"))
-                            QueueAndAutoResolve(state, defenderSeat, cardFromLife, "onPlay", def.Effect, true,
-                                EffectScope.Instant, InferTargetZone(def.Effect));
+                        if (state.Battle != null) state.Battle.RevealedLife = null; // effect moved the Trigger card
                         // "Play this card. Then, <rider>" (OP04-101 Carmel → K.O. an opponent Character; OP08-104
                         // Charlotte Poire → draw 1). The ". Then," rider on the TRIGGER (not the card's [On Play])
                         // fires AFTER the play — was dropped (the branch returned right after the play).
                         int trigThenC = FindThenClause(trigger);
+                        string trigRiderC = trigThenC > 0 ? NormalizeClause(trigger.Substring(trigThenC)) : null;
+                        bool hasTriggerRider = !string.IsNullOrWhiteSpace(trigRiderC);
+                        bool hasOnPlay = HasTiming(def.Effect, "On Play");
+                        if (hasOnPlay)
+                            QueueAndAutoResolve(state, defenderSeat, cardFromLife, "onPlay", def.Effect, true,
+                                EffectScope.Instant, InferTargetZone(def.Effect),
+                                finalizesActivatedTrigger: !hasTriggerRider);
                         if (trigThenC > 0)
                         {
-                            string trigRiderC = NormalizeClause(trigger.Substring(trigThenC));
-                            if (!string.IsNullOrWhiteSpace(trigRiderC))
+                            if (hasTriggerRider)
                                 QueueAndAutoResolve(state, defenderSeat, cardFromLife, "trigger", trigRiderC,
-                                    IsOptionalEffectText(trigRiderC), EffectScope.Instant, InferTargetZone(trigRiderC));
+                                    IsOptionalEffectText(trigRiderC), EffectScope.Instant, InferTargetZone(trigRiderC),
+                                    finalizesActivatedTrigger: true);
                         }
+                        if (!hasOnPlay && !hasTriggerRider)
+                            FinalizeOrDeferActivatedTrigger(state, defenderSeat);
                         return true;
                     }
                     Log(state, defenderSeat, $"{NameId(def)} Trigger could not play because the character area is full.");
@@ -16221,13 +16368,12 @@ namespace OnePieceTcg.Engine
                     Text = clauseText,
                     Optional = true,
                     TargetZone = InferTargetZone(clauseText),
+                    FinalizesActivatedTrigger = true,
                 };
                 state.PendingEffects.Add(pending);
                 cardFromLife.Zone = "trash";
                 Player(state, defenderSeat).Trash.Add(cardFromLife);
                 Log(state, defenderSeat, $"{NameId(def)} Trigger activates its {wantTiming} effect.");
-                state.Battle = null;
-                state.Phase = "main";
                 // Auto-open no-decision effects (deck-looks, searches, mandatory bodies) instead of
                 // leaving the effect WaitingForTarget with a board TargetZone — that lit EVERY unit as a
                 // bogus target and a click just ran the real effect (OP13-096's [Main] "Look at 3 …").
@@ -16253,13 +16399,12 @@ namespace OnePieceTcg.Engine
                     Optional = true,
                     Scope = EffectScope.Instant,
                     TargetZone = EffectTargetZone.Hand,
+                    FinalizesActivatedTrigger = true,
                 };
                 state.PendingEffects.Add(pending);
                 cardFromLife.Zone = "trash";
                 Player(state, defenderSeat).Trash.Add(cardFromLife);
                 Log(state, defenderSeat, $"{NameId(def)} Trigger: play up to 1 Supernovas card (cost ≤ 2) from hand.");
-                state.Battle = null;
-                state.Phase = "main";
                 return true;
             }
 
@@ -16281,23 +16426,14 @@ namespace OnePieceTcg.Engine
                     Text = trigger,
                     Optional = true,
                     TargetZone = InferTargetZone(trigger),
+                    FinalizesActivatedTrigger = true,
                 };
                 state.PendingEffects.Add(pending);
-                if (def.Type == "event")
-                {
-                    // Using an event's trigger uses the event — it goes to the trash.
-                    cardFromLife.Zone = "trash";
-                    Player(state, defenderSeat).Trash.Add(cardFromLife);
-                }
-                else
-                {
-                    // Characters/stages: the life card goes to hand after its trigger
-                    // resolves (unless the trigger itself plays the card — handled above).
-                    cardFromLife.Zone = "hand";
-                    Player(state, defenderSeat).Hand.Add(cardFromLife);
-                }
-                state.Battle = null;
-                state.Phase = "main";
+                // Activating [Trigger] trashes the Life card after resolution regardless of card
+                // type, unless the effect itself moves it elsewhere (the "Play this card" cases
+                // are handled above). The old Character/Stage path incorrectly added it to hand.
+                cardFromLife.Zone = "trash";
+                Player(state, defenderSeat).Trash.Add(cardFromLife);
                 return true;
             }
 
@@ -16850,16 +16986,19 @@ namespace OnePieceTcg.Engine
             foreach (var c in cards)
             {
                 var def = GetCard(c);
-                if (!HasTiming(def.Effect, "End of Opponent's Turn")) continue;
+                string endOpponentTiming = HasTiming(def.Effect, "End of Your Opponent's Turn")
+                    ? "End of Your Opponent's Turn"
+                    : HasTiming(def.Effect, "End of Opponent's Turn") ? "End of Opponent's Turn" : null;
+                if (endOpponentTiming == null) continue;
                 int donReq = ParseDonThreshold(def.Effect);
                 if (donReq > 0 && c.AttachedDonIds.Count < donReq) continue;
                 if (ContainsAll(def.Effect, "Set this", "as active") && c.Rested)
                 {
                     c.Rested = false;
-                    Log(state, seat, $"{NameId(def)} [End of Opponent's Turn] sets itself as active.");
+                    Log(state, seat, $"{NameId(def)} [End of Your Opponent's Turn] sets itself as active.");
                     continue;
                 }
-                string eotClause = ExtractTimedClause(def.Effect, "End of Opponent's Turn");
+                string eotClause = ExtractTimedClause(def.Effect, endOpponentTiming);
                 QueueAndAutoResolve(state, seat, c, "endOfOpponentsTurn", eotClause, IsOptionalEffectText(eotClause),
                     EffectScope.Instant, InferTargetZone(eotClause));
             }
@@ -17010,6 +17149,19 @@ namespace OnePieceTcg.Engine
         private static bool HasKeyword(CardInstance instance, string keyword)
         {
             return GetCard(instance).Keywords.Contains(keyword);
+        }
+
+        // [Once Per Turn] belongs to this appearance of a card, not permanently to its
+        // physical instance. Re-entering the field makes it a new card (rule 10-2-13-4),
+        // so clear every usage key owned by the prior appearance.
+        private static void ResetOncePerTurnIdentity(GameState state, CardInstance card)
+        {
+            if (state == null || card == null || string.IsNullOrEmpty(card.InstanceId)) return;
+            string id = card.InstanceId;
+            foreach (var p in state.Players.Values)
+                p.AbilityUsedThisTurn.RemoveWhere(k =>
+                    string.Equals(k, id, StringComparison.Ordinal)
+                    || k.StartsWith(id + ":", StringComparison.Ordinal));
         }
 
         // Shared "end the match right now" plumbing for every deck-out branch below.

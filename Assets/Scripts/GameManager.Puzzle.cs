@@ -60,15 +60,13 @@ public partial class GameManager
         LoadPuzzle(puzzleIndex);
     }
 
-    // The full verified set (100), fully shuffled across ALL difficulties so "Next" jumps to a random puzzle of
-    // any difficulty (not a long run of Easy then Medium ...). Random per session (not deterministic).
+    // The mechanic-distinct, proof-certified set. Random per session (not deterministic).
     private List<AuthoredPuzzle> BuildShuffledPuzzleSet()
     {
         var rng = new System.Random();
-        // Generated puzzles (Easy/Medium after the relabel) + real-game HARVESTED puzzles (Hard/Expert),
-        // fully shuffled so "Next" lands on any difficulty.
+        // Harvested and power-math synthesized positions remain offline candidate sources. They do not enter
+        // the player rotation unless promoted into the mechanic library and passed through its quality gate.
         var all = new List<AuthoredPuzzle>(PuzzleLibrary.All());
-        all.AddRange(HarvestedPuzzleStore.All());
         return all.OrderBy(_ => rng.Next()).ToList();
     }
 
@@ -83,7 +81,7 @@ public partial class GameManager
         puzzleAttacker = pz.Attacker;
 
         puzzleRuntime = new PuzzleRuntime();
-        puzzleRuntime.Start(pz.Build(), pz.Attacker);
+        puzzleRuntime.Start(pz.Build(), pz.Attacker, pz.PlayerTurnLimit);
         state = puzzleRuntime.State;
         currentMatchConfig = new MatchConfig { Seed = "puzzle-" + pz.Id };
 
@@ -140,7 +138,8 @@ public partial class GameManager
             puzzleFailCounted = true;
             puzzleStrikes++;
             if (puzzleStrikes >= PuzzleMaxStrikes && puzzleSolutionText == null && puzzleSet != null && puzzleIndex < puzzleSet.Count)
-                puzzleSolutionText = HintGenerator.DescribeSolution(puzzleSet[puzzleIndex].Build(), puzzleAttacker);
+                puzzleSolutionText = HintGenerator.DescribeSolution(
+                    puzzleSet[puzzleIndex].Build(), puzzleAttacker, puzzleSet[puzzleIndex].PlayerTurnLimit);
         }
         NormalizeSelection();
         Render();
@@ -178,6 +177,10 @@ public partial class GameManager
         {
             AddInfo(body, "Solved — that's lethal!");
             if (pz != null && !string.IsNullOrEmpty(pz.Teaches)) AddInfo(body, pz.Teaches);
+            if (pz != null && pz.Mechanics != null && pz.Mechanics.Length > 0)
+                AddInfo(body, "Mechanics: " + string.Join(" / ", pz.Mechanics));
+            if (pz != null && !string.IsNullOrEmpty(pz.DifficultyEvidence))
+                AddInfo(body, $"Why {DifficultyWord(pz.Difficulty)}: {pz.DifficultyEvidence}");
             AddButton(body, "Next Puzzle", NextPuzzle, true, false);
             AddButton(body, "Replay", () => LoadPuzzle(puzzleIndex), true, false);
         }
@@ -190,14 +193,19 @@ public partial class GameManager
         else
         {
             // No "you're off track" tell mid-solve — that would hand over the answer. Just the neutral prompt.
-            AddInfo(body, "There is lethal here. Find the line.");
-            AddInfo(body, "Attack, spread your DON!!, and play cards to close it out.");
+            AddInfo(body, pz != null && pz.PlayerTurnLimit > 1
+                ? "Force the win by the end of your next turn."
+                : "Find the winning sequence this turn.");
             if (!string.IsNullOrEmpty(puzzleHintText)) AddInfo(body, "Hint: " + puzzleHintText);
             if (puzzleHintLevel < 3)
                 AddButton(body, puzzleHintLevel == 0 ? "Hint" : "Reveal more", () => RevealHint(puzzleHintLevel + 1), true, false);
-            // End the attempt on purpose (e.g. you don't see the line): ends the turn, which fails the puzzle and
-            // costs a strike — after 3 the winning line is revealed. Restart, by contrast, is a free do-over.
-            AddButton(body, "Give Up (End Turn)", () => Dispatch(new GameCommand { Type = "endTurn", Seat = state.ActiveSeat }), CanEndTurn(), false);
+            // End the attempt on purpose. This is separate from End Turn because ending the setup turn is a
+            // required move in cross-turn puzzles. Restart, by contrast, is a free do-over.
+            AddButton(body, "Give Up", () =>
+            {
+                puzzleRuntime?.GiveUp();
+                Render();
+            }, true, false);
             AddButton(body, "Restart", () => LoadPuzzle(puzzleIndex), true, false);
             AddButton(body, "Next Puzzle", NextPuzzle, true, false);
         }

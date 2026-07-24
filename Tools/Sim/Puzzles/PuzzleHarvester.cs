@@ -95,6 +95,7 @@ namespace OnePieceTcg.Sim.Puzzles
             public DeckDef South, North;
             public List<GameCommand> Prefix;
             public LethalSolver.Result Solved;
+            public PuzzleQualityAnalyzer.Report Quality;
             public double Score;
             public int Difficulty;
         }
@@ -108,6 +109,7 @@ namespace OnePieceTcg.Sim.Puzzles
 
             var cands = new List<Candidate>();
             int reconstructed = 0, skippedDeck = 0, replayErrors = 0, gameNo = 0;
+            int rejectedQuality = 0;
             // Real end-game boards are far branchier than synthetic puzzles, so each solve is dear. The
             // near-death pre-filter (defLife<=3) keeps solves to the handful of moments where a lethal actually
             // lives, so a single moderate budget stays fast enough while still resolving most of them.
@@ -131,7 +133,7 @@ namespace OnePieceTcg.Sim.Puzzles
                 int endWindowStart = Math.Max(2, dto.TurnCount - 6);
                 var cmds = dto.CommandHistory.Select(c => c.ToCommand()).ToList();
                 bool broke = false;
-                int solves = 0, wins = 0, noLethal = 0, unknown = 0, minDefLife = 99;
+                int solves = 0, wins = 0, noLethal = 0, unknown = 0, qualityFails = 0, minDefLife = 99;
                 var perTurnKept = new Dictionary<int, int>();   // turn -> #candidates kept (cap solves per turn)
                 for (int i = 0; i < cmds.Count && solves < 12; i++)   // bound per-game solve time (branchy boards)
                 {
@@ -153,30 +155,51 @@ namespace OnePieceTcg.Sim.Puzzles
                     else if (r.Outcome == LethalSolver.Lethal.NoLethal) { noLethal++; continue; }
                     else { unknown++; continue; }
 
-                    cands.Add(new Candidate
+                    var candidate = new Candidate
                     {
                         State = GameClone.Clone(sim), Attacker = atk, ReplayId = dto.Id, Turn = sim.TurnNumber,
                         CmdIndex = i + 1, Seed = dto.Seed, FirstPlayer = cfg.FirstPlayer, South = south, North = north,
                         Prefix = cmds.Take(i + 1).ToList(), Solved = r,
-                    });
+                    };
+
+                    // "Forced lethal exists" is necessary but nowhere near sufficient. Audit the first several
+                    // attacker decisions and reject any position where too many choices still win (the old
+                    // harvested set's "attack with everybody in any order" failure).
+                    candidate.Quality = PuzzleQualityAnalyzer.Analyze(
+                        candidate.State, candidate.Attacker, candidate.Solved,
+                        PuzzleQualityAnalyzer.StrictHarvest());
+                    if (!candidate.Quality.Passed)
+                    {
+                        qualityFails++;
+                        rejectedQuality++;
+                        if (verbose)
+                            Console.WriteLine($"      reject-quality T{candidate.Turn} cmd{candidate.CmdIndex}: {candidate.Quality.Reason} " +
+                                              $"first={candidate.Quality.WinningFirstMoves}/{candidate.Quality.LegalFirstMoves} " +
+                                              $"critical={candidate.Quality.CriticalDecisions}");
+                        continue;
+                    }
+
+                    candidate.Score = DifficultyEvaluator.Score(candidate.State, candidate.Attacker, candidate.Solved);
+                    candidate.Difficulty = Math.Max(3, DifficultyEvaluator.Bucket(candidate.Score));
+                    cands.Add(candidate);
                 }
                 if (!broke) reconstructed++;
                 if (verbose) Console.WriteLine($"  [{gameNo}] {dto.Id} turns={dto.TurnCount} " +
                     $"{(broke ? "REPLAY-BROKE" : "ok")} solves={solves}(W{wins}/N{noLethal}/U{unknown}) " +
-                    $"minDefLife={(minDefLife == 99 ? -1 : minDefLife)} +{cands.Count - before} lethal");
+                    $"qualityReject={qualityFails} minDefLife={(minDefLife == 99 ? -1 : minDefLife)} " +
+                    $"+{cands.Count - before} publishable");
+
+                // Checkpoint after every replay. If a branchy tail is interrupted, all quality-approved work
+                // from earlier games is already present in the output asset and the run is safely resumable.
+                if (!string.IsNullOrEmpty(outPath) && cands.Count > 0)
+                    Emit(cands, outPath, perTierCap, verbose: false);
             }
 
             if (verbose)
                 Console.WriteLine($"Reconstructed {reconstructed}/{replayFiles.Count} replays cleanly " +
                                   $"(skipped {skippedDeck} unresolved decks, {replayErrors} build errors). " +
-                                  $"Found {cands.Count} forced-lethal position(s).");
+                                  $"Found {cands.Count} publishable puzzle(s); rejected {rejectedQuality} shallow lethal(s).");
 
-            // Difficulty score + bucket.
-            foreach (var c in cands)
-            {
-                c.Score = DifficultyEvaluator.Score(c.State, c.Attacker, c.Solved);
-                c.Difficulty = DifficultyEvaluator.Bucket(c.Score);
-            }
             if (verbose)
             {
                 var byDiff = cands.GroupBy(c => c.Difficulty).OrderBy(g => g.Key)
@@ -289,7 +312,7 @@ namespace OnePieceTcg.Sim.Puzzles
                 title: DifficultyEvaluator.TitleFor(c.State, c.Attacker, c.Solved),
                 teaches: DifficultyEvaluator.LessonFor(c.State, c.Attacker, c.Solved),
                 difficulty: c.Difficulty, attacker: c.Attacker, seed: c.Seed, firstPlayer: c.FirstPlayer,
-                south: c.South, north: c.North, prefix: c.Prefix)).ToList();
+                south: c.South, north: c.North, prefix: c.Prefix, quality: c.Quality)).ToList();
 
             var set = new HarvestedPuzzleSet { puzzles = puzzles };
             // IncludeFields + verbatim names so Unity's JsonUtility reads the SAME JSON on the client side.

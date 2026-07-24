@@ -51,10 +51,16 @@ namespace OnePieceTcg.Engine.Puzzles
         {
             public string Attacker;
             public Options Opt;
-            public Dictionary<string, Lethal> Memo;
+            public Dictionary<string, MemoEntry> Memo;
             public long Work;
             public int Nodes;
             public bool OutOfWork => Opt.WorkBudget > 0 && Work >= Opt.WorkBudget;
+        }
+
+        private sealed class MemoEntry
+        {
+            public Lethal Outcome;
+            public List<GameCommand> PrincipalVariation;
         }
 
         public static Result Solve(GameState root, string attacker, Options opt = null)
@@ -64,7 +70,7 @@ namespace OnePieceTcg.Engine.Puzzles
             {
                 Attacker = attacker,
                 Opt = opt,
-                Memo = opt.UseTransposition ? new Dictionary<string, Lethal>() : null,
+                Memo = opt.UseTransposition ? new Dictionary<string, MemoEntry>() : null,
             };
             var res = new Result();
             var start = GameClone.Clone(root);
@@ -93,7 +99,11 @@ namespace OnePieceTcg.Engine.Puzzles
             if (ctx.Memo != null)
             {
                 key = PositionKey(state, attacker);
-                if (ctx.Memo.TryGetValue(key, out var cached)) return cached;
+                if (ctx.Memo.TryGetValue(key, out var cached))
+                {
+                    if (cached.PrincipalVariation != null) pv.AddRange(cached.PrincipalVariation);
+                    return cached.Outcome;
+                }
             }
 
             string decider = DecidingSeat(state, attacker);
@@ -105,7 +115,7 @@ namespace OnePieceTcg.Engine.Puzzles
             if (legal.Count == 0)
             {
                 var stuck = attackerToMove ? Lethal.NoLethal : Lethal.Unknown;
-                if (ctx.Memo != null && stuck != Lethal.Unknown) ctx.Memo[key] = stuck;
+                if (ctx.Memo != null && stuck != Lethal.Unknown) Memoize(ctx, key, stuck, pv);
                 return stuck;
             }
 
@@ -122,7 +132,7 @@ namespace OnePieceTcg.Engine.Puzzles
                     if (r == Lethal.Win)
                     {
                         pv.Add(kv.Key); pv.AddRange(childPv);
-                        if (ctx.Memo != null) ctx.Memo[key] = Lethal.Win;
+                        if (ctx.Memo != null) Memoize(ctx, key, Lethal.Win, pv);
                         return Lethal.Win;
                     }
                     if (r == Lethal.Unknown) outcome = Lethal.Unknown;
@@ -133,7 +143,9 @@ namespace OnePieceTcg.Engine.Puzzles
             {
                 // AND node (defender): lethal only if EVERY defense still loses.
                 outcome = Lethal.Win;
-                GameCommand firstCmd = null; List<GameCommand> firstPv = null;
+                GameCommand representativeCmd = null;
+                List<GameCommand> representativePv = null;
+                int representativeLength = -1;
                 foreach (var kv in legal)
                 {
                     ctx.Work++;
@@ -142,18 +154,39 @@ namespace OnePieceTcg.Engine.Puzzles
                     if (r == Lethal.NoLethal)
                     {
                         pv.Add(kv.Key); pv.AddRange(childPv);
-                        if (ctx.Memo != null) ctx.Memo[key] = Lethal.NoLethal;
+                        if (ctx.Memo != null) Memoize(ctx, key, Lethal.NoLethal, pv);
                         return Lethal.NoLethal;   // a defense escapes -> refutation
                     }
                     if (r == Lethal.Unknown) outcome = Lethal.Unknown;
-                    if (firstCmd == null) { firstCmd = kv.Key; firstPv = childPv; }
+                    // The proof is universal over every defense. For the displayed line/hints, retain the
+                    // defense that forces the longest continuation instead of the first enumerated "pass".
+                    // This mirrors how PuzzleRuntime resists and exposes the actual counter/block sequence.
+                    if (r == Lethal.Win && childPv.Count > representativeLength)
+                    {
+                        representativeCmd = kv.Key;
+                        representativePv = childPv;
+                        representativeLength = childPv.Count;
+                    }
                     if (ctx.OutOfWork) { outcome = Lethal.Unknown; break; }
                 }
-                if (outcome == Lethal.Win && firstCmd != null) { pv.Add(firstCmd); pv.AddRange(firstPv); }
+                if (outcome == Lethal.Win && representativeCmd != null)
+                {
+                    pv.Add(representativeCmd);
+                    pv.AddRange(representativePv);
+                }
             }
 
-            if (ctx.Memo != null && outcome != Lethal.Unknown) ctx.Memo[key] = outcome;
+            if (ctx.Memo != null && outcome != Lethal.Unknown) Memoize(ctx, key, outcome, pv);
             return outcome;
+        }
+
+        private static void Memoize(Ctx ctx, string key, Lethal outcome, List<GameCommand> pv)
+        {
+            ctx.Memo[key] = new MemoEntry
+            {
+                Outcome = outcome,
+                PrincipalVariation = pv == null ? new List<GameCommand>() : new List<GameCommand>(pv),
+            };
         }
 
         private static IEnumerable<KeyValuePair<GameCommand, GameState>> Order(
@@ -200,22 +233,56 @@ namespace OnePieceTcg.Engine.Puzzles
                 sb.Append("|B:").Append(s.Battle.Step).Append(',').Append(s.Battle.AttackerId).Append(',')
                   .Append(s.Battle.TargetId).Append(',').Append(s.Battle.Blocked).Append(',')
                   .Append(s.Battle.CounterPower).Append(',').Append(s.Battle.RevealedLife?.CardId);
-            if (s.ActiveChoice != null) sb.Append("|C:").Append(s.ActiveChoice.Seat);
-            if (s.DeckLook != null) sb.Append("|D:").Append(s.DeckLook.Seat).Append(',').Append(s.DeckLook.Cards.Count);
-            foreach (var pe in s.PendingEffects) sb.Append("|E:").Append(pe.Seat).Append(',').Append(pe.EffectId).Append(',').Append(pe.Timing);
+            if (s.ActiveChoice != null)
+                sb.Append("|C:").Append(s.ActiveChoice.Seat).Append(',').Append(s.ActiveChoice.ControllerSeat)
+                  .Append(',').Append(s.ActiveChoice.OptionA).Append(',').Append(s.ActiveChoice.OptionB)
+                  .Append(',').Append(s.ActiveChoice.OptionC);
+            if (s.DeckLook != null)
+            {
+                sb.Append("|D:").Append(s.DeckLook.Seat).Append(',').Append(s.DeckLook.Step).Append(',');
+                foreach (var c in s.DeckLook.Cards) sb.Append(c.InstanceId).Append(',');
+            }
+            foreach (var pe in s.PendingEffects)
+                sb.Append("|E:").Append(pe.Seat).Append(',').Append(pe.EffectId).Append(',').Append(pe.Timing)
+                  .Append(',').Append(pe.Text).Append(',').Append(pe.SelectionsRemaining)
+                  .Append(',').Append(pe.RemainingBudget).Append(',').Append(pe.FirstPickId);
+            foreach (var m in s.ActiveModifiers.OrderBy(m => m.TargetInstanceId, StringComparer.Ordinal)
+                                                .ThenBy(m => m.ModifierType, StringComparer.Ordinal)
+                                                .ThenBy(m => m.Keyword, StringComparer.Ordinal))
+                sb.Append("|M:").Append(m.SourceInstanceId).Append('>').Append(m.TargetInstanceId)
+                  .Append(',').Append(m.ModifierType).Append(',').Append(m.Keyword)
+                  .Append(',').Append(m.Duration).Append(',').Append(m.BattleId).Append(',').Append(m.OwnerSeat);
+            foreach (var kv in s.TemporaryPowerBonus.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                sb.Append("|P:").Append(kv.Key).Append('=').Append(kv.Value);
+            foreach (var kv in s.AttackCountThisTurn.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+                sb.Append("|A:").Append(kv.Key).Append('=').Append(kv.Value);
+            foreach (var id in s.NoBlockerGrantedThisTurn.OrderBy(x => x, StringComparer.Ordinal))
+                sb.Append("|NB:").Append(id);
             foreach (var seat in new[] { attacker, GameEngine.OtherSeat(attacker) })
             {
                 var p = s.Players[seat];
                 sb.Append("\n#").Append(seat)
                   .Append(" don").Append(GameEngine.ActiveDonCount(p)).Append('/').Append(p.CostArea.Count)
+                  .Append(" dd").Append(p.DonDeck).Append(" turns").Append(p.TurnsStarted)
                   .Append(" life").Append(p.Life.Count).Append(" trash").Append(p.Trash.Count).Append(" deck").Append(p.Deck.Count);
                 sb.Append(" L:"); Piece(sb, s, p.Leader);
                 sb.Append(" A:");
                 foreach (var c in p.CharacterArea) { Piece(sb, s, c); sb.Append(';'); }
                 sb.Append(" H:");
-                foreach (var id in p.Hand.Select(c => c.CardId).OrderBy(x => x, StringComparer.Ordinal)) sb.Append(id).Append(',');
+                foreach (var c in p.Hand.OrderBy(c => c.InstanceId, StringComparer.Ordinal))
+                    sb.Append(c.CardId).Append('@').Append(c.InstanceId).Append(',');
                 sb.Append(" F:");
-                foreach (var c in p.Life) sb.Append(c.CardId).Append(',');
+                foreach (var c in p.Life)
+                    sb.Append(c.CardId).Append('@').Append(c.InstanceId).Append(c.FaceUp ? 'u' : 'd').Append(',');
+                sb.Append(" X:");
+                foreach (var c in p.Trash.OrderBy(c => c.InstanceId, StringComparer.Ordinal))
+                    sb.Append(c.CardId).Append('@').Append(c.InstanceId).Append(',');
+                sb.Append(" K:");
+                foreach (var c in p.Deck)
+                    sb.Append(c.CardId).Append('@').Append(c.InstanceId).Append(',');
+                sb.Append(" U:");
+                foreach (var key in p.AbilityUsedThisTurn.OrderBy(x => x, StringComparer.Ordinal))
+                    sb.Append(key).Append(',');
             }
             return sb.ToString();
         }
@@ -223,10 +290,15 @@ namespace OnePieceTcg.Engine.Puzzles
         private static void Piece(StringBuilder sb, GameState s, CardInstance c)
         {
             if (c == null) { sb.Append('.'); return; }
-            sb.Append(c.CardId).Append(c.Rested ? 'r' : 'a')
+            sb.Append(c.CardId).Append('@').Append(c.InstanceId).Append(c.Rested ? 'r' : 'a')
               .Append('p').Append(GameEngine.GetPower(s, c))
+              .Append('c').Append(GameEngine.GetCost(s, c))
               .Append('d').Append(c.AttachedDonIds.Count)
-              .Append('t').Append(c.PlayedOnTurn);
+              .Append('t').Append(c.PlayedOnTurn)
+              .Append(c.FaceUp ? 'u' : 'd');
+            foreach (var m in c.Modifiers)
+                sb.Append('[').Append(m.Source).Append(',').Append(m.PowerDelta).Append(',')
+                  .Append(m.CostDelta).Append(',').Append(m.ExpiresAt).Append(']');
         }
     }
 }

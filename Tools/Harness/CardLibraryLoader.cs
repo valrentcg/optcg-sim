@@ -16,7 +16,7 @@ static class CardLibraryLoader
     {
         "[On Play]", "[Activate: Main]", "[When Attacking]", "[On Block]", "[On K.O.]",
         "[Main]", "[Counter]", "[Trigger]", "[End of Your Turn]", "[Start of Your Turn]",
-        "[On Your Opponent's Attack]", "[End of Opponent's Turn]",
+        "[On Your Opponent's Attack]", "[End of Your Opponent's Turn]", "[End of Opponent's Turn]",
     };
 
     public static int Load(string jsonPath)

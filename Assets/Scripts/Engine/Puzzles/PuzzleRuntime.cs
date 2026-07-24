@@ -41,11 +41,15 @@ namespace OnePieceTcg.Engine.Puzzles
 
         private GameState _state;
         private string _attacker;
+        private int _playerTurnLimit = 1;
+        private int _finalPlayerTurnsStarted;
         private readonly List<GameCommand> _playerMoves = new List<GameCommand>();
 
         public PuzzleStatus Status { get; private set; } = PuzzleStatus.NotStarted;
         public GameState State => _state;                 // live position (for the UI to render)
         public string Attacker => _attacker;
+        public int PlayerTurnLimit => _playerTurnLimit;
+        public int FinalPlayerTurnsStarted => _finalPlayerTurnsStarted;
         public bool StillWinning { get; private set; }    // is a forced lethal still available from here?
         public string Message { get; private set; }       // short feedback for the UI
         public int HintsRevealed { get; private set; }
@@ -62,27 +66,43 @@ namespace OnePieceTcg.Engine.Puzzles
         /// the doubt (no false fail).</summary>
         public LethalSolver.Options StuckCheckOpts = new LethalSolver.Options { WorkBudget = 70_000 };
 
+        public ForcedWinSolver.Options ForcedSolveOpts = new ForcedWinSolver.Options
+        {
+            WorkBudget = 1_200_000,
+            MaxDepth = 140,
+            MaxPlayerTurns = 2,
+        };
+
+        public ForcedWinSolver.Options ForcedStuckCheckOpts = new ForcedWinSolver.Options
+        {
+            WorkBudget = 350_000,
+            MaxDepth = 140,
+            MaxPlayerTurns = 2,
+        };
+
         /// <summary>Begin from a live position. Returns false (and marks Failed) if it is NOT a valid lethal
         /// puzzle — i.e. the solver cannot prove a forced win for the attacker. A valid puzzle must start Win.</summary>
-        public bool Start(GameState position, string attackerSeat)
+        public bool Start(GameState position, string attackerSeat, int playerTurnLimit = 1)
         {
             _attacker = attackerSeat;
             _state = GameClone.Clone(position);
+            _playerTurnLimit = Math.Max(1, playerTurnLimit);
+            int includedCurrentTurn = _state.ActiveSeat == _attacker ? 1 : 0;
+            _finalPlayerTurnsStarted = _state.Players[_attacker].TurnsStarted
+                + _playerTurnLimit - includedCurrentTurn;
             _playerMoves.Clear();
             HintsRevealed = 0;
             AdvanceThroughNonPlayer();
-            var proof = LethalSolver.Solve(_state, _attacker, SolveOpts);
-            StillWinning = proof.Outcome == LethalSolver.Lethal.Win;
+            string failedReason;
+            StillWinning = ProvesWin(_state, fullBudget: true, out failedReason);
             if (!StillWinning)
             {
                 Status = PuzzleStatus.Failed;
-                Message = proof.Outcome == LethalSolver.Lethal.Unknown
-                    ? "Could not verify a forced win here (too complex for the budget)."
-                    : "This position has no forced lethal.";
+                Message = failedReason;
                 return false;
             }
             Status = PuzzleStatus.InProgress;
-            Message = "Find the lethal line.";
+            Message = _playerTurnLimit > 1 ? "Force the win across both turns." : "Find the lethal line.";
             return true;
         }
 
@@ -149,7 +169,7 @@ namespace OnePieceTcg.Engine.Puzzles
             for (int guard = 0; guard < 200; guard++)
             {
                 if (_state.Status == "finished") return;
-                if (_state.ActiveSeat != _attacker) return;                 // turn ended
+                if (_playerTurnLimit <= 1 && _state.ActiveSeat != _attacker) return; // one-turn puzzle ended
                 string decider = LethalSolver.DecidingSeat(_state, _attacker);
                 if (decider == _attacker) return;                          // player's decision
                 var defense = StrongestDefense(_state, decider);
@@ -173,6 +193,30 @@ namespace OnePieceTcg.Engine.Puzzles
             if (legal.Count == 0) return default;
             if (legal.Count == 1) return legal[0];
 
+            if (_playerTurnLimit > 1)
+            {
+                KeyValuePair<GameCommand, GameState> bestForced = default;
+                int bestForcedRank = -1;
+                long bestForcedWork = -1;
+                foreach (var kv in legal)
+                {
+                    var r = ForcedWinSolver.Solve(kv.Value, _attacker, ForcedOptions(120_000));
+                    int rank = r.Outcome switch
+                    {
+                        ForcedWinSolver.ForcedWin.NoWin => 2,  // refuting response
+                        ForcedWinSolver.ForcedWin.Unknown => 1,
+                        _ => 0,
+                    };
+                    if (rank > bestForcedRank || (rank == bestForcedRank && r.Work > bestForcedWork))
+                    {
+                        bestForcedRank = rank;
+                        bestForcedWork = r.Work;
+                        bestForced = kv;
+                    }
+                }
+                return bestForced;
+            }
+
             // Small budget: these are tiny battle-step positions and this runs synchronously on Unity's Mono
             // runtime after every attack, so a deep solve here freezes the UI. 40k is ample to rank defenses.
             var defenseOpts = new LethalSolver.Options { WorkBudget = 40_000 };
@@ -195,6 +239,19 @@ namespace OnePieceTcg.Engine.Puzzles
                 Status = won ? PuzzleStatus.Solved : PuzzleStatus.Failed;
                 StillWinning = won;
                 Message = won ? "Solved — that's lethal!" : "That line doesn't win.";
+                return;
+            }
+            if (_playerTurnLimit > 1)
+            {
+                var forced = ForcedWinSolver.Solve(_state, _attacker, ForcedOptions(ForcedStuckCheckOpts.WorkBudget));
+                StillWinning = forced.Outcome == ForcedWinSolver.ForcedWin.Win;
+                if (forced.Outcome == ForcedWinSolver.ForcedWin.NoWin)
+                {
+                    Status = PuzzleStatus.Failed;
+                    Message = "The forced win is gone — this sequence lets the opponent escape.";
+                    return;
+                }
+                Message = "Force the win across both turns.";
                 return;
             }
             // Turn ended without lethal = the player is out of chances on this puzzle -> a real fail (this is
@@ -235,12 +292,53 @@ namespace OnePieceTcg.Engine.Puzzles
         public HintGenerator.Hint Hint(int level)
         {
             HintsRevealed = Math.Max(HintsRevealed, level);
+            if (_playerTurnLimit > 1)
+            {
+                var forced = ForcedWinSolver.Solve(_state, _attacker, ForcedOptions(ForcedSolveOpts.WorkBudget));
+                return HintGenerator.GenerateForced(_state, _attacker, forced)
+                    .FirstOrDefault(h => h.Level == level);
+            }
             var proof = LethalSolver.Solve(_state, _attacker, SolveOpts);
             return HintGenerator.Generate(_state, _attacker, proof).FirstOrDefault(h => h.Level == level);
         }
 
         /// <summary>Reset to a starting position and play again.</summary>
-        public bool Restart(GameState position) => Start(position, _attacker);
+        public bool Restart(GameState position) => Start(position, _attacker, _playerTurnLimit);
+
+        public void GiveUp()
+        {
+            if (Status != PuzzleStatus.InProgress) return;
+            Status = PuzzleStatus.Failed;
+            StillWinning = false;
+            Message = "Attempt ended.";
+        }
+
+        private ForcedWinSolver.Options ForcedOptions(long budget) => new ForcedWinSolver.Options
+        {
+            WorkBudget = budget,
+            MaxDepth = ForcedSolveOpts.MaxDepth,
+            MaxPlayerTurns = _playerTurnLimit,
+            FinalPlayerTurnsStarted = _finalPlayerTurnsStarted,
+        };
+
+        private bool ProvesWin(GameState position, bool fullBudget, out string failedReason)
+        {
+            if (_playerTurnLimit <= 1)
+            {
+                var proof = LethalSolver.Solve(position, _attacker, SolveOpts);
+                failedReason = proof.Outcome == LethalSolver.Lethal.Unknown
+                    ? "Could not verify a forced win here (too complex for the budget)."
+                    : "This position has no forced lethal.";
+                return proof.Outcome == LethalSolver.Lethal.Win;
+            }
+
+            var forced = ForcedWinSolver.Solve(position, _attacker,
+                ForcedOptions(fullBudget ? ForcedSolveOpts.WorkBudget : ForcedStuckCheckOpts.WorkBudget));
+            failedReason = forced.Outcome == ForcedWinSolver.ForcedWin.Unknown
+                ? "Could not verify the multi-turn forced win within the search budget."
+                : "This position has no forced win within the turn limit.";
+            return forced.Outcome == ForcedWinSolver.ForcedWin.Win;
+        }
 
         // Two commands are "the same move" if their action + the ids that identify it match. (Order-only
         // fields the engine fills in are ignored.)

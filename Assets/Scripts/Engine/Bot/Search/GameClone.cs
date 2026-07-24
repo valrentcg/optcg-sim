@@ -24,6 +24,7 @@ namespace OnePieceTcg.Engine.Bot.Search
                 DeckLook = CloneDeckLook(s.DeckLook),
                 PendingCharReplace = CloneCharReplace(s.PendingCharReplace),
                 ActiveChoice = CloneChoice(s.ActiveChoice),
+                DeferredActivatedTriggerSeat = s.DeferredActivatedTriggerSeat,
             };
             g.PendingEffects = s.PendingEffects.Select(ClonePE).ToList();
             g.CommandHistory = new List<GameCommand>(s.CommandHistory);
@@ -81,7 +82,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             OriginalText = e.OriginalText,
             DoneParts = e.DoneParts != null ? new System.Collections.Generic.List<string>(e.DoneParts) : new System.Collections.Generic.List<string>(),
             SkippedParts = e.SkippedParts != null ? new System.Collections.Generic.List<string>(e.SkippedParts) : new System.Collections.Generic.List<string>(),
-            OnceKey = e.OnceKey,
+            OnceKey = e.OnceKey, FinalizesActivatedTrigger = e.FinalizesActivatedTrigger,
         };
 
         private static CardModifier CloneCM(CardModifier m) => new CardModifier

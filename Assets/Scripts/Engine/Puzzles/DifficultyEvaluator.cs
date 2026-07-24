@@ -75,13 +75,12 @@ namespace OnePieceTcg.Engine.Puzzles
         // Short human title, themed on the dominant difficulty driver (mirrors the generated-puzzle titles).
         public static string TitleFor(GameState pos, string attacker, LethalSolver.Result solved)
         {
+            // Do not put the answer in the title. The old titles ("Develop, then close", "Break the wall",
+            // "Spread your DON!!") disclosed the required motif before the player made a decision.
             var f = Extract(pos, attacker, solved);
-            if (f.SetupPlays > 0) return "Develop, then close";
-            if (f.Activates > 0) return "Ability unlocks lethal";
-            if (f.Blockers > 0) return "Break the wall";
-            if (f.CounterCards >= 2) return "Beat the counters";
-            if (f.DonMoves >= 2) return "Spread your DON!!";
-            return "Find the exact line";
+            if (f.Work >= 30_000) return "No Room for Error";
+            if (f.Attacks >= 4) return "The Narrow Path";
+            return "Find the Exact Line";
         }
 
         public static string LessonFor(GameState pos, string attacker, LethalSolver.Result solved)

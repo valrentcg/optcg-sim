@@ -26,8 +26,21 @@ public static class HarvestedPuzzleStore
             if (!File.Exists(FilePath)) return _cache;
             var set = JsonUtility.FromJson<HarvestedPuzzleSet>(File.ReadAllText(FilePath));
             if (set?.puzzles == null) return _cache;
+            int rejectedLegacy = 0;
             foreach (var hp in set.puzzles)
-                if (hp != null) _cache.Add(hp.ToAuthored());
+            {
+                // Old harvested files proved only that lethal existed. They included any-order alpha strikes,
+                // so never silently promote an unstamped legacy position into the Hard/Expert library.
+                if (hp?.Quality == null || hp.Quality.Version < PuzzleQualityAnalyzer.CurrentVersion
+                    || !hp.Quality.Passed)
+                {
+                    rejectedLegacy++;
+                    continue;
+                }
+                _cache.Add(hp.ToAuthored());
+            }
+            if (rejectedLegacy > 0)
+                Debug.LogWarning($"[HarvestedPuzzleStore] Rejected {rejectedLegacy} unstamped/low-quality harvested puzzle(s). Re-run puzzleharvest.");
         }
         catch (System.Exception ex)
         {

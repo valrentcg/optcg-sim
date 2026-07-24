@@ -600,7 +600,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         "[On Play]", "[Activate: Main]", "[When Attacking]", "[On Block]", "[On K.O.]",
         "[Main]", "[Counter]", "[Trigger]", "[End of Your Turn]", "[Start of Your Turn]",
-        "[On Your Opponent's Attack]", "[End of Opponent's Turn]",
+        "[On Your Opponent's Attack]", "[End of Your Opponent's Turn]", "[End of Opponent's Turn]",
     };
 
     private static string NormalizeEffectText(string text)
@@ -6547,6 +6547,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         moveZoneAnchors["life:" + seat] = life;
         // At the end of the match, reveal BOTH players' remaining Life cards face-up (View Board);
         // during play they stay hidden.
+        // Puzzle proofs know the exact Life order, but the player sees normal game information: only cards
+        // explicitly turned face-up by an effect (or the finished-match reveal) show their face.
         AddLifeStackToZone(life, p.Life.Count, top, seat, p.Life, RevealFinishedInfo());
         // "Add from the top or bottom of your Life" effects (Zeus OP11-106): overlay this Life zone
         // with clickable TOP / BOTTOM halves so the player picks the card right on the board.
@@ -7492,7 +7494,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             Sprite lifeFace = faceUp ? GetCardSprite(lifeCards[i].CardId) : null;
             RoundedCardVisual(lifeFace != null ? "Life Face" : "Life Back", card, lifeFace ?? GetBackSprite(), out var img);
             img.raycastTarget = false;
-            card.gameObject.AddComponent<BackHover>().Init(this);
+            // The hover preview must match what this exact Life card is showing on the board. Previously every
+            // Life slot used BackHover unconditionally, so effect-revealed Life still previewed as a card
+            // back even though its board art was face-up.
+            card.gameObject.AddComponent<BackHover>().Init(
+                this, isDonBack: false, faceUpCard: faceUp ? lifeCards[i] : null);
             // Per-CARD presence: the opponent's glow lands on this exact Life card,
             // not the whole Life region.
             if (isNetworked && seat != null)
@@ -8889,7 +8895,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             case "activateMain":        return "Activate: Main";
             case "onKo":                return "On KO";
             case "endOfYourTurn":       return "End of Your Turn";
-            case "endOfOpponentsTurn":  return "End of Opponent's Turn";
+            case "endOfOpponentsTurn":  return "End of Your Opponent's Turn";
             case "startOfYourTurn":     return "Start of Your Turn";
             case "counter":             return "Counter";
             case "onBlock":             return "On Block";
@@ -10693,9 +10699,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // Hotseat/Versus Self is unaffected (isNetworked is false there).
                 // At the end of the match we reveal the opponent's hand (RevealFinishedInfo, win or
                 // lose) — the local hand is already face-up, so this only flips the top one.
-                // Puzzle mode hides the opponent's hand too: it's single-player, but you must find the lethal
-                // WITHOUT seeing their cards (the solver knows them; you don't).
-                handFaceUp = RevealFinishedInfo() || !(top && (isNetworked || aiSeat == TopSeat || isPuzzle));
+                // Puzzle mode preserves the normal hidden-information boundary. The proof oracle can know the
+                // configured defense without turning the exercise into a visible-hand calculation.
+                handFaceUp = RevealFinishedInfo()
+                    || !(top && (isNetworked || aiSeat == TopSeat || isPuzzle));
             }
             AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top && !IsReplayRotated, count - 1 - i);
             holders[i] = holder;
@@ -13539,11 +13546,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         private Vector2 originalOutlineDistance;
         private RectTransform hoverGlow;
         private bool donBack;
+        private CardInstance faceUpCard;
 
-        public void Init(GameManager owner, bool isDonBack = false)
+        public void Init(GameManager owner, bool isDonBack = false, CardInstance faceUpCard = null)
         {
             manager = owner;
             donBack = isDonBack;
+            this.faceUpCard = faceUpCard;
             outline = GetComponent<Outline>();
             if (outline != null)
             {
@@ -13554,7 +13563,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         public void OnPointerEnter(PointerEventData eventData)
         {
-            if (donBack) manager.ShowDonBackPreview();
+            if (faceUpCard != null) manager.ShowPreview(faceUpCard, true);
+            else if (donBack) manager.ShowDonBackPreview();
             else manager.ShowBackPreview();
             ShowHoverGlow();
         }
