@@ -140,7 +140,7 @@ namespace OnePieceTcg.Sealed
         private void BuildFilterRail()
         {
             var rail = SealedUI.Panel(body, "Filters", SealedUI.PanelBg2);
-            SealedUI.Stretch(rail, new Vector2(0f, 0f), new Vector2(0.17f, 0.94f));
+            SealedUI.Stretch(rail, new Vector2(0f, 0f), new Vector2(0.145f, 0.94f));
             var col = SealedUI.ScrollColumn(rail, "Filter");
             SealedUI.Stretch(col.parent as RectTransform, new Vector2(0.03f, 0.01f), new Vector2(0.97f, 0.99f));
 
@@ -169,11 +169,17 @@ namespace OnePieceTcg.Sealed
         }
 
         private RectTransform gridHost;
+        /// <summary>Usable width of the card grid, used to derive the column count. Taken from the live
+        /// rect when it has been laid out, else from the canvas reference width times the grid's anchor
+        /// span — a freshly-created rect reads 0 on the first frame, which would collapse to 1 column.</summary>
+        private float gridWidth = 1240f;
 
         private void BuildGrid()
         {
             var host = SealedUI.Panel(body, "Pool", new Color(0, 0, 0, 0));
-            SealedUI.Stretch(host, new Vector2(0.17f, 0f), new Vector2(0.76f, 0.94f));
+            SealedUI.Stretch(host, new Vector2(0.145f, 0f), new Vector2(0.795f, 0.94f));
+            float live = host.rect.width;
+            gridWidth = live > 200f ? live : 1920f * (0.795f - 0.145f);
             gridHost = SealedUI.ScrollColumn(host, "Pool", 6f);
             SealedUI.Stretch(gridHost.parent as RectTransform, new Vector2(0.01f, 0.01f), new Vector2(0.99f, 0.99f));
             RefreshGrid();
@@ -204,12 +210,16 @@ namespace OnePieceTcg.Sealed
                 var grid = new GameObject("Grid", typeof(RectTransform)).GetComponent<RectTransform>();
                 grid.SetParent(gridHost, false);
                 var g = grid.gameObject.AddComponent<GridLayoutGroup>();
-                g.cellSize = new Vector2(84f, 118f);
-                g.spacing = new Vector2(6f, 6f);
+                g.cellSize = new Vector2(132f, 184f);
+                g.spacing = new Vector2(8f, 8f);
                 g.childAlignment = TextAnchor.UpperLeft;
-                int cols = 8;
+                // Rows are derived from the ACTUAL width the grid gets, not a guessed column
+                // count, so the cards fill the row at any window size instead of leaving a dead margin.
+                int cols = Mathf.Max(1, Mathf.FloorToInt((gridWidth + 8f) / (132f + 8f)));
+                g.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+                g.constraintCount = cols;
                 int rows = Mathf.CeilToInt(group.Count / (float)cols);
-                grid.gameObject.AddComponent<LayoutElement>().preferredHeight = rows * 124f;
+                grid.gameObject.AddComponent<LayoutElement>().preferredHeight = rows * 192f;
 
                 foreach (var id in group.CardIds) AddCardCell(grid, id);
             }
@@ -265,7 +275,7 @@ namespace OnePieceTcg.Sealed
         private void BuildStatsPanel()
         {
             var panel = SealedUI.Panel(body, "Stats", SealedUI.PanelBg2);
-            SealedUI.Stretch(panel, new Vector2(0.76f, 0f), new Vector2(1f, 0.94f));
+            SealedUI.Stretch(panel, new Vector2(0.795f, 0f), new Vector2(1f, 0.94f));
             statsHost = SealedUI.ScrollColumn(panel, "Stats", 3f);
             SealedUI.Stretch(statsHost.parent as RectTransform, new Vector2(0.05f, 0.01f), new Vector2(0.95f, 0.99f));
             RefreshStats();
@@ -354,7 +364,7 @@ namespace OnePieceTcg.Sealed
             preview = SealedUI.Panel(root, "Preview", sprite != null ? Color.white : new Color32(24, 36, 52, 250));
             preview.anchorMin = preview.anchorMax = new Vector2(0.5f, 0.5f);
             preview.pivot = new Vector2(0.5f, 0.5f);
-            preview.sizeDelta = new Vector2(300f, 420f);
+            preview.sizeDelta = new Vector2(420f, 588f);
             preview.SetAsLastSibling();
             var img = preview.GetComponent<Image>();
             if (sprite != null) { img.sprite = sprite; img.preserveAspect = true; }

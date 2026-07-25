@@ -32,6 +32,10 @@ namespace OnePieceTcg.Sealed
         private Action onComplete;
         private bool skipRequested;
         private readonly Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
+        /// <summary>The real OPTCG card back, shown while a card is still face-down. Same asset the
+        /// match view uses (StreamingAssets/Cards/optcg_card_back.jpg), so a higher-quality file
+        /// dropped in there is picked up everywhere at once.</summary>
+        private Sprite backSprite;
 
         private static readonly Color Ink = new Color32(238, 242, 247, 255);
         private static readonly Color Muted = new Color32(159, 171, 190, 255);
@@ -68,6 +72,7 @@ namespace OnePieceTcg.Sealed
             // back to its name placeholder — which is why almost nothing showed art. Every id is known
             // up front, so fetch them all first and the sequence then runs entirely from cache.
             counter.text = "PREPARING PACKS…";
+            KickBackLoad();
             yield return StartCoroutine(PreloadArt(pool.Packs.SelectMany(p => p.Cards).Select(c => c.CardId)));
 
             for (int i = 0; i < pool.Packs.Count && !skipRequested; i++)
@@ -205,10 +210,13 @@ namespace OnePieceTcg.Sealed
             holder.sizeDelta = new Vector2(150f, 210f);
             holder.anchoredPosition = new Vector2(0f, -30f);
 
-            var face = Panel(holder, "Face", new Color32(28, 40, 58, 255));
+            // Face-DOWN to begin with: a card coming out of a pack is a card back until it turns over.
+            // Previously this was a flat navy rectangle, which lost the whole "what did I pull" moment.
+            var face = Panel(holder, "Face", Color.white);
             Stretch(face, Vector2.zero, Vector2.one);
             var faceImg = face.GetComponent<Image>();
-            faceImg.color = new Color32(24, 36, 52, 255);
+            if (backSprite != null) { faceImg.sprite = backSprite; faceImg.preserveAspect = true; }
+            else faceImg.color = new Color32(24, 36, 52, 255);
 
             // Rise out of the pack.
             float t = 0f;
@@ -222,10 +230,10 @@ namespace OnePieceTcg.Sealed
 
             // Flip: squash to zero width, swap in the face, expand back.
             t = 0f;
-            while (t < 0.06f)
+            while (t < 0.11f)
             {
                 t += Time.unscaledDeltaTime;
-                holder.localScale = new Vector3(1f - Mathf.Clamp01(t / 0.06f), 1f, 1f);
+                holder.localScale = new Vector3(1f - Mathf.Clamp01(t / 0.11f), 1f, 1f);
                 yield return null;
             }
 
@@ -236,10 +244,10 @@ namespace OnePieceTcg.Sealed
             if (card.IsParallel) AddFoilTint(face);
 
             t = 0f;
-            while (t < 0.07f)
+            while (t < 0.13f)
             {
                 t += Time.unscaledDeltaTime;
-                holder.localScale = new Vector3(Mathf.Clamp01(t / 0.07f), 1f, 1f);
+                holder.localScale = new Vector3(Mathf.Clamp01(t / 0.13f), 1f, 1f);
                 yield return null;
             }
             holder.localScale = Vector3.one;
@@ -247,6 +255,7 @@ namespace OnePieceTcg.Sealed
             // Celebrate a hit.
             var tier = TierOf(card);
             if (tier != HitTier.None) yield return StartCoroutine(Celebrate(stage, holder, tier));
+            else yield return WaitUnscaled(0.10f);   // a beat to read the card before it tucks away
 
             // Tuck into the stack along the bottom. For an ordinary card this runs DETACHED so the next
             // card starts rising immediately — the cards flow out continuously instead of the sequence
@@ -426,6 +435,27 @@ namespace OnePieceTcg.Sealed
                 waited += Time.unscaledDeltaTime;
                 yield return null;
             }
+        }
+
+        /// <summary>Load the shared card back. Same candidates and same order the match view uses, so
+        /// whatever file is dropped in for the board is what the pack reveal shows too.</summary>
+        private async void KickBackLoad()
+        {
+            try
+            {
+                while (!CardAssets.Ready) await System.Threading.Tasks.Task.Yield();
+                var rel = CardAssets.FirstExisting(new[]
+                {
+                    "optcg_card_back.jpg", "optcg_card_back.png", "backs/CardBackRegular.png",
+                });
+                if (string.IsNullOrEmpty(rel)) return;
+                var bytes = await CardAssets.ReadBytesAsync(rel);
+                if (bytes == null || bytes.Length == 0) return;
+                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                if (!tex.LoadImage(bytes)) return;
+                backSprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+            }
+            catch (Exception e) { Debug.LogWarning("[SealedPackOpening] card back load failed: " + e.Message); }
         }
 
         private Sprite GetSprite(string cardId)
