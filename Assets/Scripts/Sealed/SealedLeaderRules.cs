@@ -64,8 +64,11 @@ namespace OnePieceTcg.Sealed
                 life: 5,
                 counter: 0,
                 keywords: null,
-                effect: "Under the rules of this game, this Leader is every colour, counts as every type, "
-                      + "and counts as every card name.\n(Sealed / Pre-Release only.)",
+                // The printed rules text. Display only — the wildcard behaviour itself is enforced in
+                // code via CardDef.WildcardIdentity, not parsed out of this string.
+                effect: "This Leader can only be used in designated events according to the rules."
+                      + "\nThis Leader is treated as a card with all card names, types, and attributes "
+                      + "according to the rules.",
                 trigger: "",
                 features: new[] { "Straw Hat Crew" },
                 rarity: "L",

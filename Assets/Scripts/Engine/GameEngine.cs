@@ -1626,6 +1626,18 @@ namespace OnePieceTcg.Engine
         /// it to drop such cards from their attacker list, since proposing one is a guaranteed rejected
         /// command. Conditional locks ("If X, this Character cannot attack.") are deliberately NOT covered:
         /// they are state-dependent, and the callers' no-op blacklists absorb a single wasted attempt.</summary>
+        /// <summary>Does <paramref name="def"/> have the ＜attribute＞ named by <paramref name="want"/>?
+        /// The single chokepoint for attribute checks, so a WILDCARD-identity card (the sealed-format
+        /// Rainbow Luffy Leader, printed as being treated as a card with all names, types AND
+        /// attributes) satisfies every one of them. Empty want = no requirement.</summary>
+        public static bool AttributeMatches(CardDef def, string want)
+        {
+            if (string.IsNullOrEmpty(want)) return true;
+            if (def == null) return false;
+            if (def.WildcardIdentity) return true;
+            return string.Equals(def.Attribute ?? "", want, StringComparison.OrdinalIgnoreCase);
+        }
+
         public static bool HasPrintedCannotAttack(GameState state, CardInstance attacker)
         {
             if (attacker == null) return false;
@@ -3818,7 +3830,7 @@ namespace OnePieceTcg.Engine
                                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                             if (oaAttrM.Success)
                             {
-                                if (!string.Equals(GetCard(attacker)?.Attribute ?? "", oaAttrM.Groups[1].Value, StringComparison.OrdinalIgnoreCase)) { oaClause = null; break; }
+                                if (!AttributeMatches(GetCard(attacker), oaAttrM.Groups[1].Value)) { oaClause = null; break; }
                                 oaClause = oaAttrM.Groups[2].Value.Trim();
                             }
                             // Keep a [Once Per Turn] prefix (stripped by the regex) for the gates below.
@@ -5749,7 +5761,7 @@ namespace OnePieceTcg.Engine
                         // guards only ＜Slash＞ Characters). Was unchecked → protected any-attribute Character.
                         var attrVM = System.Text.RegularExpressions.Regex.Match(line, @"your [＜<]?([A-Za-z]+)[＞>] attribute",
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                        if (attrVM.Success && !string.Equals(GetCard(victim).Attribute ?? "", attrVM.Groups[1].Value, StringComparison.OrdinalIgnoreCase)) continue;
+                        if (attrVM.Success && !AttributeMatches(GetCard(victim), attrVM.Groups[1].Value)) continue;
                         // "your Character with N power or more/less" (OP05-001 Sabo leader — protects only a
                         // Character with 5000+ CURRENT power). Was unfiltered → protected any Character.
                         // "with N power or more/less" (current power) OR "with N BASE power or more/less"
@@ -6295,7 +6307,7 @@ namespace OnePieceTcg.Engine
             // attacker's attribute against the holder's.
             string holderAttr = GetCard(instance)?.Attribute ?? "";
             bool sameAttr = !string.IsNullOrEmpty(holderAttr)
-                && string.Equals(holderAttr, atkDef?.Attribute ?? "", StringComparison.OrdinalIgnoreCase);
+                && AttributeMatches(atkDef, holderAttr);
             foreach (var line in text.Split('\n'))
             {
                 if (!ContainsAll(line, "cannot be K.O.'d in battle")) continue;
@@ -6319,7 +6331,7 @@ namespace OnePieceTcg.Engine
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 string refAttr = attrRef.Success ? attrRef.Groups[1].Value.Trim() : holderAttr;
                 bool atkIsRef = !string.IsNullOrEmpty(refAttr)
-                    && string.Equals(atkDef?.Attribute ?? "", refAttr, StringComparison.OrdinalIgnoreCase);
+                    && AttributeMatches(atkDef, refAttr);
                 // "by ＜X＞ attribute Leaders or Characters" (P-007 Luffy) — the attacker (either type) must be
                 // X-attribute. Check this BEFORE byChars, whose "attribute Characters" substring won't match the
                 // "Leaders or Characters" phrasing, which would otherwise leave the attribute filter unapplied
@@ -7459,7 +7471,7 @@ namespace OnePieceTcg.Engine
                 string wantAttr = m.Groups[1].Success ? m.Groups[1].Value.Trim()
                     : (FindCardInstance(state, sourceInstanceId) is CardInstance sc ? GetCard(sc)?.Attribute ?? "" : "");
                 return lead != null && !string.IsNullOrEmpty(wantAttr)
-                    && string.Equals(GetCard(lead)?.Attribute ?? "", wantAttr, StringComparison.OrdinalIgnoreCase);
+                    && AttributeMatches(GetCard(lead), wantAttr);
             }
             // "your opponent's Character has been K.O.'d during this turn" (OP16-100)
             if (ContainsAll(condition, "opponent's Character has been K.O.'d") && ContainsAll(condition, "this turn"))
@@ -8355,7 +8367,7 @@ namespace OnePieceTcg.Engine
                 {
                     bool anyAttr = false;
                     foreach (System.Text.RegularExpressions.Match m in atMatches)
-                        if (string.Equals(def.Attribute ?? "", m.Groups[1].Value.Trim(), StringComparison.OrdinalIgnoreCase)) { anyAttr = true; break; }
+                        if (AttributeMatches(def, m.Groups[1].Value.Trim())) { anyAttr = true; break; }
                     // If the clause offers an "or {Type}"/"or <color> Event" alternative, let the {Tag}
                     // path below (or the caller's colour check) also get a chance; otherwise the
                     // attribute is the sole filter, so a non-match fails here.

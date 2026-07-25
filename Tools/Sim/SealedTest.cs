@@ -257,6 +257,27 @@ namespace OnePieceTcg.Sim
             Check("Rainbow Luffy counts as every type", rainbow.HasFeature("Land of Wano")
                 && rainbow.HasFeature("Straw Hat Crew") && rainbow.HasFeature("Navy"));
 
+            // The card is printed as being treated as a card with all names, types AND attributes.
+            // Attributes drive real effects (battle-K.O.-immunity clauses key off them), so every
+            // attribute check must match too - not just names and types.
+            Check("Rainbow Luffy counts as every attribute",
+                GameEngine.AttributeMatches(rainbow, "Slash")
+                && GameEngine.AttributeMatches(rainbow, "Strike")
+                && GameEngine.AttributeMatches(rainbow, "Ranged")
+                && GameEngine.AttributeMatches(rainbow, "Special")
+                && GameEngine.AttributeMatches(rainbow, "Wisdom"));
+
+            // ...while an ordinary card still matches only its own printed attribute.
+            var plainStrike = CardData.Library.Values.FirstOrDefault(d => d.Attribute == "Strike" && !d.WildcardIdentity);
+            if (plainStrike != null)
+                Check("a normal card still matches only its own attribute",
+                    GameEngine.AttributeMatches(plainStrike, "Strike")
+                    && !GameEngine.AttributeMatches(plainStrike, "Wisdom"));
+
+            Check("Rainbow Luffy matches the printed card: 5000 power, 5 Life, Strike, Straw Hat Crew",
+                rainbow.Power == 5000 && rainbow.Life == 5
+                && rainbow.Attribute == "Strike" && rainbow.Rarity == "L");
+
             var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st02", Seed = "rainbow" });
             var leaderInst = new CardInstance { InstanceId = "rl", CardId = SealedLeaderRules.RainbowLuffyId, Owner = "south", Zone = "leader" };
             Check("Rainbow Luffy counts as every card name",
