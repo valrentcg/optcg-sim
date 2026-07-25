@@ -120,9 +120,8 @@ namespace OnePieceTcg.Sealed
             if (SealedCatalog.Available().Count == 0)
             {
                 var err = SealedUI.Label(screenRoot, "NoSets",
-                    "No booster sets are available.
-
-The card library did not load, so there is nothing to open.",
+                    "No booster sets are available."
+                    + "\n\nThe card library did not load, so there is nothing to open.",
                     15, SealedUI.Bad, TextAnchor.MiddleCenter);
                 SealedUI.Stretch(err.rectTransform, new Vector2(0.1f, 0.35f), new Vector2(0.9f, 0.6f));
                 return;
