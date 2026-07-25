@@ -62,7 +62,7 @@ namespace OnePieceTcg.Sealed
             var backdrop = Panel(root, "Opening Backdrop", new Color32(6, 10, 16, 252));
             Stretch(backdrop, Vector2.zero, Vector2.one);
 
-            var counter = Text(backdrop, "Pack Counter", "", 15, Muted, TextAnchor.UpperCenter);
+            var counter = Text(backdrop, "Pack Counter", "", 26, Muted, TextAnchor.UpperCenter);
             Stretch(counter.rectTransform, new Vector2(0.1f, 0.90f), new Vector2(0.9f, 0.96f));
 
             AddButton(backdrop, "SKIP", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip);
@@ -97,13 +97,13 @@ namespace OnePieceTcg.Sealed
             var packRt = Panel(stage, "Pack", Color.white);
             packRt.anchorMin = packRt.anchorMax = new Vector2(0.5f, 0.52f);
             packRt.pivot = new Vector2(0.5f, 0.5f);
-            packRt.sizeDelta = new Vector2(220f, 320f);
+            packRt.sizeDelta = new Vector2(430f, 601f);
             var packImg = packRt.GetComponent<Image>();
             packImg.sprite = SealedPackArt.For(pool.SetCode);
             packImg.preserveAspect = true;
 
-            var hint = Text(stage, "Hint", "click to open", 13, Muted, TextAnchor.MiddleCenter);
-            Stretch(hint.rectTransform, new Vector2(0.3f, 0.16f), new Vector2(0.7f, 0.22f));
+            var hint = Text(stage, "Hint", "click to open", 18, Muted, TextAnchor.MiddleCenter);
+            Stretch(hint.rectTransform, new Vector2(0.3f, 0.10f), new Vector2(0.7f, 0.16f));
 
             // Idle breathing until the player taps (or ~1.6s passes, so it never blocks).
             bool tapped = false;
@@ -161,8 +161,8 @@ namespace OnePieceTcg.Sealed
             var strip = Panel(stage, "Pack Top", Color.white);
             strip.anchorMin = strip.anchorMax = new Vector2(0.5f, 0.52f);
             strip.pivot = new Vector2(0.5f, 0.5f);
-            strip.sizeDelta = new Vector2(224f, 40f);
-            strip.anchoredPosition = new Vector2(0f, 150f);
+            strip.sizeDelta = new Vector2(436f, 76f);
+            strip.anchoredPosition = new Vector2(0f, 282f);
             var stripImg = strip.GetComponent<Image>();
             stripImg.sprite = SealedPackArt.For(pool.SetCode);
             stripImg.color = new Color(0.8f, 0.8f, 0.85f, 1f);
@@ -172,8 +172,8 @@ namespace OnePieceTcg.Sealed
             var glow = Panel(stage, "Tear Glow", TierColour(tier));
             glow.anchorMin = glow.anchorMax = new Vector2(0.5f, 0.52f);
             glow.pivot = new Vector2(0.5f, 0.5f);
-            glow.sizeDelta = new Vector2(40f, 20f);
-            glow.anchoredPosition = new Vector2(0f, 128f);
+            glow.sizeDelta = new Vector2(70f, 34f);
+            glow.anchoredPosition = new Vector2(0f, 242f);
             var glowImg = glow.GetComponent<Image>();
 
             float t = 0f;
@@ -185,13 +185,13 @@ namespace OnePieceTcg.Sealed
 
                 if (strip != null)
                 {
-                    strip.anchoredPosition = new Vector2(Mathf.Lerp(0f, 120f, k), Mathf.Lerp(150f, 260f, k));
+                    strip.anchoredPosition = new Vector2(Mathf.Lerp(0f, 230f, k), Mathf.Lerp(282f, 480f, k));
                     strip.localRotation = Quaternion.Euler(0, 0, Mathf.Lerp(0f, 38f, k));
                     var c = stripImg.color; c.a = 1f - k; stripImg.color = c;
                 }
                 if (glow != null)
                 {
-                    glow.sizeDelta = new Vector2(Mathf.Lerp(40f, 300f, k), Mathf.Lerp(20f, 120f, k));
+                    glow.sizeDelta = new Vector2(Mathf.Lerp(70f, 560f, k), Mathf.Lerp(34f, 220f, k));
                     var gc = glowImg.color; gc.a = Mathf.Sin(k * Mathf.PI) * 0.85f; glowImg.color = gc;
                 }
                 yield return null;
@@ -207,7 +207,7 @@ namespace OnePieceTcg.Sealed
             var holder = Panel(stage, "Card " + card.CardId, new Color(0, 0, 0, 0));
             holder.anchorMin = holder.anchorMax = new Vector2(0.5f, 0.52f);
             holder.pivot = new Vector2(0.5f, 0.5f);
-            holder.sizeDelta = new Vector2(150f, 210f);
+            holder.sizeDelta = new Vector2(400f, 559f);
             holder.anchoredPosition = new Vector2(0f, -30f);
 
             // Face-DOWN to begin with: a card coming out of a pack is a card back until it turns over.
@@ -224,7 +224,7 @@ namespace OnePieceTcg.Sealed
             {
                 t += Time.unscaledDeltaTime;
                 float k = Mathf.Clamp01(t / 0.10f);
-                holder.anchoredPosition = new Vector2(0f, Mathf.Lerp(-30f, 40f, Ease(k)));
+                holder.anchoredPosition = new Vector2(0f, Mathf.Lerp(-60f, 60f, Ease(k)));
                 yield return null;
             }
 
@@ -270,7 +270,7 @@ namespace OnePieceTcg.Sealed
 
         private IEnumerator TuckAway(RectTransform holder, int idx)
         {
-            var target = new Vector2(-330f + idx * 56f, -215f);
+            var target = new Vector2(-742f + idx * 135f, -352f);
             Vector2 from = holder != null ? holder.anchoredPosition : Vector2.zero;
             float t = 0f;
             while (t < 0.14f && holder != null)
@@ -278,13 +278,13 @@ namespace OnePieceTcg.Sealed
                 t += Time.unscaledDeltaTime;
                 float k = Ease(Mathf.Clamp01(t / 0.14f));
                 holder.anchoredPosition = Vector2.Lerp(from, target, k);
-                holder.localScale = Vector3.one * Mathf.Lerp(1f, 0.42f, k);
+                holder.localScale = Vector3.one * Mathf.Lerp(1f, 0.31f, k);
                 yield return null;
             }
             if (holder != null)
             {
                 holder.anchoredPosition = target;
-                holder.localScale = Vector3.one * 0.42f;
+                holder.localScale = Vector3.one * 0.31f;
             }
         }
 
@@ -366,8 +366,8 @@ namespace OnePieceTcg.Sealed
             var grid = Panel(parent, "All Cards", new Color(0, 0, 0, 0));
             Stretch(grid, new Vector2(0.04f, 0.10f), new Vector2(0.96f, 0.88f));
             var layout = grid.gameObject.AddComponent<GridLayoutGroup>();
-            layout.cellSize = new Vector2(74f, 104f);
-            layout.spacing = new Vector2(5f, 5f);
+            layout.cellSize = new Vector2(122f, 170f);
+            layout.spacing = new Vector2(7f, 7f);
             layout.childAlignment = TextAnchor.UpperCenter;
 
             foreach (var card in pool.Packs.SelectMany(p => p.Cards))
