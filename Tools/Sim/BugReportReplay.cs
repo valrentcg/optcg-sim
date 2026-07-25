@@ -45,6 +45,60 @@ namespace OnePieceTcg.Sim
             return st;
         }
 
+        /// <summary>Triage view for BOT SUGGESTIONS ("the A.I. should have done X"), filed from the
+        /// in-game right-click menu with the Bot Suggestion toggle. Prints everything needed to judge a
+        /// suggestion: the player's words, which bot tier/seat was driving, the exact matchup, and the
+        /// position it was filed from — every one of which is replayable via `bugreplay &lt;file&gt; &lt;id&gt;`.
+        ///
+        /// Run: dotnet run --project Sim.csproj -c Release -- suggestions [bugs.jsonl]
+        /// </summary>
+        public static int RunSuggestions(string[] args)
+        {
+            string path = args.Length > 1 ? args[1] : DefaultPath();
+            if (!File.Exists(path)) { Console.WriteLine("No bug file at " + path); return 1; }
+            var lines = File.ReadAllLines(path).Where(l => !string.IsNullOrWhiteSpace(l)).ToList();
+
+            int shown = 0, bugs = 0;
+            foreach (var line in lines)
+            {
+                using var doc = JsonDocument.Parse(line);
+                var r = doc.RootElement;
+                string kind = Str(r, "Kind");
+                if (kind != "bot-suggestion") { bugs++; continue; }
+                shown++;
+                bool addressed = r.TryGetProperty("Addressed", out var a) && a.ValueKind == JsonValueKind.True;
+                Console.WriteLine($"── {Str(r, "Id")}  {(addressed ? "[ADDRESSED]" : "[OPEN]")}  {Str(r, "CreatedAtIso")}");
+                Console.WriteLine($"   suggestion : {Str(r, "Description")}");
+                Console.WriteLine($"   bot        : tier={Str(r, "BotDifficulty")} seat={Str(r, "BotSeat")} mode={Str(r, "GameMode")} app={Str(r, "AppVersion")}");
+                Console.WriteLine($"   matchup    : south {Str(r, "SouthLeaderId")} ({Str(r, "SouthDeckId")})  vs  north {Str(r, "NorthLeaderId")} ({Str(r, "NorthDeckId")})");
+                Console.WriteLine($"   position   : turn {r.GetProperty("Turn").GetInt32()} · {Str(r, "Phase")} · {Str(r, "ActiveSeat")} to act · on {Str(r, "CardName")} [{Str(r, "CardId")}]");
+                Console.WriteLine($"   replay     : dotnet run --project Sim.csproj -c Release -- bugreplay \"{path}\" {Str(r, "Id")}");
+                Console.WriteLine();
+            }
+            Console.WriteLine($"{shown} bot suggestion(s); {bugs} ordinary bug report(s) skipped.");
+            if (shown > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("EVALUATING A SUGGESTION — the protocol these fields exist to support:");
+                Console.WriteLine("  1. `bugreplay <file> <id>` rebuilds the EXACT position. Confirm the bot still makes the");
+                Console.WriteLine("     move complained about; if it doesn't, the suggestion is already fixed or mis-remembered.");
+                Console.WriteLine("  2. Decide whether it is a CAPABILITY gap (the bot literally cannot execute that move —");
+                Console.WriteLine("     check the legal-action set) or a JUDGEMENT preference. Capability gaps are safe to fix");
+                Console.WriteLine("     outright; judgement changes must be measured.");
+                Console.WriteLine("  3. Implement it behind a per-seat toggle, then A/B it GLOBALLY (donab-style, both seats,");
+                Console.WriteLine("     paired seeds) over the full meta pool — not just the reported matchup.");
+                Console.WriteLine("  4. Report the reported matchup separately as context, but NEVER judge on it alone: an");
+                Console.WriteLine("     archetype bucket carries a deck-strength bias, so comparing one bucket against 50% is");
+                Console.WriteLine("     a measurement artifact, not a result. Keep/discard on the GLOBAL paired delta + CI.");
+                Console.WriteLine("  5. Re-run `botstall all` before shipping — a behaviour change can open a new decision loop.");
+            }
+            return 0;
+        }
+
+        private static string DefaultPath() =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                "AppData", "LocalLow", "DefaultCompany", "One Piece TCG Simulator", "BugReports", "bugs.jsonl");
+
         public static int Run(string[] args)
         {
             string path = args.Length > 1 ? args[1]
@@ -63,6 +117,9 @@ namespace OnePieceTcg.Sim
             var r = doc.RootElement;
             Console.WriteLine($"=== bug {Str(r, "Id")} — {Str(r, "Description")}");
             Console.WriteLine($"    card={Str(r, "CardId")} {Str(r, "CardName")} turn={r.GetProperty("Turn").GetInt32()} active={Str(r, "ActiveSeat")} app={Str(r, "AppVersion")}");
+            string rKind = Str(r, "Kind");
+            if (!string.IsNullOrEmpty(rKind) && rKind != "bug")
+                Console.WriteLine($"    KIND={rKind}  bot: tier={Str(r, "BotDifficulty")} seat={Str(r, "BotSeat")} mode={Str(r, "GameMode")}");
 
             var cfg = new MatchConfig
             {

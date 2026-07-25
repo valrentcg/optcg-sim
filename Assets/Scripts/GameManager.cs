@@ -3299,15 +3299,63 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             11, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(sub.rectTransform, new Vector2(0.05f, 0.78f), new Vector2(0.95f, 0.86f), Vector2.zero, Vector2.zero);
 
+        // ---- Bug vs. Bot-suggestion toggle ----------------------------------------------------------
+        // Only when a BOT is actually playing (vs AI or Puzzles) — a "the A.I. should have done X"
+        // report is meaningless in PvP/hotseat, where both sides are human. Suggestions capture the same
+        // exact-repro triplet as a bug, PLUS which bot tier/seat was driving, so the proposed line can be
+        // replayed in the reported position and A/B'd against the same matchup.
+        bool botIsPlaying = aiSeat != null || isPuzzle;
+        string reportKind = BugReport.KindBug;
+        System.Action<string> applyKind = null;   // assigned below; also refreshes the placeholder
+        var promptRect = botIsPlaying
+            ? (min: new Vector2(0.05f, 0.615f), max: new Vector2(0.95f, 0.695f))
+            : (min: new Vector2(0.05f, 0.70f), max: new Vector2(0.95f, 0.78f));
+
         var prompt = TextObject("Bug Prompt", panel, "What went wrong? (what you expected vs. what happened)",
             11, Accent2, TextAnchor.UpperLeft);
-        Stretch(prompt.rectTransform, new Vector2(0.05f, 0.70f), new Vector2(0.95f, 0.78f), Vector2.zero, Vector2.zero);
+        Stretch(prompt.rectTransform, promptRect.min, promptRect.max, Vector2.zero, Vector2.zero);
+
+        RectTransform bugPill = null, sugPill = null;
+        if (botIsPlaying)
+        {
+            bugPill = PanelObject("Kind Bug", panel, Accent);
+            Stretch(bugPill, new Vector2(0.05f, 0.705f), new Vector2(0.49f, 0.775f), Vector2.zero, Vector2.zero);
+            Round(bugPill);
+            var bugPillTxt = TextObject("Kind Bug Text", bugPill, "🐛  Bug", 11, BadgeInk, TextAnchor.MiddleCenter, titleFont);
+            Stretch(bugPillTxt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+            sugPill = PanelObject("Kind Suggestion", panel, (Color)new Color32(40, 54, 72, 235));
+            Stretch(sugPill, new Vector2(0.51f, 0.705f), new Vector2(0.95f, 0.775f), Vector2.zero, Vector2.zero);
+            Round(sugPill);
+            var sugPillTxt = TextObject("Kind Suggestion Text", sugPill, "🤖  Bot Suggestion", 11, Ink, TextAnchor.MiddleCenter, titleFont);
+            Stretch(sugPillTxt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
+            var bugImg = bugPill.GetComponent<Image>();
+            var sugImg = sugPill.GetComponent<Image>();
+            // Defined below, once the placeholder exists (it changes with the kind too).
+            applyKind = kind =>
+            {
+                reportKind = kind;
+                bool isBug = kind == BugReport.KindBug;
+                bugImg.color = isBug ? Accent : (Color)new Color32(40, 54, 72, 235);
+                sugImg.color = isBug ? (Color)new Color32(40, 54, 72, 235) : Accent;
+                bugPillTxt.color = isBug ? BadgeInk : Ink;
+                sugPillTxt.color = isBug ? Ink : BadgeInk;
+                title.text = isBug ? "🐛  Report a Bug" : "🤖  Suggest a Bot Improvement";
+                prompt.text = isBug
+                    ? "What went wrong? (what you expected vs. what happened)"
+                    : "What should the bot have done instead, and why is it better?";
+            };
+            bugPill.gameObject.AddComponent<Button>().onClick.AddListener(() => applyKind?.Invoke(BugReport.KindBug));
+            sugPill.gameObject.AddComponent<Button>().onClick.AddListener(() => applyKind?.Invoke(BugReport.KindBotSuggestion));
+        }
 
         // Multi-line input field.
         var fieldGo = new GameObject("Bug Input", typeof(RectTransform), typeof(Image), typeof(InputField));
         var fieldRt = fieldGo.GetComponent<RectTransform>();
         fieldRt.SetParent(panel, false);
-        Stretch(fieldRt, new Vector2(0.05f, 0.22f), new Vector2(0.95f, 0.68f), Vector2.zero, Vector2.zero);
+        Stretch(fieldRt, new Vector2(0.05f, 0.22f),
+            new Vector2(0.95f, botIsPlaying ? 0.60f : 0.68f), Vector2.zero, Vector2.zero);
         fieldGo.GetComponent<Image>().color = new Color32(20, 34, 50, 235);
         Round(fieldRt);
         AddRoundedCardBorder(fieldRt, MenuB, 1f);
@@ -3324,6 +3372,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         field.characterLimit = 1000;
         field.ActivateInputField();
 
+        // Now that the placeholder exists, extend the kind switch to retint it and select Bug initially.
+        if (applyKind != null)
+        {
+            var applyKindBase = applyKind;
+            applyKind = kind =>
+            {
+                applyKindBase(kind);
+                ph.color = Muted;
+                ph.text = kind == BugReport.KindBug
+                    ? "Describe the bug..."
+                    : "e.g. it attacked my Leader instead of K.O.'ing the Blocker that was stopping lethal...";
+            };
+            applyKind(BugReport.KindBug);
+        }
+
         // Submit (captures state now) + Cancel.
         var submit = PanelObject("Bug Submit", panel, Accent);
         Stretch(submit, new Vector2(0.52f, 0.05f), new Vector2(0.95f, 0.17f), Vector2.zero, Vector2.zero);
@@ -3333,10 +3396,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         submit.gameObject.AddComponent<Button>().onClick.AddListener(() =>
         {
             string desc = field.text ?? "";
-            if (string.IsNullOrWhiteSpace(desc)) { ph.text = "Please describe the bug first."; ph.color = (Color)new Color32(232, 120, 120, 255); return; }
-            var report = BugReportStore.Build(state, currentMatchConfig, card, card.Zone, desc.Trim(), localSeat);
+            if (string.IsNullOrWhiteSpace(desc))
+            {
+                ph.text = reportKind == BugReport.KindBug
+                    ? "Please describe the bug first."
+                    : "Please describe what the bot should have done first.";
+                ph.color = (Color)new Color32(232, 120, 120, 255);
+                return;
+            }
+            // Bot context travels with a suggestion so it can be replayed and measured: which tier was
+            // driving, which seat it held, and the mode it was in.
+            string mode = isPuzzle ? "puzzle"
+                : isSandbox ? "sandbox"
+                : aiSeat != null ? "vs-ai"
+                : isNetworked ? "pvp"
+                : "hotseat";
+            var report = BugReportStore.Build(state, currentMatchConfig, card, card.Zone, desc.Trim(), localSeat,
+                reportKind,
+                aiSeat != null ? aiDifficulty : (isPuzzle ? "puzzle-defender" : null),
+                aiSeat,
+                mode);
             bool ok = BugReportStore.Save(report);
-            ShowBugReportConfirmation(panel, ok, report?.Id);
+            ShowBugReportConfirmation(panel, ok, report?.Id, reportKind);
         });
 
         var cancel = PanelObject("Bug Cancel", panel, (Color)new Color32(40, 54, 72, 235));
@@ -3348,12 +3429,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
     // Replaces the modal body with a brief confirmation, then a Close button.
-    private void ShowBugReportConfirmation(RectTransform panel, bool ok, string id)
+    private void ShowBugReportConfirmation(RectTransform panel, bool ok, string id, string kind = BugReport.KindBug)
     {
         for (int i = panel.childCount - 1; i >= 0; i--) Destroy(panel.GetChild(i).gameObject);
+        bool isBug = kind == BugReport.KindBug;
+        string okMsg = isBug
+            ? $"✓  Thanks — bug report saved.\nID: {id}\n\nIt records the exact game state so it can be reproduced and fixed."
+            : $"✓  Thanks — bot suggestion saved.\nID: {id}\n\nIt records the exact position and the decks in play, so the line you\nsuggested can be replayed and measured against how the bot plays now.";
         var msg = TextObject("Bug Confirm", panel,
-            ok ? $"✓  Thanks — bug report saved.\nID: {id}\n\nIt records the exact game state so it can be reproduced and fixed."
-               : "⚠  Could not save the report (see log).",
+            ok ? okMsg : "⚠  Could not save the report (see log).",
             13, ok ? Ink : (Color)new Color32(232, 120, 120, 255), TextAnchor.MiddleCenter);
         Stretch(msg.rectTransform, new Vector2(0.06f, 0.30f), new Vector2(0.94f, 0.95f), Vector2.zero, Vector2.zero);
         var close = PanelObject("Bug Close", panel, Accent);
@@ -6721,6 +6805,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // "Add from the top or bottom of your Life" effects (Zeus OP11-106): overlay this Life zone
         // with clickable TOP / BOTTOM halves so the player picks the card right on the board.
         MaybeAddLifeTargetPicker(life, p, seat);
+
+        // ---- Card content above the pile ZONE PANELS -------------------------------------------
+        // This board has no explicit sorting: uGUI draws later siblings on top, so layering here is
+        // purely creation order. The four pile zones (DECK, DON!! DECK, TRASH, LIFE) are created LAST,
+        // which means their panels painted over anything that overflowed its own zone — and the
+        // character row is deliberately sized to reach out to the deck/trash on its far side. A card
+        // is a child of its zone, so it always beats its OWN background, but not a later sibling's;
+        // the visible cases were a RESTED character (rotated 90°, so far wider than its snug zone) or
+        // one carrying a glow at the outer end of the row, which is why it only showed sometimes.
+        // Lifting the two content ROWS above the pile panels fixes that without reordering any zone:
+        // the piles' own cards are children of their zones and so are unaffected, and the rows carry
+        // no background of their own, so nothing new can be painted over.
+        // NOTE: the leader/stage zones are NOT lifted here — their overflow is still handled by the
+        // SiblingRestore in ShowAttackTargetIndicator. Splitting zone backgrounds from zone contents
+        // into two layers would retire that hack and close the class properly.
+        charRow.SetAsLastSibling();
+        donRow.SetAsLastSibling();
     }
 
     private void DrawExternalHand(PlayerState p, string seat, bool top)

@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.24",
-  "buildNumber": 22,
+  "buildVersion": "1.0.25",
+  "buildNumber": 23,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "The Advanced A.I. no longer freezes on searcher cards. Playing a card that looks at the top of its deck (Nami OP16-091 and others) could leave the bot thinking for many seconds — its practice playouts were spending nearly their whole budget re-attempting an attack the rules never allow. That decision is now near-instant, and the bot's choice on searches and effect targets is based on completed simulations instead of a cut-off guess. Also fixed: the Advanced A.I. locking up when a [Trigger] queued a follow-up decision, and every difficulty hanging before the first turn against a deck led by Imu (OP13-079), whose Stage play opens at the very start of the game. Finally, you are no longer handed the opponent's decisions in A.I. matches — the bot's deck-search 'Take None', its Choose A / Choose B branches, and Go First / Go Second after you lose the coin flip now show a waiting message instead of live buttons that decided things on the bot's behalf.",
+  "notes": "New: suggest a bot improvement. Right-click a card during a game against the A.I. (or in Puzzles) and the report window now offers a Bot Suggestion toggle alongside the usual bug report — tell us what the bot should have done instead and why it's better. It records the exact position, both decks, and which A.I. difficulty was playing, so the line you suggest can be replayed and measured against how the bot plays today. Fixed: cards no longer render behind the board zones. The deck, DON!! deck, trash and Life panels are drawn after everything else, so a card overflowing its own slot could be painted over by them — most visibly a rested (rotated) Character at the outer end of the row. Character cards and cost-area DON!! now always draw on top.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

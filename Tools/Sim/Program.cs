@@ -96,6 +96,9 @@ switch (mode)
     case "retargetlooptest":
         return OnePieceTcg.Sim.ChampionRetargetLoopTest.Run();
 
+    case "suggestions":
+        return OnePieceTcg.Sim.BugReportReplay.RunSuggestions(args);
+
     case "bugreplay":
         return OnePieceTcg.Sim.BugReportReplay.Run(args);
 

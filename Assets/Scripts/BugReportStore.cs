@@ -37,6 +37,22 @@ public sealed class BugReport
     public string PlayerIdentity;   // AccountManager.CurrentIdentityKey (account or guest)
     public string LocalSeat;        // which seat the reporter controls ("south"/"north")
 
+    // ---- Report kind + bot context ---------------------------------------------------------------
+    // "bug" (default) or "bot-suggestion" — a player telling us the BOT misplayed and what it should
+    // have done instead. Only offered when a bot is actually playing (vs AI, Puzzles), since a
+    // suggestion is meaningless in PvP. The extra bot context below is what makes a suggestion
+    // ACTIONABLE: which bot tier was driving, which seat it held, and which mode it was in, so the
+    // proposed behaviour can be A/B'd against the same matchup it was observed in.
+    // These ride along inside the worker's `raw_json` column, which stores the whole client report
+    // verbatim — so no D1 schema change or worker redeploy is needed to start collecting them.
+    public string Kind = KindBug;
+    public string BotDifficulty;    // "beginner" | "intermediate" | "advanced" (null when no bot)
+    public string BotSeat;          // the seat the bot controls ("north" in vs-AI), null in PvP
+    public string GameMode;         // "vs-ai" | "puzzle" | "sandbox" | "pvp" | "hotseat"
+
+    public const string KindBug = "bug";
+    public const string KindBotSuggestion = "bot-suggestion";
+
     // The card the report was filed on (right-clicked).
     public string CardId;
     public string CardName;
@@ -83,8 +99,13 @@ public static class BugReportStore
     /// <summary>Builds a report from the live match state + the card the player right-clicked.
     /// Captures the deterministic replay triplet and a human-readable snapshot. `config` may be null
     /// (older/rare paths) — the report still saves, just without deck-id/seed repro metadata.</summary>
+    /// <summary>Capture a report. <paramref name="kind"/> is <see cref="BugReport.KindBug"/> or
+    /// <see cref="BugReport.KindBotSuggestion"/>; the bot fields describe which A.I. was driving so a
+    /// suggestion can be replayed and measured later. All four are optional so existing call sites and
+    /// PvP reports are unchanged.</summary>
     public static BugReport Build(GameState state, MatchConfig config, CardInstance card, string zone,
-        string description, string localSeat)
+        string description, string localSeat,
+        string kind = BugReport.KindBug, string botDifficulty = null, string botSeat = null, string gameMode = null)
     {
         var def = card != null ? GameEngine.GetCard(card) : null;
         state.Players.TryGetValue("south", out var southP);
@@ -98,6 +119,10 @@ public static class BugReportStore
             AppVersion = Application.version,
             PlayerIdentity = SafeIdentity(),
             LocalSeat = localSeat,
+            Kind = string.IsNullOrEmpty(kind) ? BugReport.KindBug : kind,
+            BotDifficulty = botDifficulty,
+            BotSeat = botSeat,
+            GameMode = gameMode,
             CardId = card?.CardId,
             CardName = def?.Name,
             CardZone = string.IsNullOrEmpty(zone) ? card?.Zone : zone,

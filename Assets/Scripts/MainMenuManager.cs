@@ -1117,6 +1117,20 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.25", "Suggest a bot improvement, and cards no longer hide behind the board", "Jul 25, 2026", new (string, string[])[]
+        {
+            ("New: Suggest a bot improvement", new[]
+            {
+                "Right-click a card during a game against the A.I. (or in Puzzles) and the report window now offers a Bot Suggestion toggle alongside the usual bug report.",
+                "Tell us what the bot should have done instead and why it's better. The report records the exact position, both decks, and which A.I. difficulty was playing, so the line you suggest can be replayed in that position and measured against how the bot plays today.",
+                "The toggle only appears when a bot is actually playing — PvP and hotseat games see the normal bug form.",
+            }),
+            ("Fixes", new[]
+            {
+                "Cards no longer render behind the board zones. The deck, DON!! deck, trash and Life panels are drawn after everything else on the board, so any card that overflowed its own slot could be painted over by them — most visibly a rested (rotated) Character at the outer end of the row, where the character area deliberately reaches out toward the deck and trash.",
+                "Character cards and cost-area DON!! now always draw above those panels.",
+            }),
+        }),
         ("v1.0.24", "A.I. freeze fixes, and your opponent's decisions are no longer yours", "Jul 25, 2026", new (string, string[])[]
         {
             ("Advanced A.I. no longer freezes or stalls", new[]
