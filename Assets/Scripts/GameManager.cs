@@ -732,7 +732,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         matchStartRealtime = Time.realtimeSinceStartup;
         commandElapsedSeconds.Clear();
         var config = new MatchConfig { Seed = System.Guid.NewGuid().ToString("N") };
-        if (!string.IsNullOrEmpty(PendingSouthDeckId) && !string.IsNullOrEmpty(PendingNorthDeckId))
+
+        // Sealed / Pre-Release practice match. The decks come from the sealed run itself (a 40-card
+        // pool deck and the A.I.'s own sealed pool), NOT from DeckStore — sealed decks deliberately
+        // never enter the constructed roster. Consumed here so a later match falls back to normal.
+        var sealedLaunch = OnePieceTcg.Sealed.SealedMatchLaunch.Consume();
+        if (sealedLaunch?.PlayerDeck != null && sealedLaunch.OpponentDeck != null)
+        {
+            config.SouthDeckDef = sealedLaunch.PlayerDeck;
+            config.NorthDeckDef = sealedLaunch.OpponentDeck;
+            if (!string.IsNullOrEmpty(sealedLaunch.Seed)) config.Seed = sealedLaunch.Seed + ":match";
+        }
+        else if (!string.IsNullOrEmpty(PendingSouthDeckId) && !string.IsNullOrEmpty(PendingNorthDeckId))
         {
             var southDef = BuildDeckDef(DeckStore.Get(PendingSouthDeckId));
             var northDef = BuildDeckDef(DeckStore.Get(PendingNorthDeckId));

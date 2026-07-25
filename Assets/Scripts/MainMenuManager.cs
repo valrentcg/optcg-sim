@@ -53,6 +53,7 @@ public partial class MainMenuManager : MonoBehaviour
         new MenuMode { Id = "soloAi",      Parent = "SOLO PLAY",   Label = "Versus A.I.",   Status = ModeStatus.Ready, Launch = "START MATCH"   },
         new MenuMode { Id = "soloSandbox", Parent = "SOLO PLAY",   Label = "Sandbox",       Status = ModeStatus.Ready, Launch = "ENTER SANDBOX" },
         new MenuMode { Id = "soloPuzzle",  Parent = "SOLO PLAY",   Label = "Puzzles",       Status = ModeStatus.Ready, Launch = "PLAY PUZZLES"  },
+        new MenuMode { Id = "sealed",      Parent = "SOLO PLAY",   Label = "Sealed / Pre-Release", Status = ModeStatus.Ready, Launch = "OPEN PACKS" },
         new MenuMode { Id = "casual",      Parent = "MULTIPLAYER", Label = "Casual Match",  Status = ModeStatus.Ready, Launch = "QUEUE MATCH"   },
         new MenuMode { Id = "ranked",      Parent = "MULTIPLAYER", Label = "Ranked Match",  Status = ModeStatus.Ready, Launch = "QUEUE MATCH"   },
         new MenuMode { Id = "privateRoom", Parent = "MULTIPLAYER", Label = "Custom Room",   Status = ModeStatus.Ready, Launch = "VIEW LOBBIES"  },
@@ -5403,6 +5404,21 @@ public partial class MainMenuManager : MonoBehaviour
     // sync between the two connected players is a separate follow-up (INetworkHandler).
     // ══════════════════════════════════════════════════════════════════════════
 
+    /// <summary>Sealed / Pre-Release. The mode is self-hosting — it builds its own canvas — so all the
+    /// menu does is hide itself and hand back control when Sealed exits.</summary>
+    private void EnterSealed()
+    {
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        OnePieceTcg.Sealed.SealedManager.OnExitToMenu = () =>
+        {
+            if (canvas != null) canvas.gameObject.SetActive(true);
+            // A sealed practice match hands off through SealedMatchLaunch; if one is pending, start it.
+            if (OnePieceTcg.Sealed.SealedMatchLaunch.Requested != null) EnterVersusSelf();
+            else RenderMenu();
+        };
+        OnePieceTcg.Sealed.SealedManager.Open();
+    }
+
     private void OpenLobbyHub()
     {
         showingLobbyHub = true;
@@ -7408,12 +7424,14 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(subRow, new Vector2(0f, 0f), new Vector2(1f, 0.09f),
             new Vector2(12f, 10f), new Vector2(-12f, 0f));
 
-        BuildMultiSubTile(subRow, "Versus Self", "soloSelf",   ModeStatus.Ready, 0, 4, 6f);
-        BuildMultiSubTile(subRow, "Versus A.I.", "soloAi",     ModeStatus.Ready, 1, 4, 6f);
-        BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Ready, 2, 4, 6f);
+        BuildMultiSubTile(subRow, "Versus Self", "soloSelf",   ModeStatus.Ready, 0, 5, 6f);
+        BuildMultiSubTile(subRow, "Versus A.I.", "soloAi",     ModeStatus.Ready, 1, 5, 6f);
+        BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Ready, 2, 5, 6f);
         // Puzzles is playable but still being expanded — show a DEV chip (same treatment as ranked/casual),
         // while keeping the mode itself launchable.
-        BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Dev,   3, 4, 6f);
+        BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Dev,   3, 5, 6f);
+        // Sealed / Pre-Release: open six seeded packs, build a 40-card deck, play it.
+        BuildMultiSubTile(subRow, "Sealed",      "sealed",     ModeStatus.Dev,   4, 5, 6f);
     }
 
     // ── Multiplayer sub-tile (centered label + SOON chip below) ──────────────
@@ -7724,6 +7742,8 @@ public partial class MainMenuManager : MonoBehaviour
                     StartQueue("ranked");
                 else if (mode.Id == "casual")
                     StartQueue("casual");
+                else if (mode.Id == "sealed")
+                    EnterSealed();
                 // TODO: soloAi when implemented
             });
         }
