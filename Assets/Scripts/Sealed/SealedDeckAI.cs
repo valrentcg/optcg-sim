@@ -44,7 +44,17 @@ namespace OnePieceTcg.Sealed
             pool.ClearDeck();
 
             var counts = pool.PoolCounts();
-            var leaders = pool.AvailableLeaders();
+            var mode = pool.LeaderMode;
+
+            // Rainbow Luffy: no choice to make, and nothing in the pool can be off-colour under it.
+            if (mode == SealedLeaderMode.RainbowLuffy)
+            {
+                SealedLeaderRules.EnsureRegistered();
+                pool.LeaderId = SealedLeaderRules.RainbowLuffyId;
+            }
+            var leaders = mode == SealedLeaderMode.RainbowLuffy
+                ? new List<string> { SealedLeaderRules.RainbowLuffyId }
+                : SealedLeaderRules.LegalLeaders(mode, pool);
             if (leaders.Count == 0) return;
 
             // 1. Leader. Sealed does NOT apply the colour rule, so a Leader is not a colour commitment
@@ -52,8 +62,9 @@ namespace OnePieceTcg.Sealed
             //    Pick on the Leader's own merits (stats, Life, and an ability that does something) and
             //    give a mild nudge toward the colour you happen to be deepest in, since colour-
             //    referencing Leader abilities still function normally.
-            string bestLeader = null;
+            string bestLeader = pool.LeaderId;
             double bestLeaderScore = double.NegativeInfinity;
+            if (mode != SealedLeaderMode.RainbowLuffy)
             foreach (var leaderId in leaders)
             {
                 var lDef = CardData.GetCard(leaderId);

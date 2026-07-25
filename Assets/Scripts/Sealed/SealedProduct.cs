@@ -109,8 +109,6 @@ namespace OnePieceTcg.Sealed
         public int PackCount = 6;       // a prerelease kit is 6 packs
         public PackCollation Collation = PackCollation.StandardBooster();
 
-        // Sealed deck-construction rules. Prerelease is 40 cards + a Leader from your own pool, and
-        // the copy limit is effectively whatever you opened.
         // SEALED DECK RULES — from Bandai's official tournament rules manual, NOT the constructed rules.
         // Sealed deliberately relaxes almost everything:
         //   • 40-card deck (constructed is 50), plus the usual 10-card DON!! deck.
@@ -124,10 +122,10 @@ namespace OnePieceTcg.Sealed
         // Card effects that reference colours still work normally; it is only DECKBUILDING that relaxes.
         public int DeckSize = 40;
         public int MaxCopies = int.MaxValue;
-        /// <summary>The official rules let a player BRING a Leader, including from older sets. A
-        /// self-contained digital sealed run has nowhere to bring one from, so the default is
-        /// pool-only; flip this for a product that should allow any Leader.</summary>
-        public bool LeaderMustComeFromPool = true;
+        /// <summary>Which Leader variant of the format this run uses. Both real variants are
+        /// supported: Rainbow Luffy (the prerelease-exclusive wildcard Leader everyone plays) and Free
+        /// Select (any Leader in the game, banned Leaders excluded). See SealedLeaderRules.</summary>
+        public SealedLeaderMode LeaderMode = SealedLeaderMode.RainbowLuffy;
 
         /// <summary>Minimum Leaders the kit must contain. The Leader slot averages ~1 per 2 packs, so a
         /// pure-random 6-pack kit opens ZERO Leaders 1.56% of the time ((1 - 12/24)^6) — and with no

@@ -60,8 +60,16 @@ namespace OnePieceTcg.Engine
             Features = features ?? new List<string>();
         }
 
+        /// <summary>This card counts as EVERY type and EVERY card name. Set only by the sealed-format
+        /// "Rainbow Luffy" prerelease Leader, which is printed to work with any colour, activate any
+        /// type-based effect, and count as every character name — which is exactly why it is legal only
+        /// at prerelease events. Kept as a FLAG rather than an id check so the two identity chokepoints
+        /// (HasFeature here, NameMatches in the engine) stay card-agnostic.</summary>
+        public bool WildcardIdentity;
+
         public bool HasFeature(string feature)
         {
+            if (WildcardIdentity) return !string.IsNullOrWhiteSpace(feature);
             if (string.IsNullOrWhiteSpace(feature) || Features == null) return false;
             foreach (var value in Features)
             {

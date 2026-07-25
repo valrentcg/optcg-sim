@@ -5587,6 +5587,8 @@ namespace OnePieceTcg.Engine
         public static bool NameMatches(GameState state, CardInstance card, string name)
         {
             if (card == null || string.IsNullOrEmpty(name)) return false;
+            // Wildcard identity (the sealed-format Rainbow Luffy Leader) counts as every card name.
+            if (GetCard(card)?.WildcardIdentity == true) return true;
             if (string.Equals(GetEffectiveName(state, card), name, StringComparison.OrdinalIgnoreCase)) return true;
             var text = GetCard(card)?.Effect ?? "";
             if (text.IndexOf("treat this card's name as", StringComparison.OrdinalIgnoreCase) < 0) return false;

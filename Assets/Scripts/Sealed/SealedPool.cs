@@ -29,6 +29,10 @@ namespace OnePieceTcg.Sealed
     {
         public string SetCode;
         public string Seed;
+        /// <summary>The Leader variant this run was created under. Stored ON THE RUN, not looked up
+        /// from the catalogue: a run's format is part of the run, and SealedCatalog rebuilds product
+        /// objects on demand, so a catalogue lookup would silently discard it.</summary>
+        public SealedLeaderMode LeaderMode = SealedLeaderMode.RainbowLuffy;
         public List<SealedPack> Packs = new List<SealedPack>();
 
         /// <summary>Chosen Leader (a card id from the pool), or null.</summary>
@@ -36,7 +40,20 @@ namespace OnePieceTcg.Sealed
         /// <summary>Main deck: card id -> copies.</summary>
         public Dictionary<string, int> Deck = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-        public SealedProduct Product() => SealedCatalog.Find(SetCode);
+        [NonSerialized] private SealedProduct cachedProduct;
+
+        /// <summary>The product this pool came from. CACHED — SealedCatalog.Find rebuilds every product
+        /// from the card library on each call, and Add()/Remaining() hit this per card, so an uncached
+        /// lookup turned deckbuilding into a full library scan per click.</summary>
+        public SealedProduct Product()
+        {
+            if (cachedProduct == null || !string.Equals(cachedProduct.SetCode, SetCode, StringComparison.OrdinalIgnoreCase))
+            {
+                cachedProduct = SealedCatalog.Find(SetCode);
+                if (cachedProduct != null) cachedProduct.LeaderMode = LeaderMode;   // the run's format wins
+            }
+            return cachedProduct;
+        }
 
         public static SealedPool Generate(SealedProduct product, string seed)
         {
@@ -45,6 +62,7 @@ namespace OnePieceTcg.Sealed
             {
                 SetCode = product.SetCode,
                 Seed = seed,
+                LeaderMode = product.LeaderMode,
                 Packs = PackGenerator.Open(product, seed),
             };
         }
@@ -65,7 +83,8 @@ namespace OnePieceTcg.Sealed
         /// <summary>Distinct card ids in the pool, for the builder grid.</summary>
         public List<string> PoolCardIds() => PoolCounts().Keys.ToList();
 
-        /// <summary>Leaders actually opened — a sealed deck's Leader must come from the pool.</summary>
+        /// <summary>Leaders actually opened. Only the pool-only variant restricts you to these — see
+        /// SealedLeaderRules for the Rainbow Luffy and Free Select variants.</summary>
         public List<string> AvailableLeaders() =>
             PoolCounts().Keys.Where(id => CardData.GetCard(id)?.Type == "leader")
                              .OrderBy(id => id, StringComparer.Ordinal).ToList();
@@ -134,11 +153,24 @@ namespace OnePieceTcg.Sealed
                 LeaderLegal = true,
             };
 
-            if (!v.HasLeader) v.Problems.Add("Choose a Leader from your pool.");
-            else if (product != null && product.LeaderMustComeFromPool && !AvailableLeaders().Contains(LeaderId))
+            var mode = LeaderMode;
+            if (!v.HasLeader)
+            {
+                v.Problems.Add(mode == SealedLeaderMode.PoolOnly
+                    ? "Choose a Leader from your pool."
+                    : "Choose a Leader.");
+            }
+            else if (!SealedLeaderRules.LegalLeaders(mode, this).Contains(LeaderId))
             {
                 v.LeaderLegal = false;
-                v.Problems.Add("Your Leader must be one you opened.");
+                v.Problems.Add(mode switch
+                {
+                    SealedLeaderMode.RainbowLuffy => "This format uses the Rainbow Luffy Leader.",
+                    SealedLeaderMode.FreeSelect => SealedLeaderRules.IsBannedLeader(LeaderId)
+                        ? "That Leader is banned."
+                        : "That Leader is not a legal choice.",
+                    _ => "Your Leader must be one you opened.",
+                });
             }
 
             if (v.MainCount != required)

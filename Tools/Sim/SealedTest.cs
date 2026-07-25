@@ -32,6 +32,7 @@ namespace OnePieceTcg.Sim
             PoolAndDeckRulesHold();
             AiBuildsALegalSealedDeck();
             EventRunsAFullSwiss();
+            LeaderFormatVariants();
             Console.WriteLine($"sealedtest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -237,6 +238,78 @@ namespace OnePieceTcg.Sim
             Check("no player is paired against themselves", ev.Pairings.All(p => p.IsBye || p.AId != p.BId));
             int humanRounds = ev.Pairings.Count(p => p.AId == "player" || p.BId == "player");
             Check($"the human plays every round ({humanRounds}/3)", humanRounds == 3);
+        }
+
+        // Both real variants of the format: Rainbow Luffy (everyone plays the prerelease wildcard
+        // Leader) and Free Select (any Leader in the game, banned Leaders excluded).
+        private static void LeaderFormatVariants()
+        {
+            var product = SealedCatalog.Find("OP16");
+
+            // --- Rainbow Luffy -----------------------------------------------------------------
+            product.LeaderMode = SealedLeaderMode.RainbowLuffy;
+            SealedLeaderRules.EnsureRegistered();
+            var rainbow = CardData.GetCard(SealedLeaderRules.RainbowLuffyId);
+            Check("Rainbow Luffy is registered as a Leader", rainbow != null && rainbow.Type == "leader");
+            Check("Rainbow Luffy is every colour",
+                SealedPool.SplitColors(rainbow?.Color).Count() == 6);
+            Check("Rainbow Luffy counts as every type", rainbow.HasFeature("Land of Wano")
+                && rainbow.HasFeature("Straw Hat Crew") && rainbow.HasFeature("Navy"));
+
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st02", Seed = "rainbow" });
+            var leaderInst = new CardInstance { InstanceId = "rl", CardId = SealedLeaderRules.RainbowLuffyId, Owner = "south", Zone = "leader" };
+            Check("Rainbow Luffy counts as every card name",
+                GameEngine.NameMatches(st, leaderInst, "Monkey.D.Luffy")
+                && GameEngine.NameMatches(st, leaderInst, "Roronoa Zoro")
+                && GameEngine.NameMatches(st, leaderInst, "Trafalgar Law"));
+
+            var rainbowLegal = SealedLeaderRules.LegalLeaders(SealedLeaderMode.RainbowLuffy, null);
+            Check("Rainbow Luffy is the only legal Leader in that variant",
+                rainbowLegal.Count == 1 && rainbowLegal[0] == SealedLeaderRules.RainbowLuffyId);
+
+            var rPool = SealedPool.Generate(product, "rainbow-pool");
+            SealedDeckAI.Build(rPool);
+            Check("A.I. plays Rainbow Luffy in that variant", rPool.LeaderId == SealedLeaderRules.RainbowLuffyId);
+            Check("A.I. still builds a legal deck under Rainbow Luffy", rPool.Validate().Ok);
+
+            // A Leader you opened is NOT legal in the Rainbow variant.
+            var opened = rPool.AvailableLeaders().FirstOrDefault();
+            if (opened != null)
+            {
+                rPool.LeaderId = opened;
+                Check("an opened Leader is rejected in the Rainbow variant", !rPool.Validate().LeaderLegal);
+                rPool.LeaderId = SealedLeaderRules.RainbowLuffyId;
+            }
+
+            // --- Free Select -------------------------------------------------------------------
+            rPool.LeaderMode = SealedLeaderMode.FreeSelect;
+            var free = SealedLeaderRules.LegalLeaders(SealedLeaderMode.FreeSelect, rPool);
+            Check($"Free Select offers every Leader in the game ({free.Count})", free.Count > 100);
+            Check("Free Select excludes banned Leaders",
+                free.All(id => !SealedLeaderRules.IsBannedLeader(id)));
+
+            // A Leader from a completely different set is legal here but not in pool-only.
+            var foreign = free.FirstOrDefault(id => !id.StartsWith("OP16-", StringComparison.OrdinalIgnoreCase));
+            if (foreign != null)
+            {
+                rPool.LeaderId = foreign;
+                Check("Free Select accepts a Leader you never opened", rPool.Validate().LeaderLegal);
+                rPool.LeaderMode = SealedLeaderMode.PoolOnly;
+                Check("pool-only rejects that same Leader", !rPool.Validate().LeaderLegal);
+            }
+
+            // A banned Leader must be rejected even in Free Select.
+            rPool.LeaderMode = SealedLeaderMode.FreeSelect;
+            var banned = CardData.Library.Keys.FirstOrDefault(id =>
+                CardData.GetCard(id)?.Type == "leader" && SealedLeaderRules.IsBannedLeader(id));
+            if (banned != null)
+            {
+                rPool.LeaderId = banned;
+                Check($"Free Select rejects the banned Leader {banned}", !rPool.Validate().LeaderLegal);
+            }
+            else Console.WriteLine("    (no banned Leaders on the current ban list — skipped)");
+
+            rPool.LeaderMode = SealedLeaderMode.RainbowLuffy;
         }
 
         private static void Check(string name, bool ok)
