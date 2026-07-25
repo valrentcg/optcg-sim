@@ -45,6 +45,30 @@ namespace OnePieceTcg.Sealed
             chips = SealedFilters.All();
             if (buildSeconds > 0) deadlineUnscaled = Time.unscaledTime + buildSeconds;
             Render();
+            // The grid draws a cell immediately, so a per-cell async load always loses the race and the
+            // card falls back to its name placeholder. Preload the pool (72 cards, all ids known) and
+            // redraw once when it lands.
+            StartCoroutine(PreloadPoolArt());
+        }
+
+        private System.Collections.IEnumerator PreloadPoolArt()
+        {
+            var ids = pool.PoolCounts().Keys.ToList();
+            int pending = 0;
+            foreach (var id in ids)
+            {
+                if (spriteCache.ContainsKey(id)) continue;
+                spriteCache[id] = null;
+                pending++;
+                KickLoad(id, () => pending--);
+            }
+            float waited = 0f;
+            while (pending > 0 && waited < 8f)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+            RefreshGrid();
         }
 
         private void Update()
@@ -361,7 +385,7 @@ namespace OnePieceTcg.Sealed
             return null;
         }
 
-        private async void KickLoad(string cardId)
+        private async void KickLoad(string cardId, Action onDone = null)
         {
             try
             {
@@ -375,6 +399,7 @@ namespace OnePieceTcg.Sealed
                 spriteCache[cardId] = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
             }
             catch (Exception e) { Debug.LogWarning($"[SealedBuilder] art load failed for {cardId}: {e.Message}"); }
+            finally { onDone?.Invoke(); }
         }
 
         private InputField NewInput(RectTransform parent, Vector2 min, Vector2 max, string placeholder)

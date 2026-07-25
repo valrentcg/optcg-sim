@@ -63,6 +63,13 @@ namespace OnePieceTcg.Sealed
 
             AddButton(backdrop, "SKIP", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip);
 
+            // PRELOAD every card's art before the first pack. The reveal draws a card the instant it
+            // flips, so kicking an async load at that moment always lost the race and the card fell
+            // back to its name placeholder — which is why almost nothing showed art. Every id is known
+            // up front, so fetch them all first and the sequence then runs entirely from cache.
+            counter.text = "PREPARING PACKS…";
+            yield return StartCoroutine(PreloadArt(pool.Packs.SelectMany(p => p.Cards).Select(c => c.CardId)));
+
             for (int i = 0; i < pool.Packs.Count && !skipRequested; i++)
             {
                 counter.text = $"PACK {i + 1} / {pool.Packs.Count}";
@@ -97,7 +104,7 @@ namespace OnePieceTcg.Sealed
             bool tapped = false;
             AddFullscreenClick(stage, () => tapped = true);
             float idle = 0f;
-            while (!tapped && !skipRequested && idle < 1.6f)
+            while (!tapped && !skipRequested && idle < 0.7f)
             {
                 idle += Time.unscaledDeltaTime;
                 float b = 1f + Mathf.Sin(idle * 2.2f) * 0.015f;
@@ -108,7 +115,7 @@ namespace OnePieceTcg.Sealed
             if (skipRequested) { Destroy(stage.gameObject); yield break; }
 
             // ---- shudder, then tear ----
-            yield return StartCoroutine(Shudder(packRt, 0.28f));
+            yield return StartCoroutine(Shudder(packRt, 0.18f));
             yield return StartCoroutine(Tear(stage, packRt, pack));
 
             // ---- cards out, one at a time ----
@@ -119,7 +126,7 @@ namespace OnePieceTcg.Sealed
                 yield return StartCoroutine(RevealCard(stage, card, landed));
             }
 
-            if (!skipRequested) yield return WaitUnscaled(0.55f);
+            if (!skipRequested) yield return WaitUnscaled(0.20f);
             if (stage != null) Destroy(stage.gameObject);
         }
 
@@ -165,7 +172,7 @@ namespace OnePieceTcg.Sealed
             var glowImg = glow.GetComponent<Image>();
 
             float t = 0f;
-            const float dur = 0.5f;
+            const float dur = 0.32f;
             while (t < dur)
             {
                 t += Time.unscaledDeltaTime;
@@ -205,20 +212,20 @@ namespace OnePieceTcg.Sealed
 
             // Rise out of the pack.
             float t = 0f;
-            while (t < 0.26f)
+            while (t < 0.10f)
             {
                 t += Time.unscaledDeltaTime;
-                float k = Mathf.Clamp01(t / 0.26f);
+                float k = Mathf.Clamp01(t / 0.10f);
                 holder.anchoredPosition = new Vector2(0f, Mathf.Lerp(-30f, 40f, Ease(k)));
                 yield return null;
             }
 
             // Flip: squash to zero width, swap in the face, expand back.
             t = 0f;
-            while (t < 0.14f)
+            while (t < 0.06f)
             {
                 t += Time.unscaledDeltaTime;
-                holder.localScale = new Vector3(1f - Mathf.Clamp01(t / 0.14f), 1f, 1f);
+                holder.localScale = new Vector3(1f - Mathf.Clamp01(t / 0.06f), 1f, 1f);
                 yield return null;
             }
 
@@ -229,10 +236,10 @@ namespace OnePieceTcg.Sealed
             if (card.IsParallel) AddFoilTint(face);
 
             t = 0f;
-            while (t < 0.16f)
+            while (t < 0.07f)
             {
                 t += Time.unscaledDeltaTime;
-                holder.localScale = new Vector3(Mathf.Clamp01(t / 0.16f), 1f, 1f);
+                holder.localScale = new Vector3(Mathf.Clamp01(t / 0.07f), 1f, 1f);
                 yield return null;
             }
             holder.localScale = Vector3.one;
@@ -240,22 +247,36 @@ namespace OnePieceTcg.Sealed
             // Celebrate a hit.
             var tier = TierOf(card);
             if (tier != HitTier.None) yield return StartCoroutine(Celebrate(stage, holder, tier));
-            else yield return WaitUnscaled(0.12f);
 
-            // Tuck into the stack along the bottom.
+            // Tuck into the stack along the bottom. For an ordinary card this runs DETACHED so the next
+            // card starts rising immediately — the cards flow out continuously instead of the sequence
+            // stopping dead on every common. Only a hit holds the sequence, which is what makes a hit
+            // feel like one. Fully sequential it was ~1s a card, so a six-pack kit ran over a minute.
             int idx = landed.Count;
+            landed.Add(holder);
+            var tuck = TuckAway(holder, idx);
+            if (tier != HitTier.None) yield return StartCoroutine(tuck);
+            else StartCoroutine(tuck);
+        }
+
+        private IEnumerator TuckAway(RectTransform holder, int idx)
+        {
             var target = new Vector2(-330f + idx * 56f, -215f);
-            t = 0f;
-            Vector2 from = holder.anchoredPosition;
-            while (t < 0.22f)
+            Vector2 from = holder != null ? holder.anchoredPosition : Vector2.zero;
+            float t = 0f;
+            while (t < 0.14f && holder != null)
             {
                 t += Time.unscaledDeltaTime;
-                float k = Ease(Mathf.Clamp01(t / 0.22f));
+                float k = Ease(Mathf.Clamp01(t / 0.14f));
                 holder.anchoredPosition = Vector2.Lerp(from, target, k);
                 holder.localScale = Vector3.one * Mathf.Lerp(1f, 0.42f, k);
                 yield return null;
             }
-            landed.Add(holder);
+            if (holder != null)
+            {
+                holder.anchoredPosition = target;
+                holder.localScale = Vector3.one * 0.42f;
+            }
         }
 
         /// <summary>The payoff. Each tier looks distinct at a glance: silver shimmer for a parallel,
@@ -263,7 +284,7 @@ namespace OnePieceTcg.Sealed
         private IEnumerator Celebrate(RectTransform stage, RectTransform card, HitTier tier)
         {
             int count = tier switch { HitTier.SecretRare => 46, HitTier.SuperRare => 26, _ => 14 };
-            float life = tier switch { HitTier.SecretRare => 1.15f, HitTier.SuperRare => 0.75f, _ => 0.5f };
+            float life = tier switch { HitTier.SecretRare => 0.85f, HitTier.SuperRare => 0.50f, _ => 0.30f };
             float reach = tier switch { HitTier.SecretRare => 330f, HitTier.SuperRare => 220f, _ => 150f };
 
             // Screen flare — only the big two get one, and only SEC gets a full-screen wash.
@@ -385,6 +406,28 @@ namespace OnePieceTcg.Sealed
 
         // ---- Art -----------------------------------------------------------------------------
 
+        /// <summary>Fetch every distinct card's art up front, so the reveal never races a load.
+        /// Bounded so a missing/slow file can never hang the sequence.</summary>
+        private IEnumerator PreloadArt(IEnumerable<string> cardIds)
+        {
+            var ids = cardIds.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            int pending = 0;
+            foreach (var id in ids)
+            {
+                if (spriteCache.ContainsKey(id)) continue;
+                spriteCache[id] = null;
+                pending++;
+                KickLoad(id, () => pending--);
+            }
+
+            float waited = 0f;
+            while (pending > 0 && waited < 8f && !skipRequested)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+        }
+
         private Sprite GetSprite(string cardId)
         {
             if (string.IsNullOrEmpty(cardId)) return null;
@@ -394,7 +437,7 @@ namespace OnePieceTcg.Sealed
             return null;
         }
 
-        private async void KickLoad(string cardId)
+        private async void KickLoad(string cardId, Action onDone = null)
         {
             try
             {
@@ -408,6 +451,7 @@ namespace OnePieceTcg.Sealed
                 spriteCache[cardId] = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
             }
             catch (Exception e) { Debug.LogWarning($"[SealedPackOpening] art load failed for {cardId}: {e.Message}"); }
+            finally { onDone?.Invoke(); }
         }
 
         private void AddLabel(RectTransform parent, PulledCard card)
