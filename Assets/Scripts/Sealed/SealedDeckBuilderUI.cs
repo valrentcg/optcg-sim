@@ -51,23 +51,36 @@ namespace OnePieceTcg.Sealed
             StartCoroutine(PreloadPoolArt());
         }
 
+        /// <summary>Ids with a load in flight. WITHOUT this, the "have I already asked for this?" test
+        /// was spriteCache.ContainsKey — but GetSprite inserts a null placeholder the moment a cell is
+        /// drawn, so by the time the preload ran every id was already "present" and it kicked nothing,
+        /// waited on nothing, and refreshed before a single image had landed. That is why the builder
+        /// stayed on name placeholders while the pack opening (which preloads BEFORE drawing) was fine.</summary>
+        private readonly HashSet<string> loading = new HashSet<string>();
+        private bool gridNeedsRefresh;
+
         private System.Collections.IEnumerator PreloadPoolArt()
         {
-            var ids = pool.PoolCounts().Keys.ToList();
-            int pending = 0;
-            foreach (var id in ids)
-            {
-                if (spriteCache.ContainsKey(id)) continue;
-                spriteCache[id] = null;
-                pending++;
-                KickLoad(id, () => pending--);
-            }
+            foreach (var id in pool.PoolCounts().Keys.ToList())
+                if (GetSprite(id) == null) { }        // GetSprite kicks the load if it is not cached
+
+            // Redraw whenever a batch of art lands, not once on a guessed deadline, so the grid fills
+            // in progressively and a slow file cannot leave it permanently blank.
             float waited = 0f;
-            while (pending > 0 && waited < 8f)
+            while (loading.Count > 0 && waited < 15f)
             {
                 waited += Time.unscaledDeltaTime;
+                if (gridNeedsRefresh) { gridNeedsRefresh = false; RefreshGrid(); }
                 yield return null;
             }
+            RefreshGrid();
+        }
+
+        private void LateUpdate()
+        {
+            // Late arrivals (a load that finished after the preload window) still get shown.
+            if (!gridNeedsRefresh) return;
+            gridNeedsRefresh = false;
             RefreshGrid();
         }
 
@@ -389,9 +402,10 @@ namespace OnePieceTcg.Sealed
         private Sprite GetSprite(string cardId)
         {
             if (string.IsNullOrEmpty(cardId)) return null;
-            if (spriteCache.TryGetValue(cardId, out var s)) return s;
-            spriteCache[cardId] = null;
-            KickLoad(cardId);
+            if (spriteCache.TryGetValue(cardId, out var s) && s != null) return s;
+            // Kick a load unless one is already in flight. Keyed on `loading`, NOT on the cache, since
+            // the cache holds a null placeholder from the very first draw.
+            if (loading.Add(cardId)) KickLoad(cardId);
             return null;
         }
 
@@ -409,7 +423,12 @@ namespace OnePieceTcg.Sealed
                 spriteCache[cardId] = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
             }
             catch (Exception e) { Debug.LogWarning($"[SealedBuilder] art load failed for {cardId}: {e.Message}"); }
-            finally { onDone?.Invoke(); }
+            finally
+            {
+                loading.Remove(cardId);
+                gridNeedsRefresh = true;   // coalesced in LateUpdate, so N arrivals cost one redraw
+                onDone?.Invoke();
+            }
         }
 
         private InputField NewInput(RectTransform parent, Vector2 min, Vector2 max, string placeholder)

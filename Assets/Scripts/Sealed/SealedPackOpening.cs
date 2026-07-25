@@ -36,6 +36,10 @@ namespace OnePieceTcg.Sealed
         /// match view uses (StreamingAssets/Cards/optcg_card_back.jpg), so a higher-quality file
         /// dropped in there is picked up everywhere at once.</summary>
         private Sprite backSprite;
+        /// <summary>Kept so it can be re-raised above every pack stage. Each pack adds a FULL-SCREEN
+        /// click catcher (the tap-to-open affordance) as a later sibling, which sat on top of SKIP and
+        /// swallowed the click — the button was there and looked live but could never be pressed.</summary>
+        private RectTransform skipButton;
 
         private static readonly Color Ink = new Color32(238, 242, 247, 255);
         private static readonly Color Muted = new Color32(159, 171, 190, 255);
@@ -65,7 +69,7 @@ namespace OnePieceTcg.Sealed
             var counter = Text(backdrop, "Pack Counter", "", 26, Muted, TextAnchor.UpperCenter);
             Stretch(counter.rectTransform, new Vector2(0.1f, 0.90f), new Vector2(0.9f, 0.96f));
 
-            AddButton(backdrop, "SKIP", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip);
+            skipButton = AddButton(backdrop, "SKIP", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip);
 
             // PRELOAD every card's art before the first pack. The reveal draws a card the instant it
             // flips, so kicking an async load at that moment always lost the race and the card fell
@@ -92,6 +96,7 @@ namespace OnePieceTcg.Sealed
         {
             var stage = Panel(parent, "Pack Stage", new Color(0, 0, 0, 0));
             Stretch(stage, Vector2.zero, Vector2.one);
+            if (skipButton != null) skipButton.SetAsLastSibling();   // above this pack's click catcher
 
             // ---- the pack itself ----
             var packRt = Panel(stage, "Pack", Color.white);
@@ -351,7 +356,7 @@ namespace OnePieceTcg.Sealed
             // Celebrate a hit.
             var tier = TierOf(card);
             if (tier != HitTier.None) yield return StartCoroutine(Celebrate(stage, holder, tier));
-            else yield return WaitUnscaled(0.10f);   // a beat to read the card before it tucks away
+            else yield return StartCoroutine(HoldRevealed(0.90f));   // hold so the card can be read
 
             // Tuck into the stack along the bottom. For an ordinary card this runs DETACHED so the next
             // card starts rising immediately — the cards flow out continuously instead of the sequence
@@ -611,6 +616,18 @@ namespace OnePieceTcg.Sealed
 
         private static float Ease(float k) => 1f - Mathf.Pow(1f - Mathf.Clamp01(k), 3f);
 
+        /// <summary>Hold on a revealed card, but bail the instant SKIP is pressed. A plain wait would
+        /// make the button feel dead for up to a second on every card.</summary>
+        private IEnumerator HoldRevealed(float seconds)
+        {
+            float t = 0f;
+            while (t < seconds && !skipRequested)
+            {
+                t += Time.unscaledDeltaTime;
+                yield return null;
+            }
+        }
+
         private static IEnumerator WaitUnscaled(float seconds)
         {
             float t = 0f;
@@ -670,7 +687,7 @@ namespace OnePieceTcg.Sealed
             catcher.gameObject.AddComponent<Button>().onClick.AddListener(() => onClick?.Invoke());
         }
 
-        private void AddButton(RectTransform parent, string label, Vector2 min, Vector2 max, Action onClick)
+        private RectTransform AddButton(RectTransform parent, string label, Vector2 min, Vector2 max, Action onClick)
         {
             var rt = Panel(parent, label + " Button", new Color32(40, 54, 72, 235));
             Stretch(rt, min, max);
@@ -678,6 +695,7 @@ namespace OnePieceTcg.Sealed
             var t = Text(rt, "Label", label, 12, Ink, TextAnchor.MiddleCenter);
             Stretch(t.rectTransform, Vector2.zero, Vector2.one);
             rt.gameObject.AddComponent<Button>().onClick.AddListener(() => onClick?.Invoke());
+            return rt;
         }
     }
 }
