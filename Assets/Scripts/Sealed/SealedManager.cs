@@ -20,7 +20,7 @@ namespace OnePieceTcg.Sealed
 {
     public sealed class SealedManager : MonoBehaviour
     {
-        private enum Screen { Picker, Opening, Building, Ready }
+        private enum Screen { Picker, Opening, Building, Ready, Event }
 
         private Canvas canvas;
         private RectTransform root, screenRoot;
@@ -28,6 +28,7 @@ namespace OnePieceTcg.Sealed
 
         private SealedPool pool;
         private string runId;
+        private SealedEvent activeEvent;
 
         // Picker state
         private SealedProduct chosenProduct;
@@ -276,6 +277,7 @@ namespace OnePieceTcg.Sealed
             }
 
             Action("PRACTICE vs A.I.", StartPracticeMatch, v.Ok);
+            Action(activeEvent == null ? "ENTER 8-PLAYER EVENT" : "RESUME EVENT", StartOrResumeEvent, v.Ok);
             Action("EDIT DECK", ShowBuilder);
             Action("VIEW POOL BY PACK", () =>
             {
@@ -295,6 +297,36 @@ namespace OnePieceTcg.Sealed
 
             SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
                 .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
+        }
+
+        /// <summary>Swiss event: 8 players, 3 rounds, the A.I. field each opening its own pool from a
+        /// derived seed. Created once and kept, so leaving to edit the deck between rounds resumes the
+        /// same event rather than starting a fresh one.</summary>
+        private void StartOrResumeEvent()
+        {
+            var product = pool.Product();
+            if (product == null) return;
+            activeEvent ??= SealedEvent.Create(product, pool.Seed, pool, playerCount: 8, timed: timedBuild);
+            if (activeEvent.Phase == EventPhase.Building) activeEvent.StartPlay();
+
+            screen = Screen.Event;
+            Clear();
+            var ui = gameObject.AddComponent<SealedEventUI>();
+            ui.Begin(screenRoot, activeEvent, pool,
+                (mine, theirs) =>
+                {
+                    // Play it for real; the result is reported back when the match ends.
+                    SealedStore.Save(SealedStore.ToRecord(pool, runId));
+                    SealedMatchLaunch.Requested = new SealedMatchLaunch
+                    {
+                        PlayerDeck = mine.ToDeckDef("Sealed Deck"),
+                        OpponentDeck = (theirs ?? mine).ToDeckDef("Sealed Opponent"),
+                        Seed = $"{pool.Seed}|r{activeEvent.CurrentRound}",
+                    };
+                    Toast("Starting round " + activeEvent.CurrentRound + "…");
+                    ExitToMenu();
+                },
+                () => { Destroy(ui); ShowReady(); });
         }
 
         /// <summary>Hand the sealed deck to a practice match. The A.I. opens its OWN pool from a derived
