@@ -153,51 +153,147 @@ namespace OnePieceTcg.Sealed
 
         /// <summary>Split the pack along its heat-seal strip: the top slice rips away and tumbles off
         /// while light floods out of the tear.</summary>
+        /// <summary>The rip. Three beats, because that is what makes a pack read as paper rather than
+        /// as a rectangle that disappears:
+        ///
+        ///   ANTICIPATION  the pack lifts and tilts while a specular glint rolls across the foil
+        ///   ZIP           a tear front travels along the seal, leaving jagged paper teeth behind it
+        ///                 and throwing foil flecks off the point of the tear
+        ///   BURST         the top detaches, spins away under gravity, and light erupts from the mouth
+        ///
+        /// The light and the shake are both scaled by the best card in the pack, so the rip itself
+        /// foreshadows the pull before a single card is visible.</summary>
         private IEnumerator Tear(RectTransform stage, RectTransform packRt, SealedPack pack)
         {
             if (packRt == null) yield break;
 
-            // The torn-off top strip, cloned from the pack so it matches whatever art is in use.
-            var strip = Panel(stage, "Pack Top", Color.white);
-            strip.anchorMin = strip.anchorMax = new Vector2(0.5f, 0.52f);
-            strip.pivot = new Vector2(0.5f, 0.5f);
-            strip.sizeDelta = new Vector2(436f, 76f);
-            strip.anchoredPosition = new Vector2(0f, 282f);
-            var stripImg = strip.GetComponent<Image>();
-            stripImg.sprite = SealedPackArt.For(pool.SetCode);
-            stripImg.color = new Color(0.8f, 0.8f, 0.85f, 1f);
-
-            // Light pouring out of the tear, tinted by the best card in the pack.
             var tier = BestTier(pack);
-            var glow = Panel(stage, "Tear Glow", TierColour(tier));
-            glow.anchorMin = glow.anchorMax = new Vector2(0.5f, 0.52f);
-            glow.pivot = new Vector2(0.5f, 0.5f);
-            glow.sizeDelta = new Vector2(70f, 34f);
-            glow.anchoredPosition = new Vector2(0f, 242f);
-            var glowImg = glow.GetComponent<Image>();
+            var tint = TierColour(tier);
+            float w = packRt.sizeDelta.x, h = packRt.sizeDelta.y;
+            float seamY = h * 0.34f;                     // where the heat-seal strip sits
 
+            // ---- 1. anticipation ----------------------------------------------------------------
+            StartCoroutine(SealedPackFx.Glint(packRt, 0.42f, 0.55f));
             float t = 0f;
-            const float dur = 0.32f;
-            while (t < dur)
+            Vector2 packHome = packRt.anchoredPosition;
+            while (t < 0.26f && packRt != null)
             {
                 t += Time.unscaledDeltaTime;
-                float k = Mathf.Clamp01(t / dur);
+                float k = SealedPackFx.EaseOut(Mathf.Clamp01(t / 0.26f));
+                packRt.anchoredPosition = packHome + new Vector2(0f, 18f * k);
+                packRt.localRotation = Quaternion.Euler(0, 0, -3.5f * k);
+                packRt.localScale = Vector3.one * (1f + 0.05f * k);
+                yield return null;
+            }
 
-                if (strip != null)
+            // ---- 2. zip -------------------------------------------------------------------------
+            // Teeth are pre-created invisible and revealed as the front passes, so the torn edge is
+            // left BEHIND the tear instead of appearing all at once.
+            var teeth = SealedPackFx.TornTeeth(packRt, w * 0.98f, seamY,
+                new Color(0.93f, 0.93f, 0.96f, 1f), 26, w * 0.055f);
+
+            var front = SealedPackFx.Quad(packRt, "Tear Front", Color.white, new Vector2(w * 0.09f, h * 0.11f));
+            var seam = SealedPackFx.Quad(packRt, "Seam Light", tint, new Vector2(0f, h * 0.045f));
+            seam.anchoredPosition = new Vector2(0f, seamY);
+
+            t = 0f;
+            const float zipDur = 0.40f;
+            while (t < zipDur && packRt != null)
+            {
+                t += Time.unscaledDeltaTime;
+                float k = Mathf.Clamp01(t / zipDur);
+                float x = Mathf.Lerp(-w * 0.5f, w * 0.5f, k);
+
+                if (front != null)
                 {
-                    strip.anchoredPosition = new Vector2(Mathf.Lerp(0f, 230f, k), Mathf.Lerp(282f, 480f, k));
-                    strip.localRotation = Quaternion.Euler(0, 0, Mathf.Lerp(0f, 38f, k));
-                    var c = stripImg.color; c.a = 1f - k; stripImg.color = c;
+                    front.anchoredPosition = new Vector2(x, seamY);
+                    var fi = front.GetComponent<Image>();
+                    var fc = fi.color; fc.a = Mathf.Sin(k * Mathf.PI) * 0.95f; fi.color = fc;
                 }
-                if (glow != null)
+                // The seam opens up behind the front.
+                if (seam != null) seam.sizeDelta = new Vector2(w * k, h * 0.045f * (0.5f + k));
+
+                // Reveal every tooth the front has passed.
+                for (int i = 0; i < teeth.Count; i++)
                 {
-                    glow.sizeDelta = new Vector2(Mathf.Lerp(70f, 560f, k), Mathf.Lerp(34f, 220f, k));
-                    var gc = glowImg.color; gc.a = Mathf.Sin(k * Mathf.PI) * 0.85f; glowImg.color = gc;
+                    if (teeth[i] == null) continue;
+                    float tx = Mathf.Lerp(-w * 0.5f, w * 0.5f, i / (float)(teeth.Count - 1));
+                    if (tx > x) continue;
+                    var img = teeth[i].GetComponent<Image>();
+                    var c = img.color;
+                    if (c.a < 1f) { c.a = Mathf.Min(1f, c.a + Time.unscaledDeltaTime * 9f); img.color = c; }
+                }
+
+                // Flecks come off the point of the tear, not the whole pack.
+                if (UnityEngine.Random.value < 0.42f)
+                    StartCoroutine(SealedPackFx.Confetti(stage, packRt.anchoredPosition + new Vector2(x, seamY),
+                        SealedPackFx.SilverFoil, 2, 8f, 0.55f));
+
+                yield return null;
+            }
+            if (front != null) Destroy(front.gameObject);
+
+            // ---- 3. burst -----------------------------------------------------------------------
+            // The top half becomes its own object so it can spin away under gravity.
+            var top = Panel(stage, "Pack Top", Color.white);
+            top.anchorMin = top.anchorMax = new Vector2(0.5f, 0.52f);
+            top.pivot = new Vector2(0.5f, 0.5f);
+            top.sizeDelta = new Vector2(w, h * 0.16f);
+            top.anchoredPosition = packRt.anchoredPosition + new Vector2(0f, seamY + h * 0.08f);
+            var topImg = top.GetComponent<Image>();
+            topImg.sprite = SealedPackArt.For(pool.SetCode);
+            topImg.color = new Color(0.88f, 0.88f, 0.92f, 1f);
+
+            var mouth = SealedPackFx.Quad(stage, "Mouth Light", tint, new Vector2(w * 0.9f, h * 0.10f));
+            mouth.anchoredPosition = packRt.anchoredPosition + new Vector2(0f, seamY);
+
+            var rays = SealedPackFx.Rays(stage, mouth.anchoredPosition, tint,
+                tier == HitTier.SecretRare ? 16 : 10, h * 1.5f);
+            StartCoroutine(SealedPackFx.SpinAndFade(rays, tier == HitTier.SecretRare ? 42f : 22f, 0.85f,
+                tier == HitTier.None ? 0.16f : 0.34f));
+
+            StartCoroutine(SealedPackFx.Confetti(stage, mouth.anchoredPosition,
+                tier == HitTier.SecretRare ? SealedPackFx.Prismatic(8) : SealedPackFx.SilverFoil,
+                tier == HitTier.None ? 14 : 26, w * 0.36f, 0.95f));
+
+            StartCoroutine(SealedPackFx.Shake(stage,
+                tier == HitTier.SecretRare ? 16f : tier == HitTier.None ? 5f : 9f, 0.30f));
+
+            Vector2 topVel = new Vector2(210f, 520f);
+            float topSpin = 150f;
+            t = 0f;
+            const float burstDur = 0.42f;
+            while (t < burstDur)
+            {
+                float dt = Time.unscaledDeltaTime;
+                t += dt;
+                float k = Mathf.Clamp01(t / burstDur);
+
+                if (top != null)
+                {
+                    topVel.y -= 1750f * dt;
+                    top.anchoredPosition += topVel * dt;
+                    top.localRotation *= Quaternion.Euler(0, 0, topSpin * dt);
+                    var tc = topImg.color; tc.a = 1f - SealedPackFx.EaseIn(k); topImg.color = tc;
+                }
+                if (mouth != null)
+                {
+                    mouth.sizeDelta = new Vector2(w * (0.9f + 0.5f * k), Mathf.Lerp(h * 0.10f, h * 0.42f, k));
+                    var mi = mouth.GetComponent<Image>();
+                    var mc = mi.color; mc.a = tint.a * Mathf.Sin(k * Mathf.PI); mi.color = mc;
+                }
+                // The body settles back down as the cards come out of it.
+                if (packRt != null)
+                {
+                    packRt.localScale = Vector3.one * Mathf.Lerp(1.05f, 0.97f, k);
+                    packRt.localRotation = Quaternion.Euler(0, 0, Mathf.Lerp(-3.5f, 1.5f, k));
                 }
                 yield return null;
             }
-            if (strip != null) Destroy(strip.gameObject);
-            if (glow != null) Destroy(glow.gameObject);
+
+            if (top != null) Destroy(top.gameObject);
+            if (mouth != null) Destroy(mouth.gameObject);
+            if (seam != null) Destroy(seam.gameObject);
         }
 
         /// <summary>One card rises out of the pack, flips face-up, celebrates if it is a hit, then
@@ -290,74 +386,86 @@ namespace OnePieceTcg.Sealed
 
         /// <summary>The payoff. Each tier looks distinct at a glance: silver shimmer for a parallel,
         /// a gold burst for a Super Rare, and a bigger, longer, prismatic eruption for a Secret Rare.</summary>
+        /// <summary>The payoff. The three tiers are structurally different, not the same burst at three
+        /// intensities — a Secret Rare should be recognisable from across the room before you have read
+        /// the card:
+        ///
+        ///   PARALLEL  a silver shimmer rolls across the card face, a few cool sparks. No screen effect:
+        ///             it is a nice-to-have, not an event.
+        ///   SUPER     a gold pillar of light rises behind the card, rays turn slowly, gold foil bursts,
+        ///             one ring pulse, a light shake. The sequence STOPS for it.
+        ///   SECRET    prismatic wash over the whole screen, twice the rays turning twice as fast,
+        ///             rainbow foil, two ring pulses, a heavy shake, and a longer hold at the end.
+        /// </summary>
         private IEnumerator Celebrate(RectTransform stage, RectTransform card, HitTier tier)
         {
-            int count = tier switch { HitTier.SecretRare => 46, HitTier.SuperRare => 26, _ => 14 };
-            float life = tier switch { HitTier.SecretRare => 0.85f, HitTier.SuperRare => 0.50f, _ => 0.30f };
-            float reach = tier switch { HitTier.SecretRare => 330f, HitTier.SuperRare => 220f, _ => 150f };
+            Vector2 at = card != null ? card.anchoredPosition : Vector2.zero;
 
-            // Screen flare — only the big two get one, and only SEC gets a full-screen wash.
-            if (tier != HitTier.Parallel)
+            // ---- parallel: a shimmer on the card itself, nothing more ----------------------------
+            if (tier == HitTier.Parallel)
             {
-                var flare = Panel(stage, "Flare", TierColour(tier));
-                if (tier == HitTier.SecretRare) Stretch(flare, Vector2.zero, Vector2.one);
-                else
-                {
-                    flare.anchorMin = flare.anchorMax = new Vector2(0.5f, 0.52f);
-                    flare.pivot = new Vector2(0.5f, 0.5f);
-                    flare.sizeDelta = new Vector2(420f, 420f);
-                }
-                StartCoroutine(FadeOut(flare, tier == HitTier.SecretRare ? 0.55f : 0.35f, 0.5f));
+                StartCoroutine(SealedPackFx.Glint(card, 0.42f, 0.75f));
+                StartCoroutine(SealedPackFx.Confetti(stage, at, SealedPackFx.SilverFoil, 10, 60f, 0.55f));
+                yield return WaitUnscaled(0.34f);
+                yield break;
             }
 
-            // Sparks.
-            var sparks = new List<RectTransform>();
-            for (int i = 0; i < count; i++)
+            bool secret = tier == HitTier.SecretRare;
+            var tint = TierColour(tier);
+            var palette = secret ? SealedPackFx.Prismatic(10) : SealedPackFx.GoldFoil;
+
+            // ---- the screen reacts ---------------------------------------------------------------
+            if (secret)
             {
-                var s = Panel(stage, "Spark", SparkColour(tier, i));
-                s.anchorMin = s.anchorMax = new Vector2(0.5f, 0.52f);
-                s.pivot = new Vector2(0.5f, 0.5f);
-                float size = tier == HitTier.SecretRare ? UnityEngine.Random.Range(5f, 13f) : UnityEngine.Random.Range(4f, 9f);
-                s.sizeDelta = new Vector2(size, size);
-                sparks.Add(s);
+                var wash = SealedPackFx.Quad(stage, "Prismatic Wash", new Color(1f, 0.78f, 1f, 0.55f), Vector2.one);
+                Stretch(wash, Vector2.zero, Vector2.one);
+                wash.SetAsFirstSibling();
+                StartCoroutine(FadeOut(wash, 0.55f, 0.65f));
+            }
+            StartCoroutine(SealedPackFx.Shake(stage, secret ? 22f : 10f, secret ? 0.5f : 0.28f));
+
+            // ---- light behind the card ------------------------------------------------------------
+            StartCoroutine(SealedPackFx.Pillar(stage, at, new Color(tint.r, tint.g, tint.b, secret ? 0.5f : 0.38f),
+                secret ? 520f : 320f, 1300f, secret ? 0.95f : 0.62f));
+
+            var rays = SealedPackFx.Rays(stage, at, new Color(tint.r, tint.g, tint.b, 1f),
+                secret ? 20 : 11, secret ? 1500f : 950f);
+            rays.SetAsFirstSibling();
+            StartCoroutine(SealedPackFx.SpinAndFade(rays, secret ? 70f : 30f, secret ? 1.05f : 0.68f,
+                secret ? 0.42f : 0.30f));
+
+            // ---- foil + rings ----------------------------------------------------------------------
+            StartCoroutine(SealedPackFx.Confetti(stage, at, palette, secret ? 54 : 28,
+                secret ? 200f : 120f, secret ? 1.15f : 0.75f));
+            StartCoroutine(SealedPackFx.RingPulse(stage, at, new Color(1f, 1f, 1f, secret ? 0.55f : 0.4f),
+                secret ? 220f : 180f, secret ? 1150f : 720f, secret ? 0.65f : 0.45f));
+            if (secret)
+            {
+                yield return WaitUnscaled(0.16f);
+                StartCoroutine(SealedPackFx.RingPulse(stage, at, new Color(1f, 0.85f, 1f, 0.45f),
+                    260f, 1400f, 0.7f));
             }
 
-            var angles = new float[sparks.Count];
-            var dists = new float[sparks.Count];
-            for (int i = 0; i < sparks.Count; i++)
-            {
-                angles[i] = (360f / sparks.Count) * i + UnityEngine.Random.Range(-9f, 9f);
-                dists[i] = reach * UnityEngine.Random.Range(0.55f, 1f);
-            }
-
-            // Card kick — a quick pop so the hit registers even without the particles.
+            // ---- the card itself pops --------------------------------------------------------------
+            float life = secret ? 0.95f : 0.58f;
             float t = 0f;
             while (t < life)
             {
                 t += Time.unscaledDeltaTime;
-                float k = Mathf.Clamp01(t / life);
-
-                for (int i = 0; i < sparks.Count; i++)
-                {
-                    if (sparks[i] == null) continue;
-                    float d = Mathf.Lerp(0f, dists[i], Ease(k));
-                    float rad = angles[i] * Mathf.Deg2Rad;
-                    sparks[i].anchoredPosition = new Vector2(Mathf.Cos(rad) * d, Mathf.Sin(rad) * d * 0.85f);
-                    var img = sparks[i].GetComponent<Image>();
-                    var c = img.color; c.a = 1f - k; img.color = c;
-                    sparks[i].localScale = Vector3.one * Mathf.Lerp(1.2f, 0.25f, k);
-                }
-
                 if (card != null)
                 {
-                    float pop = 1f + Mathf.Sin(Mathf.Clamp01(t / 0.25f) * Mathf.PI) * (tier == HitTier.SecretRare ? 0.22f : 0.12f);
+                    float pop = 1f + Mathf.Sin(Mathf.Clamp01(t / 0.3f) * Mathf.PI) * (secret ? 0.26f : 0.14f);
                     card.localScale = new Vector3(pop, pop, 1f);
+                    // A slow tilt so the card catches the light rather than sitting flat.
+                    card.localRotation = Quaternion.Euler(0, 0, Mathf.Sin(t * 5f) * (secret ? 2.4f : 1.2f));
                 }
                 yield return null;
             }
-
-            foreach (var s in sparks) if (s != null) Destroy(s.gameObject);
-            if (card != null) card.localScale = Vector3.one;
+            if (card != null)
+            {
+                card.localScale = Vector3.one;
+                card.localRotation = Quaternion.identity;
+            }
         }
 
         /// <summary>Skip path: lay the whole pool out at once so skipping never costs information.</summary>

@@ -101,25 +101,56 @@ namespace OnePieceTcg.Sealed
             var tex = new Texture2D(W, H, TextureFormat.RGBA32, false);
             var px = new Color32[W * H];
 
+            // A wrapper, not a rectangle: rounded corners cut out of the alpha, crimped serrated seals
+            // top and bottom, layered holo bands, and a soft inner shadow so it reads as a bagged
+            // object with depth.
+            const float corner = 0.055f;          // corner radius, as a fraction of the width
+            const float sealTop = 0.885f;         // heat-seal band the rip tears along
+            const float sealBottom = 0.075f;
+
             for (int y = 0; y < H; y++)
             {
                 float v = (float)y / (H - 1);
                 for (int x = 0; x < W; x++)
                 {
                     float u = (float)x / (W - 1);
+
+                    // --- silhouette: rounded rectangle via a corner distance test ---
+                    float rx = corner, ry = corner * W / (float)H;
+                    float dx = Mathf.Max(Mathf.Abs(u - 0.5f) - (0.5f - rx), 0f) / rx;
+                    float dy = Mathf.Max(Mathf.Abs(v - 0.5f) - (0.5f - ry), 0f) / ry;
+                    float corner01 = Mathf.Sqrt(dx * dx + dy * dy);
+                    float alpha = 1f - Mathf.SmoothStep(0.92f, 1.04f, corner01);
+                    if (alpha <= 0.001f) { px[y * W + x] = new Color(0, 0, 0, 0); continue; }
+
                     Color c = Color.Lerp(bottom, top, Mathf.Clamp01(v * 0.85f + u * 0.15f));
 
-                    // Diagonal foil sheen.
+                    // --- layered foil: one broad sheen plus a tighter secondary band ---
                     float band = Mathf.Abs(Mathf.Sin((u * 2.4f + v * 1.6f) * Mathf.PI));
                     c = Color.Lerp(c, Color.white, Mathf.Pow(band, 12f) * 0.55f);
+                    float band2 = Mathf.Abs(Mathf.Sin((u * 5.1f - v * 3.2f) * Mathf.PI));
+                    c = Color.Lerp(c, Color.white, Mathf.Pow(band2, 26f) * 0.30f);
 
-                    // Vignette so the pack reads as an object, not a flat rectangle.
+                    // --- crimped seals: fine vertical serration, darker and desaturated ---
+                    bool inSeal = v > sealTop || v < sealBottom;
+                    if (inSeal)
+                    {
+                        float crimp = Mathf.Abs(Mathf.Sin(u * W * 0.16f));   // tight vertical ribs
+                        c = Color.Lerp(c, Color.black, 0.30f);
+                        c = Color.Lerp(c, Color.white, Mathf.Pow(crimp, 3f) * 0.22f);
+                        // A dark scored line where the pack is meant to be torn.
+                        float scoreDist = Mathf.Abs(v - (sealTop + 0.012f));
+                        if (v > sealTop && scoreDist < 0.006f) c = Color.Lerp(c, Color.black, 0.55f);
+                    }
+
+                    // --- inner shadow + vignette, so it looks bagged rather than printed ---
                     float edge = Mathf.Min(Mathf.Min(u, 1 - u), Mathf.Min(v, 1 - v));
-                    c = Color.Lerp(c * 0.55f, c, Mathf.SmoothStep(0f, 0.10f, edge));
+                    c = Color.Lerp(c * 0.5f, c, Mathf.SmoothStep(0f, 0.085f, edge));
+                    // Faint horizontal crease across the middle where a pack naturally bends.
+                    float crease = Mathf.Exp(-Mathf.Pow((v - 0.47f) * 22f, 2f));
+                    c = Color.Lerp(c, c * 1.16f, crease * 0.5f);
 
-                    // Heat-seal strip along the top — the seam the rip animation tears along.
-                    if (v > 0.90f) c = Color.Lerp(c, Color.black, 0.35f + (v - 0.90f) * 2f);
-
+                    c.a = alpha;
                     px[y * W + x] = c;
                 }
             }
