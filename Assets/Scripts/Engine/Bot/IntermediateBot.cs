@@ -418,6 +418,15 @@ namespace OnePieceTcg.Engine.Bot
                 return Try(blacklist, new GameCommand { Type = "mulliganDecision", Seat = seat, Mulligan = ShouldMulligan(state, p, seat) });
             }
 
+            // A deck look can be open BEFORE the game is "active": Imu (OP13-079) plays a Stage from the deck
+            // at GAME START, opening a look while Status is still "setup". ApplyCommand's status gate has an
+            // explicit exception for deckLookSelect/ConfirmOrder/ScryConfirm precisely so it can be resolved
+            // then — but this method's status bail below came FIRST, so the bot returned null every tick and
+            // the match never started. Handled here rather than by moving the main deck-look branch up, so
+            // the established precedence during ACTIVE play (choice → charReplace → look) is untouched.
+            if (state.Status != "active" && state.DeckLook != null)
+                return state.DeckLook.Seat == seat ? DecideDeckLook(state, seat, blacklist) : null;
+
             if (state.Status != "active") return null;
 
             // Bug found via a 435-game all-starter-decks batch run (game "st07 vs st01"): the
@@ -1374,6 +1383,12 @@ namespace OnePieceTcg.Engine.Bot
             attackers.AddRange(p.CharacterArea.Where(c => c != null && !c.Rested));
             attackers = attackers
                 .Where(a => !GameEngine.HasModifier(state, a, "cannotAttack"))
+                // PRINTED attack locks ("This Leader cannot attack." — OP15-039 Rebecca) are permanent, so
+                // proposing such an attacker is a guaranteed rejected command, once per distinct target. The
+                // blacklist hid that as a single wasted try; it became a livelock once ChampionBot rewrote the
+                // target to the face (one rejected signature, unlimited fresh proposals). Same predicate the
+                // engine's DeclareAttack enforces, so the bot's view of legality can't drift from the rules.
+                .Where(a => !GameEngine.HasPrintedCannotAttack(state, a))
                 .Where(a => a.PlayedOnTurn != state.TurnNumber || GameEngine.HasRush(state, a))
                 .ToList();
             // A/B (research "don't attack with your Blocker"): hold non-Leader Blockers back to stay active for

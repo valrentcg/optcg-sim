@@ -59,13 +59,38 @@ namespace OnePieceTcg.Engine.Bot
             if (cmd != null && cmd.Type == "declareAttack" && FaceBias >= 0.5)
             {
                 var oppLeader = state.Players[GameEngine.OtherSeat(seat)].Leader;
-                if (oppLeader != null) cmd.Target = oppLeader.InstanceId; // always a legal target
+                // The re-target REWRITES the command AFTER IntermediateBot checked the blacklist, so the
+                // face version has its own signature that nothing had validated. When the ATTACKER itself
+                // is the illegal part ("X cannot attack" — rested, already attacked, attack restriction),
+                // every face re-target collapses onto that one rejected signature while IntermediateBot
+                // keeps proposing fresh, un-blacklisted CHARACTER targets for the same attacker — so the
+                // pair livelocked, re-issuing an identical rejected command until the caller's command
+                // budget ran out (measured: 9,403 of ~9,400 no-ops in one Advanced-bot rollout, ~94% of
+                // the whole playout, which is why a single resolution decision cost seconds). Re-check the
+                // blacklist against the REWRITTEN signature and keep IntermediateBot's own target when the
+                // face attack is already known to be a no-op.
+                if (oppLeader != null && !IsKnownNoOp(blacklist, cmd, oppLeader.InstanceId))
+                    cmd.Target = oppLeader.InstanceId;
             }
             return cmd;
         }
 
         // GameManager reuses IntermediateBot's SnapshotFor/Succeeded/Signature for its no-op blacklist;
         // ChampionBot returns the same command shapes, so those work unchanged.
+
+        /// <summary>True when rewriting <paramref name="cmd"/>'s Target to <paramref name="newTarget"/> would
+        /// produce a command the caller has ALREADY seen no-op. Any post-hoc mutation of a command that
+        /// IntermediateBot blacklist-checked must be re-checked here, or the mutated signature slips past
+        /// the loop guard the blacklist exists to provide.</summary>
+        private static bool IsKnownNoOp(HashSet<string> blacklist, GameCommand cmd, string newTarget)
+        {
+            if (blacklist == null || blacklist.Count == 0) return false;
+            string original = cmd.Target;
+            cmd.Target = newTarget;
+            bool known = blacklist.Contains(IntermediateBot.Signature(cmd));
+            cmd.Target = original;
+            return known;
+        }
 
         private static GameCommand DecideCounter(GameState state, string seat, PlayerState me)
         {

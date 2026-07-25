@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.23",
-  "buildNumber": 21,
+  "buildVersion": "1.0.24",
+  "buildNumber": 22,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "Advanced AI no longer freezes the game: its search now runs in the background, so the window stays responsive while the bot thinks (previously it could hang on 'Not Responding', worst on the opening turns). Fixed the Advanced AI getting stuck at 'Waiting for opponent' after you kept your hand. The coin-flip animation now plays whether you win OR lose the flip (before, a bot win cut it short so you only ever saw it on your own wins) — the flip itself was always a fair 50/50. Casual and Ranked now correctly block Standard-illegal decks: illegal starter decks are greyed out in the picker and can't be queued. Replay viewer: the Main Menu button is no longer clipped off the edge of the Match Timeline panel. Fixed the opening hand deal animating twice when going second.",
+  "notes": "The Advanced A.I. no longer freezes on searcher cards. Playing a card that looks at the top of its deck (Nami OP16-091 and others) could leave the bot thinking for many seconds — its practice playouts were spending nearly their whole budget re-attempting an attack the rules never allow. That decision is now near-instant, and the bot's choice on searches and effect targets is based on completed simulations instead of a cut-off guess. Also fixed: the Advanced A.I. locking up when a [Trigger] queued a follow-up decision, and every difficulty hanging before the first turn against a deck led by Imu (OP13-079), whose Stage play opens at the very start of the game. Finally, you are no longer handed the opponent's decisions in A.I. matches — the bot's deck-search 'Take None', its Choose A / Choose B branches, and Go First / Go Second after you lose the coin flip now show a waiting message instead of live buttons that decided things on the bot's behalf.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

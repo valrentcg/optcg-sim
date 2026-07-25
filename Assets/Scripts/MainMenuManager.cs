@@ -1117,6 +1117,54 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.24", "A.I. freeze fixes, and your opponent's decisions are no longer yours", "Jul 25, 2026", new (string, string[])[]
+        {
+            ("Advanced A.I. no longer freezes or stalls", new[]
+            {
+                "Playing a searcher — a card that looks at the top of its deck, like Nami OP16-091 — could leave the Advanced bot thinking for many seconds before it moved. Its practice playouts were spending almost their whole budget re-attempting an attack the rules never allow, so they never reached a result.",
+                "The trigger was a Leader that prints \"This Leader cannot attack\" (Rebecca OP15-039), but the stall could surface in any matchup. Those decisions are now near-instant, and because the playouts finally run to a result, the bot's choice on searches and effect targets comes from completed simulations instead of a cut-off guess.",
+                "The Advanced bot could also lock up on a [Trigger] whose own text queued a follow-up decision — K.O. a Character, hand out +1000 power. It kept re-activating the Trigger instead of resolving what it had just queued, and the match stopped advancing.",
+                "On every difficulty, a match against a deck led by Imu (OP13-079) hung before the first turn: Imu plays a Stage from the deck at the very start of the game, and the bot never answered that prompt.",
+            }),
+            ("Decisions that were never yours to make", new[]
+            {
+                "In a game against the A.I. you could be shown live buttons that belonged to the bot: \"Take None\" on the bot's deck search, a Choose A / Choose B branch, and Go First / Go Second after you lost the coin flip.",
+                "Answering one of those decided it on the bot's behalf, and could leave the game stuck. Each now shows a \"waiting for opponent\" message instead.",
+                "Hotseat and Versus Self are unchanged — one player controls both sides there, so both sets of buttons still appear.",
+            }),
+        }),
+        ("v1.0.23", "Advanced A.I. responsiveness, coin flip, and format enforcement", "Jul 24, 2026", new (string, string[])[]
+        {
+            ("Advanced A.I.", new[]
+            {
+                "The rollout search now runs on a background thread, so the window stays responsive while the bot thinks — previously a heavy decision (worst on the opening turns) could hang the app on \"Not Responding\" until it finished.",
+                "Fixed the Advanced A.I. getting stuck at \"Waiting for opponent\" after you kept your hand.",
+            }),
+            ("Fixes", new[]
+            {
+                "The coin-flip animation now plays whether you win or lose. When the bot won the flip, its turn-order choice cut the animation short, so you only ever saw the flip on your own wins — the flip itself was always a fair 50/50.",
+                "Casual and Ranked now block Standard-illegal decks: illegal starter decks are greyed out (\"NOT LEGAL\") in the picker, and the queue refuses an illegal deck at every path.",
+                "Replay viewer: the Match Timeline's tools wrap to two rows, so the Main Menu button is no longer clipped off the edge.",
+                "Fixed the opening hand deal animating twice when going second. The deck and hand counts were always correct.",
+            }),
+        }),
+        ("v1.0.22", "Customizable cursor and on-board circled DON!! payment", "Jul 24, 2026", new (string, string[])[]
+        {
+            ("New: Customizable cursor", new[]
+            {
+                "Choose from six metal finishes — Gold, Bronze, Silver, Gunmetal, Platinum, Rose Gold — and fine-tune the cursor's size and angle in Settings.",
+            }),
+            ("Fixes", new[]
+            {
+                "Circled DON!! costs are paid on the board. Pending ①/②/… costs are now paid by clicking a glowing active DON!! at every supported timing ([On Play], [When Attacking], [Activate: Main], and others), instead of dropping you into a confusing generic card-target prompt. Fixes OP06-118 Zoro, OP07-019, and other cards that spell the cost out.",
+                "The coin flip and opening hand deal no longer vanish. Fixed the intermittent missing spin and deal that happened when card art was still streaming in on the first match — the board no longer re-renders over a playing animation.",
+                "Blitz clock placement: both players' clocks now sit in the Leader-to-Life gap, mirrored for the opponent.",
+            }),
+            ("Puzzles", new[]
+            {
+                "Refreshed the certified puzzle catalog with a new gold-standard library.",
+            }),
+        }),
         ("v1.0.21", "Deeper Puzzles, multi-turn challenges, and official keyword fixes", "Jul 23, 2026", new (string, string[])[]
         {
             ("Puzzles rebuilt around real decisions", new[]

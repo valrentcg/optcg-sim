@@ -1620,6 +1620,22 @@ namespace OnePieceTcg.Engine
         //     are played" (OP04-096 Corrida Coliseum from a Stage, etc.).
         // A negated attacker loses its OWN printed grant but keeps a modifier-granted one. This is the single
         // source of truth for both DeclareAttack's gate and the board glow/dim, so the two never disagree.
+        /// <summary>The card carries an UNCONDITIONAL printed attack lock — "This Leader cannot attack."
+        /// (OP15-039 Rebecca, OP03-058, …) or a line-anchored "This Character cannot attack." — so it can
+        /// never be a legal attacker while its effect is active. DeclareAttack enforces this; the bots call
+        /// it to drop such cards from their attacker list, since proposing one is a guaranteed rejected
+        /// command. Conditional locks ("If X, this Character cannot attack.") are deliberately NOT covered:
+        /// they are state-dependent, and the callers' no-op blacklists absorb a single wasted attempt.</summary>
+        public static bool HasPrintedCannotAttack(GameState state, CardInstance attacker)
+        {
+            if (attacker == null) return false;
+            var def = GetCard(attacker);
+            if (def == null || IsEffectNegated(state, attacker)) return false;
+            return (ContainsAll(def.Effect, "This Leader cannot attack.") && def.Type == "leader")
+                || System.Text.RegularExpressions.Regex.IsMatch(def.Effect ?? "",
+                    @"(^|\n)\s*This Character cannot attack\.\s*($|\n)");
+        }
+
         public static bool CanAttackCharactersOnPlayTurn(GameState state, string seat, CardInstance attacker)
         {
             if (state == null || attacker == null) return false;
@@ -3565,9 +3581,7 @@ namespace OnePieceTcg.Engine
             var attackerDefP = GetCard(attacker);
             if (!IsEffectNegated(state, attacker))
             {
-                if ((ContainsAll(attackerDefP.Effect, "This Leader cannot attack.") && attackerDefP.Type == "leader")
-                    || System.Text.RegularExpressions.Regex.IsMatch(attackerDefP.Effect ?? "",
-                        @"(^|\n)\s*This Character cannot attack\.\s*($|\n)"))
+                if (HasPrintedCannotAttack(state, attacker))
                 {
                     Log(state, seat, $"{NameId(attackerDefP)} cannot attack.");
                     return;

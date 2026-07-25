@@ -5793,11 +5793,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             return;
         }
 
-        // Networked PvP: only the coin-flip winner sees the Go First/Second choice - the other
-        // client gets a waiting message (with an animated ellipsis, see Update()) instead of a
-        // second copy of buttons they have no business clicking. Hotseat/Versus Self is
-        // unaffected (isNetworked is false there), matching how mulligan was scoped earlier.
-        if (isNetworked && state.CoinFlipWinner != localSeat)
+        // Only the coin-flip WINNER sees the Go First/Second choice; everyone else gets a waiting message
+        // (with an animated ellipsis, see Update()) instead of a copy of buttons they have no business
+        // clicking. Two cases, both required:
+        //   • networked PvP — the peer that lost the flip;
+        //   • solo vs AI — the BOT won, so the choice is the bot's. This case was missing: the buttons
+        //     dispatch Seat = state.CoinFlipWinner, and the engine accepts that (ChooseTurnOrder only
+        //     checks seat == CoinFlipWinner), so the human was picking the BOT's turn order for it. The
+        //     bot makes this call itself on its next tick (IntermediateBot handles Status == "coinflip").
+        // Hotseat / Versus Self is deliberately unaffected (no aiSeat, not networked): one person controls
+        // both seats, so they decide either way — the same scoping the mulligan overlay uses.
+        if ((aiSeat != null && state.CoinFlipWinner == aiSeat)
+            || (isNetworked && state.CoinFlipWinner != localSeat))
         {
             coinFlipWaitingBaseMessage = $"Waiting for {DisplayName(state.CoinFlipWinner)} to decide going first or second";
             var waitLabel = TextObject("Coin Flip Text", panel, coinFlipWaitingBaseMessage,
@@ -8715,10 +8722,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             selectedSeat = null;
             var dl = state.DeckLook;
             var selecting = dl.Step == "select";
-            // Buttons only for the seat doing the look/search; the other client just waits.
-            if (isNetworked && dl.Seat != localSeat)
+            // Buttons only for the seat doing the look/search; the other side just waits. This must cover
+            // the SOLO vs-AI case as well as the networked one — DrawDeckLookOverlay already hides the AI's
+            // cards (searchIsOpponents), but this panel used to hand the human a live "Take None" button for
+            // the BOT's search, so a player could resolve the opponent's decision for them. Same test the
+            // pending-effect and 6th-character branches use.
+            if ((aiSeat != null && dl.Seat == aiSeat) || (isNetworked && dl.Seat != localSeat))
             {
-                AddInfo(body, $"{dl.SourceName}: opponent is looking at cards — waiting on opponent...");
+                AddInfo(body, $"◦  {dl.SourceName}: opponent is looking at cards — waiting on opponent…");
                 return;
             }
             if (dl.Step == "scry")
@@ -9072,10 +9083,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var ch = state.ActiveChoice;
         var source = CardData.GetCard(ch.SourceCardId);
         AddEffectCardVisual(body, ch.SourceCardId);
-        // Buttons only for the seat whose choice this is; the other client just waits.
-        if (isNetworked && ch.Seat != localSeat)
+        // Buttons only for the seat whose choice this is; the other side just waits. Covers the solo
+        // vs-AI case too (same omission as the deck-look branch: the human was handed live Choose A /
+        // Choose B buttons for a branch the BOT owns).
+        if ((aiSeat != null && ch.Seat == aiSeat) || (isNetworked && ch.Seat != localSeat))
         {
-            AddInfo(body, source.Name + " — opponent is choosing...");
+            AddInfo(body, "◦  " + source.Name + " — opponent is choosing…");
             return;
         }
         AddInfo(body, source.Name + " — Choose One:");

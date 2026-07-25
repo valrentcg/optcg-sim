@@ -93,6 +93,21 @@ switch (mode)
     case "stagereplacetest":
         return OnePieceTcg.Sim.StageReplacementTest.Run();
 
+    case "retargetlooptest":
+        return OnePieceTcg.Sim.ChampionRetargetLoopTest.Run();
+
+    case "bugreplay":
+        return OnePieceTcg.Sim.BugReportReplay.Run(args);
+
+    case "triggerprecedencetest":
+        return OnePieceTcg.Sim.AdvancedTriggerPrecedenceTest.Run();
+
+    case "botstall":
+        return OnePieceTcg.Sim.BotStallSweep.Run(args, BuildRegistry(out _));
+
+    case "decklookprofile":
+        return OnePieceTcg.Sim.DeckLookThinkProfile.Run(args);
+
     case "bubblecostcheck":
         return OnePieceTcg.Sim.BubbleCostTest.Run();
 

@@ -97,7 +97,28 @@ namespace OnePieceTcg.Engine.Bot.Search
             // [Counter] + card advantage, with a lethal override). This subsumes the old zero-value gate —
             // a no-target/no-value Trigger scores ~0 and is declined — and, unlike the generic rollout,
             // does not wash out a Trigger's marginal defensive value.
-            if (!SkipTriggerUtility && state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger")
+            // PRECEDENCE GUARDS. Both fast paths below (trigger utility, then the rollout) key off the BATTLE
+            // alone, so either can outrank an open choice/effect/deck-look that the engine is actually waiting
+            // on. A Trigger's BODY routinely queues one while the battle is still parked on Step == "trigger"
+            // (OP14-108's "K.O. up to 1 …", ST11-005's "+1000 power"). Both guards restore the order
+            // IntermediateBot.DecideNextCommand uses.
+
+            // 1. The OTHER seat owns the open decision: the engine is waiting on them, so this seat must not
+            //    act at all. The core returns null (wait); acting here would fire commands out of turn.
+            bool otherSeatOwnsOpenDecision =
+                (state.ActiveChoice != null && state.ActiveChoice.Seat != seat)
+                || (state.DeckLook != null && state.DeckLook.Seat != seat)
+                || (state.PendingCharReplace != null && state.PendingCharReplace.Seat != seat)
+                || (state.PendingEffects.Count > 0 && !state.PendingEffects.Any(e => e.Seat == seat));
+            if (otherSeatOwnsOpenDecision) return IntermediateBot.DecideOneCommand(state, seat, blacklist);
+
+            // 2. THIS seat has something queued: resolve it before touching the trigger step. Skipping this
+            //    made the bot hand back `useTrigger` again — which never clears the queued effect, so it
+            //    re-issued the same command every tick and the match hung with the bot apparently frozen.
+            bool nothingOpenToResolve =
+                state.PendingEffects.Count == 0 && state.ActiveChoice == null && state.DeckLook == null;
+            if (!SkipTriggerUtility && nothingOpenToResolve
+                && state.Battle != null && state.Battle.TargetSeat == seat && state.Battle.Step == "trigger")
             {
                 var fair = BotDeterminizer.FairView(state, seat, BotDeterminizer.Seed(state, seat));
                 return new GameCommand
