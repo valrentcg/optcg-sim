@@ -33,6 +33,7 @@ namespace OnePieceTcg.Sim
             AiBuildsALegalSealedDeck();
             EventRunsAFullSwiss();
             LeaderFormatVariants();
+            BuilderFiltersAndViews();
             Console.WriteLine($"sealedtest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -322,6 +323,84 @@ namespace OnePieceTcg.Sim
             else Console.WriteLine("    (no banned Leaders on the current ban list — skipped)");
 
             rPool.LeaderMode = SealedLeaderMode.RainbowLuffy;
+        }
+
+        // The builder's filter/sort/group model. Filters STACK across groups and OR within a group,
+        // quick views regroup whatever survived, and both must agree with the pool.
+        private static void BuilderFiltersAndViews()
+        {
+            var product = SealedCatalog.Find("OP16");
+            var pool = SealedPool.Generate(product, "view-test");
+            var chips = SealedFilters.All();
+            var view = new SealedPoolView();
+
+            int distinct = pool.PoolCounts().Count;
+            Check($"no filters shows the whole pool ({distinct} distinct)",
+                view.Filter(pool, chips).Count == distinct);
+
+            // Single group: Characters only.
+            var charChip = chips.First(c => c.Group == "type" && c.Key == "character");
+            view.Toggle(charChip);
+            var chars = view.Filter(pool, chips);
+            Check("type filter keeps only Characters",
+                chars.Count > 0 && chars.All(i => CardData.GetCard(i)?.Type == "character"));
+
+            // Second group ANDs: Characters AND 2K counter.
+            var twoK = chips.First(c => c.Group == "counter" && c.Key == "2000");
+            view.Toggle(twoK);
+            var charsTwoK = view.Filter(pool, chips);
+            Check("groups AND together (Character + 2K)",
+                charsTwoK.All(i => CardData.GetCard(i).Type == "character" && CardData.GetCard(i).Counter >= 2000)
+                && charsTwoK.Count <= chars.Count);
+
+            // Chips inside a group OR: adding Events widens the type group.
+            var eventChip = chips.First(c => c.Group == "type" && c.Key == "event");
+            view.Toggle(eventChip);
+            var charsOrEventsTwoK = view.Filter(pool, chips);
+            Check("chips inside a group OR together (Character or Event)",
+                charsOrEventsTwoK.Count >= charsTwoK.Count
+                && charsOrEventsTwoK.All(i => CardData.GetCard(i).Counter >= 2000));
+
+            view.Reset();
+            Check("reset clears every chip", view.ActiveCount == 0 && view.Filter(pool, chips).Count == distinct);
+
+            // Search matches name, id and effect text.
+            view.Search = "OP16-";
+            Check("search matches card ids", view.Filter(pool, chips).Count == distinct);
+            view.Search = "zzzznotacard";
+            Check("search with no hits returns nothing", view.Filter(pool, chips).Count == 0);
+            view.Reset();
+
+            // Quick views regroup without losing cards.
+            foreach (var qv in new[] { SealedQuickView.Counter, SealedQuickView.Curve, SealedQuickView.Type,
+                                       SealedQuickView.Rarity, SealedQuickView.Pack, SealedQuickView.Color })
+            {
+                view.QuickView = qv;
+                var groups = view.Build(pool, chips);
+                Check($"quick view {qv} produces groups ({groups.Count})", groups.Count > 0);
+                if (qv == SealedQuickView.Counter || qv == SealedQuickView.Curve || qv == SealedQuickView.Type)
+                    Check($"quick view {qv} partitions the pool exactly",
+                        groups.Sum(g => g.Count) == distinct);
+            }
+
+            // Pack view is the "never lose pack information" promise.
+            view.QuickView = SealedQuickView.Pack;
+            var packGroups = view.Build(pool, chips);
+            Check($"pack view has one group per pack ({packGroups.Count})", packGroups.Count == pool.Packs.Count);
+
+            // Sorts are total and stable.
+            view.QuickView = SealedQuickView.None;
+            foreach (SealedSort srt in Enum.GetValues(typeof(SealedSort)))
+            {
+                view.Sort = srt;
+                var a = view.Filter(pool, chips);
+                var b = view.Filter(pool, chips);
+                Check($"sort {srt} is stable and total", a.Count == distinct && a.SequenceEqual(b));
+            }
+
+            view.Sort = SealedSort.Cost;
+            var byCost = view.Filter(pool, chips).Select(i => CardData.GetCard(i).Cost).ToList();
+            Check("cost sort is ascending", byCost.SequenceEqual(byCost.OrderBy(x => x)));
         }
 
         private static void Check(string name, bool ok)
