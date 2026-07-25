@@ -60,12 +60,36 @@ namespace OnePieceTcg.Sealed
             scaler.matchWidthOrHeight = 0.5f;
             gameObject.AddComponent<GraphicRaycaster>();
 
-            root = SealedUI.Panel((RectTransform)transform, "Sealed Root", SealedUI.PanelBg);
+            // AddComponent<Canvas> gives the GameObject a RectTransform; be defensive anyway so a cast
+            // can never take the whole mode down silently.
+            var rootRt = transform as RectTransform ?? gameObject.AddComponent<RectTransform>();
+            root = SealedUI.Panel(rootRt, "Sealed Root", SealedUI.PanelBg);
             SealedUI.Fill(root);
 
-            chosenProduct = SealedCatalog.Available().FirstOrDefault();
             chosenSeed = PackGenerator.NewSeed();
+            BootAsync();
+        }
+
+        /// <summary>The main menu never populates CardData (it parses the card JSON into its own menu
+        /// structures) and the match loader drops rarity, so Sealed loads the library itself before it
+        /// can offer a single set. Without this the picker had no products, chosenProduct stayed null,
+        /// and OPEN PACKS silently early-returned.</summary>
+        private async void BootAsync()
+        {
+            ShowLoading();
+            await SealedCardLibrary.EnsureLoadedAsync();
+            if (this == null) return;
+
+            chosenProduct = SealedCatalog.Available().FirstOrDefault();
             ShowPicker();
+        }
+
+        private void ShowLoading()
+        {
+            Clear();
+            var t = SealedUI.Label(screenRoot, "Loading", "Loading card library…", 18, SealedUI.Muted,
+                TextAnchor.MiddleCenter);
+            SealedUI.Fill(t.rectTransform);
         }
 
         private void Clear()
@@ -92,6 +116,17 @@ namespace OnePieceTcg.Sealed
 
             SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
                 .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
+
+            if (SealedCatalog.Available().Count == 0)
+            {
+                var err = SealedUI.Label(screenRoot, "NoSets",
+                    "No booster sets are available.
+
+The card library did not load, so there is nothing to open.",
+                    15, SealedUI.Bad, TextAnchor.MiddleCenter);
+                SealedUI.Stretch(err.rectTransform, new Vector2(0.1f, 0.35f), new Vector2(0.9f, 0.6f));
+                return;
+            }
 
             // --- set list ---
             var listHost = SealedUI.Panel(screenRoot, "Sets", SealedUI.PanelBg2);
