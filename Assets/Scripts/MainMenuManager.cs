@@ -7366,17 +7366,11 @@ public partial class MainMenuManager : MonoBehaviour
                 Vector2.zero, Vector2.zero);
 
             var sealBody = TextObject("Sealed Body", portal,
-                "Pick a set, open six seeded packs, and build a 40-card deck from exactly what you pull.
-
-"
-                + "•  Sealed rules: no colour restriction, no copy limit, 40 cards instead of 50.
-"
-                + "•  Two Leader formats: Rainbow Luffy, or free select from any legal Leader.
-"
-                + "•  Share your seed and anyone opens the same six packs.
-
-"
-                + "No deck selection here — your pool comes out of the packs.",
+                "Pick a set, open six seeded packs, and build a 40-card deck from exactly what you pull."
+                + "\n\n•  Sealed rules: no colour restriction, no copy limit, 40 cards instead of 50."
+                + "\n•  Two Leader formats: Rainbow Luffy, or free select from any legal Leader."
+                + "\n•  Share your seed and anyone opens the same six packs."
+                + "\n\nNo deck selection here — your pool comes out of the packs.",
                 12, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
             sealBody.horizontalOverflow = HorizontalWrapMode.Wrap;
             sealBody.verticalOverflow = VerticalWrapMode.Overflow;
