@@ -1117,6 +1117,19 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.26", "The coin flip tells the truth — gold heads, silver tails", "Jul 25, 2026", new (string, string[])[]
+        {
+            ("Coin flip", new[]
+            {
+                "The toss ran for a fixed time at a fixed speed, so it always landed on the same face — heads, every game, whether you won or lost. It now lands on heads when you win the flip and tails when you lose.",
+                "The flip itself was always a fair 50/50; only the animation was wrong.",
+                "The coin has two sides now: gold heads, silver tails. The metal changes as the coin turns, so it reads as a real two-sided disc instead of one face being relettered.",
+            }),
+            ("Turn order at a glance", new[]
+            {
+                "On the keep-hand / mulligan screen, the order pill is gold when you're going first and silver when you're going second — so first and second read the same way on the coin and at the mulligan.",
+            }),
+        }),
         ("v1.0.25", "Suggest a bot improvement, and cards no longer hide behind the board", "Jul 25, 2026", new (string, string[])[]
         {
             ("New: Suggest a bot improvement", new[]

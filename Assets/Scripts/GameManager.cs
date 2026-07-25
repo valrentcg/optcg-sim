@@ -42,6 +42,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private static readonly Color ZoneBorder = new Color32(120, 180, 220, 66); // rgba(120,180,220,.26)
     private static readonly Color ZoneYou  = new Color32(40, 124, 124, 56);    // rgba(40,124,124,.22)
     private static readonly Color ZoneOpp  = new Color32(44, 94, 144, 56);     // rgba(44,94,144,.22)
+    // Turn-order metals, shared by the coin flip and the mulligan order pill so the two read as one
+    // idea: GOLD = heads = going FIRST, SILVER = tails = going SECOND. *Ink are the legible face/text
+    // colours to sit on each metal.
+    private static readonly Color CoinGold      = new Color32(226, 188, 74, 255);
+    private static readonly Color CoinGoldInk   = new Color32(58, 42, 10, 255);
+    private static readonly Color CoinSilver    = new Color32(206, 214, 226, 255);
+    private static readonly Color CoinSilverInk = new Color32(38, 46, 58, 255);
     private static readonly Color MatTop   = new Color32(13, 33, 60, 255);     // ~#0d213c (radial mid)
     private static readonly Color MatBottom= new Color32(13, 38, 50, 255);     // ~#0d2632
     private static readonly Color SeamCyan = new Color32(79, 195, 224, 150);
@@ -5597,13 +5604,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Going first / second is a primary mulligan decision input, so present it as a large,
         // high-contrast status pill instead of the old 16px floating caption.
         bool mulGoingFirst = seat == state.FirstPlayer;
+        // Match the coin's metals so turn order reads the same everywhere: GOLD = first, SILVER = second.
+        var orderMetal = mulGoingFirst ? CoinGold : CoinSilver;
         var orderPill = PanelObject("Mulligan Order Pill", dim, new Color32(17, 43, 58, 248));
         Stretch(orderPill, new Vector2(0.34f, 0.835f), new Vector2(0.66f, 0.912f), Vector2.zero, Vector2.zero);
         RoundBig(orderPill);
-        AddRoundedCardBorder(orderPill, Accent, 2.2f);
+        AddRoundedCardBorder(orderPill, orderMetal, 2.2f);
         var orderLabel = TextObject("Mulligan Order", orderPill,
             mulliganPlayerName.ToUpperInvariant() + "  GOES  " + (mulGoingFirst ? "FIRST" : "SECOND"),
-            28, Accent, TextAnchor.MiddleCenter, titleFont);
+            28, orderMetal, TextAnchor.MiddleCenter, titleFont);
         orderLabel.fontStyle = FontStyle.Bold;
         orderLabel.resizeTextForBestFit = true;
         orderLabel.resizeTextMinSize = 19;
@@ -5909,13 +5918,44 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddButton(buttons, "Go Second", () => Dispatch(new GameCommand { Type = "chooseTurnOrder", Seat = state.CoinFlipWinner, GoingFirst = false }));
     }
 
-    // Spins a gold coin (edge-on squash + an up-and-down arc) on the coin-flip panel for ~1.3s, then
+    /// <summary>Did the player LOOKING AT THIS SCREEN win the coin flip? Drives which face the coin
+    /// lands on (heads = you won, tails = you lost). Each mode has a different notion of "you":
+    /// networked = the seat this client controls; vs AI = whichever seat the bot is NOT; hotseat /
+    /// Versus Self = the bottom seat, since one person controls both and the board is drawn from that
+    /// side. Falls back to true only when there is no flip result to report.</summary>
+    private bool LocalWonCoinFlip()
+    {
+        string winner = state?.CoinFlipWinner;
+        if (string.IsNullOrEmpty(winner)) return true;
+        if (isNetworked) return winner == localSeat;
+        if (aiSeat != null) return winner != aiSeat;
+        return winner == BottomSeat;
+    }
+
+    // Spins the coin (edge-on squash + an up-and-down arc) on the coin-flip panel for ~1.3s, then
     // flips coinFlipRevealed and re-renders to show the winner + first/second choice. Guarded against
     // the panel being torn down mid-spin. Uses unscaled time so it plays regardless of any pause.
     private IEnumerator AnimateCoinFlip(RectTransform panel)
     {
         if (panel == null) { coinFlipRevealed = true; yield break; }
-        var coin = PanelObject("Coin", panel, (Color)new Color32(226, 188, 74, 255));
+
+        // WHICH FACE THE COIN LANDS ON. The toss used to run for a fixed 1.35s at a fixed rate, so the
+        // final angle was always cos(11.475) ≈ +0.46 — the front face, every single time, regardless of
+        // who actually won. Heads now means YOU won the flip and tails means you lost, so the coin
+        // actually reports the result instead of decorating it.
+        bool localWonFlip = LocalWonCoinFlip();
+        // Land face-on by construction: each half-flip is π radians, so an EVEN number of half-flips
+        // ends at cos = +1 (front/heads) and an ODD number at cos = -1 (back/tails). Picking the parity
+        // is what makes the landing deterministic — no snapping the face at the end.
+        int halfFlips = localWonFlip ? 4 : 5;
+        float totalRad = halfFlips * Mathf.PI;
+        // Hold the spin RATE at the original 8.5 rad/s and let the duration follow from the number of
+        // half-flips (~1.48s heads, ~1.85s tails). Fixing the duration instead would make a losing toss
+        // visibly spin ~37% faster than a winning one, which would leak the result before it lands.
+        const float spinRate = 8.5f;
+        float dur = totalRad / spinRate;
+
+        var coin = PanelObject("Coin", panel, localWonFlip ? CoinGold : CoinSilver);
         coin.anchorMin = coin.anchorMax = new Vector2(0.5f, 0.46f);
         coin.pivot = new Vector2(0.5f, 0.5f);
         coin.sizeDelta = new Vector2(78f, 78f);
@@ -5923,39 +5963,49 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         RoundCircle(coin);                       // a real disc, not a rounded square
         var coinImg = coin.GetComponent<Image>();
         // H / T face — swaps each half-flip and inherits the coin's squash, so it turns with the disc.
-        var faceText = TextObject("Coin Face", coin, "H", 38, (Color)new Color32(58, 42, 10, 255), TextAnchor.MiddleCenter, titleFont);
+        var faceText = TextObject("Coin Face", coin, localWonFlip ? "H" : "T", 38,
+            localWonFlip ? CoinGoldInk : CoinSilverInk, TextAnchor.MiddleCenter, titleFont);
         faceText.fontStyle = FontStyle.Bold;
         Stretch(faceText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         faceText.raycastTarget = false;
 
-        const float dur = 1.35f;
         float t = 0f;
         while (t < dur && coin != null && panel != null)
         {
             t += Time.unscaledDeltaTime;
-            float spins = t * 8.5f;                                 // ~8-9 half-flips over the toss
+            float spins = totalRad * Mathf.Clamp01(t / dur);        // ends exactly on a face (see halfFlips)
             float cos = Mathf.Cos(spins);
             float squash = Mathf.Abs(cos);                         // 0 = edge-on, 1 = face-on
             coin.localScale = new Vector3(1f, squash * 0.86f + 0.14f, 1f);
             coin.anchoredPosition = new Vector2(0f, Mathf.Sin(Mathf.Clamp01(t / dur) * Mathf.PI) * 66f); // toss arc
-            // Shade the face darker at the edge-on point so the flip reads as a real 3-D turn.
+            // The two SIDES of the coin are different metals — gold heads, silver tails — so the turn
+            // reads as a real two-sided disc rather than one face relettered. Shade darker at the
+            // edge-on point so it still reads as a 3-D turn.
+            bool showingHeads = cos >= 0f;
+            var metal = showingHeads ? CoinGold : CoinSilver;
             if (coinImg != null)
             {
                 float b = 0.55f + 0.45f * squash;
-                coinImg.color = new Color(0.89f * b, 0.74f * b, 0.29f * b, 1f);
+                coinImg.color = new Color(metal.r * b, metal.g * b, metal.b * b, 1f);
             }
             if (faceText != null)
             {
-                faceText.text = cos >= 0f ? "H" : "T";             // front face = Heads, back = Tails
-                var fc = faceText.color; fc.a = squash;            // fade the letter out at the edge-on point
-                faceText.color = fc;
+                faceText.text = showingHeads ? "H" : "T";          // front face = Heads, back = Tails
+                var ink = showingHeads ? CoinGoldInk : CoinSilverInk;
+                ink.a = squash;                                    // fade the letter out at the edge-on point
+                faceText.color = ink;
             }
             yield return null;
         }
-        // Land face-on and HOLD so the player can read the H/T result before the winner is shown.
+        // Land face-on and HOLD so the player can read the H/T result before the winner is shown. The
+        // parity of halfFlips already put the correct side up, so this only settles the transform.
         if (coin != null) { coin.localScale = Vector3.one; coin.anchoredPosition = Vector2.zero; }
-        if (coinImg != null) coinImg.color = new Color(0.89f, 0.74f, 0.29f, 1f);
-        if (faceText != null) { var fc = faceText.color; fc.a = 1f; faceText.color = fc; }
+        if (coinImg != null) coinImg.color = localWonFlip ? CoinGold : CoinSilver;
+        if (faceText != null)
+        {
+            faceText.text = localWonFlip ? "H" : "T";
+            faceText.color = localWonFlip ? CoinGoldInk : CoinSilverInk;
+        }
         yield return new WaitForSecondsRealtime(0.9f);
         coinFlipRevealed = true;
         Render();

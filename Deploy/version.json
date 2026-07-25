@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.25",
-  "buildNumber": 23,
+  "buildVersion": "1.0.26",
+  "buildNumber": 24,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "New: suggest a bot improvement. Right-click a card during a game against the A.I. (or in Puzzles) and the report window now offers a Bot Suggestion toggle alongside the usual bug report — tell us what the bot should have done instead and why it's better. It records the exact position, both decks, and which A.I. difficulty was playing, so the line you suggest can be replayed and measured against how the bot plays today. Fixed: cards no longer render behind the board zones. The deck, DON!! deck, trash and Life panels are drawn after everything else, so a card overflowing its own slot could be painted over by them — most visibly a rested (rotated) Character at the outer end of the row. Character cards and cost-area DON!! now always draw on top.",
+  "notes": "The coin flip now shows the real result. The toss ran for a fixed time at a fixed speed, so it always landed on the same face — heads, every game, whether you won or lost. It now lands on heads when you win the flip and tails when you lose. (The flip itself was always a fair 50/50; only the animation was wrong.) The coin also has two sides now — gold heads, silver tails — with the metal changing as it turns, so it reads as a real two-sided disc. Turn order is colour-coded to match: on the keep-hand / mulligan screen the order pill is gold when you're going first and silver when you're going second.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
