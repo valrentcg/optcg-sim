@@ -288,6 +288,18 @@ namespace OnePieceTcg.Sim
             Check("Free Select excludes banned Leaders",
                 free.All(id => !SealedLeaderRules.IsBannedLeader(id)));
 
+            // Name every banned LEADER explicitly, so a future ban-list edit that drops one is caught
+            // here rather than by a player picking it in a sealed event.
+            var bannedLeaders = CardData.Library.Keys
+                .Where(id => CardData.GetCard(id)?.Type == "leader" && SealedLeaderRules.IsBannedLeader(id))
+                .OrderBy(id => id, StringComparer.Ordinal).ToList();
+            Console.WriteLine("    banned Leaders on the list: " + string.Join(", ",
+                bannedLeaders.Select(id => $"{id} {CardData.GetCard(id)?.Name} ({CardData.GetCard(id)?.Color})")));
+            Check("ST10-001 Trafalgar Law (Red/Purple, ULTRA DECK) is a banned Leader",
+                bannedLeaders.Contains("ST10-001"));
+            Check("no banned Leader is offered by Free Select",
+                bannedLeaders.All(id => !free.Contains(id)));
+
             // A Leader from a completely different set is legal here but not in pool-only.
             var foreign = free.FirstOrDefault(id => !id.StartsWith("OP16-", StringComparison.OrdinalIgnoreCase));
             if (foreign != null)
