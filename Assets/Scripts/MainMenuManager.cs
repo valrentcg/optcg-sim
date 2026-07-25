@@ -7328,7 +7328,7 @@ public partial class MainMenuManager : MonoBehaviour
         // Timing cycle (Standard → Bullet → Blitz → Rapid): applies to Versus Self (hotseat) and Versus A.I.
         // only, so Blitz is locally testable. NOT shown for Puzzles (single-turn, untimed) or Sandbox
         // (free-form editing) — a game-mode clock is meaningless there. See GameManager.Blitz.cs / BlitzConfig.
-        if (selectedId != "soloPuzzle" && selectedId != "soloSandbox")
+        if (selectedId != "soloPuzzle" && selectedId != "soloSandbox" && selectedId != "sealed")
         {
             bool timed = soloTimingPreset != "standard";
             var timeBtn = PanelObject("Timing Btn", portal, timed ? new Color(0.62f, 0.42f, 0.12f, 0.85f) : (Color)new Color32(10, 22, 32, 220));
@@ -7349,9 +7349,41 @@ public partial class MainMenuManager : MonoBehaviour
         bool aiMode = selectedId == "soloAi";
         bool sandboxMode = selectedId == "soloSandbox";
         bool puzzleMode = selectedId == "soloPuzzle";
+        // Sealed builds its pool from packs, so it needs NO deck selection here — without its own
+        // branch it fell through to the generic two-deck layout and the CTA started a Versus Self match.
+        bool sealedMode = selectedId == "sealed";
         var northDeck = DeckStore.Get(aiMode ? aiDeckId : p2DeckId);
         var southDeck = DeckStore.Get(p1DeckId);
-        if (puzzleMode)
+        if (sealedMode)
+        {
+            var sealDev = TextObject("Sealed Dev Flag", portal,
+                "EARLY DEVELOPMENT  —  Sealed / Pre-Release is brand new. Right-click any card to report a bug.",
+                11, Accent2, TextAnchor.UpperLeft);
+            sealDev.fontStyle = FontStyle.Bold;
+            sealDev.horizontalOverflow = HorizontalWrapMode.Wrap;
+            sealDev.verticalOverflow = VerticalWrapMode.Overflow;
+            Stretch(sealDev.rectTransform, new Vector2(0.028f, 0.78f), new Vector2(0.972f, 0.90f),
+                Vector2.zero, Vector2.zero);
+
+            var sealBody = TextObject("Sealed Body", portal,
+                "Pick a set, open six seeded packs, and build a 40-card deck from exactly what you pull.
+
+"
+                + "•  Sealed rules: no colour restriction, no copy limit, 40 cards instead of 50.
+"
+                + "•  Two Leader formats: Rainbow Luffy, or free select from any legal Leader.
+"
+                + "•  Share your seed and anyone opens the same six packs.
+
+"
+                + "No deck selection here — your pool comes out of the packs.",
+                12, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
+            sealBody.horizontalOverflow = HorizontalWrapMode.Wrap;
+            sealBody.verticalOverflow = VerticalWrapMode.Overflow;
+            Stretch(sealBody.rectTransform, new Vector2(0.028f, 0.30f), new Vector2(0.972f, 0.77f),
+                Vector2.zero, Vector2.zero);
+        }
+        else if (puzzleMode)
         {
             var puzDev = TextObject("Puzzle Dev Flag", portal,
                 "EARLY DEVELOPMENT  —  Puzzles is a new mode still being built and tuned. Expect rough edges and " +
@@ -7393,7 +7425,9 @@ public partial class MainMenuManager : MonoBehaviour
 
         // Status caption
         bool bothReady = northDeck != null && southDeck != null;
-        string capText = puzzleMode
+        string capText = sealedMode
+            ? "Six packs, 40-card deck, your pool only"
+            : puzzleMode
             ? "Preset boards — no deck needed. Find the forced win."
             : sandboxMode
             ? "Decks optional — they just stock each side's deck zone. Enter with a blank board either way."
@@ -7402,13 +7436,16 @@ public partial class MainMenuManager : MonoBehaviour
             : (northDeck == null && southDeck == null) ? "Select 2 decks to begin"
             : "Select 1 more deck to begin";
         var cap = TextObject("Deck Caption", portal, capText, 10,
-            (puzzleMode || sandboxMode || bothReady) ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
+            (sealedMode || puzzleMode || sandboxMode || bothReady) ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
         cap.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(cap.rectTransform, new Vector2(0f, 0.195f), new Vector2(1f, 0.232f),
             new Vector2(12f, 0f), new Vector2(-12f, 0f));
 
         // Primary CTA. Sandbox + Puzzles are always launchable (no deck needed).
-        if (puzzleMode)
+        if (sealedMode)
+            BuildPortalCta(portal, "OPEN PACKS  ▸", true,
+                new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterSealed);
+        else if (puzzleMode)
             BuildPortalCta(portal, "PLAY PUZZLES  ▸", true,
                 new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterPuzzle);
         else if (sandboxMode)
