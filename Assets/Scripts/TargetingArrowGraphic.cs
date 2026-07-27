@@ -78,8 +78,9 @@ public class TargetingArrowGraphic : MaskableGraphic
     /// ribbon width, so a fat barb is also a SOFT barb — at the spec's 1.85 the barbs carried about
     /// twice the shaft's blur radius and read as smears rather than blades, which is the more
     /// noticeable now that the shaft tapers to a crisp point beside them. 1.10 keeps them solid
-    /// while sharpening the edge; below ~0.8 they go wispy and stop reading as a head at all.</summary>
-    public float barbWidth = 1.10f;
+    /// while sharpening the edge; below ~0.8 they go wispy and stop reading as a head at all.
+    /// 1.50 after a request for a thicker head — past ~1.7 the apex starts rounding off again.</summary>
+    public float barbWidth = 1.50f;
 
     [Header("Look")]
     [Range(0f, 1f)] public float bloom = 0.52f;
@@ -494,12 +495,13 @@ public class TargetingArrowGraphic : MaskableGraphic
     float WidthAtS(float s, float L, float armLen)
     {
         float w = 0.32f + 0.68f * Mathf.Pow(Mathf.Min(s / (L * 0.55f), 1f), 0.8f);
-        float dEnd = L - s, blend = armLen * 0.55f;
-        // Taper to almost nothing at the very tip. The spec floors this at 0.55, which leaves the
-        // shaft ending in a blunt cap right where the two barbs meet — and that cap, blurred by the
-        // shader, is the rounded blob that read as "no tip". Running it down to 0.10 lets the shaft
-        // itself form the point, with the barbs flanking it.
-        if (dEnd < blend) w *= 0.10f + 0.90f * (dEnd / blend);
+        // The taper has to reach a point WITHOUT stepping. The spec's 0.55 floor leaves a blunt cap
+        // that blurs into a blob; my first attempt (0.10 over 0.55*armLen) went to the other extreme
+        // and dropped the core from ~3 px to ~1 px across barely 30 px, which reads as a thinner
+        // line spliced onto the end of the shaft — the "zig-zag before the head". 0.34 over a much
+        // longer 1.6*armLen narrows it gradually enough that the eye follows it into the point.
+        float dEnd = L - s, blend = armLen * 1.6f;
+        if (dEnd < blend) w *= 0.34f + 0.66f * (dEnd / blend);
         return w;
     }
 
