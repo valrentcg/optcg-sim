@@ -7638,6 +7638,34 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return root;
     }
 
+    // The beam arrow (TargetingArrowGraphic + Spellbind/ArrowBeam) replaces the sprite-strip
+    // arrow. Flip this to false to fall back to RenderEnergyArrow, which is left intact below.
+    private const bool UseBeamArrow = true;
+
+    /// <summary>The persistent beam component for an arrow root. It lives on the ROOT rather than
+    /// on a child because Clear(root) destroys children every frame, and the spring that gives the
+    /// arrow its weight only reads as weight if its velocity survives between frames.</summary>
+    private TargetingArrowGraphic BeamArrowOn(RectTransform root)
+    {
+        if (root == null) return null;
+        var beam = root.GetComponent<TargetingArrowGraphic>();
+        if (beam == null)
+        {
+            beam = root.gameObject.AddComponent<TargetingArrowGraphic>();
+            beam.raycastTarget = false;
+        }
+        return beam;
+    }
+
+    private static TargetingArrowGraphic.ArrowState BeamStateFor(Color color)
+    {
+        // The old API carried intent as a colour. Map it back: warm/red reads as invalid,
+        // green as valid, anything else (the orange battle arrow, gold drag) as the neutral aim.
+        if (color.r > 0.6f && color.g < 0.45f && color.b < 0.45f) return TargetingArrowGraphic.ArrowState.Invalid;
+        if (color.g > 0.55f && color.r < 0.5f) return TargetingArrowGraphic.ArrowState.Valid;
+        return TargetingArrowGraphic.ArrowState.Aim;
+    }
+
     private void DrawCurvedTargetingArrow(RectTransform root, RectTransform source, RectTransform target, Color color, float thickness)
     {
         if (root == null || source == null || target == null) return;
@@ -7650,6 +7678,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Origin sits just past the card edge so the ribbon never overlays the source art.
         var start = sourceCenter + dir * RectScreenRadius(source, 0.56f);
         var end = targetCenter - dir * RectScreenRadius(target, 0.50f);
+        if (UseBeamArrow)
+        {
+            var beam = BeamArrowOn(root);
+            if (beam != null) { beam.Track(start, end, BeamStateFor(color)); return; }
+        }
         RenderEnergyArrow(root, start, end, color, thickness, true);
     }
 
@@ -7664,6 +7697,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var dir = delta.normalized;
         var start = sourceCenter + dir * RectScreenRadius(source, 0.56f);
         var end = screenPoint;
+        if (UseBeamArrow)
+        {
+            var beam = BeamArrowOn(root);
+            // The surge is a shader effect on a persistent mesh, so unlike the old sprite sparks
+            // it costs nothing to keep running while the pointer moves.
+            if (beam != null) { beam.Track(start, end, BeamStateFor(color)); return; }
+        }
         // Rebuilt every frame while dragging — no travelling sparks (they'd re-spawn per frame).
         RenderEnergyArrow(root, start, end, color, thickness, false);
     }
