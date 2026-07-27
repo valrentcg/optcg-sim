@@ -101,6 +101,11 @@ switch (mode)
 
     // leaderaudit [all] — stuck / unreachable sweep. Leaders by default (they carry the game's most
     // unusual wording); "all" runs the identical sweep over every printed card.
+    // auraaudit — passive/continuous auras, which never queue a pending effect and so are invisible
+    // to leaderaudit. Differential: same board twice, with and without the aura's source.
+    case "auraaudit":
+        return OnePieceTcg.Sim.AuraLeakAudit.Run();
+
     case "leaderaudit":
         if (args.Length > 2 && args[1] == "why")
             return OnePieceTcg.Sim.LeaderEffectAudit.Why(args[2]);

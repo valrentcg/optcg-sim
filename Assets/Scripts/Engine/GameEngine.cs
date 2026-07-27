@@ -6884,6 +6884,10 @@ namespace OnePieceTcg.Engine
             return m.Success ? m.Groups[1].Value.Trim() : null;
         }
 
+        /// <summary>Test seam: evaluate a printed condition against a state.</summary>
+        public static bool AuditConditionValue(GameState state, string seat, string condition)
+            => EvaluateCondition(state, seat, condition, null, false);
+
         private static bool EvaluateCondition(GameState state, string seat, string condition, string sourceInstanceId = null, bool logUnknown = true)
         {
             _conditionRecognized = true;
@@ -7405,6 +7409,43 @@ namespace OnePieceTcg.Engine
             // "this Character has N power or more" (self)
             if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"this Character has (\d{3,5}) power or more", RO))().Success)
             { var s = FindCardInstance(state, sourceInstanceId); return s != null && GetPower(state, s) >= int.Parse(M().Groups[1].Value); }
+            // "you have a/an/no [colour ]{Type} type Character[ with a cost of N or more][ other than [Name]]"
+            // — a plain "do I control one of these?" question, and the negated "no" form. An unparsed
+            // condition FAILS CLOSED, so every one of these silently never fired: OP16-076 Sakazuki
+            // ("you have an {Admiral} type Character"), OP11-096 ("a black {Navy} type Character other
+            // than [Ripper]"), OP16-017 ("you have NO Characters with a type including "Whitebeard
+            // Pirates" and a cost of 8 or more").
+            if ((M = () => System.Text.RegularExpressions.Regex.Match(condition,
+                    @"^you have (?<neg>no|an?)\s+(?<colour>red|green|blue|purple|black|yellow\s+)?(?:\{(?<tag>[^}]+)\} type |Characters? with a type including ""(?<qtag>[^""]+)"" )?(?<noun>Characters?)(?<tail>.*)$",
+                    RO))().Success)
+            {
+                var m = M();
+                string tag = m.Groups["tag"].Success ? m.Groups["tag"].Value.Trim()
+                           : m.Groups["qtag"].Success ? m.Groups["qtag"].Value.Trim() : null;
+                string colour = m.Groups["colour"].Success ? m.Groups["colour"].Value.Trim() : null;
+                string tail = m.Groups["tail"].Value;
+                int costMin = -1, costMax = -1;
+                var cm = System.Text.RegularExpressions.Regex.Match(tail, @"cost of (\d+) or (more|less)", RO);
+                if (cm.Success)
+                {
+                    int cv = int.Parse(cm.Groups[1].Value);
+                    if (cm.Groups[2].Value.Equals("more", StringComparison.OrdinalIgnoreCase)) costMin = cv; else costMax = cv;
+                }
+                var exclude = System.Text.RegularExpressions.Regex.Match(tail, @"other than \[([^\]]+)\]", RO);
+                int have = p.CharacterArea.Count(c =>
+                {
+                    if (c == null) return false;
+                    var cd = GetCard(c);
+                    if (cd == null) return false;
+                    if (tag != null && !cd.HasFeature(tag)) return false;
+                    if (colour != null && (cd.Color ?? "").IndexOf(colour, StringComparison.OrdinalIgnoreCase) < 0) return false;
+                    if (costMin >= 0 && GetCost(state, c) < costMin) return false;
+                    if (costMax >= 0 && GetCost(state, c) > costMax) return false;
+                    if (exclude.Success && NameMatches(state, c, exclude.Groups[1].Value.Trim())) return false;
+                    return true;
+                });
+                return m.Groups["neg"].Value.Equals("no", StringComparison.OrdinalIgnoreCase) ? have == 0 : have >= 1;
+            }
             // "you have N or more Characters with a cost of M or more" (OWN board only — OP12-081 Koala).
             if ((M = () => System.Text.RegularExpressions.Regex.Match(condition, @"you have (\d+) or more Characters with a cost of (\d+) or more", RO))().Success)
             { var m = M(); int need = int.Parse(m.Groups[1].Value); int cst = int.Parse(m.Groups[2].Value);

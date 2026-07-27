@@ -54,6 +54,7 @@ namespace OnePieceTcg.Sim
             OtherThanIsNotReadAsARequirement();
             ACostOfferingAChoiceCanBePaidEitherWay();
             GiveAllOpponentCharactersHitsEveryoneAndNeverWaits();
+            BoardPresenceConditionsAreParsed();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -578,6 +579,28 @@ namespace OnePieceTcg.Sim
             GameEngine.QueueClauseForTest(f.St, "south", f.Hand("south", "EB04-051"), "trigger", Clause);
             Check("\"give ALL\" against an empty board resolves instead of freezing",
                 f.St.PendingEffects.Count == 0, $"pending={f.St.PendingEffects.Count}");
+        }
+
+        // An unparsed condition FAILS CLOSED, so a "do I control one of these?" question the engine
+        // cannot read means the gated effect silently never fires, all game, with no error. Three such
+        // conditions were unreadable: OP16-076 ("you have an {Admiral} type Character"), OP11-096
+        // ("a black {Navy} type Character other than [Ripper]") and OP16-017's negated form.
+        private static void BoardPresenceConditionsAreParsed()
+        {
+            var b = new Fixture();
+            b.Character("south", "ST01-005");                       // Jinbe — {Straw Hat Crew}, not {Navy}
+            Check("\"you have a {Type} Character\" is false when you control none",
+                !GameEngine.AuditConditionValue(b.St, "south", "you have an {Admiral} type Character"));
+            Check("\"you have NO {Type} Characters\" is TRUE when you control none",
+                GameEngine.AuditConditionValue(b.St, "south", "you have no {Admiral} type Characters"));
+
+            var f = new Fixture();
+            f.Character("south", "ST01-005");                        // {Straw Hat Crew}
+            Check("\"you have a {Type} Character\" is true when you control one",
+                GameEngine.AuditConditionValue(f.St, "south", "you have a {Straw Hat Crew} type Character"));
+            Check("\"other than [Name]\" excludes the named card from the count",
+                !GameEngine.AuditConditionValue(f.St, "south",
+                    "you have a {Straw Hat Crew} type Character other than [Jinbe]"));
         }
 
         // ---- plumbing -------------------------------------------------------------------------
