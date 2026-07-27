@@ -107,6 +107,8 @@ switch (mode)
         return OnePieceTcg.Sim.AuraLeakAudit.Run();
 
     case "leaderaudit":
+        if (args.Length > 1 && args[1] == "conditions")
+            return OnePieceTcg.Sim.LeaderEffectAudit.Conditions();
         if (args.Length > 2 && args[1] == "why")
             return OnePieceTcg.Sim.LeaderEffectAudit.Why(args[2]);
         return OnePieceTcg.Sim.LeaderEffectAudit.Run(args.Length > 1 ? args[1] : "leaders");

@@ -376,6 +376,78 @@ namespace OnePieceTcg.Sim
                 || after == null || after.EffectId != beforeId || after.SelectionsRemaining != beforeSel;
         }
 
+        /// <summary>`leaderaudit conditions` — which printed conditions ACTUALLY reach EvaluateCondition
+        /// and fail closed there?
+        ///
+        /// condition-audit reads printed text, so it lists every condition whose wording the parser does
+        /// not know. Most of those never reach the parser at all: replacement triggers, "if you do"
+        /// sequencing and reveal comparisons are resolved inline where they are printed. Claiming those
+        /// are harmless from the shape of the words is a guess. This runs every clause and watches for the
+        /// engine's own "Unknown condition" line, which it emits only when a condition genuinely arrived
+        /// at EvaluateCondition and was treated as not met — the failure that silently disables a card.</summary>
+        public static int Conditions()
+        {
+            var hits = new SortedDictionary<string, SortedSet<string>>(StringComparer.Ordinal);
+            int clauses = 0;
+
+            foreach (var d in CardData.Library.Values
+                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Id))
+                         .OrderBy(x => x.Id, StringComparer.Ordinal))
+            {
+                foreach (var raw in ClausesOf(d))
+                {
+                    string clause = raw.Trim();
+                    if (clause.Length == 0) continue;
+                    var tags = TagsOf(clause);
+                    if (tags.Count == 0) continue;
+                    bool isTrigger = tags.Any(t => t.Equals("Trigger", StringComparison.OrdinalIgnoreCase));
+                    if (!isTrigger && !tags.Any(t => ResolverEventTags.Contains(t))) continue;
+                    clauses++;
+
+                    var st = Rich(Board(d.Id, 3, 3, false, 3, 3, 3));
+                    var south = st.Players["south"];
+                    CardInstance src;
+                    if (string.Equals(d.Type, "leader", StringComparison.OrdinalIgnoreCase)) src = south.Leader;
+                    else if (string.Equals(d.Type, "stage", StringComparison.OrdinalIgnoreCase)) { src = Inst(d.Id, "south", "stage"); south.Stage = src; }
+                    else if (string.Equals(d.Type, "event", StringComparison.OrdinalIgnoreCase)) { src = Inst(d.Id, "south", "hand"); south.Hand.Add(src); }
+                    else
+                    {
+                        src = Inst(d.Id, "south", "character");
+                        int slot = south.CharacterArea.FindIndex(c => c == null);
+                        south.CharacterArea[slot < 0 ? south.CharacterArea.Count - 1 : slot] = src;
+                    }
+
+                    int logFrom = st.EventLog.Count;
+                    try
+                    {
+                        GameEngine.QueueClauseForTest(st, "south", src, TimingFor(tags), clause);
+                        var pe = st.PendingEffects.FirstOrDefault();
+                        for (int step = 0; step < 6 && pe != null; step++)
+                        {
+                            if (!AdvanceOneStep(st, pe)) break;
+                            pe = st.PendingEffects.FirstOrDefault();
+                        }
+                    }
+                    catch { }
+
+                    foreach (var entry in st.EventLog.Skip(logFrom))
+                    {
+                        var m = Regex.Match(entry.Message ?? "", @"Unknown condition '(?<c>.*)' — treating as not met\.");
+                        if (!m.Success) continue;
+                        string cond = m.Groups["c"].Value;
+                        if (!hits.TryGetValue(cond, out var set)) hits[cond] = set = new SortedSet<string>(StringComparer.Ordinal);
+                        set.Add(d.Id);
+                    }
+                }
+            }
+
+            Console.WriteLine($"condition reach: {clauses} clauses executed");
+            Console.WriteLine($"  conditions that REALLY reached EvaluateCondition and failed closed: {hits.Count}");
+            foreach (var kv in hits.OrderByDescending(k => k.Value.Count))
+                Console.WriteLine($"    {kv.Value.Count,3} cards  \"{kv.Key}\"  e.g. {string.Join(", ", kv.Value.Take(4))}");
+            return hits.Count == 0 ? 0 : 1;
+        }
+
         // ---- the player's own "is anything clickable?" test ----------------------------------------
         // Mirrors GameManager.EffectHasValidTarget exactly: if this is false and the effect is not
         // Optional, the pending panel has no enabled control at all.
