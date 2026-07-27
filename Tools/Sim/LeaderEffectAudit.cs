@@ -343,6 +343,11 @@ namespace OnePieceTcg.Sim
             // Strip the same prefixes the engine strips before it looks for a cost — leading timing tags
             // AND the DON!!-cost prefix. Without the second one this read "DON!! -1 (...) You may rest this
             // Leader: ..." as "not a cost step at all" and reported a perfectly good card as dead.
+            // "Give up to N rested DON!! card(s) to 1 of your {type} Characters" — what the player clicks
+            // is a rested DON!!, which the panel handles on its own path (GameManager's DonGivePickActive)
+            // and which is not a CARD at all, so a card-based reach check can never see it.
+            if (Regex.IsMatch(pe.Text ?? "", @"give (?:up to )?[\d\w]+ rested DON!!", RegexOptions.IgnoreCase))
+                return false;
             string t = Regex.Replace(pe.Text ?? "", @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
             t = Regex.Replace(t, @"^\s*(?:[➀-➉①-⑩]|DON!!\s*[-−–‑‒—]\s*\d+)\s*(?:\([^)]*\))?\s*[:：]?\s*", "");
             var costGate = Regex.Match(t, @"^\s*(?:\[[^\]]+\]\s*/?\s*)*You (?:may|can) (?<cost>[^:]+):",
@@ -357,7 +362,7 @@ namespace OnePieceTcg.Sim
             cost = Regex.Replace(cost, @"\bthis (?:Character|card|Leader|Stage)\b", "", RegexOptions.IgnoreCase);
             return Regex.IsMatch(cost, @"\b(?:K\.O\.|trash|rest|return|place|add|reveal)\b[^:]*\b(?:Characters?|cards?)\b",
                        RegexOptions.IgnoreCase)
-                && !Regex.IsMatch(cost, @"DON!!|top of your deck|top of your Life|Life cards face-up",
+                && !Regex.IsMatch(cost, @"DON!!|top of your deck|top of your Life|Life cards face-up|from your Life area",
                        RegexOptions.IgnoreCase)
                 // "return N cards from your trash to the bottom of your deck" is paid automatically — the
                 // engine takes the last N, the player picks nothing — so nothing glowing is correct.
@@ -460,7 +465,10 @@ namespace OnePieceTcg.Sim
         {
             var n = st.Players["north"];
             n.Leader.Rested = true;
-            var withDon = n.CharacterArea.FirstOrDefault(c => c != null);
+            // The SAME Character must carry every awkward property at once. Resting one Character and
+            // hanging DON!! on a different one satisfied neither half of "opponent's RESTED Characters …
+            // that HAS 2 or more DON!! cards given" (OP15-038), so a real card read as dead.
+            var withDon = n.CharacterArea.LastOrDefault(c => c != null);
             if (withDon != null)
                 for (int i = 0; i < 2; i++)
                 {

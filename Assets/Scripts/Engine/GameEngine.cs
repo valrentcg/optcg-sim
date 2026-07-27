@@ -8768,7 +8768,12 @@ namespace OnePieceTcg.Engine
                     if (System.Text.RegularExpressions.Regex.IsMatch(costTx, @"^rest\b",
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                         && System.Text.RegularExpressions.Regex.IsMatch(costTx, @"\b(?:cards?|Leader|Stage)\b",
-                            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                        // A COMPOUND cost may only begin with "rest …" and pay its clickable half
+                        // elsewhere — "rest this Stage AND add 1 card from the top or bottom of your Life
+                        // cards" (ST07-017 Queen Mama Chanter). Claiming it here would shadow the Life
+                        // branch below and light nothing.
+                        && !ContainsAll(costTx, "of your Life"))
                     {
                         if (card.Owner != effect.Seat || card.Rested) return false;
                         if (card.Zone != "character" && card.Zone != "leader" && card.Zone != "stage") return false;
@@ -8804,12 +8809,26 @@ namespace OnePieceTcg.Engine
                     var costPick = System.Text.RegularExpressions.Regex.Match(costTx,
                         CostPickPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (!costPick.Success)
-                        foreach (var part in System.Text.RegularExpressions.Regex.Split(costTx, @",?\s+and\s+"))
+                    {
+                        // The leading verb applies to every conjunct: "TRASH this Character and 1 of your
+                        // {Baroque Works} type Characters" — the split drops the verb from the second half,
+                        // so it has to be re-attached before matching, exactly as the resolver does. Without
+                        // that, the half of the cost that needs a click never matched anything (OP04-073
+                        // Mr.13 & Ms.Friday, ST07-017 Queen Mama Chanter).
+                        string leadVerb = System.Text.RegularExpressions.Regex.Match(costTx,
+                            @"^(rest|trash|K\.O\.|return|place|add|give)\b",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase).Value;
+                        foreach (var rawPart in System.Text.RegularExpressions.Regex.Split(costTx, @",?\s+and\s+"))
                         {
-                            var m2 = System.Text.RegularExpressions.Regex.Match(part.Trim(),
+                            string part = rawPart.Trim();
+                            if (!string.IsNullOrEmpty(leadVerb) && System.Text.RegularExpressions.Regex.IsMatch(
+                                    part, @"^\d+ (?:of your )?", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                                part = leadVerb + " " + part;
+                            var m2 = System.Text.RegularExpressions.Regex.Match(part,
                                 CostPickPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                            if (m2.Success) { costPick = m2; costTx = part.Trim(); break; }
+                            if (m2.Success) { costPick = m2; costTx = part; break; }
                         }
+                    }
                     if (costPick.Success)
                         return card.Owner == effect.Seat && card.Zone == "character"
                             && CostCharFilterOk(state, costTx, costPick.Groups[3].Value, card)
