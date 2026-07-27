@@ -8607,6 +8607,25 @@ namespace OnePieceTcg.Engine
         /// leaves the player unable to click the very card the cost demands, and the effect looks broken
         /// with no error. Two copies of this rule had already drifted apart twice: "add" (ST13-001 Sabo)
         /// and the optional "of your" (OP01-047 Law, whose cost reads "return 1 Character to your hand").</summary>
+        /// <summary>Square brackets carry two different things in card text: a card NAME ("of your
+        /// [Nico Robin] cards") and a KEYWORD or timing ("of your opponent's [Blocker] Characters"). A
+        /// name filter applied to a keyword can never match — no card is called "Blocker" — so the
+        /// clause silently targets nothing at all (ST30-012 Monkey.D.Luffy).</summary>
+        private static bool IsKeywordTag(string tag)
+        {
+            switch ((tag ?? "").Trim().ToLowerInvariant())
+            {
+                case "blocker": case "rush": case "double attack": case "banish": case "unblockable":
+                case "trigger": case "counter": case "main": case "on play": case "on k.o.":
+                case "when attacking": case "on block": case "activate: main": case "your turn":
+                case "opponent's turn": case "end of your turn": case "on your opponent's attack":
+                    return true;
+                default:
+                    return System.Text.RegularExpressions.Regex.IsMatch(tag ?? "", @"^DON!!\s*[x×]?\s*\d*$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            }
+        }
+
         private const string CostPickPattern =
             @"^(K\.O\.|trash|rest|return|place|add) (\d+) (?:of your )?([^:]*?)Characters?\b(?! cards?)";
 
@@ -9031,8 +9050,17 @@ namespace OnePieceTcg.Engine
                     if (!isLeader && !isChar) return false;
                     // Leader and Character are DISTINCT card types - only allow the type(s) the text names
                     // (e.g. "rested Characters" must not match a Leader).
-                    bool textLeader = text.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0;
-                    bool textChar = text.IndexOf("Character", StringComparison.OrdinalIgnoreCase) >= 0;
+                    // Read the type words from the FIRST clause only. A ". Then, …" rider is a separate
+                    // effect and its wording says nothing about what THIS step targets — OP16-035 Zoro
+                    // ("Rest up to 1 of your opponent's cards. Then, … give 3 rested DON!! to your LEADER")
+                    // had the rider's "Leader" convince the glow that only Leaders were targets, so the
+                    // opponent Character the first clause names could not be clicked. Same contamination
+                    // the target-ZONE inference had.
+                    string typeScan = text;
+                    int thenForType = FindThenClause(typeScan);
+                    if (thenForType > 0 && thenForType <= typeScan.Length) typeScan = typeScan.Substring(0, thenForType);
+                    bool textLeader = typeScan.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool textChar = typeScan.IndexOf("Character", StringComparison.OrdinalIgnoreCase) >= 0;
                     if (textLeader || textChar)
                     {
                         if (isLeader && !textLeader) return false;
@@ -9055,6 +9083,8 @@ namespace OnePieceTcg.Engine
                     // "[Name] cards/Characters" named-target filters.
                     var playNameF = System.Text.RegularExpressions.Regex.Match(text,
                         @"of your (?:opponent's )?\[([^\]]+)\]");
+                    if (playNameF.Success && IsKeywordTag(playNameF.Groups[1].Value))
+                        playNameF = System.Text.RegularExpressions.Match.Empty;   // a keyword, not a name
                     if (playNameF.Success && !NameMatches(state, card, playNameF.Groups[1].Value.Trim()))
                     {
                         // In a choice-of-targets description the name belongs to ONE alternative, so a card
