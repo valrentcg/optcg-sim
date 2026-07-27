@@ -216,16 +216,25 @@ public static class RankedStore
     /// and agree. matchId = shared UGS session id, opponentId = opponent UGS player
     /// id. Solo/bot games don't count. Never throws — fire-and-forget from the
     /// match-end hook.</summary>
-    public static async Task ReportMatchAsync(string matchId, string opponentId, bool won)
+    public static async Task<BountyOutcome> ReportMatchAsync(string matchId, string opponentId, bool won)
     {
-        if (!Configured || AccountManager.IsGuest) return;
-        if (string.IsNullOrEmpty(matchId) || string.IsNullOrEmpty(opponentId)) return;
+        if (!Configured || AccountManager.IsGuest) return null;
+        if (string.IsNullOrEmpty(matchId) || string.IsNullOrEmpty(opponentId)) return null;
+
+        // Bounty BEFORE the match settles. The delta is measured, not read: the server's
+        // lastDeltaBounty is computed in memory by whichever report triggers settlement, so only ONE
+        // of the two players ever receives it — the one who reported first is handed a pre-settlement
+        // profile and would see nothing. Subtracting two bounties works for both sides.
+        var beforeProfile = await LoadAsync();
+        long beforeBounty = beforeProfile?.bounty ?? 0;
+        int beforeGames = beforeProfile?.games ?? 0;
+        var outcome = new BountyOutcome { status = "error" };
 
         try
         {
             await AccountManager.EnsureReadyAsync();
             string token = AuthenticationService.Instance.AccessToken;
-            if (string.IsNullOrEmpty(token)) return;
+            if (string.IsNullOrEmpty(token)) return outcome;
 
             var payload = new ReportRequest
             {
@@ -250,6 +259,14 @@ public static class RankedStore
                 // pre-settlement one (pending) — cache it so the profile updates.
                 var wrap = JsonUtility.FromJson<ReportResponse>(req.downloadHandler.text);
                 if (wrap?.profile != null) { _cache = wrap.profile; Changed?.Invoke(); }
+                outcome.status = wrap?.status ?? "error";
+                if (outcome.status == "settled" && wrap?.profile != null)
+                {
+                    outcome.bounty = wrap.profile.bounty;
+                    outcome.deltaBounty = wrap.profile.bounty - beforeBounty;
+                    outcome.vivreSaved = wrap.profile.lastVivreSaved;
+                    outcome.known = true;
+                }
             }
             else
             {
@@ -260,6 +277,36 @@ public static class RankedStore
         {
             Debug.LogWarning($"RankedStore report exception: {ex.Message}");
         }
+
+        // "pending" = our half is in, the opponent has not filed theirs yet, so nothing has moved.
+        // Settlement happens server-side the moment they do, with no push channel back to us — poll
+        // briefly so the result screen can fill in rather than leaving the player guessing.
+        if (outcome.status == "pending")
+        {
+            for (int i = 0; i < 12 && !outcome.known; i++)
+            {
+                await Task.Delay(2500);
+                var p2 = await LoadAsync();
+                if (p2 == null || p2.games <= beforeGames) continue;   // still unsettled
+                outcome.bounty = p2.bounty;
+                outcome.deltaBounty = p2.bounty - beforeBounty;
+                outcome.vivreSaved = !won && p2.bounty == beforeBounty;   // a loss that cost nothing
+                outcome.known = true;
+                outcome.status = "settled";
+            }
+        }
+        return outcome;
+    }
+
+    /// <summary>What a finished ranked match did to your bounty. <c>known</c> is false while the
+    /// opponent has not confirmed — the screen shows that state rather than inventing a number.</summary>
+    public sealed class BountyOutcome
+    {
+        public string status;        // settled | pending | disputed | error
+        public long deltaBounty;
+        public long bounty;
+        public bool vivreSaved;
+        public bool known;
     }
 
     // Await a UnityWebRequest without a coroutine (match the async store style).

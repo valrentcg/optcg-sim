@@ -152,6 +152,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // a finished match. "View Board" hides it (matchResultHidden) to inspect the final
     // state; a "Show Result" chip brings it back. The in-match menu is locked out meanwhile.
     private string finishedResultText;   // "YOU WIN!" / "YOU LOSE." / "MATCH OVER" — set on finish
+    // Ranked bounty movement for the result screen. Null until the report comes back; `known` stays
+    // false while the opponent has not confirmed, which the screen says out loud instead of showing a
+    // number that might be wrong.
+    private RankedStore.BountyOutcome rankedBounty;
+    private bool rankedBountyAwaiting;
     private bool matchResultHidden;      // View Board pressed — result popup temporarily hidden
     // Custom-online rematch handshake (both players must ask; host then publishes a shared
     // seed and both restart in place over the still-open session — no teardown, no re-queue).
@@ -803,6 +808,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         previewLockCard = null;
         ClearDonSelection(false);
         finishedResultText = null;
+        rankedBounty = null; rankedBountyAwaiting = false;
         matchResultHidden = false;
         BlitzInit(PendingBlitzConfig);   // timed-match clocks (null/Standard = untimed)
         Render();
@@ -1201,6 +1207,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         PendingNorthName = null;
         opponentLeft = false;
         finishedResultText = null;
+        rankedBounty = null; rankedBountyAwaiting = false;
         matchResultHidden = false;
         chatOpen = false;
         chatUnread = false;
@@ -1357,9 +1364,25 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 string rankedMatchId = !string.IsNullOrEmpty(cachedRankedMatchId) ? cachedRankedMatchId : LobbyManager.CurrentSession?.Id;
                 string rankedOppId = !string.IsNullOrEmpty(cachedRankedOppId) ? cachedRankedOppId : LobbyManager.OpponentPlayerId();
                 if (!string.IsNullOrEmpty(rankedMatchId) && !string.IsNullOrEmpty(rankedOppId))
-                    _ = RankedStore.ReportMatchAsync(rankedMatchId, rankedOppId, summary.result == "win");
+                    _ = ReportRankedAndShowBountyAsync(rankedMatchId, rankedOppId, summary.result == "win");
             }
         }
+    }
+
+    /// <summary>Report our half of a ranked match and show what it did to our bounty. Same
+    /// fire-and-forget contract as before — it never throws and never blocks match end — but the
+    /// answer is now kept and drawn on the result screen instead of thrown away.</summary>
+    private async System.Threading.Tasks.Task ReportRankedAndShowBountyAsync(string matchId, string oppId, bool won)
+    {
+        rankedBountyAwaiting = true;
+        if (this != null && finishedResultText != null && !matchResultHidden) Render();
+        RankedStore.BountyOutcome outcome = null;
+        try { outcome = await RankedStore.ReportMatchAsync(matchId, oppId, won); }
+        catch (System.Exception ex) { Debug.LogWarning($"ranked bounty report failed: {ex.Message}"); }
+        if (this == null) return;                     // left the match while waiting
+        rankedBounty = outcome;
+        rankedBountyAwaiting = false;
+        if (finishedResultText != null && !matchResultHidden) Render();
     }
 
     private void NormalizeSelection()
@@ -3181,7 +3204,49 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             : custom ? "Custom match complete"
             : (networkedMode == "ranked" ? "Ranked" : "Casual") + " match complete";
         var sub = TextObject("Match Result Sub", panel, subText, 12, Muted, TextAnchor.MiddleCenter, monoFont);
-        Stretch(sub.rectTransform, new Vector2(0.06f, 0.44f), new Vector2(0.94f, 0.54f), Vector2.zero, Vector2.zero);
+        Stretch(sub.rectTransform, new Vector2(0.06f, 0.46f), new Vector2(0.94f, 0.54f), Vector2.zero, Vector2.zero);
+
+        // Ranked bounty movement — the number the whole mode is played for, which the result screen
+        // previously never showed. Guests and non-ranked matches get nothing (a guest does not report,
+        // so there is genuinely no ladder movement to report).
+        if (isNetworked && isRankedMatch && !AccountManager.IsGuest)
+        {
+            string bountyText;
+            Color bountyCol;
+            if (rankedBounty != null && rankedBounty.known)
+            {
+                long d = rankedBounty.deltaBounty;
+                bountyCol = d > 0 ? new Color(0.42f, 0.85f, 0.55f)
+                          : d < 0 ? new Color(0.93f, 0.48f, 0.48f) : Gold;
+                // House style for berries is a plain grouped number with the unit spelled out (the
+                // profile's bounty card does exactly this) — no symbol.
+                bountyText = d > 0 ? "+" + RankedStore.FormatBerries(d) + " BERRIES"
+                           : d < 0 ? "-" + RankedStore.FormatBerries(-d) + " BERRIES"
+                           : rankedBounty.vivreSaved ? "Vivre Card saved your bounty"
+                           : "Bounty unchanged";
+                if (d != 0) bountyText += "   ·   now " + RankedStore.FormatBerriesShort(rankedBounty.bounty);
+            }
+            else if (rankedBountyAwaiting || rankedBounty == null)
+            {
+                bountyText = "Confirming the result with your opponent…";
+                bountyCol = Muted;
+            }
+            else if (rankedBounty.status == "disputed")
+            {
+                bountyText = "Reports disagreed — no bounty change";
+                bountyCol = Gold;
+            }
+            else
+            {
+                // Their half never arrived while we waited. The match is not lost — the server settles
+                // whenever they do report — so say that rather than implying nothing happened.
+                bountyText = "Bounty updates once your opponent reports";
+                bountyCol = Muted;
+            }
+            var bounty = TextObject("Match Result Bounty", panel, bountyText, 14, bountyCol, TextAnchor.MiddleCenter, monoFont);
+            bounty.fontStyle = FontStyle.Bold;
+            Stretch(bounty.rectTransform, new Vector2(0.04f, 0.38f), new Vector2(0.96f, 0.46f), Vector2.zero, Vector2.zero);
+        }
 
         var buttons = RowObject("Match Result Buttons", panel, 10, TextAnchor.MiddleCenter);
         Stretch(buttons, new Vector2(0.06f, 0.12f), new Vector2(0.94f, 0.40f), Vector2.zero, Vector2.zero);
@@ -8494,6 +8559,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         ClearDonSelection(false);
 
         finishedResultText = null;
+        rankedBounty = null; rankedBountyAwaiting = false;
         matchResultHidden = false;
         opponentLeft = false;
         rematchLocalRequested = false;
