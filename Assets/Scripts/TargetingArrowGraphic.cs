@@ -70,6 +70,13 @@ public class TargetingArrowGraphic : MaskableGraphic
     /// spanning the screen ended up with a head half the size of a card.</summary>
     public float maxHeadPixels = 90f;
 
+    /// <summary>Barb thickness, as a multiple of the shaft's width. The shader's blur scales with
+    /// ribbon width, so a fat barb is also a SOFT barb — at the spec's 1.85 the barbs carried about
+    /// twice the shaft's blur radius and read as smears rather than blades, which is the more
+    /// noticeable now that the shaft tapers to a crisp point beside them. 1.10 keeps them solid
+    /// while sharpening the edge; below ~0.8 they go wispy and stop reading as a head at all.</summary>
+    public float barbWidth = 1.10f;
+
     [Header("Look")]
     [Range(0f, 1f)] public float bloom = 0.52f;
     [Range(0f, 1f)] public float surge = 0.55f;
@@ -399,7 +406,7 @@ public class TargetingArrowGraphic : MaskableGraphic
         float spread   = 0.42f + sweep * 0.52f;
         // Pinned to the spec's 0.55, NOT to WidthAtS — that now tapers to 0.10 at the tip, and
         // reading the arm width from it would shrink the barbs away along with the shaft.
-        float wMax     = 0.55f * scale * 1.85f * MESH_MUL;
+        float wMax     = 0.55f * scale * barbWidth * MESH_MUL;
         Vector2 tipP   = dense[DENSE];
 
         for (int side = 0; side < 2; side++)
