@@ -8502,9 +8502,26 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
+        /// <summary>Test seam: does this printed card satisfy a cost description?</summary>
+        public static bool AuditCostCardMatches(string costText, string cardId)
+            => CostCardMatches(costText, CardData.GetCard(cardId));
+
         private static bool CostCardMatches(string costText, CardDef def)
         {
             if (def == null) return false;
+            // A cost can offer a CHOICE of cards to pay with: "trash 1 {Fish-Man} type card from your hand
+            // OR 1 [The Ark Noah] from your hand or field" (OP06-033 Vander Decken IX). Checked as one
+            // string the alternatives AND together and nothing can pay. Split only where "or" is followed
+            // by a quantity, so the "or" inside "8000 power or more" and "cost of 4 or less" is untouched.
+            {
+                var alts = System.Text.RegularExpressions.Regex.Split(costText ?? "", @"\s+or\s+(?=\d+\s)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (alts.Length >= 2)
+                {
+                    foreach (var alt in alts) if (CostCardMatches(alt, def)) return true;
+                    return false;
+                }
+            }
             foreach (var color in new[] { "red", "green", "blue", "purple", "black", "yellow" })
             {
                 if (System.Text.RegularExpressions.Regex.IsMatch(costText, $@"\b{color}\b",
@@ -14096,8 +14113,18 @@ namespace OnePieceTcg.Engine
                     bool saTypeOk = saDef.Type == "character" || (saLeaderOk && saDef.Type == "leader");
                     // Named filter: "Set up to 1 of your [Uta] Leader as active" (ST11-005) — the [Name] was
                     // unenforced, so ANY leader/Character could be set active.
-                    var saNameF = System.Text.RegularExpressions.Regex.Match(saDesc, @"\[([^\]]+)\]");
+                    // Read the name from the description with any "other than [X]" REMOVED first. Without
+                    // that, an exclusion was read as a REQUIREMENT and inverted the card: P-029 Bartolomeo
+                    // ("Set up to 1 of your {FILM} type Characters other than [Bartolomeo] as active")
+                    // would set only Bartolomeo himself active — the one Character it rules out.
+                    var saNameF = System.Text.RegularExpressions.Regex.Match(
+                        System.Text.RegularExpressions.Regex.Replace(saDesc, @"other than \[[^\]]+\]", "",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase),
+                        @"\[([^\]]+)\]");
+                    if (saNameF.Success && IsKeywordTag(saNameF.Groups[1].Value))
+                        saNameF = System.Text.RegularExpressions.Match.Empty;
                     if (saSeat != effect.Seat || !saTypeOk || !saTarget.Rested
+                        || ExcludedByOtherThan(state, saDesc, saTarget)
                         || (saCap >= 0 && GetCost(state, saTarget) > saCap)
                         || (saRange.Success && (GetCost(state, saTarget) < int.Parse(saRange.Groups[1].Value)
                                              || GetCost(state, saTarget) > int.Parse(saRange.Groups[2].Value)))

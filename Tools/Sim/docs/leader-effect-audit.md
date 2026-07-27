@@ -1,7 +1,7 @@
 # Leader-effect operability sweep
 
-- Generated: 2026-07-27 00:22
-- Cards swept: **136**, tagged clauses: **107**, clause texts reach-tested: **14**
+- Generated: 2026-07-27 00:38
+- Cards swept: **136**, tagged clauses: **107**, clause texts reach-tested: **13**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
 

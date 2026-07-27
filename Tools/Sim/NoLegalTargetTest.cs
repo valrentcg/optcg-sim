@@ -51,6 +51,8 @@ namespace OnePieceTcg.Sim
             MandatoryHandDiscardWithNoHandDoesNotFreeze();
             OtherThanExclusionIsEnforcedByTheResolver();
             NamedCostCardMustActuallyBeThatCard();
+            OtherThanIsNotReadAsARequirement();
+            ACostOfferingAChoiceCanBePaidEitherWay();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -514,6 +516,43 @@ namespace OnePieceTcg.Sim
                 $"stillInHand={b.S.Hand.Any(c => c.InstanceId == wrong.InstanceId)} inTrash={b.S.Trash.Any(c => c.InstanceId == wrong.InstanceId)}");
             Check("the wrong card does not glow for a named cost",
                 !GameEngine.IsValidEffectTarget(b.St, pe, wrong));
+        }
+
+        // "other than [Name]" read as a POSITIVE name filter inverts the card completely: P-029
+        // Bartolomeo ("Set up to 1 of your {FILM} type Characters other than [Bartolomeo] as active")
+        // could set only Bartolomeo active — the one Character the text rules out.
+        private static void OtherThanIsNotReadAsARequirement()
+        {
+            const string Clause = "Set up to 1 of your {FILM} type Characters other than [Bartolomeo] as active.";
+            var b = new Fixture();
+            var barto = b.Character("south", "P-029", rested: true);
+            GameEngine.QueueClauseForTest(b.St, "south", barto, "main", Clause);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("\"other than\" is not read as a requirement", false, "no pending effect"); return; }
+            GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = barto.InstanceId });
+            var after = b.S.CharacterArea.FirstOrDefault(c => c != null && c.InstanceId == barto.InstanceId);
+            Check("\"other than [Name]\" excludes that card instead of requiring it",
+                after != null && after.Rested, $"rested={after?.Rested} (should stay rested — it is excluded)");
+        }
+
+        // A cost may offer a CHOICE of cards to pay with. Checked as one string the alternatives AND
+        // together and nothing can pay it (OP06-033 Vander Decken IX). The "or" inside "8000 power or
+        // more" must not be mistaken for one of those choices.
+        private static void ACostOfferingAChoiceCanBePaidEitherWay()
+        {
+            const string Cost = "trash 1 {Fish-Man} type card from your hand or 1 [The Ark Noah] from your hand";
+            var fishman = CardData.Library.Values.FirstOrDefault(d =>
+                d != null && d.Features != null && d.Features.Any(f => f != null && f.Contains("Fish-Man")));
+            var ark = CardData.GetCard("OP06-041");           // The Ark Noah
+            Check("a choice-of-cards cost accepts EITHER alternative",
+                fishman != null && ark != null
+                    && GameEngine.AuditCostCardMatches(Cost, fishman.Id)
+                    && GameEngine.AuditCostCardMatches(Cost, ark.Id),
+                $"fishman={fishman?.Id}:{(fishman != null && GameEngine.AuditCostCardMatches(Cost, fishman.Id))} " +
+                $"ark={(ark != null && GameEngine.AuditCostCardMatches(Cost, ark.Id))}");
+            Check("a power range's \"or\" is not mistaken for a choice",
+                !GameEngine.AuditCostCardMatches("trash 1 Character card with 9000 power or more from your hand", "ST01-005"));
         }
 
         // ---- plumbing -------------------------------------------------------------------------

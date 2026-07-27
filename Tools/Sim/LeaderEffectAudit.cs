@@ -146,6 +146,26 @@ namespace OnePieceTcg.Sim
                             if (!AdvanceOneStep(st, pe)) break;
                             pe = st.PendingEffects.FirstOrDefault();
                         }
+                        // The clickable / reach questions must be asked of a FRESH board. Walking the
+                        // chain consumes targets — after picking three opponent cards, "up to a total of
+                        // 3 of your opponent's rested cards" legitimately has nothing left to click, and
+                        // reporting that as a dead clause is nonsense (it flagged OP04-031 Doflamingo and
+                        // OP07-091 Luffy, both of which were clickable at every step). The walk answers
+                        // "can the player get stuck"; these two answer "was there ever anything to click",
+                        // so they get the board as the player would first meet it.
+                        st = scenario.Build(d.Id);
+                        south = st.Players["south"];
+                        if (string.Equals(d.Type, "leader", StringComparison.OrdinalIgnoreCase)) src = south.Leader;
+                        else if (string.Equals(d.Type, "stage", StringComparison.OrdinalIgnoreCase)) { src = Inst(d.Id, "south", "stage"); south.Stage = src; }
+                        else if (string.Equals(d.Type, "event", StringComparison.OrdinalIgnoreCase)) { src = Inst(d.Id, "south", "hand"); south.Hand.Add(src); }
+                        else
+                        {
+                            src = Inst(d.Id, "south", "character");
+                            int slot2 = south.CharacterArea.FindIndex(c => c == null);
+                            south.CharacterArea[slot2 < 0 ? south.CharacterArea.Count - 1 : slot2] = src;
+                        }
+                        try { GameEngine.QueueClauseForTest(st, "south", src, TimingFor(tags), clause); }
+                        catch { continue; }
                         pe = st.PendingEffects.FirstOrDefault();
                         if (pe == null) continue;
 
