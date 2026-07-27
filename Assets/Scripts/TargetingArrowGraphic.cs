@@ -91,7 +91,13 @@ public class TargetingArrowGraphic : MaskableGraphic
     [Range(0f, 1f)] public float bloom = 0.52f;
     [Range(0f, 1f)] public float surge = 0.55f;
     [Range(0f, 1f)] public float shift = 0.45f;   // state cross-fade speed
-    public float intensity = 1.6f;                // HDR multiplier, feeds Bloom
+    /// <summary>Output multiplier. The spec's 1.6 assumes an HDR target with Bloom downstream; on
+    /// this overlay canvas there is neither, so the tiers sum to ~1.56 at the centreline and 1.6x
+    /// takes that to ~2.5 — the middle of the beam clips to flat white about 6 px across. A clipped
+    /// region has a THRESHOLD edge, not a gradient one, which is what made the point read as gnawed
+    /// and the barbs as low resolution: their shape was being defined by where the clipping stopped.
+    /// 0.75 puts the peak just over 1.0, so only the very centre saturates and the falloff survives.</summary>
+    public float intensity = 0.75f;
 
     [Header("Timing (seconds)")]
     public float materializeTime = 0.13f;
@@ -479,6 +485,8 @@ public class TargetingArrowGraphic : MaskableGraphic
     {
         vh.Clear();
         if (!hasGeometry) return;
+        float canvasScale = canvas != null ? canvas.scaleFactor : 1f;
+        if (canvasScale <= 0f) canvasScale = 1f;
 
         var vert = UIVertex.simpleVert;
         vert.color = Color.white;          // the ramp lives in the material, not here
@@ -486,7 +494,11 @@ public class TargetingArrowGraphic : MaskableGraphic
         {
             vert.position = outVerts[i];
             vert.uv0 = outUvs[i];
-            vert.uv1 = new Vector2(outHalf[i], 0f);
+            // SCREEN pixels, not canvas units. The CanvasScaler is ScaleWithScreenSize against a
+            // 1600x900 reference, so a canvas unit is not a pixel — feeding the shader canvas units
+            // made its pixel floor under-correct by exactly that factor, which is why thin ribbons
+            // still aliased after the floor was added.
+            vert.uv1 = new Vector2(outHalf[i] * canvasScale, 0f);
             vh.AddVert(vert);
         }
 
