@@ -7781,6 +7781,33 @@ namespace OnePieceTcg.Engine
         ///
         /// Loops because retiring one clause can queue its "Then, …" continuation, which may
         /// itself be unsatisfiable. The bound is a runaway guard, not an expected depth.</summary>
+        /// <summary>A MANDATORY "trash N card(s) from your hand" the hand cannot cover.
+        ///
+        /// This is a real freeze, not a curiosity: play your last card, its [On Play] demands a discard,
+        /// and the hand is now empty. Nothing is clickable, the pending panel disables Skip because the
+        /// clause is mandatory, and its "Use Effect" button just re-enters the same wait — every control
+        /// on screen is a no-op. Rule 1-3-2 says an action that cannot be carried out simply is not
+        /// carried out, so the clause retires. 5 cards reach this wording (EB03-028 Yu, OP11-083 Caribou,
+        /// OP11-086 Coribou, OP12-046 Zephyr(Navy), ST27-004 Sanjuan.Wolf).
+        ///
+        /// Deliberately narrow: "up to"/"you may" wordings are already optional and skippable, and a
+        /// discard the hand CAN cover must still be paid — PassEffect force-pays that case rather than
+        /// letting it be declined for free.</summary>
+        private static bool HandDiscardCannotBePaid(GameState state, PendingEffect e)
+        {
+            string t = e.Text ?? "";
+            if (e.Optional || IsOptionalEffectText(t)) return false;
+            // Leading timing tags survive on the queued text ("[On Play] Trash 1 card from your hand."),
+            // and this match is anchored, so they have to come off first.
+            t = System.Text.RegularExpressions.Regex.Replace(t, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+            var m = System.Text.RegularExpressions.Regex.Match(t,
+                @"^\s*[Tt]rash (\d+) cards? from your hand\.?\s*$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!m.Success) return false;
+            int need = e.SelectionsRemaining > 0 ? e.SelectionsRemaining : int.Parse(m.Groups[1].Value);
+            return Player(state, e.Seat).Hand.Count < need;
+        }
+
         private static void RetireUnresolvablePendingEffects(GameState state)
         {
             if (state?.PendingEffects == null) return;
@@ -7790,7 +7817,8 @@ namespace OnePieceTcg.Engine
                 foreach (var e in state.PendingEffects)
                 {
                     if (e == null || string.IsNullOrEmpty(e.Text)) continue;
-                    if (!ClauseHasNoLegalCharacterTarget(state, e.Seat, e.Text)) continue;
+                    if (!ClauseHasNoLegalCharacterTarget(state, e.Seat, e.Text)
+                        && !HandDiscardCannotBePaid(state, e)) continue;
                     stuck = e; break;
                 }
                 if (stuck == null) return;
@@ -8573,6 +8601,15 @@ namespace OnePieceTcg.Engine
             return false;
         }
 
+        /// <summary>The board-sacrifice COST pattern: "K.O./trash/rest/return/place/add N [of your]
+        /// [filter ]Character(s)". Declared ONCE because the resolver and the glow filter must agree — the
+        /// glow decides what is CLICKABLE, so a verb the resolver accepts but the glow does not know about
+        /// leaves the player unable to click the very card the cost demands, and the effect looks broken
+        /// with no error. Two copies of this rule had already drifted apart twice: "add" (ST13-001 Sabo)
+        /// and the optional "of your" (OP01-047 Law, whose cost reads "return 1 Character to your hand").</summary>
+        private const string CostPickPattern =
+            @"^(K\.O\.|trash|rest|return|place|add) (\d+) (?:of your )?([^:]*?)Characters?\b(?! cards?)";
+
         private static bool CardPassesFeatureFilter(string effectText, CardDef def)
         {
             if (string.IsNullOrEmpty(effectText)) return true;
@@ -8681,6 +8718,15 @@ namespace OnePieceTcg.Engine
             // −4 cost..." must not mark the Leader as a valid target).
             text = System.Text.RegularExpressions.Regex.Replace(text,
                 @"^If [^,]+,\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // Strip a leading DON!!-cost prefix — the circled-number form "➁ (You may rest the specified
+            // number of DON!! cards in your cost area.)" and the written "DON!! −3 (…)" form. It is paid
+            // with DON!!, never a board click, but it sits in FRONT of the real "You may …:" cost, so
+            // leaving it in place made the cost gate below miss entirely and the glow fell through to the
+            // BODY — the hand card the cost actually wants was never lit (OP06-080 Gecko Moria,
+            // ST06-001 Sakazuki, OP07-059 Foxy).
+            text = System.Text.RegularExpressions.Regex.Replace(text,
+                @"^\s*(?:[➀-➉①-⑩]|DON!!\s*[-−–‑‒—]\s*\d+)\s*(?:\([^)]*\))?\s*[:：]?\s*", "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             // While an optional-cost effect is still paying its cost ("You may <cost>: <body>"),
             // the click chooses a COST card — validate against the cost clause, not the body.
             {
@@ -8698,14 +8744,44 @@ namespace OnePieceTcg.Engine
                     if (ContainsAll(costTx, "trash") && ContainsAll(costTx, "from your hand"))
                         return Player(state, effect.Seat).Hand.Any(c => c.InstanceId == card.InstanceId)
                             && CostCardMatches(costTx, def);
+                    // "reveal N <filter> card(s) from your hand" — the cards stay in hand, but the player
+                    // still clicks them to choose which to show (ST22-001 Ace & Newgate). Same shape as the
+                    // trash-from-hand cost above, which is why it was easy to miss.
+                    if (ContainsAll(costTx, "reveal") && ContainsAll(costTx, "from your hand"))
+                        return Player(state, effect.Seat).Hand.Any(c => c.InstanceId == card.InstanceId)
+                            && CostCardMatches(costTx, def);
+                    // "add 1 card from the TOP of your Life cards to your hand" — the top-or-bottom variant
+                    // is handled further down, but the plain top-only wording reached nothing, so the Life
+                    // card the cost demands was unclickable (OP05-060 Monkey.D.Luffy).
+                    if (ContainsAll(costTx, "top of your Life") && !ContainsAll(costTx, "top or bottom"))
+                    {
+                        if (card.Owner != effect.Seat || card.Zone != "life") return false;
+                        var lfTop = Player(state, effect.Seat).Life;
+                        return lfTop.Count > 0 && card.InstanceId == lfTop[lfTop.Count - 1].InstanceId;
+                    }
+                    // "rest 1 of your CARDS" (not "Characters") — any of your own cards in play qualifies,
+                    // Leader and Stage included (OP14-020 Dracule Mihawk).
+                    if (System.Text.RegularExpressions.Regex.IsMatch(costTx, @"^rest \d+ of your cards?\b",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                        return card.Owner == effect.Seat && !card.Rested
+                            && (card.Zone == "character" || card.Zone == "leader" || card.Zone == "stage");
                     if (ContainsAll(costTx, "place") && ContainsAll(costTx, "from your trash"))
                         return Player(state, effect.Seat).Trash.Any(c => c.InstanceId == card.InstanceId);
-                    // Verb list MUST match the cost RESOLVER (L~6336): K.O./trash/rest/return/place. Missing
-                    // "return"/"place" here glowed nothing for X.Barrels (place own char at deck bottom) and
-                    // ST17-002 Law (return own char to hand), so the player couldn't click the cost Character.
+                    // Shares CostPickPattern with the resolver rather than restating it. A comment here
+                    // used to say the verb list MUST match the resolver's — it drifted anyway, twice.
+                    // A compound cost ("rest this Leader AND return 1 of your {Dressrosa} type Characters")
+                    // pays more than one thing, and the half that needs a board click is not necessarily
+                    // the first. The resolver rewrites the cost text to reach it; the glow anchors at the
+                    // start, so it saw only "rest this Leader" and lit nothing (OP15-039 Rebecca).
                     var costPick = System.Text.RegularExpressions.Regex.Match(costTx,
-                        @"^(K\.O\.|trash|rest|return|place) (\d+) of your ([^:]*?)Characters",
-                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        CostPickPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (!costPick.Success)
+                        foreach (var part in System.Text.RegularExpressions.Regex.Split(costTx, @",?\s+and\s+"))
+                        {
+                            var m2 = System.Text.RegularExpressions.Regex.Match(part.Trim(),
+                                CostPickPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (m2.Success) { costPick = m2; costTx = part.Trim(); break; }
+                        }
                     if (costPick.Success)
                         return card.Owner == effect.Seat && card.Zone == "character"
                             && CostCharFilterOk(state, costTx, costPick.Groups[3].Value, card)
@@ -9630,8 +9706,7 @@ namespace OnePieceTcg.Engine
                         // Exclude the HAND-trash cost "trash N Character card(s) … from your hand" (OP16-015) — a
                         // "Character card"/"from your hand" phrasing is a from-hand cost, not a board sacrifice.
                         var pickM = System.Text.RegularExpressions.Regex.Match(costText,
-                            @"^(K\.O\.|trash|rest|return|place|add) (\d+) (?:of your )?([^:]*?)Characters?\b(?! cards?)",
-                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            CostPickPattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                         // "add" is only a board-sacrifice verb when it names where the Character GOES
                         // ("…to the top of your Life cards face-up", ST13-001 Sabo). Any other "add N of
                         // your Characters" phrasing belongs to a different handler, so it must not be

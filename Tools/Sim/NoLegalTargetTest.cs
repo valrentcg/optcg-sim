@@ -48,6 +48,7 @@ namespace OnePieceTcg.Sim
             RedAceLeaderTargetsItsDottedNameFilter();
             OldRedAceLeaderScalesWithEveryCardTrashed();
             OldRedAceAlsoTriggersOnDefence();
+            MandatoryHandDiscardWithNoHandDoesNotFreeze();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -225,7 +226,9 @@ namespace OnePieceTcg.Sim
                 Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = paidId,
             });
 
-            // ApplyCommand returns a fresh state, so compare by id rather than by reference.
+            // Compare by id: ApplyCommand mutates the state in place and hands the same object back,
+            // but the instances inside it move between zone lists, so a captured reference is not a
+            // reliable way to ask "where is this card now".
             bool offBoard = !b.S.CharacterArea.Any(c => c != null && c.InstanceId == paidId);
             var inLife = b.S.Life.FirstOrDefault(c => c.InstanceId == paidId);
             Check("add-to-Life cost moves the Character to the top of Life, face-up",
@@ -428,6 +431,33 @@ namespace OnePieceTcg.Sim
             int bonus = b.St.Battle != null && b.St.Battle.BattlePowerBonus.TryGetValue(leaderId, out var v) ? v : 0;
             Check("old red Ace also triggers when it IS attacked", bonus == 1000,
                 $"defensive bonus={bonus} want 1000");
+        }
+
+        // A mandatory "Trash N cards from your hand" you cannot pay used to be a hard freeze: nothing is
+        // clickable, the pending panel disables Skip because the clause is mandatory, and its "Use Effect"
+        // button re-enters the same wait — every control on screen a no-op. Reached by simply playing your
+        // LAST card when its [On Play] demands a discard. 5 cards carry this wording (EB03-028 Yu,
+        // OP11-083 Caribou, OP11-086 Coribou, OP12-046 Zephyr(Navy), ST27-004 Sanjuan.Wolf).
+        private static void MandatoryHandDiscardWithNoHandDoesNotFreeze()
+        {
+            var b = new Fixture();
+            var src = b.Hand("south", "OP11-083");
+            b.S.Hand.Remove(src);                       // the source is the last card — hand is now empty
+            GameEngine.QueueClauseForTest(b.St, "south", src, "main", "Trash 2 cards from your hand.");
+            Check("an unpayable mandatory hand discard retires instead of freezing",
+                b.St.PendingEffects.Count == 0,
+                $"pending={b.St.PendingEffects.Count}");
+
+            // …but a discard the hand CAN cover is still a cost that must be paid, not a free decline.
+            var f = new Fixture();
+            var keep1 = f.Hand("south", "ST01-005");
+            var keep2 = f.Hand("south", "ST01-005");
+            var src2 = f.Hand("south", "OP11-083"); f.S.Hand.Remove(src2);
+            GameEngine.QueueClauseForTest(f.St, "south", src2, "main", "Trash 2 cards from your hand.");
+            Check("a payable mandatory hand discard is NOT retired",
+                f.St.PendingEffects.Count == 1 || f.S.Trash.Count == 2,
+                $"pending={f.St.PendingEffects.Count} trash={f.S.Trash.Count} hand={f.S.Hand.Count} " +
+                $"(cards {keep1.InstanceId != null} {keep2.InstanceId != null})");
         }
 
         // ---- plumbing -------------------------------------------------------------------------
