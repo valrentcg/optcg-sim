@@ -8659,6 +8659,19 @@ namespace OnePieceTcg.Engine
             return m.Success && NameMatches(state, card, m.Groups[1].Value.Trim());
         }
 
+        /// <summary>Does this card satisfy a "of your [Name] cards/Characters" filter in the clause?
+        /// True when the clause names nobody. Shared because the SAME filter is applied by several buff
+        /// paths and the glow, and each copy that went missing let any card take a named card's buff
+        /// (EB01-044 Funkfreed buffed Jinbe; OP03-117 Napoleon did the same on the until-next-turn path).</summary>
+        private static bool TargetNameFilterOk(GameState state, string text, CardInstance card)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(text ?? "",
+                @"of your \[([^\]]+)\]\s*(?:cards?|Characters?)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!m.Success || IsKeywordTag(m.Groups[1].Value)) return true;
+            return NameMatches(state, card, m.Groups[1].Value.Trim());
+        }
+
         private const string CostPickPattern =
             @"^(K\.O\.|trash|rest|return|place|add) (\d+) (?:of your )?([^:]*?)Characters?\b(?! cards?)";
 
@@ -8787,6 +8800,18 @@ namespace OnePieceTcg.Engine
             {
                 int thenAt = FindThenClause(firstClause);
                 if (thenAt > 0 && thenAt <= firstClause.Length) firstClause = firstClause.Substring(0, thenAt);
+            }
+            // The OTHER optional-cost spelling: "you may trash N cards from your hand. If you do, <benefit>"
+            // — a payment with no colon, so the "You may <cost>:" gate below never saw it and the hand
+            // cards you have to click were never lit (OP15-020 Fire Fist, OP16-035 Roronoa Zoro). The
+            // clause is checked from its own start because it usually arrives as a ". Then, …" rider.
+            {
+                var ifYouDo = System.Text.RegularExpressions.Regex.Match(firstClause,
+                    @"^\s*you may trash (\d+) (?:([^.]*?) )?cards? from your hand\b",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (ifYouDo.Success && ContainsAll(text, "If you do"))
+                    return Player(state, effect.Seat).Hand.Any(c => c.InstanceId == card.InstanceId)
+                        && CostCardMatches(ifYouDo.Value, def);
             }
             // While an optional-cost effect is still paying its cost ("You may <cost>: <body>"),
             // the click chooses a COST card — validate against the cost clause, not the body.
@@ -14458,7 +14483,9 @@ namespace OnePieceTcg.Engine
                             Log(state, effect.Seat, $"Choose a card for +{uBonus} power ({sourceName}).");
                             return EffectResolution.WaitingForTarget;
                         }
-                        if (uSeat != effect.Seat || !CardPassesFeatureFilter(text, GetCard(uT)))
+                        if (uSeat != effect.Seat || !CardPassesFeatureFilter(text, GetCard(uT))
+                            || !TargetNameFilterOk(state, text, uT)
+                            || ExcludedByOtherThan(state, text, uT))
                         {
                             Log(state, effect.Seat, "That is not a valid target.");
                             return EffectResolution.WaitingForTarget;
@@ -15023,14 +15050,31 @@ namespace OnePieceTcg.Engine
                     return EffectResolution.WaitingForTarget;
                 }
                 var targetDef = GetCard(target);
-                // "[Name] cards" targeting allows either leader or character with that name.
-                var buffNameF = System.Text.RegularExpressions.Regex.Match(text, @"of your \[([^\]]+)\] cards");
-                if (buffNameF.Success) { allowLeader = true; allowChar = true; }
+                // "[Name] cards" targeting allows either leader or character with that name. "[Name]
+                // CHARACTERS" is the same filter with a narrower noun — and it was not matched at all, so
+                // the name went unchecked and any Character took the buff: EB01-044 Funkfreed ("Up to 1 of
+                // your [Spandam] Characters gains +3000 power") buffed Jinbe. The glow enforced it, the
+                // resolver did not. A [Keyword] in that position is not a name.
+                var buffNameF = System.Text.RegularExpressions.Regex.Match(text,
+                    @"of your \[([^\]]+)\]\s*(cards?|Characters?)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (buffNameF.Success && IsKeywordTag(buffNameF.Groups[1].Value))
+                    buffNameF = System.Text.RegularExpressions.Match.Empty;
+                if (buffNameF.Success && buffNameF.Groups[2].Value.StartsWith("card", StringComparison.OrdinalIgnoreCase))
+                { allowLeader = true; allowChar = true; }
                 bool typeOk = (targetDef.Type == "leader" && allowLeader) || (targetDef.Type == "character" && allowChar);
                 if (targetSeat != effect.Seat || !typeOk
                     || (buffNameF.Success && !NameMatches(state, target, buffNameF.Groups[1].Value.Trim())))
                 {
                     Log(state, effect.Seat, "That is not a valid power-buff target.");
+                    return EffectResolution.WaitingForTarget;
+                }
+                // "other than [Name]" — EB02-002 Sabo reads "Up to 1 of your {Revolutionary Army} type
+                // Characters OTHER THAN [Sabo] gains +2000 power", and Sabo could buff himself because
+                // only the "other than this card" spelling was handled here.
+                if (ExcludedByOtherThan(state, text, target))
+                {
+                    Log(state, effect.Seat, $"{NameId(targetDef)} is excluded by {sourceName}'s effect.");
                     return EffectResolution.WaitingForTarget;
                 }
                 // "other than this card" (e.g. Jinbe ST01-005) excludes the source itself.

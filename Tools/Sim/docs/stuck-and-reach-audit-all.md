@@ -1,7 +1,7 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-27 00:29
-- Cards swept: **2636**, tagged clauses: **2135**, clause texts reach-tested: **158**
+- Generated: 2026-07-27 00:35
+- Cards swept: **2636**, tagged clauses: **2135**, clause texts reach-tested: **161**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
 
@@ -11,15 +11,10 @@
 
 _none_
 
-## UNCLICKABLE — 6
+## UNCLICKABLE — 1
 
 | Card | Name | Board | Detail | Clause |
 |---|---|---|---|---|
-| EB01-044 | Funkfreed | full-board | the resolver accepts ST01-005 (own character) [south/character/False/0/0 -> south/character/False/0/1] but the glow lights nothing | You may rest this Character: Up to 1 of your [Spandam] Characters gains +3000 power during this turn. |
-| EB02-002 | Sabo | full-board | the resolver accepts EB02-002 (own character) [south/character/True/0/0 -> south/character/True/0/1] but the glow lights nothing | You may rest this Character: Up to 1 of your {Revolutionary Army} type Characters other than [Sabo] gains +2000 power during this turn. |
-| OP03-117 | Napoleon | full-board | the resolver accepts ST01-005 (own character) [south/character/False/0/0 -> south/character/False/0/1] but the glow lights nothing | You may rest this Character: Up to 1 of your [Charlotte Linlin] cards gains +1000 power until the start of your next turn. |
-| OP15-020 | Fire Fist | full-board | the resolver accepts ST01-005 (own hand) [south/hand/False/0/0 -> south/trash/False/0/0] but the glow lights nothing | Your Leader gains +3000 power during this turn and give up to 1 of your opponent's Characters −8000 power until the end of your opponent's next End Phase. Then, you may trash 2 cards from your hand. If you do, K.O. up to 1 of your opponent's Characters with 0 power or less. |
-| OP16-035 | Roronoa Zoro | full-board | the resolver accepts ST01-005 (own hand) [south/hand/False/0/0 -> south/trash/False/0/0] but the glow lights nothing | Rest up to 1 of your opponent's cards. Then, you may trash 1 card from your hand. If you do, give up to 3 rested DON!! cards to your Leader. |
 | P-029 | Bartolomeo | full-board | the resolver accepts P-029 (own character) [south/character/True/0/0 -> south/character/False/0/0] but the glow lights nothing | You may rest this Character: Set up to 1 of your {FILM} type Characters other than [Bartolomeo] as active. |
 
 ## UNREACHABLE — 4
