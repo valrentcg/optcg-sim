@@ -55,8 +55,8 @@ Shader "Spellbind/ArrowBeam"
             #pragma fragment frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-            struct Attributes { float4 positionOS : POSITION; float2 uv : TEXCOORD0; };
-            struct Varyings   { float4 positionHCS : SV_POSITION; float2 uv : TEXCOORD0; };
+            struct Attributes { float4 positionOS : POSITION; float2 uv : TEXCOORD0; float2 hw : TEXCOORD1; };
+            struct Varyings   { float4 positionHCS : SV_POSITION; float2 uv : TEXCOORD0; float hw : TEXCOORD1; };
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _Fringe, _Hue, _Light, _CoreCol;
@@ -89,6 +89,7 @@ Shader "Spellbind/ArrowBeam"
                 Varyings OUT;
                 OUT.positionHCS = TransformObjectToHClip(IN.positionOS.xyz);
                 OUT.uv = IN.uv;
+                OUT.hw = IN.hw.x;      // local ribbon half-width in canvas px
                 return OUT;
             }
 
@@ -100,13 +101,22 @@ Shader "Spellbind/ArrowBeam"
                 // Three nested Gaussians replace the three draw passes of the
                 // 2D prototype. Widths are fractions of the mesh half-width,
                 // which is 3.4x the core half-width.
-                // Tightened from the spec's 0.30 / 0.62. Those put the haze out at ~4.4x the core
-                // radius, which on this board reads as a wide soft wash either side of the beam
-                // rather than a beam with an edge. 0.22 / 0.34 keeps the same three-tier falloff
-                // but hugs it in to ~2.4x. The core tier is untouched.
-                float core = exp(-(v / 0.14) * (v / 0.14));
-                float mid  = exp(-(v / 0.22) * (v / 0.22));
-                float haze = exp(-(v / 0.34) * (v / 0.34));
+                // Tightened from the spec's 0.30 / 0.62, which put the haze out at ~4.4x the core
+                // radius and read as a wide wash rather than a beam with an edge.
+                //
+                // The sigmas are fractions of the LOCAL half-width, which alone makes a point
+                // impossible: thinning a ribbon to converge at the tip drives its core below a
+                // pixel, and a sub-pixel bright line does not render thin, it renders RAGGED. That
+                // is the "gnawed" arrowhead. So each sigma is also floored in PIXELS, using the
+                // half-width the mesh writes into TEXCOORD1. A wide ribbon is unaffected (the
+                // fractional term wins); a thin one keeps a crisp ~1 px core instead of dissolving.
+                float hwPx = max(IN.hw, 0.5);
+                float sCore = max(0.14, 0.90 / hwPx);
+                float sMid  = max(0.22, 1.60 / hwPx);
+                float sHaze = max(0.34, 2.60 / hwPx);
+                float core = exp(-(v / sCore) * (v / sCore));
+                float mid  = exp(-(v / sMid)  * (v / sMid));
+                float haze = exp(-(v / sHaze) * (v / sHaze));
 
                 float b = 0.5 + _Bloom * 1.1;
 
@@ -151,8 +161,8 @@ Shader "Spellbind/ArrowBeam"
             #pragma fragment frag
             #include "UnityCG.cginc"
 
-            struct appdata { float4 vertex : POSITION; float2 uv : TEXCOORD0; };
-            struct v2f     { float4 pos : SV_POSITION;  float2 uv : TEXCOORD0; };
+            struct appdata { float4 vertex : POSITION; float2 uv : TEXCOORD0; float2 hw : TEXCOORD1; };
+            struct v2f     { float4 pos : SV_POSITION;  float2 uv : TEXCOORD0; float hw : TEXCOORD1; };
 
             float4 _Fringe, _Hue, _Light, _CoreCol;
             float  _Intensity, _Bloom, _Surge, _From, _Fade;
@@ -179,19 +189,29 @@ Shader "Spellbind/ArrowBeam"
                 v2f o;
                 o.pos = UnityObjectToClipPos(i.vertex);
                 o.uv  = i.uv;
+                o.hw  = i.hw.x;
                 return o;
             }
 
             fixed4 frag(v2f i) : SV_Target
             {
                 float v = abs(i.uv.y * 2.0 - 1.0);
-                // Tightened from the spec's 0.30 / 0.62. Those put the haze out at ~4.4x the core
-                // radius, which on this board reads as a wide soft wash either side of the beam
-                // rather than a beam with an edge. 0.22 / 0.34 keeps the same three-tier falloff
-                // but hugs it in to ~2.4x. The core tier is untouched.
-                float core = exp(-(v / 0.14) * (v / 0.14));
-                float mid  = exp(-(v / 0.22) * (v / 0.22));
-                float haze = exp(-(v / 0.34) * (v / 0.34));
+                // Tightened from the spec's 0.30 / 0.62, which put the haze out at ~4.4x the core
+                // radius and read as a wide wash rather than a beam with an edge.
+                //
+                // The sigmas are fractions of the LOCAL half-width, which alone makes a point
+                // impossible: thinning a ribbon to converge at the tip drives its core below a
+                // pixel, and a sub-pixel bright line does not render thin, it renders RAGGED. That
+                // is the "gnawed" arrowhead. So each sigma is also floored in PIXELS, using the
+                // half-width the mesh writes into TEXCOORD1. A wide ribbon is unaffected (the
+                // fractional term wins); a thin one keeps a crisp ~1 px core instead of dissolving.
+                float hwPx = max(i.hw, 0.5);
+                float sCore = max(0.14, 0.90 / hwPx);
+                float sMid  = max(0.22, 1.60 / hwPx);
+                float sHaze = max(0.34, 2.60 / hwPx);
+                float core = exp(-(v / sCore) * (v / sCore));
+                float mid  = exp(-(v / sMid)  * (v / sMid));
+                float haze = exp(-(v / sHaze) * (v / sHaze));
                 float b = 0.5 + _Bloom * 1.1;
 
                 float3 c = _CoreCol.rgb * core

@@ -72,7 +72,7 @@ public class TargetingArrowGraphic : MaskableGraphic
 
     /// <summary>Smallest ribbon half-width, in canvas pixels. Guards the shader's core against
     /// going sub-pixel, which aliases into a zig-zag rather than simply looking thin.</summary>
-    public float minRibbonPixels = 5f;
+    public float minRibbonPixels = 2f;
 
     /// <summary>How far back along each barb, as a fraction of its length, the barb reaches full
     /// width. Small values give a sharper apex; 0 restores the spec's full-width-at-the-tip barbs
@@ -122,6 +122,9 @@ public class TargetingArrowGraphic : MaskableGraphic
     // Local-space (canvas) geometry, produced by Rebuild and consumed by OnPopulateMesh.
     readonly Vector2[] outVerts = new Vector2[(SHAFT + 1) * 2 + (ARM + 1) * 2 * 2];
     readonly Vector2[] outUvs   = new Vector2[(SHAFT + 1) * 2 + (ARM + 1) * 2 * 2];
+    // Local half-width in canvas px, handed to the shader so it can floor its cross-section in
+    // pixels instead of only in fractions of the ribbon.
+    readonly float[]   outHalf  = new float[(SHAFT + 1) * 2 + (ARM + 1) * 2 * 2];
     bool hasGeometry;
 
     Vector2 origin, aimPoint, tip, vel;
@@ -231,6 +234,15 @@ public class TargetingArrowGraphic : MaskableGraphic
             enabled = false;
         }
         canvasRenderer.cull = true;
+    }
+
+    protected override void OnEnable()
+    {
+        base.OnEnable();
+        // uGUI strips every vertex channel the canvas has not opted into, so without this the
+        // shader would read zero for the half-width and floor every sigma at its widest.
+        var c = canvas;
+        if (c != null) c.additionalShaderChannels |= AdditionalCanvasShaderChannels.TexCoord1;
     }
 
     protected override void OnDestroy()
@@ -409,8 +421,8 @@ public class TargetingArrowGraphic : MaskableGraphic
                         : (i == SHAFT)  ? sPos[SHAFT] - sPos[SHAFT - 1]
                                         : sPos[i + 1] - sPos[i - 1];
             Vector2 n = new Vector2(-tan.y, tan.x).normalized;
-            outVerts[v] = sPos[i] + n * sHalf[i]; outUvs[v] = new Vector2(sU[i], 1f); v++;
-            outVerts[v] = sPos[i] - n * sHalf[i]; outUvs[v] = new Vector2(sU[i], 0f); v++;
+            outVerts[v] = sPos[i] + n * sHalf[i]; outUvs[v] = new Vector2(sU[i], 1f); outHalf[v] = sHalf[i]; v++;
+            outVerts[v] = sPos[i] - n * sHalf[i]; outUvs[v] = new Vector2(sU[i], 0f); outHalf[v] = sHalf[i]; v++;
         }
 
         // --- head: two arms starting AT the tip, sweeping back.
@@ -448,12 +460,12 @@ public class TargetingArrowGraphic : MaskableGraphic
                 // It works now because the shaft tapers too — the two changes are only useful
                 // together, which is why each looked wrong on its own.
                 float apex = Mathf.SmoothStep(0f, 1f, Mathf.Min(1f, f / Mathf.Max(0.01f, barbApexRamp)));
-                float hw = Mathf.Max(1.5f,
+                float hw = Mathf.Max(1f,
                            wMax * apex * Mathf.Pow(1f - f, 0.55f)
                          * (1f + SWELL * 0.45f * Surge(u, time, surge)));
                 Vector2 p = tipP + dir * (f * armLen);
-                outVerts[v] = p + nrm * hw; outUvs[v] = new Vector2(u, 1f); v++;
-                outVerts[v] = p - nrm * hw; outUvs[v] = new Vector2(u, 0f); v++;
+                outVerts[v] = p + nrm * hw; outUvs[v] = new Vector2(u, 1f); outHalf[v] = hw; v++;
+                outVerts[v] = p - nrm * hw; outUvs[v] = new Vector2(u, 0f); outHalf[v] = hw; v++;
             }
         }
 
@@ -474,6 +486,7 @@ public class TargetingArrowGraphic : MaskableGraphic
         {
             vert.position = outVerts[i];
             vert.uv0 = outUvs[i];
+            vert.uv1 = new Vector2(outHalf[i], 0f);
             vh.AddVert(vert);
         }
 
