@@ -355,7 +355,13 @@ public class TargetingArrowGraphic : MaskableGraphic
         if (L < coreHalfWidth * 0.5f) return false;
 
         float scale   = coreHalfWidth * (0.45f + width * 1.1f);
-        float armLen  = Mathf.Min(L * 0.34f, scale * (2.6f + head * 5.2f));
+        // THE MISSING TIP. The spec derives the head length from `scale` alone, which works in world
+        // units where the arrow is only a couple of dozen core-widths long. In canvas pixels a board
+        // arrow runs ~500 px against a 6.5 px core — roughly twice as slender — so that formula gave
+        // a head ~33 px long and ~46 px wide: wider than it was long, a bowtie with no barbs and no
+        // apex. Tying it to arrow LENGTH keeps the head in proportion at any range, with the spec's
+        // formula as the floor for very short arrows and its 0.34L as the ceiling for very long ones.
+        float armLen  = Mathf.Min(L * 0.34f, Mathf.Max(L * 0.16f, scale * (2.6f + head * 5.2f)));
         float time    = Time.unscaledTime;
 
         // --- shaft, resampled by ARC LENGTH so the head keeps its proportions
@@ -398,13 +404,11 @@ public class TargetingArrowGraphic : MaskableGraphic
                 float f  = (float)k / ARM;
                 float u  = 1f + f * ARM_SPAN;
                 // 0.45 damps the swell on the head so it conducts rather than inflates
-                // Leading ramp, then the spec's taper. Without the ramp both arms are at FULL width
-                // exactly at the tip, so two wide quads cross there and the arrow ends in a blunt
-                // notch with nothing covering the point — the apex reads as missing. Ramping from
-                // zero over the first ~18% gives the barbs somewhere to converge, so the shaft's own
-                // narrowing end forms the point.
-                float apex = Mathf.SmoothStep(0f, 1f, Mathf.Min(1f, f / 0.18f));
-                float hw = wMax * apex * Mathf.Pow(1f - f, 0.55f)
+                // Full width AT the tip, exactly as specified. I briefly ramped this from zero to
+                // "make a point" and it did the opposite: the arms at full width are what COVERS the
+                // shaft's blunt end cap, and thinning them exposed it. The missing tip was never this
+                // curve — it was armLen (below).
+                float hw = wMax * Mathf.Pow(1f - f, 0.55f)
                          * (1f + SWELL * 0.45f * Surge(u, time, surge));
                 Vector2 p = tipP + dir * (f * armLen);
                 outVerts[v] = p + nrm * hw; outUvs[v] = new Vector2(u, 1f); v++;

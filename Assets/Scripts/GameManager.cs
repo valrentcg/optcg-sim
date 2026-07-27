@@ -495,7 +495,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void Update()
     {
-        if (UseBeamArrow) RetireUnusedBeams();
         // Coalesced re-render when async CDN card art/definitions arrive: many
         // fetches can complete in one frame — rebuild once, and never mid-drag
         // (Render() would destroy the dragged object under the EventSystem).
@@ -7512,7 +7511,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawResolvedTargetingArrows()
     {
         if (state == null || state.DeckLook != null) return;
-        if (state.Battle == null) return;
+        if (state.Battle == null) { if (UseBeamArrow) HideBeam("Battle Target Arrow"); return; }
 
         var b = state.Battle;
         if (!cardTargetRects.TryGetValue(b.AttackerId, out var source) || source == null) return;
@@ -7624,6 +7623,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void HideHoverTargetArrow()
     {
+        if (UseBeamArrow) HideBeam("Hover Target Arrow");
         if (hoverTargetArrowRoot == null) return;
         Destroy(hoverTargetArrowRoot);
         hoverTargetArrowRoot = null;
@@ -7653,8 +7653,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // instead, where nothing clears them.
     private readonly Dictionary<string, TargetingArrowGraphic> beams =
         new Dictionary<string, TargetingArrowGraphic>();
-    // Frame-stamped rather than swept at the end of Render(): the board arrows are drawn from
-    // Render(), but the drag arrow is driven from pointer events, so no single pass sees them all.
     private readonly Dictionary<string, int> beamLastFrame = new Dictionary<string, int>();
 
     private TargetingArrowGraphic Beam(string key, Transform parentCanvas)
@@ -7677,17 +7675,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return beam;
     }
 
-    /// <summary>A beam nobody asked to draw for a few frames collapses. The grace period matters:
-    /// Render() and the drag handler run on different schedules, so a one-frame test would retire a
-    /// live arrow on any frame the other system happened to drive it.</summary>
-    private void RetireUnusedBeams()
+    /// <summary>Collapse a beam by key. Lifetime is EXPLICIT, not swept: the drag arrow is driven
+    /// from OnDrag, which only fires while the pointer MOVES, so any "not drawn recently" rule
+    /// retires a perfectly live arrow the moment the player holds still — which is exactly what a
+    /// frame-stamped sweep did here.</summary>
+    private void HideBeam(string key)
     {
-        foreach (var kv in beams)
-        {
-            if (kv.Value == null) continue;
-            if (beamLastFrame.TryGetValue(kv.Key, out int last) && Time.frameCount - last <= 3) continue;
-            if (kv.Value.IsShowing) kv.Value.End();
-        }
+        if (beams.TryGetValue(key, out var beam) && beam != null && beam.IsShowing) beam.End();
     }
 
     private void DrawCurvedTargetingArrow(RectTransform root, RectTransform source, RectTransform target, Color color, float thickness,
@@ -14388,6 +14382,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             manager.SetHandDropRaycastActive(handSeat, false);
             RestoreLiftedSource();
             if (ghost != null) Destroy(ghost);
+            if (UseBeamArrow && arrowRoot != null) manager.HideBeam(arrowRoot.name);
             if (arrowRoot != null) Destroy(arrowRoot);
             ghost = null;
             arrowRoot = null;
