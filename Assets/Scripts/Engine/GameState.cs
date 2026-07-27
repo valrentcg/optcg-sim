@@ -156,6 +156,14 @@ namespace OnePieceTcg.Engine
         // if clicked again (prevents e.g. double-applying "give up to 2 opponent Characters −2000"
         // to the same Character). Populated centrally in ResolveEffect after each continuing pick.
         public System.Collections.Generic.List<string> PickedInstanceIds;
+        // ALL-OR-NOTHING COST PAYMENT. A multi-item optional cost ("You may trash 2 cards from your
+        // hand: <benefit>") is paid one click at a time, and PassEffect stays available the whole
+        // way through (SelectionsRemaining > 0 makes an effect skippable so nothing can deadlock).
+        // Without a record of what has already been paid, bailing out after the first click LOST
+        // those cards for no benefit. Each entry is "<kind>:<instanceId>" — "hand" (trashed from
+        // hand, restore to hand) or "rest" (rested in play, set active again). Cleared once the
+        // cost is fully paid; rolled back by PassEffect while it is not.
+        public System.Collections.Generic.List<string> CostPaidRefs;
         // Shared numeric budget across picks for "total power/cost of N or less" effects
         // (e.g. "K.O. up to 2 Characters with a TOTAL power of 4000 or less"). -1 = unused.
         public int RemainingBudget = -1;

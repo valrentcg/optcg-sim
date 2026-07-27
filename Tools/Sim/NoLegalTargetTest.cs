@@ -44,6 +44,7 @@ namespace OnePieceTcg.Sim
             TallyClauseIsNotEaten();
             RiderDoesNotDecideTheTargetZone();
             AddToLifeCostActuallyMovesTheCharacter();
+            HalfPaidCostIsRefundedButAFullyPaidOneIsNot();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -227,6 +228,53 @@ namespace OnePieceTcg.Sim
             Check("add-to-Life cost moves the Character to the top of Life, face-up",
                 offBoard && inLife != null && inLife == b.S.Life.Last() && inLife.FaceUp,
                 $"offBoard={offBoard} inLife={inLife != null} onTop={inLife != null && inLife == b.S.Life.Last()} faceUp={inLife?.FaceUp} lifeBefore={lifeBefore} lifeNow={b.S.Life.Count}");
+        }
+
+        // A multi-item optional cost ("You may trash 2 cards from your hand: <benefit>") is clicked one
+        // card at a time and stays skippable the whole way through, so bailing out after the first
+        // click used to LOSE that card for nothing. Payment is now all-or-nothing. 24 cards can reach
+        // this (20 hand-trash, 4 board-rest). Both directions are locked: the refund must happen when
+        // the cost is abandoned, and must NOT happen once it has been paid in full.
+        private static void HalfPaidCostIsRefundedButAFullyPaidOneIsNot()
+        {
+            const string Clause = "You may trash 2 cards from your hand: Draw 2 cards.";
+
+            // (a) pay 1 of 2, then skip → the trashed card comes back.
+            var b = new Fixture();
+            var c1 = b.Hand("south", "ST01-005");
+            b.Hand("south", "ST01-005");
+            GameEngine.QueueClauseForTest(b.St, "south", b.Hand("south", "OP03-076"), "main", Clause);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("half-paid cost is refunded on skip", false, "no pending effect"); return; }
+            string eid = pe.EffectId;
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = eid, Target = c1.InstanceId });
+            bool wentToTrash = b.S.Trash.Any(c => c.InstanceId == c1.InstanceId);
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "passEffect", Seat = "south", EffectId = eid });
+            Check("half-paid cost is refunded on skip",
+                wentToTrash && b.S.Hand.Any(c => c.InstanceId == c1.InstanceId)
+                    && !b.S.Trash.Any(c => c.InstanceId == c1.InstanceId),
+                $"paid={wentToTrash} backInHand={b.S.Hand.Any(c => c.InstanceId == c1.InstanceId)}");
+
+            // (b) pay both, then skip whatever the BODY queues → the cost stays paid.
+            var f = new Fixture();
+            var d1 = f.Hand("south", "ST01-005");
+            var d2 = f.Hand("south", "ST01-005");
+            GameEngine.QueueClauseForTest(f.St, "south", f.Hand("south", "OP03-076"), "main", Clause);
+            var pe2 = f.St.PendingEffects.FirstOrDefault();
+            if (pe2 == null) { Check("a fully paid cost is never refunded", false, "no pending effect"); return; }
+            string eid2 = pe2.EffectId;
+            foreach (var pick in new[] { d1.InstanceId, d2.InstanceId })
+                f.St = GameEngine.ApplyCommand(f.St, new GameCommand
+                { Type = "resolveEffect", Seat = "south", EffectId = eid2, Target = pick });
+            foreach (var rest in f.St.PendingEffects.ToList())
+                f.St = GameEngine.ApplyCommand(f.St, new GameCommand
+                { Type = "passEffect", Seat = "south", EffectId = rest.EffectId });
+            Check("a fully paid cost is never refunded",
+                f.S.Trash.Any(c => c.InstanceId == d1.InstanceId) && f.S.Trash.Any(c => c.InstanceId == d2.InstanceId)
+                    && !f.S.Hand.Any(c => c.InstanceId == d1.InstanceId || c.InstanceId == d2.InstanceId),
+                $"d1InTrash={f.S.Trash.Any(c => c.InstanceId == d1.InstanceId)} d2InTrash={f.S.Trash.Any(c => c.InstanceId == d2.InstanceId)}");
         }
 
         // ---- plumbing -------------------------------------------------------------------------

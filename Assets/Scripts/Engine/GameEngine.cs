@@ -6600,6 +6600,42 @@ namespace OnePieceTcg.Engine
                 }
                 if (!state.PendingEffects.Contains(effect)) return;   // sacrifice paid → done
             }
+            // ALL-OR-NOTHING COST PAYMENT (rule: a cost is paid in full or not at all). A multi-item
+            // optional cost is clicked one card at a time and stays skippable throughout, so bailing
+            // out midway used to LOSE the cards already trashed and give nothing back. Undo them.
+            // Only reversible payments are recorded (see PendingEffect.CostPaidRefs), and the ledger
+            // is cleared the moment a cost completes, so this can never undo a cost that was paid.
+            if (effect.CostPaidRefs != null && effect.CostPaidRefs.Count > 0)
+            {
+                var refundP = Player(state, seat);
+                foreach (var refr in effect.CostPaidRefs)
+                {
+                    int sep = refr.IndexOf(':');
+                    if (sep <= 0) continue;
+                    string kind = refr.Substring(0, sep), rid = refr.Substring(sep + 1);
+                    if (kind == "hand")
+                    {
+                        int ti = refundP.Trash.FindIndex(c => c.InstanceId == rid);
+                        if (ti < 0) continue;                       // something else moved it — leave it alone
+                        var back = refundP.Trash[ti];
+                        refundP.Trash.RemoveAt(ti);
+                        back.Zone = "hand";
+                        refundP.Hand.Add(back);
+                        Log(state, seat, $"{NameId(GetCard(back))} returns to hand (cost not paid).");
+                    }
+                    else if (kind == "rest")
+                    {
+                        var unrest = FindAnyInPlay(state, rid, out var uSeat);
+                        if (unrest != null && uSeat == seat && unrest.Rested)
+                        {
+                            unrest.Rested = false;
+                            Log(state, seat, $"{NameId(GetCard(unrest))} is set active again (cost not paid).");
+                        }
+                    }
+                }
+                effect.CostPaidRefs = null;
+            }
+
             // "Up to N" effects may always choose zero targets, "You may"/"If" effects are
             // inherently optional — allow skipping even when queued as mandatory, so an
             // effect with no legal target can never deadlock the game.
@@ -9573,6 +9609,7 @@ namespace OnePieceTcg.Engine
                             {
                                 if (pcT.Rested) { Log(state, effect.Seat, "That Character is already rested."); return EffectResolution.WaitingForTarget; }
                                 pcT.Rested = true;
+                                (effect.CostPaidRefs ??= new List<string>()).Add("rest:" + pcT.InstanceId);
                                 Log(state, effect.Seat, $"{NameId(GetCard(pcT))} rests (cost).");
                             }
                             else if (verb == "return")
@@ -9614,6 +9651,7 @@ namespace OnePieceTcg.Engine
                             }
                             effect.SelectionsRemaining--;
                             if (effect.SelectionsRemaining > 0) return EffectResolution.WaitingForTarget;
+                            effect.CostPaidRefs = null;   // paid in full — nothing left to roll back
                             if (ContainsAll(costText, "rest this Character"))
                             {
                                 var rSelf2 = FindAnyInPlay(state, effect.SourceInstanceId, out _);
@@ -9680,12 +9718,15 @@ namespace OnePieceTcg.Engine
                         owner.Trash.Add(costCard);
                         NotifyHandTrashedByEffect(state, effect.Seat);
                         Log(state, effect.Seat, $"{sourceName} cost: trashed {NameId(costDef)} from hand.");
+                        (effect.CostPaidRefs ??= new List<string>()).Add("hand:" + costCard.InstanceId);
                         effect.SelectionsRemaining--;
                         if (effect.SelectionsRemaining > 0)
                         {
-                            Log(state, effect.Seat, $"Trash {effect.SelectionsRemaining} more card(s) to pay {sourceName}'s cost.");
+                            Log(state, effect.Seat,
+                                $"Trash {effect.SelectionsRemaining} more card(s) to pay {sourceName}'s cost, or skip to take the trashed card(s) back.");
                             return EffectResolution.WaitingForTarget;
                         }
+                        effect.CostPaidRefs = null;   // paid in full — nothing left to roll back
                         // Cost fully paid — "rest this Character" / "trash this Character" self-riders (the
                         // cost is "trash N from your hand AND trash/rest this Character"), then queue the body.
                         // EB02-047 Blueno, EB03-062 Law, OP09-089 Stronger, ST25-004 Buggy add "and trash this
