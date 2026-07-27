@@ -67,11 +67,27 @@ public static class DisplaySettings
         Screen.SetResolution(w, h, Mode(Fullscreen));
     }
 
+    /// <summary>The resolution to go fullscreen AT.
+    ///
+    /// Deliberately NOT Current(): with no saved pick, Current() falls back to the live window
+    /// size, so dragging the window small and then clicking fullscreen rendered the game at that
+    /// tiny size and let the display upscale it — everything came out extremely blurry. An
+    /// explicit pick is still honoured (choosing 1280x720 on a 4K screen is a real choice); it is
+    /// only the "never picked one" fallback that must be the display's own resolution.</summary>
+    private static (int w, int h) FullscreenTarget()
+    {
+        int w = PlayerPrefs.GetInt(KeyResW, 0);
+        int h = PlayerPrefs.GetInt(KeyResH, 0);
+        if (w > 0 && h > 0) return (w, h);
+        return (Mathf.Max(Screen.currentResolution.width, 1280),
+                Mathf.Max(Screen.currentResolution.height, 720));
+    }
+
     public static void ApplyMode(bool fullscreen)
     {
         PlayerPrefs.SetInt(KeyFullscreen, fullscreen ? 1 : 0);
         PlayerPrefs.Save();
-        var (w, h) = Current();
+        var (w, h) = fullscreen ? FullscreenTarget() : Current();
         Screen.SetResolution(w, h, Mode(fullscreen));
     }
 

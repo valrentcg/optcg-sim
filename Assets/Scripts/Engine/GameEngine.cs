@@ -2557,6 +2557,7 @@ namespace OnePieceTcg.Engine
                 state.HighestEventCostThisTurn[seat] = Math.Max(prevEvCost, def.Cost);
                 string mainCl = ExtractTimedClause(def.Effect, "Main");
                 QueueAndAutoResolve(state, seat, instance, "main", mainCl, IsOptionalEffectText(mainCl), EffectScope.Instant, InferTargetZone(mainCl));
+                NoteEventActivated(state, instance);   // view: play the incinerate showcase
                 FireOnEventActivation(state, seat);   // "When you activate an Event, …" board triggers
             }
             else if (HasTiming(def.Effect, "On Play"))
@@ -4112,6 +4113,16 @@ namespace OnePieceTcg.Engine
         // Fires from both event-activation paths (PlayCard [Main] events + CounterWithCard [Counter]
         // events). Respects [Your Turn]/[Opponent's Turn] timing, [DON!! xN], and [Once Per Turn].
         // (OP10-003 Sugar leader DON-ramp, OP04-053 Page One draw, OP01-062 Crocodile leader draw.)
+        /// <summary>Called from every path that ACTIVATES an Event — played from hand, played as a
+        /// Counter, or played by another card's effect. Recording the id here is what lets the view
+        /// show the incinerate for all three without mistaking a discarded Event for a played one.</summary>
+        private static void NoteEventActivated(GameState state, CardInstance instance)
+        {
+            if (state == null || instance == null) return;
+            if (!state.ActivatedEventIds.Contains(instance.InstanceId))
+                state.ActivatedEventIds.Add(instance.InstanceId);
+        }
+
         private static void FireOnEventActivation(GameState state, string seat)
         {
             var p = Player(state, seat);
@@ -4844,6 +4855,7 @@ namespace OnePieceTcg.Engine
             // "When you activate an Event, …" board triggers (OP10-003 Sugar leader ramps DON on the
             // opponent's turn when you activate a [Counter] Event — even a 0-power one).
             if (counterDef.Type == "event") FireOnEventActivation(state, defenderSeat);
+            NoteEventActivated(state, counterCard);   // view: Counters incinerate too
             // The ACTIVE player reacts to the opponent's Counter Event ("[Your Turn] … when your opponent
             // activates an Event, …" — OP01-004 Usopp, OP11-012 Franky, OP06-044 Gion).
             if (counterDef.Type == "event") FireOnOpponentEventActivation(state, OtherSeat(defenderSeat));
@@ -6686,8 +6698,21 @@ namespace OnePieceTcg.Engine
         }
 
         // Derive the EffectTargetZone a sub-effect needs based on its text.
+        /// <summary>Audit seam: the real zone inference, and the same call on an explicitly
+        /// pre-split first clause, so a sweep can prove no rider still decides the zone.</summary>
+        public static string AuditInferZone(string text) => InferTargetZone(text).ToString();
+        public static int AuditThenSplit(string text) => FindThenClause(text ?? "");
+
         private static EffectTargetZone InferTargetZone(string text)
         {
+            // Infer from the FIRST clause only. A ". Then, …" rider is resolved as its own effect
+            // later and gets its own zone, but reading the whole string here let the RIDER decide
+            // what the player is asked for first: OP15-020 Fire Fist ("Leader +3000 and give 1
+            // opponent Character -8000. Then, you may trash 2 cards FROM YOUR HAND.") inferred
+            // Hand, so the UI demanded a discard before the board effect it should have asked for.
+            int thenAt = FindThenClause(text ?? "");
+            if (thenAt > 0 && thenAt <= (text ?? "").Length) text = text.Substring(0, thenAt);
+
             // Choice-shaped bodies ("play it or add it to Life", "Choose one:") resolve to an
             // A/B choice FIRST — zone targeting belongs to the CHOSEN option, which is queued
             // as its own effect afterwards. Returning Hand/Trash here made the trash/hand
@@ -7638,9 +7663,9 @@ namespace OnePieceTcg.Engine
         // caps, the active/rested qualifier). Anything unparsed counts as "no restriction", so
         // this can only ever OVER-count - and over-counting merely declines to skip, which is
         // the safe direction. Under-counting would silently eat a card's effect.
-        private static int CountOpponentCharacterCandidates(GameState state, string seat, string text)
+        private static int CountCharacterCandidates(GameState state, string seat, string text, bool opponentSide)
         {
-            var area = Player(state, OtherSeat(seat))?.CharacterArea;
+            var area = Player(state, opponentSide ? OtherSeat(seat) : seat)?.CharacterArea;
             if (area == null) return 0;
 
             bool basePower = text.IndexOf("base power", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -7660,45 +7685,53 @@ namespace OnePieceTcg.Engine
                 // "base power" means the printed value; a plain "power" cap reads the live one.
                 if (powCap >= 0 && (basePower ? (GetCard(c)?.Power ?? 0) : GetPower(state, c)) > powCap) continue;
                 if (costCap >= 0 && GetCost(state, c) > costCap) continue;
+                // {Dressrosa} / {FILM} / {Supernovas} gates, via the SAME predicate the resolver
+                // validates targets with — so a board full of the wrong type counts as zero, which
+                // is exactly the case that used to stall (OP04-079 Orlumbus, OP06-006 Saga).
+                if (!CardPassesFeatureFilter(text, GetCard(c))) continue;
                 n++;
             }
             return n;
         }
 
-        private static bool ClauseHasNoOpponentCharacter(GameState state, string seat, string text)
+        /// <summary>Test seam for the freeze guard.</summary>
+        public static bool AuditClauseHasNoLegalTarget(GameState state, string seat, string text)
+            => ClauseHasNoLegalCharacterTarget(state, seat, text);
+
+        private static bool ClauseHasNoLegalCharacterTarget(GameState state, string seat, string text)
         {
             if (state == null || string.IsNullOrWhiteSpace(text)) return false;
             if (text.IndexOf("Character", StringComparison.OrdinalIgnoreCase) < 0) return false;
-            if (text.IndexOf("opponent", StringComparison.OrdinalIgnoreCase) < 0) return false;
             // Can land on a Leader instead → an empty Character area doesn't block it.
             if (text.IndexOf("Leader or Character", StringComparison.OrdinalIgnoreCase) >= 0) return false;
             if (text.IndexOf("Character or Leader", StringComparison.OrdinalIgnoreCase) >= 0) return false;
-            // Drawn from a non-board zone ("play up to 1 Character from your hand") → not a
-            // board selection at all, so the board being empty says nothing about it.
+            // Sourced from a non-board zone ("play 1 Character from your hand") → the board being
+            // empty says nothing about whether it can resolve.
             if (System.Text.RegularExpressions.Regex.IsMatch(text,
                     @"\b(from|in)\s+(your|their|the)\s+(hand|deck|trash|life)",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return false;
 
-            // Only a COUNTED selection ("1 of their active Characters") creates a choice that can
-            // stall. Two things this deliberately excludes:
-            //   "Rest ALL of your opponent's Characters" (OP06-041) - no choice, and an empty
-            //   board just makes it a no-op.
-            //   "When this Character battles and K.O.'s your opponent's Character, set THIS
-            //   Character as active" (OP02-094 Isuka) - the opponent is named in the condition,
-            //   but the action targets our own card, and it fires just after that Character was
-            //   K.O.'d, so the opponent's board is routinely empty here. Skipping it would
-            //   silently break the card.
+            // Only a COUNTED selection can stall. Deliberately excluded:
+            //   "Rest ALL of your opponent's Characters"        — no choice; empty board = no-op.
+            //   "gains +1000 for every 3 of your … Characters"  — a TALLY, not a selection
+            //                                                     (EB01-014 Sanji would have been
+            //                                                     skipped outright).
+            //   "When this … K.O.'s your opponent's Character"  — a CONDITION; the action is
+            //                                                     elsewhere (OP02-094 Isuka).
             var counted = System.Text.RegularExpressions.Regex.Match(text,
-                @"\b(\d+)\s+of\s+(?:your\s+opponent's|their)\b",
+                @"(?<!for\s+(?:every|each)\s+)\b(\d+)\s+of\s+(?<whose>your\s+opponent's|their|your)\b",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (!counted.Success) return false;
-
-            // Comprehensive Rules 1-3-2: an impossible action is simply not carried out - the
-            // card is still legal to play. "Select 2 …" needs TWO; with one candidate the swap
-            // it feeds (OP14-017 Chambres) cannot happen at all, so the whole clause is dropped
-            // rather than left waiting on a second pick that can never come.
             if (!int.TryParse(counted.Groups[1].Value, out int required) || required < 1) return false;
-            return CountOpponentCharacterCandidates(state, seat, text) < required;
+
+            string whose = counted.Groups["whose"].Value.ToLowerInvariant();
+            bool opponentSide = whose.Contains("opponent") || whose == "their";
+
+            // Comprehensive Rules 1-3-2: an impossible action is simply not carried out — the card
+            // stays legal to play. "Select 2 …" needs TWO; with one candidate the swap it feeds
+            // (OP14-017 Chambres) cannot happen at all, so the whole clause is dropped rather than
+            // left waiting on a pick that can never come.
+            return CountCharacterCandidates(state, seat, text, opponentSide) < required;
         }
 
         /// <summary>Runs after EVERY command: retires any pending effect that can never be
@@ -7721,13 +7754,13 @@ namespace OnePieceTcg.Engine
                 foreach (var e in state.PendingEffects)
                 {
                     if (e == null || string.IsNullOrEmpty(e.Text)) continue;
-                    if (!ClauseHasNoOpponentCharacter(state, e.Seat, e.Text)) continue;
+                    if (!ClauseHasNoLegalCharacterTarget(state, e.Seat, e.Text)) continue;
                     stuck = e; break;
                 }
                 if (stuck == null) return;
 
                 Log(state, stuck.Seat,
-                    $"{NameId(CardData.GetCard(stuck.SourceCardId))}: your opponent has no legal target — that part of the effect is not carried out (rule 1-3-2).");
+                    $"{NameId(CardData.GetCard(stuck.SourceCardId))}: no legal target — that part of the effect is not carried out (rule 1-3-2).");
                 PassEffect(state, stuck.Seat, stuck.EffectId);
             }
         }
@@ -9509,9 +9542,17 @@ namespace OnePieceTcg.Engine
                         // Exclude the HAND-trash cost "trash N Character card(s) … from your hand" (OP16-015) — a
                         // "Character card"/"from your hand" phrasing is a from-hand cost, not a board sacrifice.
                         var pickM = System.Text.RegularExpressions.Regex.Match(costText,
-                            @"^(K\.O\.|trash|rest|return|place) (\d+) (?:of your )?([^:]*?)Characters?\b(?! cards?)",
+                            @"^(K\.O\.|trash|rest|return|place|add) (\d+) (?:of your )?([^:]*?)Characters?\b(?! cards?)",
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                        if (pickM.Success && !ContainsAll(costText, "from your hand") && !ContainsAll(costText, "from their hand"))
+                        // "add" is only a board-sacrifice verb when it names where the Character GOES
+                        // ("…to the top of your Life cards face-up", ST13-001 Sabo). Any other "add N of
+                        // your Characters" phrasing belongs to a different handler, so it must not be
+                        // swallowed here.
+                        bool addToLife = pickM.Success
+                            && pickM.Groups[1].Value.Equals("add", StringComparison.OrdinalIgnoreCase)
+                            && ContainsAll(costText, "top of your Life");
+                        if (pickM.Success && !ContainsAll(costText, "from your hand") && !ContainsAll(costText, "from their hand")
+                            && (addToLife || !pickM.Groups[1].Value.Equals("add", StringComparison.OrdinalIgnoreCase)))
                         {
                             if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = int.Parse(pickM.Groups[2].Value);
                             var pcT = FindAnyInPlay(state, targetId, out var pcSeat);
@@ -9540,6 +9581,20 @@ namespace OnePieceTcg.Engine
                                 // Character goes back to its owner's hand (ST17-002 Law's On-Play cost).
                                 ReturnToHand(state, pcT.Owner, pcT);
                                 Log(state, effect.Seat, $"{NameId(GetCard(pcT))} returns to hand (cost).");
+                            }
+                            else if (verb == "add")
+                            {
+                                // "add N of your Characters … to the top of your Life cards face-up"
+                                // (ST13-001 Sabo). Life top is the END of the list, matching the
+                                // "trash N from the top of your Life" cost above.
+                                var alp = Player(state, pcT.Owner);
+                                int ai = alp.CharacterArea.IndexOf(pcT); if (ai >= 0) alp.CharacterArea[ai] = null;
+                                ReturnAttachedDon(alp, pcT);
+                                pcT.Zone = "life"; pcT.PlayedOnTurn = null; pcT.Rested = false; pcT.Modifiers.Clear();
+                                pcT.FaceUp = ContainsAll(costText, "face-up");
+                                alp.Life.Add(pcT);
+                                Log(state, effect.Seat,
+                                    $"{NameId(GetCard(pcT))} added to the top of your Life cards{(pcT.FaceUp ? " face-up" : "")} (cost).");
                             }
                             else if (verb == "place")
                             {
@@ -13191,7 +13246,7 @@ namespace OnePieceTcg.Engine
             // from your deck(, then shuffle your deck)." → deck search in PLAY mode. -----------
             {
                 var pfdM = System.Text.RegularExpressions.Regex.Match(text,
-                    @"Play up to (\d+) ([^.]*?) from your deck",
+                    @"Play up to (\d+) ((?:[^.\[]|\[[^\]]*\])*?) from your deck",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (pfdM.Success)
                 {
@@ -14927,7 +14982,11 @@ namespace OnePieceTcg.Engine
             // The PLAY clause itself must target the HAND — matching a bare "from your hand" elsewhere (e.g. a
             // "trash 1 card from your hand" COST that precedes a "play up to N … from your TRASH" body, OP13-082)
             // wrongly lit a hand card. `[^:.]` keeps the match inside the play clause (no crossing the cost ':').
-            if (System.Text.RegularExpressions.Regex.IsMatch(text, @"[Pp]lay up to \d+[^:.]*?from your hand", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            // NB: the character class admits a period ONLY inside [brackets]. Card names carry
+            // periods ("Monkey.D.Luffy", "Portgas.D.Ace", "Emporio.Ivankov" — 73 names, referenced
+            // by 58 cards), and a plain [^.] class silently failed to match every one of them, so
+            // those effects fell through to NotAutomated.
+            if (System.Text.RegularExpressions.Regex.IsMatch(text, @"[Pp]lay up to \d+(?:[^:.\[]|\[[^\]]*\])*?from your hand", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 && effect.TargetZone == EffectTargetZone.Hand)
             {
                 if (effect.SelectionsRemaining <= 0)

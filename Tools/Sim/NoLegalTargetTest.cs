@@ -37,6 +37,14 @@ namespace OnePieceTcg.Sim
             IsukaStyleConditionalIsNotEaten();
             RestAllIsNotEaten();
 
+            // ── the class sweep turned up: MANDATORY selections of your OWN board ──
+            OwnBoardSelectionDoesNotStallWhenEmpty();
+            OwnBoardSelectionDoesNotStallWhenTypeGateMatchesNothing();
+            OwnBoardSelectionStillQueuesWhenTheTypeMatches();
+            TallyClauseIsNotEaten();
+            RiderDoesNotDecideTheTargetZone();
+            AddToLifeCostActuallyMovesTheCharacter();
+
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -126,6 +134,99 @@ namespace OnePieceTcg.Sim
             Check("\"Rest all\" is not treated as a counted selection",
                 b.St.PendingEffects.Count <= 1,
                 $"{b.St.PendingEffects.Count} pending");
+        }
+
+        // ---- own-board selections (OP04-079 Orlumbus, OP06-006 Saga, OP14-001 Law) -----------
+
+        private static void OwnBoardSelectionDoesNotStallWhenEmpty()
+        {
+            var b = new Fixture();                       // south has NO Characters
+            QueueClause(b, "OP04-079", "south", "K.O. 1 of your {Dressrosa} type Characters.");
+            Check("own-board K.O. does not stall with no Characters at all",
+                b.St.PendingEffects.Count == 0, $"{b.St.PendingEffects.Count} pending");
+        }
+
+        // The board is populated, but nothing matches the type gate — the case a plain
+        // "is the area empty" check would miss entirely.
+        private static void OwnBoardSelectionDoesNotStallWhenTypeGateMatchesNothing()
+        {
+            var b = new Fixture();
+            b.Character("south", "ST01-005");             // not a {Dressrosa} Character
+            QueueClause(b, "OP04-079", "south", "K.O. 1 of your {Dressrosa} type Characters.");
+            Check("own-board K.O. does not stall when no Character matches the type gate",
+                b.St.PendingEffects.Count == 0, $"{b.St.PendingEffects.Count} pending");
+        }
+
+        private static void OwnBoardSelectionStillQueuesWhenTheTypeMatches()
+        {
+            var b = new Fixture();
+            b.Character("south", "ST01-005");
+            QueueClause(b, "OP04-079", "south", "K.O. 1 of your Characters.");   // no gate
+            Check("own-board K.O. DOES queue when a legal Character exists",
+                b.St.PendingEffects.Count == 1, $"{b.St.PendingEffects.Count} pending");
+        }
+
+        // "gains +1000 power for every 3 of your … Characters" is a TALLY, not a selection.
+        // The counted-selection regex must not read it as one (EB01-014 Sanji).
+        private static void TallyClauseIsNotEaten()
+        {
+            const string clause =
+                "This Character gains +1000 power for every 3 of your {Germa 66} type Characters.";
+            var empty = new Fixture();
+            QueueClause(empty, "EB01-014", "south", clause);
+            var populated = new Fixture();
+            populated.Character("south", "ST01-005");
+            QueueClause(populated, "EB01-014", "south", clause);
+            Check("\"for every N of your …\" tally behaves identically regardless of board",
+                empty.St.PendingEffects.Count == populated.St.PendingEffects.Count,
+                $"empty={empty.St.PendingEffects.Count} vs populated={populated.St.PendingEffects.Count}");
+        }
+
+        // A ". Then, …" rider must not decide what the player is asked for FIRST. OP15-020 Fire
+        // Fist ends in "trash 2 cards from your hand", which made the whole effect target the
+        // HAND — so the UI demanded a discard before the board effect that comes first.
+        private static void RiderDoesNotDecideTheTargetZone()
+        {
+            var b = new Fixture();
+            b.Character("north", "ST01-005");
+            QueueClause(b, "OP15-020", "south",
+                "Your Leader gains +3000 power during this turn and give up to 1 of your opponent's " +
+                "Characters -8000 power until the end of your opponent's next End Phase. " +
+                "Then, you may trash 2 cards from your hand. If you do, K.O. up to 1 of your " +
+                "opponent's Characters with 0 power or less.");
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            Check("a \". Then, … from your hand\" rider does not retarget the effect to the hand",
+                pe == null || pe.TargetZone != EffectTargetZone.Hand,
+                pe == null ? "no pending effect" : $"TargetZone={pe.TargetZone}");
+        }
+
+        // ST13-001 Sabo: "You may add 1 of your Characters with a cost of 3 or more and 7000 power
+        // or more to the top of your Life cards face-up: <benefit>". "add" was not a recognised cost
+        // verb, so the whole effect was NotAutomated. Checks the cost is really PAID, not just parsed.
+        private static void AddToLifeCostActuallyMovesTheCharacter()
+        {
+            var b = new Fixture();
+            var big = b.Character("south", "ST01-005");        // a real Character (not a Leader) to pay with
+            int lifeBefore = b.S.Life.Count;
+
+            GameEngine.QueueClauseForTest(b.St, "south", b.Hand("south", "ST13-001"), "activateMain",
+                "You may add 1 of your Characters to the top of your Life cards face-up: " +
+                "Up to 1 of your Characters gains +2000 power until the start of your next turn.");
+
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("add-to-Life cost queues a selection", false, "no pending effect"); return; }
+            string paidId = big.InstanceId;
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            {
+                Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = paidId,
+            });
+
+            // ApplyCommand returns a fresh state, so compare by id rather than by reference.
+            bool offBoard = !b.S.CharacterArea.Any(c => c != null && c.InstanceId == paidId);
+            var inLife = b.S.Life.FirstOrDefault(c => c.InstanceId == paidId);
+            Check("add-to-Life cost moves the Character to the top of Life, face-up",
+                offBoard && inLife != null && inLife == b.S.Life.Last() && inLife.FaceUp,
+                $"offBoard={offBoard} inLife={inLife != null} onTop={inLife != null && inLife == b.S.Life.Last()} faceUp={inLife?.FaceUp} lifeBefore={lifeBefore} lifeNow={b.S.Life.Count}");
         }
 
         // ---- plumbing -------------------------------------------------------------------------

@@ -286,6 +286,12 @@ namespace OnePieceTcg.Engine
         // Per-seat highest base cost of an Event that seat activated this turn (for "if you have
         // activated an Event with a base cost of N or more during this turn" — OP15-002).
         public Dictionary<string, int> HighestEventCostThisTurn = new Dictionary<string, int>();
+
+        /// <summary>Instance ids of Events ACTIVATED during the command just processed, cleared at
+        /// the start of each command. Purely a presentation signal: the view plays the incinerate
+        /// showcase off this rather than off "a card moved hand -> trash", which cannot tell a card
+        /// that was PLAYED from one DISCARDED to pay a cost. Never read by the rules.</summary>
+        public List<string> ActivatedEventIds = new List<string>();
         // Instance-ids of cards (Leaders/Characters) that BATTLED an opponent's Character this turn — i.e.
         // reached the damage step of an attack whose (final) target was a Character. For "If this Leader has
         // battled your opponent's Character during this turn" (OP12-020 Zoro restand). Cleared each turn.

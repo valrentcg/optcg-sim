@@ -310,6 +310,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // flares, counters fly hand→trash, life→hand, board→life, DON!! attaches, ...).
     private sealed class CardPose { public Vector3 pos; public Vector2 size; public string zone; public bool don; public string cardId; public string owner; public RectTransform rt; public RectTransform faceRt; public Quaternion rot; }
     private readonly Dictionary<string, CardPose> lastCardPoses = new Dictionary<string, CardPose>();
+    // Events already burned this match — the transition fires once, but a rewind/resim can replay
+    // the same hand->trash step, and burning twice would stack two showcases on screen.
+    private readonly HashSet<string> burnedThisRender = new HashSet<string>();
     private readonly HashSet<string> suppressMoveAnim = new HashSet<string>();   // ids the LOCAL player just drag-placed (their drag was the animation)
     private int activeMoveGhosts;             // in-flight zone-move ghosts (bot waits on these)
     private RectTransform northHalfRect;      // playmat halves (turn-particle rim path)
@@ -780,6 +783,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         mulliganDealAnimating = 0;
         lastCardPoses.Clear();
         suppressMoveAnim.Clear();
+        burnedThisRender.Clear();
         // A new match must never inherit a hidden trash top card from the last one.
         pendingReformIds.Clear();
         trashReveals.Clear();
@@ -2006,7 +2010,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // glow hugs the holder rect instead of the card.)
         const float previewCardAspect = 168f / 235f;   // ~0.715, standard card proportion
         var previewCardRegion = PanelObject("Preview Card Region", previewRoot, new Color(0, 0, 0, 0));
-        Stretch(previewCardRegion, new Vector2(0.05f, 0.18f), new Vector2(0.95f, 0.98f), Vector2.zero, Vector2.zero);
+        Stretch(previewCardRegion, new Vector2(0.05f, 0.02f), new Vector2(0.95f, 0.98f), Vector2.zero, Vector2.zero);
 
         // Glow behind the card, fitted to the card aspect.
         var previewGlowHolder = PanelObject("Preview Glow Holder", previewCardRegion, new Color(0, 0, 0, 0));
@@ -2022,8 +2026,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var previewImageFitter = previewMask.gameObject.AddComponent<AspectRatioFitter>();
         previewImageFitter.aspectMode = AspectRatioFitter.AspectMode.FitInParent;
         previewImageFitter.aspectRatio = previewCardAspect;
-        previewTitle = TextObject("Preview Title", previewRoot, "", 18, Ink, TextAnchor.MiddleCenter);
-        Stretch(previewTitle.rectTransform, new Vector2(0.04f, 0.02f), new Vector2(0.96f, 0.15f), Vector2.zero, Vector2.zero);
+        // No name caption under the preview: the card art already carries its name, and the strip
+        // just repeated it. The card region below reclaims the height it used to take.
+        previewTitle = null;
 
         // Blocker hover-info popout. Mirrors the CARD preview's geometry EXACTLY (same outer rect, same card
         // aspect, same rim-glow-on-an-inset-holder) so switching between hovering a card and a shield never
@@ -2845,6 +2850,29 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     continue;
                 }
                 if (old.zone == kv.Value.zone) continue;
+
+                // An Event/Counter leaving hand for the trash IS the burn. Detected here rather
+                // than in the click handlers, because those only ever see the LOCAL player's own
+                // plays — an opponent's Event arrives as a replayed command, and an Event played
+                // off another card's effect never touches an input handler at all. Both used to
+                // slide silently to the trash.
+                // old.pos/old.size carry the card's real hand rect, so the showcase still flies
+                // out of the right place even though handCardRects has already been rebuilt.
+                if (old.zone.StartsWith("hand:") && kv.Value.zone.StartsWith("trash:")
+                    && !burnedThisRender.Contains(kv.Key)
+                    && state.ActivatedEventIds.Contains(kv.Key))   // PLAYED, not discarded to pay a cost
+                {
+                    var evInst = FindAny(kv.Value.owner, kv.Key);
+                    if (evInst != null)
+                    {
+                        burnedThisRender.Add(kv.Key);
+                        BeginBurnToTrash(evInst, kv.Value.owner,
+                            state.Battle != null ? BurnTiming.Counter : BurnTiming.Event,
+                            old.pos, old.size);
+                        continue;                       // the burn replaces the flight
+                    }
+                }
+
                 if (suppressMoveAnim.Contains(kv.Key)) continue;
                 bool isLifeDeal = old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("life:");
                 if (suppressNonLife && !isLifeDeal) continue;   // hand redeal render: AnimateHandDeal covers those flights
@@ -9183,7 +9211,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     AddButton(body, $"Play{costHint}",
                         () =>
                         {
-                            if (burn) BeginBurnToTrash(burnCard, hSeat, BurnTiming.Event);
+                            // (No burn call here — DrawMatHalf's pose diff fires it off the
+                            // hand->trash transition, which covers this AND remote/effect plays.)
                             Dispatch(new GameCommand { Type = "playCard", Seat = hSeat, InstanceId = selectedId });
                         },
                         canAfford);
@@ -9732,9 +9761,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 cell.gameObject.AddComponent<Button>().onClick.AddListener(() =>
                 {
                     CounterTileHoverExit(cardRef);
-                    // Counters played off this tile panel (anything with an effect, e.g.
-                    // Love-Love Beam) come through here, NOT the click-a-hand-card path.
-                    BeginBurnToTrash(cardRef, b.TargetSeat, BurnTiming.Counter);
+                    // (No burn call — the hand->trash transition in the pose diff fires it, which
+                    // also covers the opponent playing this same Counter.)
                     Dispatch(new GameCommand { Type = "counterWithCard", Seat = b.TargetSeat, InstanceId = cardRef.InstanceId });
                 });
             }
@@ -10337,9 +10365,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             {
                 if (state.Battle.Step == "counter" && state.Battle.TargetSeat == handSeat)
                 {
-                    // A Counter is spent exactly like an Event - show it the same way, so the
-                    // opponent can see what just got played instead of a card silently leaving hand.
-                    BeginBurnToTrash(card, handSeat, BurnTiming.Counter);
                     Dispatch(new GameCommand { Type = "counterWithCard", Seat = handSeat, InstanceId = card.InstanceId });
                 }
                 else
@@ -10621,7 +10646,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void PlayEventFromHand(CardInstance card, string handSeat)
     {
         if (!CanActivateEventFromHand(card, handSeat)) return;
-        BeginBurnToTrash(card, handSeat, BurnTiming.Event);
         Dispatch(new GameCommand { Type = "playCard", Seat = handSeat, InstanceId = card.InstanceId });
     }
 
@@ -10629,12 +10653,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     /// Suppresses the normal hand-to-trash flight - two animations for one action is what
     /// made this read as clunky - and holds the trash pile on its previous top card until
     /// the reform actually lands.</summary>
-    private void BeginBurnToTrash(CardInstance card, string seat, BurnTiming timing)
+    private void BeginBurnToTrash(CardInstance card, string seat, BurnTiming timing,
+                                  Vector3? fromPos = null, Vector2? fromSize = null)
     {
         if (card == null) return;
         suppressMoveAnim.Add(card.InstanceId);      // the burn IS the movement
         pendingReformIds.Add(card.InstanceId);      // pile stays as-is until the reform delivers it
-        StartEventBurn(card, onBurnComplete: () => StartTrashReform(card, seat), timing: timing);
+        StartEventBurn(card, onBurnComplete: () => StartTrashReform(card, seat), timing: timing,
+                       fromPos: fromPos, fromSize: fromSize);
     }
 
     // ---- Experimental: event cards "incinerate" with a green burn when played ------------------
@@ -10857,7 +10883,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     /// caller sequencing on it can never hang.</summary>
     private void StartEventBurn(CardInstance card,
                                 System.Action onBurnComplete = null,
-                                BurnTiming? timing = null)
+                                BurnTiming? timing = null,
+                                Vector3? fromPos = null, Vector2? fromSize = null)
     {
         var tm = timing ?? BurnTiming.Event;
         void Abort() { onBurnComplete?.Invoke(); }
@@ -10872,12 +10899,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Start wherever the card is sitting in hand, so the showcase reads as THAT card
         // leaving THAT slot. No hand rect (played from a panel, or by the opponent) just
         // means it starts small at centre and grows in place.
-        Vector2 fromSize = new Vector2(150f, 210f);
-        Vector3 fromPos = new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f);
-        if (handCardRects.TryGetValue(card.InstanceId, out var rect) && rect != null)
+        // Caller-supplied rect wins: when the burn is triggered from the pose diff the hand row has
+        // already been rebuilt, so handCardRects no longer holds the card — but the diff kept its
+        // last real pose. Falls back to the live hand rect, then to screen centre.
+        Vector2 startSize = fromSize ?? new Vector2(150f, 210f);
+        Vector3 startPos = fromPos ?? new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f);
+        if (fromPos == null && handCardRects.TryGetValue(card.InstanceId, out var rect) && rect != null)
         {
-            fromSize = rect.rect.size;
-            fromPos = rect.position;
+            startSize = rect.rect.size;
+            startPos = rect.position;
         }
 
         // Showcase size: a fraction of screen height, card aspect preserved, clamped so it
@@ -10894,15 +10924,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // whoever is looking at this screen, so it stays upright whoever played it; only the
         // trash reform matches the far side's orientation. Nothing flips visibly between the
         // two - the card is fully burned away before the reform begins.
-        rt.sizeDelta = fromSize;
-        rt.position = fromPos;
+        rt.sizeDelta = startSize;
+        rt.position = startPos;
         var img = go.AddComponent<RawImage>();
         img.texture = sprite.texture;
         img.material = mat;
         img.raycastTarget = false;
 
         go.AddComponent<EventBurn>()
-          .Init(img, mat, fromPos, fromSize, toPos, toSize, tm, BurnCutoffCeiling(), BurnCleanStart(), this, onBurnComplete);
+          .Init(img, mat, startPos, startSize, toPos, toSize, tm, BurnCutoffCeiling(), BurnCleanStart(), this, onBurnComplete);
     }
 
     private const float BurnReformDuration = 1.40f;
@@ -11283,7 +11313,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         previewRoot.gameObject.SetActive(true);
         previewImage.sprite = GetCardSprite(card.CardId);
-        previewTitle.text = GameEngine.GetCard(card).Name;
+        if (previewTitle != null) previewTitle.text = GameEngine.GetCard(card).Name;
         previewRoot.SetAsLastSibling();
     }
 
@@ -11291,7 +11321,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         previewRoot.gameObject.SetActive(true);
         previewImage.sprite = GetDonSpriteForId(donInstanceId);
-        previewTitle.text = "DON!! Card";
+        if (previewTitle != null) previewTitle.text = "DON!! Card";
         previewRoot.SetAsLastSibling();
     }
 
@@ -11299,7 +11329,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         previewRoot.gameObject.SetActive(true);
         previewImage.sprite = GetBackSprite();
-        previewTitle.text = "";
+        if (previewTitle != null) previewTitle.text = "";
         previewRoot.SetAsLastSibling();
     }
 
@@ -11307,7 +11337,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         previewRoot.gameObject.SetActive(true);
         previewImage.sprite = GetDonBackSprite();
-        previewTitle.text = "";
+        if (previewTitle != null) previewTitle.text = "";
         previewRoot.SetAsLastSibling();
     }
 
@@ -11339,7 +11369,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         previewRoot.gameObject.SetActive(true);
         previewImage.sprite = sprite;
         var cd = CardData.GetCard(cardId);
-        previewTitle.text = cd != null ? cd.Name : cardId;
+        if (previewTitle != null) previewTitle.text = cd != null ? cd.Name : cardId;
         previewRoot.SetAsLastSibling();
     }
 

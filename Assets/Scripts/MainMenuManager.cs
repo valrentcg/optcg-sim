@@ -5688,7 +5688,7 @@ public partial class MainMenuManager : MonoBehaviour
             on ? Gold : Muted, TextAnchor.MiddleCenter, monoFont);
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var btn = tile.gameObject.AddComponent<Button>();
-        btn.onClick.AddListener(() => { lobbyIgnoreBans = !lobbyIgnoreBans; RenderMenu(); });
+        btn.onClick.AddListener(() => { lobbyIgnoreBans = !lobbyIgnoreBans; HostBroadcastLobbyState(); RenderMenu(); });
     }
 
     // Custom-lobby format: "standard" (in-rotation blocks, default) or "extra" (full pool, Extra Regulation).
@@ -5772,7 +5772,7 @@ public partial class MainMenuManager : MonoBehaviour
         AddRoundedCardBorder(tile, selected ? Gold : MenuB, selected ? 1.6f : 1f);
         var t = TextObject("Text", tile, label, 11, selected ? Ink : Muted, TextAnchor.MiddleCenter, monoFont);
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        tile.gameObject.AddComponent<Button>().onClick.AddListener(() => { lobbyTimingMode = modeVal; RenderMenu(); });
+        tile.gameObject.AddComponent<Button>().onClick.AddListener(() => { lobbyTimingMode = modeVal; HostBroadcastLobbyState(); RenderMenu(); });
     }
 
     private void BuildBlitzPresetOption(RectTransform parent, string label, string presetVal, float width = 112f)
@@ -5786,7 +5786,7 @@ public partial class MainMenuManager : MonoBehaviour
         AddRoundedCardBorder(tile, selected ? Gold : MenuB, selected ? 1.4f : 1f);
         var t = TextObject("Text", tile, label, 10, selected ? Ink : Muted, TextAnchor.MiddleCenter, monoFont);
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        tile.gameObject.AddComponent<Button>().onClick.AddListener(() => { lobbyBlitzPreset = presetVal; RenderMenu(); });
+        tile.gameObject.AddComponent<Button>().onClick.AddListener(() => { lobbyBlitzPreset = presetVal; HostBroadcastLobbyState(); RenderMenu(); });
     }
 
     // One labeled per-player clock input for Custom Blitz. `value` is raw "m:ss" text; `onChanged`
@@ -5831,7 +5831,7 @@ public partial class MainMenuManager : MonoBehaviour
         var t = TextObject("Text", tile, label, 11, selected ? Ink : Muted, TextAnchor.MiddleCenter, monoFont);
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var btn = tile.gameObject.AddComponent<Button>();
-        btn.onClick.AddListener(() => { lobbyForgiveness = forgivenessOption; RenderMenu(); });
+        btn.onClick.AddListener(() => { lobbyForgiveness = forgivenessOption; HostBroadcastLobbyState(); RenderMenu(); });
     }
 
     private void BuildFormatOption(RectTransform parent, string label, string fmt)
@@ -5847,7 +5847,7 @@ public partial class MainMenuManager : MonoBehaviour
         var t = TextObject("Text", tile, label, 11, selected ? Ink : Muted, TextAnchor.MiddleCenter, monoFont);
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var btn = tile.gameObject.AddComponent<Button>();
-        btn.onClick.AddListener(() => { lobbyFormat = fmt; RenderMenu(); });
+        btn.onClick.AddListener(() => { lobbyFormat = fmt; HostBroadcastLobbyState(); RenderMenu(); });
     }
 
     private void BuildJoinLobbyPanel(RectTransform panel)
@@ -5989,10 +5989,55 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(peerDeckText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 22f), new Vector2(-16f, y));
         y -= 30f;
 
-        // ── Match rules detail — both players see exactly what they're entering ──
-        var rulesHeader = TextObject("Rules Header", panel, "MATCH RULES", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        // ── Match rules — the HOST edits them right here ────────────────────────────────────
+        // Inviting a friend creates the session first and lands both players in this waiting room,
+        // so the host never passes through the create-lobby panel where these normally live. The
+        // same option builders are reused, and every change re-broadcasts to the guest, so an
+        // invited game is as configurable as one hosted from the browser.
+        bool canEditRules = session.IsHost && lobbyMode == "custom";
+        var rulesHeader = TextObject("Rules Header", panel,
+            canEditRules ? "MATCH RULES  ·  tap to change" : "MATCH RULES", 11, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(rulesHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 20f), new Vector2(-16f, y));
         y -= 24f;
+
+        if (canEditRules)
+        {
+            RectTransform RuleRow(string name, float h)
+            {
+                var row = PanelObject(name, panel, new Color(0, 0, 0, 0));
+                Stretch(row, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, y - h), new Vector2(-16f, y));
+                var hlg = row.gameObject.AddComponent<HorizontalLayoutGroup>();
+                hlg.spacing = 8f; hlg.childAlignment = TextAnchor.MiddleLeft;
+                hlg.childControlWidth = false; hlg.childControlHeight = false;
+                y -= h + 6f;
+                return row;
+            }
+
+            var fmtRow = RuleRow("WR Format Row", 30f);
+            BuildFormatOption(fmtRow, "Standard", "standard");
+            BuildFormatOption(fmtRow, "Extra", "extra");
+
+            var forgRow = RuleRow("WR Forgiveness Row", 30f);
+            BuildForgivenessOption(forgRow, "Standard", false);
+            BuildForgivenessOption(forgRow, "Forgiveness", true);
+
+            var timeRow = RuleRow("WR Timing Row", 30f);
+            BuildTimingOption(timeRow, "Untimed", "standard");
+            BuildTimingOption(timeRow, "Ranked", "ranked");
+            BuildTimingOption(timeRow, "Blitz", "blitz");
+
+            if (lobbyTimingMode == "blitz")
+            {
+                var presetRow = RuleRow("WR Blitz Row", 28f);
+                BuildBlitzPresetOption(presetRow, "Bullet", "bullet", 84f);
+                BuildBlitzPresetOption(presetRow, "Blitz", "blitz", 84f);
+                BuildBlitzPresetOption(presetRow, "Rapid", "rapid", 84f);
+            }
+
+            var banRow = RuleRow("WR Ban Row", 30f);
+            BuildIgnoreBansOption(banRow);
+            y -= 4f;
+        }
         string fmtName = (lobbyMode == "custom" && lobbyFormat == "extra") ? "Extra Regulation (all blocks)" : "Standard (Blocks 2–5)";
         string timingName = session.IsHost ? LobbyTimingSummary() : lobbyTimingSummary;
         string rules = $"Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}"

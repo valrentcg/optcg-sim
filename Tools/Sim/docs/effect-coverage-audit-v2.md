@@ -1,6 +1,6 @@
 # Effect-coverage operability sweep — v2 (resolver-oracle)
 
-- Generated: 2026-07-17 16:43
+- Generated: 2026-07-26 22:49
 - Cards: **2636**
 - Non-trigger event bodies dry-run through the REAL resolver: **1962** (0 threw mid-execution = recognized)
 - **RESOLVER GAPS (returned NotAutomated): 0** across 0 cards

@@ -96,6 +96,9 @@ switch (mode)
     case "retargetlooptest":
         return OnePieceTcg.Sim.ChampionRetargetLoopTest.Run();
 
+    case "zoneaudit":
+        return OnePieceTcg.Sim.ZoneInferenceAudit.Run();
+
     case "notargettest":
         return OnePieceTcg.Sim.NoLegalTargetTest.Run();
 
