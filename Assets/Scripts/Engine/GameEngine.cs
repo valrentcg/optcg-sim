@@ -8541,9 +8541,53 @@ namespace OnePieceTcg.Engine
         // Feature tags appear as {Feature Name} in card text, e.g. {Straw Hat Crew}, {Supernovas}.
         // When multiple tags are listed with "or" (e.g. {Supernovas} or {Heart Pirates}) the card
         // must match at least one. When no tags are present every card is considered a match.
+        /// <summary>A target description can offer a CHOICE of alternatives — "up to 1 of your [Name]
+        /// Characters OR up to 1 of your Characters with a type including "X"". Each alternative carries
+        /// its own name/type filter, so testing the whole string in one pass ANDs them together and
+        /// matches NOTHING: the card is silently dead with no error anywhere. Returns the alternatives,
+        /// or null when the description has only one (in which case callers keep their existing
+        /// whole-text behaviour, unchanged).</summary>
+        private static string[] TargetChoiceBranches(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            var parts = System.Text.RegularExpressions.Regex.Split(text,
+                @"\s+or (?=up to \d+ of your\b)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return parts.Length >= 2 ? parts : null;
+        }
+
+        /// <summary>Does this card fit the target description? Name and type are checked TOGETHER per
+        /// alternative — a card must satisfy one alternative completely, not borrow the name from one
+        /// and the type from another.</summary>
+        private static bool TargetFiltersMatch(GameState state, string text, CardInstance card, CardDef def)
+        {
+            bool BranchOk(string t)
+            {
+                if (!CardPassesFeatureFilter(t, def)) return false;
+                var nm = System.Text.RegularExpressions.Regex.Match(t, @"of your \[([^\]]+)\]",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                return !nm.Success || NameMatches(state, card, nm.Groups[1].Value.Trim());
+            }
+            var branches = TargetChoiceBranches(text);
+            if (branches == null) return BranchOk(text);
+            foreach (var b in branches) if (BranchOk(b)) return true;
+            return false;
+        }
+
         private static bool CardPassesFeatureFilter(string effectText, CardDef def)
         {
             if (string.IsNullOrEmpty(effectText)) return true;
+            // Evaluate each alternative of a choice-of-targets description on its own; a card that fits
+            // ANY of them passes. Without this the type filter from one alternative is applied to cards
+            // the OTHER alternative describes, so nothing matches. (Branches never nest, so this
+            // recurses exactly one level.)
+            {
+                var choiceBranches = TargetChoiceBranches(effectText);
+                if (choiceBranches != null)
+                {
+                    foreach (var b in choiceBranches) if (CardPassesFeatureFilter(b, def)) return true;
+                    return false;
+                }
+            }
             // "… with no base effect" — the target must be a VANILLA card (no printed ability text). This
             // qualifier was previously absorbed by the target regex but never enforced, so effects like
             // OP03-091 (set cost of a "no base effect" Character to 0) could hit ANY Character. (9 cards.)
@@ -8888,7 +8932,15 @@ namespace OnePieceTcg.Engine
                     // "[Name] cards/Characters" named-target filters.
                     var playNameF = System.Text.RegularExpressions.Regex.Match(text,
                         @"of your (?:opponent's )?\[([^\]]+)\]");
-                    if (playNameF.Success && !NameMatches(state, card, playNameF.Groups[1].Value.Trim())) return false;
+                    if (playNameF.Success && !NameMatches(state, card, playNameF.Groups[1].Value.Trim()))
+                    {
+                        // In a choice-of-targets description the name belongs to ONE alternative, so a card
+                        // that fits a different alternative is still legal — the glow must not reject it, or
+                        // the target is unclickable and the effect looks broken even though the resolver
+                        // would accept it. Descriptions with a single alternative are unaffected.
+                        if (TargetChoiceBranches(text) == null || !TargetFiltersMatch(state, text, card, def))
+                            return false;
+                    }
                     // Rested/active requirement, e.g. "rested Characters ... as active" needs a rested target.
                     if (System.Text.RegularExpressions.Regex.IsMatch(text, "rested (leader|character)", System.Text.RegularExpressions.RegexOptions.IgnoreCase) && !card.Rested) return false;
                     if (System.Text.RegularExpressions.Regex.IsMatch(text, "active (leader|character)", System.Text.RegularExpressions.RegexOptions.IgnoreCase) && card.Rested) return false;
@@ -13067,11 +13119,33 @@ namespace OnePieceTcg.Engine
                     bool kwNoOnPlay = ContainsAll(text, "without an [On Play] effect");
                     // Named target: "Up to 1 of your [Charlotte Linlin] cards gains [KW]" (ST07-011 Zeus,
                     // ST07-013 Prometheus) — the [Name] was unenforced, so ANY card could gain the keyword.
-                    var kwNameTgt = System.Text.RegularExpressions.Regex.Match(text, @"of your \[([^\]]+)\]");
-                    if (kwSeat != effect.Seat || !kwTypeOk || !CardPassesFeatureFilter(text, kwDef2)
+                    // Power filter carried by the grant's OWN target description ("…, with 8000 power or
+                    // more, gains [Rush]", OP16-001 Ace leader) — it was never enforced here. Scoped to the
+                    // description rather than read off the whole text: OP03-016 packs an unrelated "K.O. up
+                    // to 1 of your opponent's Characters with 8000 power or LESS" into the same sentence as
+                    // "your Leader gains [Double Attack]", and a whole-text read would gate the Leader on it.
+                    int kwPowMin = -1, kwPowMax = -1;
+                    {
+                        var subjM = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to \d+ of your ");
+                        int gainsAt = subjM.Success
+                            ? text.IndexOf(" gain", subjM.Index, StringComparison.OrdinalIgnoreCase) : -1;
+                        string subject = gainsAt > subjM.Index ? text.Substring(subjM.Index, gainsAt - subjM.Index) : null;
+                        if (subject != null && subject.IndexOf("opponent", StringComparison.OrdinalIgnoreCase) < 0)
+                        {
+                            var pwM = System.Text.RegularExpressions.Regex.Match(subject,
+                                @"with ([\d,]+) power or (more|less)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            if (pwM.Success && int.TryParse(pwM.Groups[1].Value.Replace(",", ""), out int pwVal))
+                            {
+                                if (pwM.Groups[2].Value.Equals("more", StringComparison.OrdinalIgnoreCase)) kwPowMin = pwVal;
+                                else kwPowMax = pwVal;
+                            }
+                        }
+                    }
+                    if (kwSeat != effect.Seat || !kwTypeOk || !TargetFiltersMatch(state, text, kwT, kwDef2)
                         || (kwCostCap >= 0 && GetCost(state, kwT) > kwCostCap)
-                        || (kwNoOnPlay && ContainsAll(kwDef2.Effect ?? "", "[On Play]"))
-                        || (kwNameTgt.Success && !NameMatches(state, kwT, kwNameTgt.Groups[1].Value.Trim())))
+                        || (kwPowMin >= 0 && GetPower(state, kwT) < kwPowMin)
+                        || (kwPowMax >= 0 && GetPower(state, kwT) > kwPowMax)
+                        || (kwNoOnPlay && ContainsAll(kwDef2.Effect ?? "", "[On Play]")))
                     {
                         Log(state, effect.Seat, "That is not a valid keyword grant target.");
                         return EffectResolution.WaitingForTarget;

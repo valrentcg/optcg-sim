@@ -45,6 +45,7 @@ namespace OnePieceTcg.Sim
             RiderDoesNotDecideTheTargetZone();
             AddToLifeCostActuallyMovesTheCharacter();
             HalfPaidCostIsRefundedButAFullyPaidOneIsNot();
+            RedAceLeaderTargetsItsDottedNameFilter();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -275,6 +276,66 @@ namespace OnePieceTcg.Sim
                 f.S.Trash.Any(c => c.InstanceId == d1.InstanceId) && f.S.Trash.Any(c => c.InstanceId == d2.InstanceId)
                     && !f.S.Hand.Any(c => c.InstanceId == d1.InstanceId || c.InstanceId == d2.InstanceId),
                 $"d1InTrash={f.S.Trash.Any(c => c.InstanceId == d1.InstanceId)} d2InTrash={f.S.Trash.Any(c => c.InstanceId == d2.InstanceId)}");
+        }
+
+        // OP16-001 Portgas.D.Ace (red Leader) — a live check on the dotted-name fix from a card that
+        // was NOT one of the ones repaired. Its [Activate: Main] reads "Up to 1 of your
+        // [Monkey.D.Luffy] Characters or up to 1 of your Characters with a type including
+        // "Whitebeard Pirates", with 8000 power or more, gains [Rush] during this turn."
+        // Card names carry periods, and a [^.] -bounded filter stops at the first one, so a name
+        // filter that is not dot-safe silently matches NOTHING and the Leader's whole ability is dead
+        // with no error. Both branches of the OR are exercised, plus a Character that matches neither.
+        private static void RedAceLeaderTargetsItsDottedNameFilter()
+        {
+            const string Clause = "Up to 1 of your [Monkey.D.Luffy] Characters or up to 1 of your " +
+                "Characters with a type including \"Whitebeard Pirates\", with 8000 power or more, " +
+                "gains [Rush] during this turn.";
+
+            Check("red Ace grants Rush to a dotted-name [Monkey.D.Luffy] Character",
+                AceGrantsRush(Clause, "OP04-014"), "OP04-014 Monkey.D.Luffy 9000");
+            Check("red Ace grants Rush to a {Whitebeard Pirates} Character",
+                AceGrantsRush(Clause, "OP02-007"), "OP02-007 Thatch 8000");
+            Check("red Ace does NOT grant Rush to a Character matching neither branch",
+                !AceGrantsRush(Clause, "EB01-023"), "EB01-023 Edward Weevil 8000, no matching name or type");
+
+            // The trailing ", with 8000 power or more," is read as qualifying BOTH alternatives: the
+            // pool's normal way to hang two filters on ONE description is "…and 8000 power or more"
+            // with no commas (ST13-001 Sabo), so the comma-delimited form is doing something else.
+            // Not confirmed against the official Q&A — that page renders its entries via script and
+            // could not be read.
+            Check("red Ace does NOT grant Rush to an under-power [Monkey.D.Luffy]",
+                !AceGrantsRush(Clause, "OP01-024"), "OP01-024 Monkey.D.Luffy 3000 — below the 8000 gate");
+
+            // The glow filter decides what is CLICKABLE, so a target the resolver accepts but the glow
+            // rejects is unreachable in the real game — the bug would look identical to the player.
+            Check("both branches glow as clickable targets",
+                AceGlows(Clause, "OP04-014") && AceGlows(Clause, "OP02-007"),
+                $"luffy={AceGlows(Clause, "OP04-014")} whitebeard={AceGlows(Clause, "OP02-007")}");
+        }
+
+        private static bool AceGlows(string clause, string targetCardId)
+        {
+            var b = new Fixture();
+            var target = b.Character("south", targetCardId);
+            GameEngine.QueueClauseForTest(b.St, "south", b.Hand("south", "OP16-001"), "activateMain", clause);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            return pe != null && GameEngine.IsValidEffectTarget(b.St, pe, target);
+        }
+
+        private static bool AceGrantsRush(string clause, string targetCardId)
+        {
+            var b = new Fixture();
+            var target = b.Character("south", targetCardId);
+            string tid = target.InstanceId;
+            GameEngine.QueueClauseForTest(b.St, "south", b.Hand("south", "OP16-001"), "activateMain", clause);
+
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) return false;
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = tid });
+
+            var after = b.S.CharacterArea.FirstOrDefault(c => c != null && c.InstanceId == tid);
+            return after != null && GameEngine.HasRush(b.St, after);
         }
 
         // ---- plumbing -------------------------------------------------------------------------
