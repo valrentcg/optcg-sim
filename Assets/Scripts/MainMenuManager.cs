@@ -6315,6 +6315,9 @@ public partial class MainMenuManager : MonoBehaviour
     private float rankedConnectStart = -1f;
     private const float RankedConnectTimeout = 45f;   // generous vs. ~2-5s real Relay connect
     private int rankedRange;
+    // The first match window this queue session reported. The server widens the window with wait time;
+    // comparing against the opening value is what lets the UI say "widening" only when it truly is.
+    private int rankedRangeStart;
     private long rankedDeadline;         // epoch ms the ready check expires
     private bool rankedIAccepted;
     private bool rankedOppAccepted;
@@ -6362,6 +6365,7 @@ public partial class MainMenuManager : MonoBehaviour
         rankedStatus = "connecting";
         rankedStartTime = Time.realtimeSinceStartup;
         rankedRange = 0;
+        rankedRangeStart = 0;
         rankedIAccepted = rankedOppAccepted = false;
         rankedSessionCreated = rankedGuestJoined = rankedLaunching = false;
         rankedGuestReady = false;
@@ -6416,6 +6420,7 @@ public partial class MainMenuManager : MonoBehaviour
         if (s == null || !rankedQueueActive) return;
         rankedStatus = s.status;
         rankedRange = s.range;
+        if (rankedRangeStart == 0 && s.range > 0) rankedRangeStart = s.range;
 
         // Stamp the connect-phase entry so RankedPollLoop can time it out (P1). Any
         // non-connecting state clears it, so a requeue/expiry re-arms a fresh clock.
@@ -6652,9 +6657,14 @@ public partial class MainMenuManager : MonoBehaviour
                 : $"Searching near your rank  ·  {elapsed}s";
             var sub = TextObject("RM Sub", panel, subText, 14, serverDown ? ProfileAmber : Muted, TextAnchor.MiddleCenter, monoFont);
             Stretch(sub.rectTransform, new Vector2(0f, 0.52f), Vector2.one, new Vector2(0f, 0f), new Vector2(0f, -72f));
-            if (!serverDown && rankedRange > 0)
+            // Say that the net is widening, NOT the raw number. Matchmaking pairs on the hidden Glicko
+            // rating (correctly — Bounty is the visible ladder, not the pairing key), but the player has
+            // no MMR readout anywhere in the game: their profile, the board and every reward are in
+            // Berries. "±150 MMR" therefore names a unit they cannot see and a scale they cannot judge,
+            // and contradicts the game's own vocabulary. The widening itself is the useful signal.
+            if (!serverDown && rankedRange > 0 && rankedRangeStart > 0 && rankedRange > rankedRangeStart)
             {
-                var rng = TextObject("RM Range", panel, $"match window  ±{rankedRange} MMR", 11, ProfileAmber, TextAnchor.MiddleCenter, monoFont);
+                var rng = TextObject("RM Range", panel, "widening the search…", 11, ProfileAmber, TextAnchor.MiddleCenter, monoFont);
                 Stretch(rng.rectTransform, new Vector2(0f, 0.4f), Vector2.one, Vector2.zero, new Vector2(0f, 0f));
             }
             var cancelRow = PanelObject("RM Cancel", panel, new Color(0, 0, 0, 0));
