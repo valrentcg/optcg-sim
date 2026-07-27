@@ -102,6 +102,8 @@ switch (mode)
     // leaderaudit [all] — stuck / unreachable sweep. Leaders by default (they carry the game's most
     // unusual wording); "all" runs the identical sweep over every printed card.
     case "leaderaudit":
+        if (args.Length > 2 && args[1] == "why")
+            return OnePieceTcg.Sim.LeaderEffectAudit.Why(args[2]);
         return OnePieceTcg.Sim.LeaderEffectAudit.Run(args.Length > 1 ? args[1] : "leaders");
 
     case "notargettest":

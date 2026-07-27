@@ -49,6 +49,7 @@ namespace OnePieceTcg.Sim
             OldRedAceLeaderScalesWithEveryCardTrashed();
             OldRedAceAlsoTriggersOnDefence();
             MandatoryHandDiscardWithNoHandDoesNotFreeze();
+            OtherThanExclusionIsEnforcedByTheResolver();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -458,6 +459,33 @@ namespace OnePieceTcg.Sim
                 f.St.PendingEffects.Count == 1 || f.S.Trash.Count == 2,
                 $"pending={f.St.PendingEffects.Count} trash={f.S.Trash.Count} hand={f.S.Hand.Count} " +
                 $"(cards {keep1.InstanceId != null} {keep2.InstanceId != null})");
+        }
+
+        // "other than [Name]" was enforced only by the GLOW, so the resolver happily accepted the one
+        // card the text rules out — OP06-107 Kouzuki Momonosuke could add HIMSELF to Life on a clause
+        // reading "Add up to 1 of your {Land of Wano} type Characters other than [Kouzuki Momonosuke]".
+        // The exclusion now lives in one helper both sides call.
+        private static void OtherThanExclusionIsEnforcedByTheResolver()
+        {
+            const string Clause = "Add up to 1 of your {Land of Wano} type Characters other than " +
+                "[Kouzuki Momonosuke] to the top or bottom of the owner's Life cards face-up.";
+
+            var b = new Fixture();
+            var momo = b.Character("south", "OP06-107");          // the excluded card, on the board
+            int lifeBefore = b.S.Life.Count;
+            GameEngine.QueueClauseForTest(b.St, "south", momo, "main", Clause);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("\"other than [Name]\" is enforced when resolving", false, "no pending effect"); return; }
+
+            GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = momo.InstanceId });
+
+            bool stillOnBoard = b.S.CharacterArea.Any(c => c != null && c.InstanceId == momo.InstanceId);
+            Check("\"other than [Name]\" is enforced when resolving, not just when glowing",
+                stillOnBoard && b.S.Life.Count == lifeBefore,
+                $"onBoard={stillOnBoard} life {lifeBefore}->{b.S.Life.Count}");
+            Check("the excluded card does not glow either",
+                !GameEngine.IsValidEffectTarget(b.St, pe, momo));
         }
 
         // ---- plumbing -------------------------------------------------------------------------

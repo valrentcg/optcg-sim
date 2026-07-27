@@ -11,35 +11,35 @@
       "crash": 0
     },
     "avgTurns": 10.912222222222223,
-    "avgCommands": 115.42666666666666,
+    "avgCommands": 115.30222222222223,
     "firstPlayerWinRate": {
-      "rate": 0.5367,
-      "wins": 483,
+      "rate": 0.5389,
+      "wins": 485,
       "games": 900,
       "ci95": [
-        0.504,
-        0.569
+        0.5062,
+        0.5712
       ]
     },
-    "elapsedSeconds": 9.64
+    "elapsedSeconds": 9.54
   },
   "perDeck": {
     "st01": {
-      "rate": 0.46,
-      "wins": 276,
+      "rate": 0.465,
+      "wins": 279,
       "games": 600,
       "ci95": [
-        0.4205,
-        0.5
+        0.4254,
+        0.505
       ]
     },
     "st02": {
-      "rate": 0.5233,
-      "wins": 314,
+      "rate": 0.5183,
+      "wins": 311,
       "games": 600,
       "ci95": [
-        0.4833,
-        0.563
+        0.4784,
+        0.5581
       ]
     },
     "st03": {
@@ -57,12 +57,12 @@
       "south": "st01",
       "north": "st01",
       "southWinRate_goingFirst": {
-        "rate": 0.64,
-        "wins": 32,
+        "rate": 0.62,
+        "wins": 31,
         "games": 50,
         "ci95": [
-          0.5014,
-          0.7586
+          0.4815,
+          0.7414
         ]
       },
       "southWinRate_goingSecond": {
@@ -79,12 +79,12 @@
       "south": "st01",
       "north": "st02",
       "southWinRate_goingFirst": {
-        "rate": 0.46,
-        "wins": 23,
+        "rate": 0.5,
+        "wins": 25,
         "games": 50,
         "ci95": [
-          0.3297,
-          0.596
+          0.3664,
+          0.6336
         ]
       },
       "southWinRate_goingSecond": {
@@ -132,12 +132,12 @@
         ]
       },
       "southWinRate_goingSecond": {
-        "rate": 0.5,
-        "wins": 25,
+        "rate": 0.48,
+        "wins": 24,
         "games": 50,
         "ci95": [
-          0.3664,
-          0.6336
+          0.348,
+          0.6149
         ]
       }
     },

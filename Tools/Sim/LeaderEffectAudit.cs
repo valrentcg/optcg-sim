@@ -165,7 +165,14 @@ namespace OnePieceTcg.Sim
                                     reachCache[clause] = reach;
                                     reachChecked++;
                                 }
-                                if (reach == 0 && WantsACardTarget(pe))
+                                // A POWER filter is measured against printed stats here, but power moves
+                                // during a turn — OP09-007 Heat buffs "your Leader with 4000 power or
+                                // less", which no Leader is when printed and any Leader can be after a
+                                // −power effect. A static library scan cannot answer that, so it must not
+                                // claim the clause is dead.
+                                bool powerConditioned = Regex.IsMatch(pe.Text ?? "",
+                                    @"\d{3,5} power or (?:more|less)", RegexOptions.IgnoreCase);
+                                if (reach == 0 && !powerConditioned && WantsACardTarget(pe))
                                     findings.Add(new Finding
                                     {
                                         CardId = d.Id, CardName = d.Name, Kind = "UNREACHABLE", Scenario = "library-wide",
@@ -212,6 +219,49 @@ namespace OnePieceTcg.Sim
             }
             catch { return false; }          // a throw is a different defect; THREW covers it
             return clone.PendingEffects.Any(e => e.EffectId == pe.EffectId);
+        }
+
+        /// <summary>`leaderaudit why &lt;cardId&gt;` — dump what the engine actually thinks about one card:
+        /// the queued clause, its inferred target zone, and every board card with the verdict the glow
+        /// gives it. Guessing at why a target is refused wastes more time than printing it.</summary>
+        public static int Why(string cardId)
+        {
+            var def = CardData.GetCard(cardId);
+            if (def == null) { Console.WriteLine("unknown card " + cardId); return 1; }
+            Console.WriteLine($"== {def.Id} {def.Name} [{def.Type}] {string.Join("/", def.Features ?? new List<string>())}");
+            foreach (var raw in ClausesOf(def))
+            {
+                string clause = raw.Trim();
+                var tags = TagsOf(clause);
+                if (tags.Count == 0 || !tags.Any(t => ResolverEventTags.Contains(t))) continue;
+
+                var st = Rich(Board(def.Id, 3, 3, false, 3, 3, 3));
+                var south = st.Players["south"];
+                CardInstance src;
+                if (string.Equals(def.Type, "leader", StringComparison.OrdinalIgnoreCase)) src = south.Leader;
+                else if (string.Equals(def.Type, "stage", StringComparison.OrdinalIgnoreCase)) { src = Inst(def.Id, "south", "stage"); south.Stage = src; }
+                else if (string.Equals(def.Type, "event", StringComparison.OrdinalIgnoreCase)) { src = Inst(def.Id, "south", "hand"); south.Hand.Add(src); }
+                else { src = Inst(def.Id, "south", "character"); int sl = south.CharacterArea.FindIndex(c => c == null); south.CharacterArea[sl < 0 ? 0 : sl] = src; }
+
+                GameEngine.QueueClauseForTest(st, "south", src, "main", clause);
+                var pe = st.PendingEffects.FirstOrDefault();
+                Console.WriteLine($"\n  clause: {clause}");
+                if (pe == null) { Console.WriteLine("    -> resolved / retired, nothing pending"); continue; }
+                Console.WriteLine($"    pending text : {pe.Text}");
+                Console.WriteLine($"    targetZone   : {pe.TargetZone}   optional={pe.Optional}  selections={pe.SelectionsRemaining}");
+                foreach (var kv in st.Players)
+                {
+                    var pl = kv.Value;
+                    var all = new List<CardInstance>();
+                    if (pl.Leader != null) all.Add(pl.Leader);
+                    if (pl.CharacterArea != null) all.AddRange(pl.CharacterArea.Where(c => c != null));
+                    foreach (var l in new[] { pl.Hand, pl.Trash, pl.Life })
+                        if (l != null) all.AddRange(l.Where(c => c != null).Take(1));
+                    foreach (var c in all)
+                        Console.WriteLine($"      {(kv.Key == "south" ? "own " : "opp ")}{c.Zone,-10} {c.CardId,-12} rested={c.Rested,-5} glow={GameEngine.IsValidEffectTarget(st, pe, c)}");
+                }
+            }
+            return 0;
         }
 
         // ---- the player's own "is anything clickable?" test ----------------------------------------

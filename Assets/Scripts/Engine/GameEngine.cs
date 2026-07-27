@@ -8626,6 +8626,17 @@ namespace OnePieceTcg.Engine
             }
         }
 
+        /// <summary>Is this card excluded by an "other than [Name]" clause? Shared so the resolver and the
+        /// glow agree — OP06-107 Kouzuki Momonosuke ("Add up to 1 of your {Land of Wano} type Characters
+        /// OTHER THAN [Kouzuki Momonosuke] to … your Life cards") let you add Momonosuke himself, the one
+        /// card the text rules out, because only the glow enforced it.</summary>
+        private static bool ExcludedByOtherThan(GameState state, string text, CardInstance card)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(text ?? "", @"other than \[([^\]]+)\]",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success && NameMatches(state, card, m.Groups[1].Value.Trim());
+        }
+
         private const string CostPickPattern =
             @"^(K\.O\.|trash|rest|return|place|add) (\d+) (?:of your )?([^:]*?)Characters?\b(?! cards?)";
 
@@ -8731,12 +8742,6 @@ namespace OnePieceTcg.Engine
             // phrase checks below see the same text the resolver matches against.
             text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
             text = NormalizeClause(text);
-            // Strip a leading "If <condition>," clause BEFORE analyzing target words — the
-            // condition often names card types that are NOT targets (ST19-003 Tashigi:
-            // "If your Leader is [Smoker], give up to 1 of your opponent's Characters
-            // −4 cost..." must not mark the Leader as a valid target).
-            text = System.Text.RegularExpressions.Regex.Replace(text,
-                @"^If [^,]+,\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             // Strip a leading DON!!-cost prefix — the circled-number form "➁ (You may rest the specified
             // number of DON!! cards in your cost area.)" and the written "DON!! −3 (…)" form. It is paid
             // with DON!!, never a board click, but it sits in FRONT of the real "You may …:" cost, so
@@ -8746,6 +8751,21 @@ namespace OnePieceTcg.Engine
             text = System.Text.RegularExpressions.Regex.Replace(text,
                 @"^\s*(?:[➀-➉①-⑩]|DON!!\s*[-−–‑‒—]\s*\d+)\s*(?:\([^)]*\))?\s*[:：]?\s*", "",
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // Strip a leading "If <condition>," clause BEFORE analyzing target words — the
+            // condition often names card types that are NOT targets (ST19-003 Tashigi:
+            // "If your Leader is [Smoker], give up to 1 of your opponent's Characters
+            // −4 cost..." must not mark the Leader as a valid target).
+            text = System.Text.RegularExpressions.Regex.Replace(text,
+                @"^If [^,]+,\s*", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            // The clause being resolved RIGHT NOW, without its ". Then, …" rider. The rider is a later,
+            // separate effect; letting its wording reach the checks below decides the current step from
+            // text that does not describe it, which has now caused three separate silent target failures
+            // (the target ZONE, the target's card TYPE, and the DON!!-give branch).
+            string firstClause = text;
+            {
+                int thenAt = FindThenClause(firstClause);
+                if (thenAt > 0 && thenAt <= firstClause.Length) firstClause = firstClause.Substring(0, thenAt);
+            }
             // While an optional-cost effect is still paying its cost ("You may <cost>: <body>"),
             // the click chooses a COST card — validate against the cost clause, not the body.
             {
@@ -8899,12 +8919,16 @@ namespace OnePieceTcg.Engine
                 return true;
             }
             // "Give rested DON!! to your Leader (or 1 of your Characters)".
-            if (ContainsAll(text, "Give") && ContainsAll(text, "rested DON!!") && ContainsAll(text, "Leader"))
+            // Matched against the FIRST clause only. A ". Then, …" rider is a later, separate effect, and
+            // this branch returns false for the whole board — so a rider mentioning a DON!!-give silently
+            // blanked the glow for the clause actually being resolved (OP16-035 Roronoa Zoro: "Rest up to
+            // 1 of your opponent's cards. Then, … give up to 3 rested DON!! cards to your Leader.").
+            if (ContainsAll(firstClause, "Give") && ContainsAll(firstClause, "rested DON!!") && ContainsAll(firstClause, "Leader"))
             {
                 // "…to your Leader" (no Character option) is the DON-PICK flow: the rested DON!! itself
                 // is the target (chosen via the DON!! click path), NOT a board card — so glow nothing
                 // here, otherwise the Leader wrongly lights up.
-                if (!ContainsAll(text, "Characters")) return false;
+                if (!ContainsAll(firstClause, "Characters")) return false;
                 // "…or 1 of your Characters": the recipient is chosen on the board — YOUR side only,
                 // and it must be IN PLAY (a Leader, or a Character in the character area). A Character
                 // card sitting in your HAND or LIFE is not a legal recipient and must not glow.
@@ -9056,11 +9080,8 @@ namespace OnePieceTcg.Engine
                     // had the rider's "Leader" convince the glow that only Leaders were targets, so the
                     // opponent Character the first clause names could not be clicked. Same contamination
                     // the target-ZONE inference had.
-                    string typeScan = text;
-                    int thenForType = FindThenClause(typeScan);
-                    if (thenForType > 0 && thenForType <= typeScan.Length) typeScan = typeScan.Substring(0, thenForType);
-                    bool textLeader = typeScan.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0;
-                    bool textChar = typeScan.IndexOf("Character", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool textLeader = firstClause.IndexOf("Leader", StringComparison.OrdinalIgnoreCase) >= 0;
+                    bool textChar = firstClause.IndexOf("Character", StringComparison.OrdinalIgnoreCase) >= 0;
                     if (textLeader || textChar)
                     {
                         if (isLeader && !textLeader) return false;
@@ -9105,10 +9126,7 @@ namespace OnePieceTcg.Engine
             if (!CardPassesFeatureFilter(text, def)) return false;
 
             // "other than [Name]" self-exclusion (e.g. Robin: "…other than [Nico Robin]").
-            var otherThan = System.Text.RegularExpressions.Regex.Match(text, @"other than \[([^\]]+)\]",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            if (otherThan.Success && NameMatches(state, card, otherThan.Groups[1].Value.Trim()))
-                return false;
+            if (ExcludedByOtherThan(state, text, card)) return false;
 
             // Cost caps compare against the EFFECTIVE cost (printed cost + CostDelta modifiers,
             // e.g. Backlight's "-4 cost"), not the printed cost — otherwise a card made legal by
@@ -12964,6 +12982,7 @@ namespace OnePieceTcg.Engine
                         || (flCostMin >= 0 && GetCost(state, flT) < flCostMin)
                         || (flPowMin >= 0 && GetPower(state, flT) < flPowMin)
                         || (flPowMax >= 0 && GetPower(state, flT) > flPowMax)
+                        || ExcludedByOtherThan(state, text, flT)
                         || !CardPassesFeatureFilter(text, flDef))
                     {
                         Log(state, effect.Seat, "That is not a valid target.");
