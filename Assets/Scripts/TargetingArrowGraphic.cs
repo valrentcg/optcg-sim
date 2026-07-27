@@ -68,7 +68,11 @@ public class TargetingArrowGraphic : MaskableGraphic
     /// <summary>Ceiling on head length, in canvas pixels. Head length tracks arrow length so it
     /// stays in proportion at normal range, but across the full board that keeps growing — an arrow
     /// spanning the screen ended up with a head half the size of a card.</summary>
-    public float maxHeadPixels = 90f;
+    public float maxHeadPixels = 60f;
+
+    /// <summary>Smallest ribbon half-width, in canvas pixels. Guards the shader's core against
+    /// going sub-pixel, which aliases into a zig-zag rather than simply looking thin.</summary>
+    public float minRibbonPixels = 7f;
 
     /// <summary>Barb thickness, as a multiple of the shaft's width. The shader's blur scales with
     /// ribbon width, so a fat barb is also a SOFT barb — at the spec's 1.85 the barbs carried about
@@ -383,8 +387,13 @@ public class TargetingArrowGraphic : MaskableGraphic
             float s = (float)i / SHAFT * L;
             sPos[i]  = PointAt(s, L);
             sU[i]    = s / L;
-            sHalf[i] = WidthAtS(s, L, armLen) * scale * MESH_MUL
-                     * (1f + SWELL * Surge(sU[i], time, surge));
+            // Floored in PIXELS. The shader's core is 0.14 of the LOCAL half-width, so once the
+            // ribbon thins past ~7 px that core is sub-pixel — it aliases into a visible zig-zag
+            // along the shaft, and the last stretch before the tip renders as almost nothing, which
+            // reads as the tip being missing. Both of those were my 0.10 end taper going too far.
+            sHalf[i] = Mathf.Max(minRibbonPixels,
+                       WidthAtS(s, L, armLen) * scale * MESH_MUL
+                     * (1f + SWELL * Surge(sU[i], time, surge)));
         }
 
         int v = 0;
@@ -423,8 +432,12 @@ public class TargetingArrowGraphic : MaskableGraphic
                 // "make a point" and it did the opposite: the arms at full width are what COVERS the
                 // shaft's blunt end cap, and thinning them exposed it. The missing tip was never this
                 // curve — it was armLen (below).
-                float hw = wMax * Mathf.Pow(1f - f, 0.55f)
-                         * (1f + SWELL * 0.45f * Surge(u, time, surge));
+                // Barbs get a much smaller floor than the shaft: they SHOULD taper to fine ends,
+                // and flooring them at the shaft's value leaves them blunt. 2 px is just enough to
+                // stay off the sub-pixel aliasing the shaft ran into.
+                float hw = Mathf.Max(2f,
+                           wMax * Mathf.Pow(1f - f, 0.55f)
+                         * (1f + SWELL * 0.45f * Surge(u, time, surge)));
                 Vector2 p = tipP + dir * (f * armLen);
                 outVerts[v] = p + nrm * hw; outUvs[v] = new Vector2(u, 1f); v++;
                 outVerts[v] = p - nrm * hw; outUvs[v] = new Vector2(u, 0f); v++;
