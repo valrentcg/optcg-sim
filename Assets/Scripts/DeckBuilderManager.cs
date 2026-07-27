@@ -1027,6 +1027,29 @@ public partial class DeckBuilderManager : MonoBehaviour
     // Show the big right-side preview for a card id. No-ops to hidden if the id
     // has no art or record.
     private bool _previewOnLeft;
+    /// <summary>Preview an arbitrary sprite (DON!! art), reusing the same docked panel and animated
+    /// gold rim glow the card preview uses. Separate entry point because DON!! art is not a card —
+    /// it has no CardRec and no id in the art cache.</summary>
+    private void ShowSpritePreview(Sprite sprite, bool onLeft = false)
+    {
+        if (previewRoot == null || previewImage == null || sprite == null) return;
+        previewImage.sprite = sprite;
+        previewImage.color = Color.white;
+        _previewOnLeft = onLeft;
+        PositionPreview();
+        previewRoot.gameObject.SetActive(true);
+        previewRoot.SetAsLastSibling();
+    }
+
+    // Hover a DON!! art tile → the same right-side preview + gold glow as a card.
+    private sealed class DonArtHover : MonoBehaviour, IPointerEnterHandler, IPointerExitHandler
+    {
+        [NonSerialized] public DeckBuilderManager mgr;
+        [NonSerialized] public Sprite art;
+        public void OnPointerEnter(PointerEventData e) { if (mgr != null) mgr.ShowSpritePreview(art); }
+        public void OnPointerExit(PointerEventData e) { if (mgr != null) mgr.HideCardPreview(); }
+    }
+
     private void ShowCardPreview(string id, bool onLeft = false)
     {
         _previewOnLeft = onLeft;
@@ -1548,6 +1571,9 @@ public partial class DeckBuilderManager : MonoBehaviour
         // peripheral hex thumbnails, so they should win the race to decode first.
         BuildSelectDecklist(rightPanel, selected);
         BuildSelectHexRoster(centerPanel, allDecks);
+        // Corner chip, bottom-right of the centre column. A button rather than an inline panel so
+        // the hex cluster — which auto-sizes to fill this panel — keeps its full size.
+        BuildDonDeckButton(centerPanel);
     }
 
     // ════════════════════════════════════════════════════════════════════════
@@ -4388,324 +4414,44 @@ public partial class DeckBuilderManager : MonoBehaviour
     // ══════════════════════════════════════════════════════════════════════════
     // Deck-composition graphs (left column)
     // ══════════════════════════════════════════════════════════════════════════
+    // Delegates to the shared DeckStatsPanel so the Sealed builder draws the identical panel.
+    // The drawing primitives are handed over unchanged, so this renders exactly as it always has.
+    private DeckStatsPanel.Style statsStyle;
+
+    private DeckStatsPanel.Style StatsStyle() => statsStyle ??= new DeckStatsPanel.Style
+    {
+        Mono = monoFont,
+        Ink = Ink, Muted = Muted, Accent = Accent, Accent2 = Accent2, Gold = Gold,
+        SwatchFor = (key, _) => ColorSwatch.TryGetValue(key, out var sw) ? sw : new Color(0, 0, 0, 0),
+        ArchColor = ArchColor,
+        Panel = (n, parent, c) => Panel(n, parent, c),
+        Text = (n, parent, v, size, c, a, f) => Text_(n, parent, v, size, c, a, f),
+        Stretch = (rt, min, max, oMin, oMax) => Stretch(rt, min, max, oMin, oMax),
+        Round = Round,
+        RoundCircle = RoundCircle,
+        Border = (rt, c, t) => AddBorder(rt, c, t),
+    };
+
     private void RefreshStats()
     {
         if (statsRoot == null) return;
-        for (int i = statsRoot.childCount - 1; i >= 0; i--) Destroy(statsRoot.GetChild(i).gameObject);
-
-        int chars = 0, events = 0, stages = 0;
-        int[] cost = new int[11];
-        int[] counter = new int[3];
-        var colorCounts = new Dictionary<string, int>();
-        var archCounts  = new Dictionary<string, int>();
-
-        foreach (var e in editing.cards)
-        {
-            var rec = Card(e.id);
-            if (rec == null) continue;
-            string t = (rec.type ?? "").ToLowerInvariant();
-            if (t == "event") events += e.count;
-            else if (t == "stage") stages += e.count;
-            else chars += e.count;
-
-            cost[Mathf.Clamp(rec.cost, 0, 10)] += e.count;
-            int ci = rec.counter >= 2000 ? 2 : (rec.counter >= 1000 ? 1 : 0);
-            counter[ci] += e.count;
-
-            foreach (var c in rec.Colors())
+        DeckStatsPanel.Render(
+            statsRoot,
+            editing.cards.Select(e => new KeyValuePair<string, int>(e.id, e.count)),
+            id =>
             {
-                if (string.IsNullOrEmpty(c)) continue;
-                colorCounts.TryGetValue(c, out int cv); colorCounts[c] = cv + e.count;
-            }
-            foreach (var f in rec.Features())
-            {
-                if (string.IsNullOrEmpty(f)) continue;
-                archCounts.TryGetValue(f, out int av); archCounts[f] = av + e.count;
-            }
-        }
-
-        // average cost (10+ counts as 10)
-        int costTotal = 0; float weighted = 0f;
-        for (int i = 0; i < cost.Length; i++) { costTotal += cost[i]; weighted += i * cost[i]; }
-        float avgCost = costTotal > 0 ? weighted / costTotal : 0f;
-
-        // top 5 archetypes + "Other" (features overlap, so these DON'T sum to 50)
-        var archSorted = archCounts.OrderByDescending(k => k.Value).ToList();
-        var archTop = new List<KeyValuePair<string, int>>();
-        int shown = Mathf.Min(5, archSorted.Count);
-        for (int i = 0; i < shown; i++) archTop.Add(archSorted[i]);
-        int other = 0; for (int i = shown; i < archSorted.Count; i++) other += archSorted[i].Value;
-        if (other > 0) archTop.Add(new KeyValuePair<string, int>("Other", other));
-
-        var colorList = colorCounts.OrderByDescending(k => k.Value).ToList();
-
-        float y = -4f;
-
-        // color identity
-        if (colorList.Count > 0) y = ColorIdentity(colorList, y);
-
-        // cost curve (+ avg marker & readout)
-        y = StatSectionLabel("COST CURVE", y, "avg " + avgCost.ToString("0.0"));
-        y = CostCurve(cost, avgCost, y);
-        y -= 10f;
-
-        // card types
-        y = StatSectionLabel("CARD TYPES", y);
-        int typeMax = Mathf.Max(1, Mathf.Max(chars, Mathf.Max(events, stages)));
-        y = StatBar("Character", chars, typeMax, y);
-        y = StatBar("Event",     events, typeMax, y);
-        y = StatBar("Stage",     stages, typeMax, y);
-        y -= 10f;
-
-        // counters
-        y = StatSectionLabel("COUNTERS", y);
-        int cMax = Mathf.Max(1, Mathf.Max(counter[0], Mathf.Max(counter[1], counter[2])));
-        y = StatBar("None",  counter[0], cMax, y);
-        y = StatBar("+1000", counter[1], cMax, y);
-        y = StatBar("+2000", counter[2], cMax, y);
-        y -= 10f;
-
-        // archetypes
-        if (archTop.Count > 0)
-        {
-            y = StatSectionLabel("ARCHETYPES", y, "by card count");
-            y = ArchetypeShare(archTop, y);
-        }
-    }
-
-    // Section caption; returns the next y cursor. Optional `right` adds a
-    // right-aligned gold readout on the same line (e.g. "avg 3.8").
-    private float StatSectionLabel(string text, float y, string right = null)
-    {
-        var t = Text_("S_" + text, statsRoot, text, 9, Muted, TextAnchor.LowerLeft, monoFont);
-        t.fontStyle = FontStyle.Bold;
-        var rt = t.rectTransform;
-        rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(1f, 1f);
-        rt.pivot = new Vector2(0.5f, 1f);
-        rt.sizeDelta = new Vector2(0f, 16f);
-        rt.anchoredPosition = new Vector2(0f, y);
-
-        if (!string.IsNullOrEmpty(right))
-        {
-            var rv = Text_("SR_" + text, statsRoot, right, 9, Gold, TextAnchor.LowerRight, monoFont);
-            rv.fontStyle = FontStyle.Bold;
-            var rr = rv.rectTransform;
-            rr.anchorMin = new Vector2(0f, 1f); rr.anchorMax = new Vector2(1f, 1f);
-            rr.pivot = new Vector2(0.5f, 1f);
-            rr.sizeDelta = new Vector2(0f, 16f);
-            rr.anchoredPosition = new Vector2(0f, y);
-        }
-        return y - 18f;
-    }
-
-    // Horizontal labelled bar (label · track · value); returns the next y cursor.
-    private float StatBar(string label, int value, int max, float y)
-    {
-        const float rowH = 18f, labelW = 64f, valueW = 28f;
-
-        // Full-width row container, top-anchored, positioned by y.
-        var row = Panel("StatRow", statsRoot, new Color(0, 0, 0, 0));
-        row.anchorMin = new Vector2(0f, 1f); row.anchorMax = new Vector2(1f, 1f);
-        row.pivot = new Vector2(0.5f, 1f);
-        row.sizeDelta = new Vector2(0f, rowH);
-        row.anchoredPosition = new Vector2(0f, y);
-        row.GetComponent<Image>().raycastTarget = false;
-
-        // label (left, fixed width)
-        var lbl = Text_("L", row, label, 9, Ink, TextAnchor.MiddleLeft, monoFont);
-        Stretch(lbl.rectTransform, new Vector2(0f, 0f), new Vector2(0f, 1f), Vector2.zero, new Vector2(labelW, 0f));
-
-        // track (fills between label and value)
-        var track = Panel("Track", row, new Color(1f, 1f, 1f, 0.05f));
-        Stretch(track, new Vector2(0f, 0f), new Vector2(1f, 1f),
-            new Vector2(labelW, 3f), new Vector2(-valueW, -3f));
-        Round(track);
-        track.GetComponent<Image>().raycastTarget = false;
-
-        // fill (fraction of the track width)
-        float frac = max > 0 ? Mathf.Clamp01(value / (float)max) : 0f;
-        var fill = Panel("Fill", track, value > 0 ? (Color)Accent : new Color(0, 0, 0, 0));
-        Stretch(fill, new Vector2(0f, 0f), new Vector2(frac, 1f), Vector2.zero, Vector2.zero);
-        Round(fill);
-        fill.GetComponent<Image>().raycastTarget = false;
-
-        // value (right, fixed width)
-        var val = Text_("V", row, value.ToString(), 9, value > 0 ? Accent2 : Muted, TextAnchor.MiddleRight, monoFont);
-        val.fontStyle = FontStyle.Bold;
-        Stretch(val.rectTransform, new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(-valueW + 2f, 0f), Vector2.zero);
-
-        return y - (rowH + 4f);
-    }
-
-    // Vertical cost-curve histogram (costs 0..9 and 10+); returns the next y cursor.
-    private float CostCurve(int[] cost, float avg, float y)
-    {
-        const float barAreaH = 70f, capH = 12f, labelH = 14f;
-        int n = cost.Length;
-        int max = 1;
-        for (int i = 0; i < n; i++) max = Mathf.Max(max, cost[i]);
-
-        var area = Panel("CostArea", statsRoot, new Color(0, 0, 0, 0));
-        area.anchorMin = new Vector2(0f, 1f); area.anchorMax = new Vector2(1f, 1f);
-        area.pivot = new Vector2(0.5f, 1f);
-        area.sizeDelta = new Vector2(0f, barAreaH + capH + labelH);
-        area.anchoredPosition = new Vector2(0f, y);
-        area.GetComponent<Image>().raycastTarget = false;
-
-        for (int i = 0; i < n; i++)
-        {
-            float x0 = i / (float)n, x1 = (i + 1) / (float)n;
-            float frac = Mathf.Clamp01(cost[i] / (float)max);
-
-            // count cap
-            var cap = Text_("cap" + i, area, cost[i] > 0 ? cost[i].ToString() : "", 8,
-                cost[i] > 0 ? Accent2 : Muted, TextAnchor.LowerCenter, monoFont);
-            var cr = cap.rectTransform;
-            cr.anchorMin = new Vector2(x0, 1f); cr.anchorMax = new Vector2(x1, 1f);
-            cr.offsetMin = new Vector2(1f, -capH); cr.offsetMax = new Vector2(-1f, 0f);
-
-            // bar (grows up from the baseline above the label row)
-            var bar = Panel("bar" + i, area, cost[i] > 0 ? (Color)Accent : new Color(1f, 1f, 1f, 0.05f));
-            bar.anchorMin = new Vector2(x0, 0f); bar.anchorMax = new Vector2(x1, 0f);
-            bar.pivot = new Vector2(0.5f, 0f);
-            float h = Mathf.Max(2f, frac * barAreaH);
-            bar.offsetMin = new Vector2(2f, labelH);
-            bar.offsetMax = new Vector2(-2f, labelH + h);
-            Round(bar);
-            bar.GetComponent<Image>().raycastTarget = false;
-
-            // cost label
-            var lab = Text_("lab" + i, area, i == 10 ? "10+" : i.ToString(), 8, Muted, TextAnchor.LowerCenter, monoFont);
-            var lr = lab.rectTransform;
-            lr.anchorMin = new Vector2(x0, 0f); lr.anchorMax = new Vector2(x1, 0f);
-            lr.offsetMin = new Vector2(0f, 0f); lr.offsetMax = new Vector2(0f, labelH);
-        }
-
-        // ── avg-cost marker (gold vertical line over the bar area) ──
-        float mfrac = Mathf.Clamp01(avg / (n - 1));
-        var mark = Panel("avg", area, new Color(Gold.r, Gold.g, Gold.b, 0.7f));
-        mark.anchorMin = new Vector2(mfrac, 0f); mark.anchorMax = new Vector2(mfrac, 0f);
-        mark.pivot = new Vector2(0.5f, 0f);
-        mark.sizeDelta = new Vector2(1.6f, barAreaH);
-        mark.anchoredPosition = new Vector2(0f, labelH);
-        mark.GetComponent<Image>().raycastTarget = false;
-
-        return y - (barAreaH + capH + labelH + 4f);
-    }
-
-    // Red/Green identity tiles (equal-width row), driven by rec.Colors().
-    private float ColorIdentity(List<KeyValuePair<string, int>> colors, float y)
-    {
-        const float h = 30f;
-        var row = Panel("ColorId", statsRoot, new Color(0, 0, 0, 0));
-        row.anchorMin = new Vector2(0f, 1f); row.anchorMax = new Vector2(1f, 1f);
-        row.pivot = new Vector2(0.5f, 1f);
-        row.sizeDelta = new Vector2(0f, h);
-        row.anchoredPosition = new Vector2(0f, y);
-        row.GetComponent<Image>().raycastTarget = false;
-
-        int n = Mathf.Max(1, colors.Count);
-        for (int i = 0; i < colors.Count; i++)
-        {
-            var kv = colors[i];
-            Color c = ColorSwatch.TryGetValue(kv.Key, out var sw) ? sw : Muted;
-            float x0 = i / (float)n, x1 = (i + 1) / (float)n;
-
-            var tile = Panel("c" + i, row, new Color(c.r, c.g, c.b, 0.12f));
-            tile.anchorMin = new Vector2(x0, 0f); tile.anchorMax = new Vector2(x1, 1f);
-            tile.offsetMin = new Vector2(i == 0 ? 0f : 3f, 0f);
-            tile.offsetMax = new Vector2(-3f, 0f);
-            Round(tile); AddBorder(tile, new Color(c.r, c.g, c.b, 0.4f), 1f);
-
-            var dot = Panel("dot", tile, c);
-            dot.anchorMin = dot.anchorMax = new Vector2(0f, 0.5f);
-            dot.pivot = new Vector2(0f, 0.5f);
-            dot.sizeDelta = new Vector2(9f, 9f);
-            dot.anchoredPosition = new Vector2(9f, 0f);
-            RoundCircle(dot);
-
-            var lbl = Text_("l", tile, kv.Key.ToUpperInvariant(), 11, Ink, TextAnchor.MiddleLeft);
-            Stretch(lbl.rectTransform, Vector2.zero, Vector2.one, new Vector2(24f, 0f), new Vector2(-26f, 0f));
-
-            var val = Text_("v", tile, kv.Value.ToString(), 11, Ink, TextAnchor.MiddleRight, monoFont);
-            val.fontStyle = FontStyle.Bold;
-            Stretch(val.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(-8f, 0f));
-        }
-        return y - (h + 12f);
-    }
-
-    // Stacked color line + 2-column legend, driven by top-5 features + "Other".
-    private float ArchetypeShare(List<KeyValuePair<string, int>> items, float y)
-    {
-        const float barH = 14f, rowH = 18f;
-
-        float total = 0f; foreach (var it in items) total += it.Value; if (total <= 0f) total = 1f;
-
-        var bar = Panel("ArchBar", statsRoot, new Color(1f, 1f, 1f, 0.05f));
-        bar.anchorMin = new Vector2(0f, 1f); bar.anchorMax = new Vector2(1f, 1f);
-        bar.pivot = new Vector2(0.5f, 1f);
-        bar.sizeDelta = new Vector2(0f, barH);
-        bar.anchoredPosition = new Vector2(0f, y);
-        Round(bar);
-        bar.GetComponent<Image>().raycastTarget = false;
-
-        float cum = 0f;
-        for (int i = 0; i < items.Count; i++)
-        {
-            float w = items[i].Value / total;
-            var seg = Panel("s" + i, bar, ArchColor(i, items[i].Key));
-            seg.anchorMin = new Vector2(cum, 0f); seg.anchorMax = new Vector2(cum + w, 1f);
-            seg.offsetMin = Vector2.zero; seg.offsetMax = Vector2.zero;
-            seg.GetComponent<Image>().raycastTarget = false;
-            cum += w;
-        }
-        y -= (barH + 11f);
-
-        int rows = Mathf.CeilToInt(items.Count / 2f);
-        var leg = Panel("ArchLeg", statsRoot, new Color(0, 0, 0, 0));
-        leg.anchorMin = new Vector2(0f, 1f); leg.anchorMax = new Vector2(1f, 1f);
-        leg.pivot = new Vector2(0.5f, 1f);
-        leg.sizeDelta = new Vector2(0f, rows * rowH);
-        leg.anchoredPosition = new Vector2(0f, y);
-        leg.GetComponent<Image>().raycastTarget = false;
-
-        for (int i = 0; i < items.Count; i++)
-        {
-            int col = i % 2, r = i / 2;
-            float x0 = col * 0.5f, x1 = x0 + 0.5f;
-            float pad = col == 1 ? 8f : 0f;
-
-            var cell = Panel("cell" + i, leg, new Color(0, 0, 0, 0));
-            cell.anchorMin = new Vector2(x0, 1f); cell.anchorMax = new Vector2(x1, 1f);
-            cell.pivot = new Vector2(0.5f, 1f);
-            cell.sizeDelta = new Vector2(0f, rowH);
-            cell.anchoredPosition = new Vector2(0f, -r * rowH);
-            cell.GetComponent<Image>().raycastTarget = false;
-
-            var dot = Panel("d", cell, ArchColor(i, items[i].Key));
-            dot.anchorMin = dot.anchorMax = new Vector2(0f, 0.5f);
-            dot.pivot = new Vector2(0f, 0.5f);
-            dot.sizeDelta = new Vector2(8f, 8f);
-            dot.anchoredPosition = new Vector2(pad, 0f);
-            Round(dot);
-
-            Color nameCol = items[i].Key == "Other" ? Muted : Ink;
-            var nm = Text_("n", cell, items[i].Key, 11, nameCol, TextAnchor.MiddleLeft);
-            // Auto-shrink long archetype names ("The Seven Warlords of the Sea", …) so they fit inside their
-            // half-width cell instead of overflowing into the next column.
-            nm.horizontalOverflow = HorizontalWrapMode.Wrap;
-            nm.verticalOverflow = VerticalWrapMode.Truncate;
-            nm.resizeTextForBestFit = true;
-            nm.resizeTextMinSize = 7;
-            nm.resizeTextMaxSize = 11;
-            Stretch(nm.rectTransform, Vector2.zero, Vector2.one, new Vector2(pad + 13f, 0f), new Vector2(-22f, 0f));
-
-            var vv = Text_("v", cell, items[i].Value.ToString(), 10,
-                items[i].Key == "Other" ? Muted : Accent2, TextAnchor.MiddleRight, monoFont);
-            vv.fontStyle = FontStyle.Bold;
-            Stretch(vv.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(-2f, 0f));
-        }
-        return y - (rows * rowH + 4f);
+                var rec = Card(id);
+                if (rec == null) return null;
+                return new DeckStatsPanel.CardFacts
+                {
+                    Type = rec.type,
+                    Cost = rec.cost,
+                    Counter = rec.counter,
+                    Colors = rec.Colors(),
+                    Features = rec.Features(),
+                };
+            },
+            StatsStyle());
     }
 
     private Color ArchColor(int i, string key)

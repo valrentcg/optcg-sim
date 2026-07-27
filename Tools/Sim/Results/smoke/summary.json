@@ -10,45 +10,45 @@
       "stall": 0,
       "crash": 0
     },
-    "avgTurns": 14.88,
-    "avgCommands": 207.26888888888888,
+    "avgTurns": 10.912222222222223,
+    "avgCommands": 115.42666666666666,
     "firstPlayerWinRate": {
-      "rate": 0.5044,
-      "wins": 454,
+      "rate": 0.5367,
+      "wins": 483,
       "games": 900,
       "ci95": [
-        0.4718,
-        0.537
+        0.504,
+        0.569
       ]
     },
-    "elapsedSeconds": 11.97
+    "elapsedSeconds": 9.64
   },
   "perDeck": {
     "st01": {
-      "rate": 0.45,
-      "wins": 270,
+      "rate": 0.46,
+      "wins": 276,
       "games": 600,
       "ci95": [
-        0.4106,
-        0.49
+        0.4205,
+        0.5
       ]
     },
     "st02": {
-      "rate": 0.6283,
-      "wins": 377,
+      "rate": 0.5233,
+      "wins": 314,
       "games": 600,
       "ci95": [
-        0.589,
-        0.6661
+        0.4833,
+        0.563
       ]
     },
     "st03": {
-      "rate": 0.4217,
-      "wins": 253,
+      "rate": 0.5167,
+      "wins": 310,
       "games": 600,
       "ci95": [
-        0.3828,
-        0.4616
+        0.4767,
+        0.5564
       ]
     }
   },
@@ -56,6 +56,28 @@
     {
       "south": "st01",
       "north": "st01",
+      "southWinRate_goingFirst": {
+        "rate": 0.64,
+        "wins": 32,
+        "games": 50,
+        "ci95": [
+          0.5014,
+          0.7586
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.46,
+        "wins": 23,
+        "games": 50,
+        "ci95": [
+          0.3297,
+          0.596
+        ]
+      }
+    },
+    {
+      "south": "st01",
+      "north": "st02",
       "southWinRate_goingFirst": {
         "rate": 0.46,
         "wins": 23,
@@ -66,34 +88,12 @@
         ]
       },
       "southWinRate_goingSecond": {
-        "rate": 0.52,
-        "wins": 26,
+        "rate": 0.36,
+        "wins": 18,
         "games": 50,
         "ci95": [
-          0.3851,
-          0.652
-        ]
-      }
-    },
-    {
-      "south": "st01",
-      "north": "st02",
-      "southWinRate_goingFirst": {
-        "rate": 0.24,
-        "wins": 12,
-        "games": 50,
-        "ci95": [
-          0.143,
-          0.3741
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.24,
-        "wins": 12,
-        "games": 50,
-        "ci95": [
-          0.143,
-          0.3741
+          0.2414,
+          0.4986
         ]
       }
     },
@@ -101,144 +101,144 @@
       "south": "st01",
       "north": "st03",
       "southWinRate_goingFirst": {
-        "rate": 0.64,
-        "wins": 32,
+        "rate": 0.48,
+        "wins": 24,
         "games": 50,
         "ci95": [
-          0.5014,
-          0.7586
+          0.348,
+          0.6149
         ]
       },
       "southWinRate_goingSecond": {
-        "rate": 0.6,
-        "wins": 30,
-        "games": 50,
-        "ci95": [
-          0.4618,
-          0.7239
-        ]
-      }
-    },
-    {
-      "south": "st02",
-      "north": "st01",
-      "southWinRate_goingFirst": {
-        "rate": 0.66,
-        "wins": 33,
-        "games": 50,
-        "ci95": [
-          0.5215,
-          0.7756
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.64,
-        "wins": 32,
-        "games": 50,
-        "ci95": [
-          0.5014,
-          0.7586
-        ]
-      }
-    },
-    {
-      "south": "st02",
-      "north": "st02",
-      "southWinRate_goingFirst": {
-        "rate": 0.58,
-        "wins": 29,
-        "games": 50,
-        "ci95": [
-          0.4423,
-          0.7063
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.5,
-        "wins": 25,
-        "games": 50,
-        "ci95": [
-          0.3664,
-          0.6336
-        ]
-      }
-    },
-    {
-      "south": "st02",
-      "north": "st03",
-      "southWinRate_goingFirst": {
-        "rate": 0.72,
-        "wins": 36,
-        "games": 50,
-        "ci95": [
-          0.5833,
-          0.8253
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.68,
-        "wins": 34,
-        "games": 50,
-        "ci95": [
-          0.5419,
-          0.7924
-        ]
-      }
-    },
-    {
-      "south": "st03",
-      "north": "st01",
-      "southWinRate_goingFirst": {
-        "rate": 0.52,
-        "wins": 26,
-        "games": 50,
-        "ci95": [
-          0.3851,
-          0.652
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.5,
-        "wins": 25,
-        "games": 50,
-        "ci95": [
-          0.3664,
-          0.6336
-        ]
-      }
-    },
-    {
-      "south": "st03",
-      "north": "st02",
-      "southWinRate_goingFirst": {
-        "rate": 0.34,
-        "wins": 17,
-        "games": 50,
-        "ci95": [
-          0.2244,
-          0.4785
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.34,
-        "wins": 17,
-        "games": 50,
-        "ci95": [
-          0.2244,
-          0.4785
-        ]
-      }
-    },
-    {
-      "south": "st03",
-      "north": "st03",
-      "southWinRate_goingFirst": {
         "rate": 0.44,
         "wins": 22,
         "games": 50,
         "ci95": [
           0.3116,
           0.5769
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st01",
+      "southWinRate_goingFirst": {
+        "rate": 0.48,
+        "wins": 24,
+        "games": 50,
+        "ci95": [
+          0.348,
+          0.6149
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.5,
+        "wins": 25,
+        "games": 50,
+        "ci95": [
+          0.3664,
+          0.6336
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st02",
+      "southWinRate_goingFirst": {
+        "rate": 0.54,
+        "wins": 27,
+        "games": 50,
+        "ci95": [
+          0.404,
+          0.6703
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.56,
+        "wins": 28,
+        "games": 50,
+        "ci95": [
+          0.4231,
+          0.6884
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st03",
+      "southWinRate_goingFirst": {
+        "rate": 0.54,
+        "wins": 27,
+        "games": 50,
+        "ci95": [
+          0.404,
+          0.6703
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.42,
+        "wins": 21,
+        "games": 50,
+        "ci95": [
+          0.2937,
+          0.5577
+        ]
+      }
+    },
+    {
+      "south": "st03",
+      "north": "st01",
+      "southWinRate_goingFirst": {
+        "rate": 0.7,
+        "wins": 35,
+        "games": 50,
+        "ci95": [
+          0.5625,
+          0.809
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.54,
+        "wins": 27,
+        "games": 50,
+        "ci95": [
+          0.404,
+          0.6703
+        ]
+      }
+    },
+    {
+      "south": "st03",
+      "north": "st02",
+      "southWinRate_goingFirst": {
+        "rate": 0.48,
+        "wins": 24,
+        "games": 50,
+        "ci95": [
+          0.348,
+          0.6149
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.36,
+        "wins": 18,
+        "games": 50,
+        "ci95": [
+          0.2414,
+          0.4986
+        ]
+      }
+    },
+    {
+      "south": "st03",
+      "north": "st03",
+      "southWinRate_goingFirst": {
+        "rate": 0.48,
+        "wins": 24,
+        "games": 50,
+        "ci95": [
+          0.348,
+          0.6149
         ]
       },
       "southWinRate_goingSecond": {

@@ -1,0 +1,7 @@
+=== SCENARIOS ===
+Scenarios: 27 passed, 0 failed.
+=== INVARIANTS ===
+games=2178  gamesWithViolation=0
+=== BOT ===
+games=3267  crashes=0  stalls(non-finishing)=0  invariantFails=0
+avg turns/finished game = 12.1

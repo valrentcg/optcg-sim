@@ -1,0 +1,255 @@
+{
+  "overall": {
+    "experimentId": "smoke",
+    "totalGames": 900,
+    "finished": 900,
+    "endReasons": {
+      "life": 900,
+      "deckout": 0,
+      "cap": 0,
+      "stall": 0,
+      "crash": 0
+    },
+    "avgTurns": 10.912222222222223,
+    "avgCommands": 115.56777777777778,
+    "firstPlayerWinRate": {
+      "rate": 0.5367,
+      "wins": 483,
+      "games": 900,
+      "ci95": [
+        0.504,
+        0.569
+      ]
+    },
+    "elapsedSeconds": 10.46
+  },
+  "perDeck": {
+    "st01": {
+      "rate": 0.46,
+      "wins": 276,
+      "games": 600,
+      "ci95": [
+        0.4205,
+        0.5
+      ]
+    },
+    "st02": {
+      "rate": 0.5233,
+      "wins": 314,
+      "games": 600,
+      "ci95": [
+        0.4833,
+        0.563
+      ]
+    },
+    "st03": {
+      "rate": 0.5167,
+      "wins": 310,
+      "games": 600,
+      "ci95": [
+        0.4767,
+        0.5564
+      ]
+    }
+  },
+  "firstVsSecond": [
+    {
+      "south": "st01",
+      "north": "st01",
+      "southWinRate_goingFirst": {
+        "rate": 0.64,
+        "wins": 32,
+        "games": 50,
+        "ci95": [
+          0.5014,
+          0.7586
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.46,
+        "wins": 23,
+        "games": 50,
+        "ci95": [
+          0.3297,
+          0.596
+        ]
+      }
+    },
+    {
+      "south": "st01",
+      "north": "st02",
+      "southWinRate_goingFirst": {
+        "rate": 0.46,
+        "wins": 23,
+        "games": 50,
+        "ci95": [
+          0.3297,
+          0.596
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.36,
+        "wins": 18,
+        "games": 50,
+        "ci95": [
+          0.2414,
+          0.4986
+        ]
+      }
+    },
+    {
+      "south": "st01",
+      "north": "st03",
+      "southWinRate_goingFirst": {
+        "rate": 0.48,
+        "wins": 24,
+        "games": 50,
+        "ci95": [
+          0.348,
+          0.6149
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.44,
+        "wins": 22,
+        "games": 50,
+        "ci95": [
+          0.3116,
+          0.5769
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st01",
+      "southWinRate_goingFirst": {
+        "rate": 0.48,
+        "wins": 24,
+        "games": 50,
+        "ci95": [
+          0.348,
+          0.6149
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.5,
+        "wins": 25,
+        "games": 50,
+        "ci95": [
+          0.3664,
+          0.6336
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st02",
+      "southWinRate_goingFirst": {
+        "rate": 0.54,
+        "wins": 27,
+        "games": 50,
+        "ci95": [
+          0.404,
+          0.6703
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.56,
+        "wins": 28,
+        "games": 50,
+        "ci95": [
+          0.4231,
+          0.6884
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st03",
+      "southWinRate_goingFirst": {
+        "rate": 0.54,
+        "wins": 27,
+        "games": 50,
+        "ci95": [
+          0.404,
+          0.6703
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.42,
+        "wins": 21,
+        "games": 50,
+        "ci95": [
+          0.2937,
+          0.5577
+        ]
+      }
+    },
+    {
+      "south": "st03",
+      "north": "st01",
+      "southWinRate_goingFirst": {
+        "rate": 0.7,
+        "wins": 35,
+        "games": 50,
+        "ci95": [
+          0.5625,
+          0.809
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.54,
+        "wins": 27,
+        "games": 50,
+        "ci95": [
+          0.404,
+          0.6703
+        ]
+      }
+    },
+    {
+      "south": "st03",
+      "north": "st02",
+      "southWinRate_goingFirst": {
+        "rate": 0.48,
+        "wins": 24,
+        "games": 50,
+        "ci95": [
+          0.348,
+          0.6149
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.36,
+        "wins": 18,
+        "games": 50,
+        "ci95": [
+          0.2414,
+          0.4986
+        ]
+      }
+    },
+    {
+      "south": "st03",
+      "north": "st03",
+      "southWinRate_goingFirst": {
+        "rate": 0.48,
+        "wins": 24,
+        "games": 50,
+        "ci95": [
+          0.348,
+          0.6149
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.5,
+        "wins": 25,
+        "games": 50,
+        "ci95": [
+          0.3664,
+          0.6336
+        ]
+      }
+    }
+  ]
+}

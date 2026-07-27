@@ -90,6 +90,9 @@ namespace OnePieceTcg.Sealed
             var t = SealedUI.Label(screenRoot, "Loading", "Loading card library…", 18, SealedUI.Muted,
                 TextAnchor.MiddleCenter);
             SealedUI.Fill(t.rectTransform);
+            // A load that never finishes must not be a dead end - this screen has no other exit.
+            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+                .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
         }
 
         private void Clear()
@@ -255,6 +258,11 @@ namespace OnePieceTcg.Sealed
             Clear();
             var opening = gameObject.AddComponent<SealedPackOpening>();
             opening.Begin(screenRoot, pool, () => { Destroy(opening); ShowBuilder(); });
+            // SKIP only fast-forwards the ceremony; it still depends on the sequence running. The
+            // pool was persisted above, so leaving here costs nothing - ResumeRun picks the run up
+            // at the builder. Added after Begin so it layers over the opening's backdrop.
+            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+                .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
         }
 
         private void ResumeRun(SealedRunRecord rec)
@@ -277,6 +285,13 @@ namespace OnePieceTcg.Sealed
                 SealedStore.Save(SealedStore.ToRecord(p, runId));
                 ShowReady();
             }, timedBuild ? 50 * 60 : 0);
+
+            // The builder's own controls are SORT / VIEW / RESET / DONE - DONE being the only way
+            // out. An illegal pool that can't satisfy DONE therefore trapped the player here.
+            // Added last so it layers above the builder's chrome. Not destructive: ExitToMenu
+            // saves the pool on the way out, so the run is resumable exactly as it stands.
+            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+                .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
         }
 
         // ---- Screen 4: deck done — play it ----------------------------------------------------

@@ -8,9 +8,6 @@ using UnityEngine.UI;
 [DisallowMultipleComponent]
 public sealed class CardEmbers : MonoBehaviour
 {
-    static Sprite _glow;
-    static Material _add;
-
     RectTransform area;
     Image[] imgs;
     float[] fx, fy, vy, sway, phase, size, hue, tw;
@@ -19,7 +16,6 @@ public sealed class CardEmbers : MonoBehaviour
     public void Init(RectTransform clipRoot, int count = 22)
     {
         N = count;
-        EnsureAssets();
 
         var go = new GameObject("Embers", typeof(RectTransform));
         area = go.GetComponent<RectTransform>();
@@ -42,8 +38,8 @@ public sealed class CardEmbers : MonoBehaviour
             rt.anchorMin = rt.anchorMax = new Vector2(0.5f, 0.5f);
             rt.pivot = new Vector2(0.5f, 0.5f);
             var im = e.AddComponent<Image>();
-            im.sprite = _glow;
-            im.material = _add;
+            im.sprite = UiGlow.Sprite;
+            im.material = UiGlow.Additive;
             im.raycastTarget = false;
             imgs[i] = im;
             Spawn(i, true);
@@ -85,31 +81,6 @@ public sealed class CardEmbers : MonoBehaviour
             Color c = Color.HSVToRGB(hue[i], 0.85f, 1f);
             c.a = Mathf.Clamp01(flick) * edge * 0.9f;
             imgs[i].color = c;
-        }
-    }
-
-    // ---- shared soft-glow sprite + additive material ----
-    static void EnsureAssets()
-    {
-        if (_glow == null)
-        {
-            int s = 64; var tex = new Texture2D(s, s, TextureFormat.RGBA32, false);
-            tex.wrapMode = TextureWrapMode.Clamp;
-            var px = new Color32[s * s]; float c = (s - 1) * 0.5f;
-            for (int y = 0; y < s; y++)
-              for (int x = 0; x < s; x++)
-              {
-                  float d = Mathf.Sqrt((x - c) * (x - c) + (y - c) * (y - c)) / c;
-                  float a = Mathf.Clamp01(1f - d); a = a * a * a;           // soft round falloff
-                  px[y * s + x] = new Color(1f, 1f, 1f, a);
-              }
-            tex.SetPixels32(px); tex.Apply();
-            _glow = Sprite.Create(tex, new Rect(0, 0, s, s), new Vector2(0.5f, 0.5f), 100f);
-        }
-        if (_add == null)
-        {
-            var sh = Shader.Find("UI/CardEmberAdditive");
-            _add = new Material(sh != null ? sh : Shader.Find("UI/Default"));
         }
     }
 }

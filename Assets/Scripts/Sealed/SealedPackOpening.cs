@@ -30,7 +30,13 @@ namespace OnePieceTcg.Sealed
         private RectTransform root;
         private SealedPool pool;
         private Action onComplete;
-        private bool skipRequested;
+        /// <summary>Abandon the whole ceremony and lay the entire pool out.</summary>
+        private bool skipAll;
+        /// <summary>Cut the CURRENT pack short and move to the next one. Reset per pack.</summary>
+        private bool skipPack;
+        /// <summary>True while either skip is in force — every step inside a pack's ceremony
+        /// checks this, since both kinds of skip end the pack you are looking at.</summary>
+        private bool SkipNow => skipAll || skipPack;
         private readonly Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
         /// <summary>The real OPTCG card back, shown while a card is still face-down. Same asset the
         /// match view uses (StreamingAssets/Cards/optcg_card_back.jpg), so a higher-quality file
@@ -39,7 +45,7 @@ namespace OnePieceTcg.Sealed
         /// <summary>Kept so it can be re-raised above every pack stage. Each pack adds a FULL-SCREEN
         /// click catcher (the tap-to-open affordance) as a later sibling, which sat on top of SKIP and
         /// swallowed the click — the button was there and looked live but could never be pressed.</summary>
-        private RectTransform skipButton;
+        private readonly List<RectTransform> skipButtons = new List<RectTransform>();
 
         private static readonly Color Ink = new Color32(238, 242, 247, 255);
         private static readonly Color Muted = new Color32(159, 171, 190, 255);
@@ -57,7 +63,11 @@ namespace OnePieceTcg.Sealed
             StartCoroutine(RunAll());
         }
 
-        public void Skip() => skipRequested = true;
+        /// <summary>Skip the rest of the sequence outright.</summary>
+        public void Skip() => skipAll = true;
+
+        /// <summary>Skip only the pack currently on screen; the next one still opens normally.</summary>
+        public void SkipCurrentPack() => skipPack = true;
 
         // ---- Sequence ------------------------------------------------------------------------
 
@@ -69,7 +79,10 @@ namespace OnePieceTcg.Sealed
             var counter = Text(backdrop, "Pack Counter", "", 26, Muted, TextAnchor.UpperCenter);
             Stretch(counter.rectTransform, new Vector2(0.1f, 0.90f), new Vector2(0.9f, 0.96f));
 
-            skipButton = AddButton(backdrop, "SKIP", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip);
+            // Two levels: drop the pack in front of you, or drop the ceremony entirely.
+            skipButtons.Clear();
+            skipButtons.Add(AddButton(backdrop, "SKIP PACK", new Vector2(0.705f, 0.03f), new Vector2(0.845f, 0.09f), SkipCurrentPack));
+            skipButtons.Add(AddButton(backdrop, "SKIP ALL", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip));
 
             // PRELOAD every card's art before the first pack. The reveal draws a card the instant it
             // flips, so kicking an async load at that moment always lost the race and the card fell
@@ -79,14 +92,23 @@ namespace OnePieceTcg.Sealed
             KickBackLoad();
             yield return StartCoroutine(PreloadArt(pool.Packs.SelectMany(p => p.Cards).Select(c => c.CardId)));
 
-            for (int i = 0; i < pool.Packs.Count && !skipRequested; i++)
+            for (int i = 0; i < pool.Packs.Count && !skipAll; i++)
             {
+                skipPack = false;                                   // per-pack, not sticky
                 counter.text = $"PACK {i + 1} / {pool.Packs.Count}";
                 yield return StartCoroutine(OpenOnePack(backdrop, pool.Packs[i]));
+
+                // Skipped a single pack: still show what was in it before moving on. Skipping the
+                // ceremony must never cost you the information.
+                if (skipPack && !skipAll)
+                {
+                    counter.text = $"PACK {i + 1} / {pool.Packs.Count}  ·  CONTENTS";
+                    yield return StartCoroutine(LayOutAtOnce(backdrop, pool.Packs[i].Cards, 1.35f, true));
+                }
             }
 
             // Skipping still shows what you got — it skips the ceremony, not the information.
-            if (skipRequested) yield return StartCoroutine(ShowEverythingAtOnce(backdrop));
+            if (skipAll) yield return StartCoroutine(LayOutAtOnce(backdrop, pool.Packs.SelectMany(p => p.Cards), 0.05f, false));
 
             if (backdrop != null) Destroy(backdrop.gameObject);
             onComplete?.Invoke();
@@ -96,7 +118,7 @@ namespace OnePieceTcg.Sealed
         {
             var stage = Panel(parent, "Pack Stage", new Color(0, 0, 0, 0));
             Stretch(stage, Vector2.zero, Vector2.one);
-            if (skipButton != null) skipButton.SetAsLastSibling();   // above this pack's click catcher
+            foreach (var b in skipButtons) if (b != null) b.SetAsLastSibling();   // above this pack's click catcher
 
             // ---- the pack itself ----
             var packRt = Panel(stage, "Pack", Color.white);
@@ -114,7 +136,7 @@ namespace OnePieceTcg.Sealed
             bool tapped = false;
             AddFullscreenClick(stage, () => tapped = true);
             float idle = 0f;
-            while (!tapped && !skipRequested && idle < 0.7f)
+            while (!tapped && !SkipNow && idle < 0.7f)
             {
                 idle += Time.unscaledDeltaTime;
                 float b = 1f + Mathf.Sin(idle * 2.2f) * 0.015f;
@@ -122,7 +144,7 @@ namespace OnePieceTcg.Sealed
                 yield return null;
             }
             if (hint != null) Destroy(hint.gameObject);
-            if (skipRequested) { Destroy(stage.gameObject); yield break; }
+            if (SkipNow) { Destroy(stage.gameObject); yield break; }
 
             // ---- shudder, then tear ----
             yield return StartCoroutine(Shudder(packRt, 0.18f));
@@ -132,11 +154,11 @@ namespace OnePieceTcg.Sealed
             var landed = new List<RectTransform>();
             foreach (var card in pack.Cards)
             {
-                if (skipRequested) break;
+                if (SkipNow) break;
                 yield return StartCoroutine(RevealCard(stage, card, landed));
             }
 
-            if (!skipRequested) yield return WaitUnscaled(0.20f);
+            if (!SkipNow) yield return WaitUnscaled(0.20f);
             if (stage != null) Destroy(stage.gameObject);
         }
 
@@ -473,8 +495,10 @@ namespace OnePieceTcg.Sealed
             }
         }
 
-        /// <summary>Skip path: lay the whole pool out at once so skipping never costs information.</summary>
-        private IEnumerator ShowEverythingAtOnce(RectTransform parent)
+        /// <summary>Skip path: lay cards out at once so skipping never costs information. Used for
+        /// a single skipped pack (held briefly, then cleared) and for the whole pool.</summary>
+        private IEnumerator LayOutAtOnce(RectTransform parent, IEnumerable<PulledCard> cards,
+                                         float hold, bool clearAfter)
         {
             var grid = Panel(parent, "All Cards", new Color(0, 0, 0, 0));
             Stretch(grid, new Vector2(0.04f, 0.10f), new Vector2(0.96f, 0.88f));
@@ -483,7 +507,7 @@ namespace OnePieceTcg.Sealed
             layout.spacing = new Vector2(7f, 7f);
             layout.childAlignment = TextAnchor.UpperCenter;
 
-            foreach (var card in pool.Packs.SelectMany(p => p.Cards))
+            foreach (var card in cards)
             {
                 var cell = Panel(grid, card.CardId, new Color32(24, 36, 52, 255));
                 var img = cell.GetComponent<Image>();
@@ -491,7 +515,13 @@ namespace OnePieceTcg.Sealed
                 if (sprite != null) { img.sprite = sprite; img.color = Color.white; img.preserveAspect = true; }
                 else AddLabel(cell, card);
             }
-            yield return WaitUnscaled(0.05f);
+
+            // The skip buttons must stay reachable over the grid, or skipping one pack would
+            // leave you unable to skip the next.
+            foreach (var b in skipButtons) if (b != null) b.SetAsLastSibling();
+
+            yield return WaitUnscaled(hold);
+            if (clearAfter && grid != null) Destroy(grid.gameObject);
         }
 
         // ---- Tiers ---------------------------------------------------------------------------
@@ -543,7 +573,7 @@ namespace OnePieceTcg.Sealed
             }
 
             float waited = 0f;
-            while (pending > 0 && waited < 8f && !skipRequested)
+            while (pending > 0 && waited < 8f && !skipAll)
             {
                 waited += Time.unscaledDeltaTime;
                 yield return null;
@@ -621,7 +651,7 @@ namespace OnePieceTcg.Sealed
         private IEnumerator HoldRevealed(float seconds)
         {
             float t = 0f;
-            while (t < seconds && !skipRequested)
+            while (t < seconds && !SkipNow)
             {
                 t += Time.unscaledDeltaTime;
                 yield return null;

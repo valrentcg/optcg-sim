@@ -1,0 +1,6 @@
+===== INVARIANTS =====
+games=2178  gamesWithViolation=0
+===== BOT SWEEP =====
+games=3267  crashes=0  stalls(non-finishing)=0  invariantFails=0
+avg turns/finished game = 12.1
+end reason: lifeOut=3260  deckOut=7  other=0

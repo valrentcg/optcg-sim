@@ -1,5 +1,8 @@
 # Puzzle Mode V2: mechanic graphs and cross-turn proofs
 
+> Superseded for player-facing content by `puzzle-mode-v3.md`. V2's 500-entry manifest proved that
+> solver-certified variety and card-ID variety still do not guarantee strategically different puzzles.
+
 This document supersedes the harvest-first conclusion in `puzzle-mode-process.md`.
 
 ## Why the previous method failed

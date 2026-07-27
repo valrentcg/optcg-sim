@@ -122,6 +122,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Deck picks for a networked match (from the lobby's SELECT DECK flow). Sent
     // inside the match-start payload so both clients hold both decks; either may
     // be null, in which case CreateMatch falls back to the ST01/ST02 defaults.
+    // Cosmetic DON!! art per seat, from the match-start payload. Never touches the engine.
+    public static string PendingNetworkedSouthDon;
+    public static string PendingNetworkedNorthDon;
     public static NetworkDeck PendingNetworkedSouthDeck;
     public static NetworkDeck PendingNetworkedNorthDeck;
     // Player display names for the center turn indicator. Set by MainMenuManager before
@@ -317,6 +320,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private AudioSource sfxSource;
     private AudioClip cardDrawClip;
     private AudioClip attackClip;
+    // The incinerate whoosh gets its OWN source: it is rate-fitted to the burn, and PlayOneShot
+    // has no per-call pitch — it would inherit (and disturb) the shared source's.
+    private AudioSource burnSfxSource;
+    private AudioClip burnClip;
     private bool sfxLoadStarted;
     public static float SfxVolume
     {
@@ -773,6 +780,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         mulliganDealAnimating = 0;
         lastCardPoses.Clear();
         suppressMoveAnim.Clear();
+        // A new match must never inherit a hidden trash top card from the last one.
+        pendingReformIds.Clear();
+        trashReveals.Clear();
+        reformRun = null;
         // South is the local player on this device — show their account/guest name (the profile
         // name, e.g. "Valren") rather than a generic "Player 1", which is only the last-resort
         // fallback when no account or guest name is available.
@@ -1164,6 +1175,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var northDef = PendingNetworkedNorthDeck?.ToDeckDef();
         PendingNetworkedSouthDeck = null;
         PendingNetworkedNorthDeck = null;
+        // Each seat wears its OWN owner's DON art, so you see what your opponent picked.
+        SetDonConfig("south", PendingNetworkedSouthDon);
+        SetDonConfig("north", PendingNetworkedNorthDon);
+        PendingNetworkedSouthDon = null;
+        PendingNetworkedNorthDon = null;
         if (southDef != null) config.SouthDeckDef = southDef;
         if (northDef != null) config.NorthDeckDef = northDef;
         currentMatchConfig = config;
@@ -1777,7 +1793,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         holder.pivot = new Vector2(0.5f, 0.5f);
         holder.sizeDelta = new Vector2(cardW, cardH);
         holder.anchoredPosition = new Vector2(x, 0f);
-        AddDonCardVisual(holder, don.Rested, true);
+        AddDonCardVisual(holder, don.Rested, true, don, seat);
         if (IsDonSelected(don.InstanceId))
         {
             AddMysticalCardOutline(holder, true);
@@ -1814,7 +1830,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         else if (inverted) holder.localRotation = Quaternion.Euler(0, 0, 180f);
         var catcher = PanelObject("DON Hover Catcher", holder, new Color(0, 0, 0, 0));
         Stretch(catcher, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        catcher.gameObject.AddComponent<DonHover>().Init(this);
+        // This catcher covers the whole DON!! and wins the hover over the visual's own handler,
+        // so it needs the id too — without it the cost-area preview always showed a fallback.
+        catcher.gameObject.AddComponent<DonHover>().Init(this, don.InstanceId);
         catcher.gameObject.AddComponent<DonSelector>().Init(this, canvas, seat, don.InstanceId, origIndex);
         donMoveRects[don.InstanceId] = holder;
         if (isNetworked)
@@ -2606,7 +2624,29 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             sfxLoadStarted = true;
             StartCoroutine(LoadSfxClip("card_draw", clip => cardDrawClip = clip));
             StartCoroutine(LoadSfxClip("attack", clip => attackClip = clip));
+            StartCoroutine(LoadSfxClip("event_burn", clip => burnClip = clip));
         }
+    }
+
+    /// <summary>Whoosh for the centre-screen incinerate, rate-fitted so the audible part of the
+    /// clip spans exactly the dissolve. The clip is trimmed to its active region on load, so
+    /// clip.length IS the sound — pitch = length / duration makes it start and end with the burn.
+    /// Reading the duration at call time means it follows BurnTiming without re-authoring audio.</summary>
+    private void PlayEventBurnSfx(float burnDuration)
+    {
+        EnsureSfx();
+        if (burnClip == null || burnClip.length <= 0.01f || burnDuration <= 0.01f) return;
+        if (burnSfxSource == null)
+        {
+            burnSfxSource = gameObject.AddComponent<AudioSource>();
+            burnSfxSource.playOnAwake = false;
+        }
+        burnSfxSource.clip = burnClip;
+        // Clamped: a wild mismatch would turn a whoosh into a growl or a chirp rather than
+        // failing audibly-but-obviously, and that is worse than not quite filling the burn.
+        burnSfxSource.pitch = Mathf.Clamp(burnClip.length / burnDuration, 0.35f, 2.5f);
+        burnSfxSource.volume = SfxVolume;
+        burnSfxSource.Play();
     }
 
     private void PlayAttackSfx()
@@ -2800,7 +2840,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                         float donDelay = (hasTurnDraw ? 0.55f : 0f) + 0.40f * donSeq;
                         donSeq++;
                         PlayCardDrawSfx(donDelay);
-                        StartCoroutine(AnimateCardMoveGhost(fromDonDeck, kv.Value, null, false, false, HideForFlight(kv.Value), donDelay));
+                        StartCoroutine(AnimateCardMoveGhost(fromDonDeck, kv.Value, null, false, false, HideForFlight(kv.Value), donDelay, false, kv.Key));
                     }
                     continue;
                 }
@@ -2851,7 +2891,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // top-level object that renders above the hand fan and animates size. FLIP-ing the real
                 // board card here would let the hand layer occlude it mid-flight, so it's intentionally
                 // NOT converted. Same-zone reflow/rest is handled by the FLIP pass below.
-                StartCoroutine(AnimateCardMoveGhost(old, kv.Value, kv.Value.don ? null : kv.Value.cardId, showFace, flare, HideForFlight(kv.Value), moveDelay, ghostDesat));
+                StartCoroutine(AnimateCardMoveGhost(old, kv.Value, kv.Value.don ? null : kv.Value.cardId, showFace, flare, HideForFlight(kv.Value), moveDelay, ghostDesat, kv.Key));
             }
 
             // FLIP pass — persistent-identity glide for cards that STAY in the same zone but shift
@@ -2955,7 +2995,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     // One ghost flight from a card's previous on-screen spot to its new one. `flare`
     // (event/counter use from hand) adds a gold outline + a stronger scale pulse.
-    private IEnumerator AnimateCardMoveGhost(CardPose from, CardPose to, string cardId, bool showFace, bool flare, RectTransform reveal = null, float delay = 0f, bool desaturate = false)
+    private IEnumerator AnimateCardMoveGhost(CardPose from, CardPose to, string cardId, bool showFace, bool flare, RectTransform reveal = null, float delay = 0f, bool desaturate = false, string donInstanceId = null)
     {
         activeMoveGhosts++;
         try {
@@ -2986,7 +3026,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // the opponent's (upside-down) side must look upside down from the moment it
         // appears, not land and then flip.
         if (to.rt != null) ghost.rotation = to.rt.rotation;
-        Sprite sprite = cardId != null ? (showFace ? GetCardSprite(cardId) : GetBackSprite()) : GetDonSprite();
+        Sprite sprite = cardId != null ? (showFace ? GetCardSprite(cardId) : GetBackSprite())
+                                       : GetDonSpriteForId(donInstanceId);
         var art = AddRoundedCardImage(ghost, "Art", sprite);
         art.raycastTarget = false;
         // Fly DARKENED if it's landing as a summoning-sick character (colours kept, just dimmed — matches
@@ -6724,6 +6765,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Character row reaches out to the deck/trash on its far side; near side clears the life column.
         // Squished vertically (was 0.64-0.97) to free room below for padding; the charRow inset is
         // tightened so the cards stay full size despite the shorter zone.
+        // ── Two-layer board: ZONE PANELS below, CARD CONTENT above ──────────────────────────
+        // Zones are siblings under `half`, and uGUI draws later siblings on top, so a zone created
+        // after another one painted its background over the earlier zone's overflowing cards. Every
+        // targeted lift in this method used to be a patch for one instance of that.
+        // Now every card lives in `cardLayer`, a single container held last, so "cards are always in
+        // front of field zones" is structural rather than something each zone has to remember.
+        // Each zone gets a CONTENT MOUNT in that layer with the same rect, so card code is unchanged
+        // — it just anchors inside a mount instead of inside the panel. SnugZone resizes both.
+        // Interaction that must receive events FROM cards (drop targets, pile clicks, hover presence)
+        // lives on the mount, since a card in the layer no longer bubbles up to the panel.
+        var cardLayer = new GameObject("Card Layer").AddComponent<RectTransform>();
+        cardLayer.SetParent(half, false);
+        Stretch(cardLayer, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+
         var characterMin = top ? new Vector2(0.02f, 0.03f) : new Vector2(0.16f, 0.67f);
         var characterMax = top ? new Vector2(0.84f, 0.33f) : new Vector2(0.98f, 0.97f);
         var character = MatZone(half, "CHARACTER AREA",
@@ -6734,16 +6789,26 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // NOTE: no RectMask2D here. A RectMask2D on this zone disables the stencil-based
         // rounded Mask on the cards inside it, making them show square corners.
         // Fitted row that fills the zone width so cards read at near-full size (reference mat look).
+        var characterContent = ZoneContent(cardLayer, "CHARACTER AREA", characterMin, characterMax);
         var charRow = new GameObject("Character Cards").AddComponent<RectTransform>();
-        charRow.SetParent(character, false);
+        charRow.SetParent(characterContent, false);
         Stretch(charRow, new Vector2(0.015f, 0.02f), new Vector2(0.985f, 0.98f), Vector2.zero, Vector2.zero);
         int charSlots = Mathf.Max(1, p.CharacterArea.Count);
         var charLayout = FittedRow(charSlots, 0.190f, 0.012f, 0.06f, true);
+        var charSlotRects = new List<RectTransform>();
         for (int i = 0; i < p.CharacterArea.Count; i++)
         {
             float cx = charLayout.start + i * charLayout.step;
-            AddCharacterSlot(charRow, p, seat, i, top, cx, charLayout.cardWidth);
+            charSlotRects.Add(AddCharacterSlot(charRow, p, seat, i, top, cx, charLayout.cardWidth));
         }
+        // Cards sit in front of every EMPTY slot's placeholder. Slots are siblings in index order,
+        // so slot N+1's panel was painted over anything slot N overflowed into it — visible as the
+        // stage/slot fill showing through a character's attached DON!!, which fan right and hang
+        // ~30% below the card. Lifting the occupied slots (in order, so their own left-to-right
+        // overlap is unchanged) keeps every card above every field panel.
+        for (int i = 0; i < charSlotRects.Count; i++)
+            if (p.CharacterArea[i] != null && charSlotRects[i] != null)
+                charSlotRects[i].SetAsLastSibling();
 
         var costMin = top ? new Vector2(0.22f, 0.69f) : new Vector2(0.22f, 0.02f);
         var costMax = top ? new Vector2(0.78f, 0.98f) : new Vector2(0.78f, 0.31f);
@@ -6767,7 +6832,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var leaderMin = top ? new Vector2(0.445f, 0.36f) : new Vector2(0.445f, 0.34f);
         var leaderMax = top ? new Vector2(0.555f, 0.66f) : new Vector2(0.555f, 0.64f);
         var leader = MatZone(half, "LEADER", leaderMin, leaderMax, new Color32(217, 224, 210, 235), top);
-        leaderZoneRects[seat] = leader;
+        var leaderContent = ZoneContent(cardLayer, "LEADER", leaderMin, leaderMax);
+        leaderZoneRects[seat] = leaderContent;
         moveZoneAnchors["cost:" + seat] = cost;
         // The cost-area DON!! row is created HERE (a sibling drawn after the leader zone) so
         // DON!! attached to the Leader tuck UNDER the cost-area DON cards — but stay ABOVE the
@@ -6777,7 +6843,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // created just before this (a sibling under `half`), so DON!! attached to the Leader
         // still tucks under these cost-area DON cards by creation order. Hand fans are created
         // later in Render(), directly under playRoot, so they still always render above this.
-        donRow.SetParent(half, false);
+        donRow.SetParent(cardLayer, false);
         float dyMin = Mathf.Lerp(costMin.y, costMax.y, 0.06f);
         float dyMax = Mathf.Lerp(costMin.y, costMax.y, 0.94f);
         Stretch(donRow,
@@ -6797,49 +6863,58 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // DON!! count bubble on the Cost Area — available (unrested) / total, like the pile count chips.
         AddDonCountBadge(half, costMin, costMax, p.CostArea.Count(d => !d.Rested), p.CostArea.Count);
 
-        AddCardToZone(leader, p.Leader, seat, true, top);
-        var leaderSz = FittedCardSize(leader);
-        SnugZone(leader, leaderMin, leaderMax, leaderSz.x * 1.06f, leaderSz.y * 1.06f);
+        AddCardToZone(leaderContent, p.Leader, seat, true, top);
+        var leaderSz = FittedCardSize(leaderContent);
+        SnugZonePair(leader, leaderContent, leaderMin, leaderMax, leaderSz.x * 1.06f, leaderSz.y * 1.06f);
 
         // (STAGE zone background created above, before the Leader zone, for correct DON!! layering.)
-        var stageDrop = stage.gameObject.AddComponent<StageDrop>();
+        var stageContent = ZoneContent(cardLayer, "STAGE", stageMin, stageMax);
+        // On the mount, not the panel: a dropped card raycasts against the card layer.
+        var stageDrop = stageContent.gameObject.AddComponent<StageDrop>();
         stageDrop.Init(this, seat);
-        if (p.Stage != null) AddCardToZone(stage, p.Stage, seat, true, top);
-        var stageSz = FittedCardSize(stage);
-        SnugZone(stage, stageMin, stageMax, stageSz.x * 1.06f, stageSz.y * 1.06f);
+        if (p.Stage != null) AddCardToZone(stageContent, p.Stage, seat, true, top);
+        var stageSz = FittedCardSize(stageContent);
+        SnugZonePair(stage, stageContent, stageMin, stageMax, stageSz.x * 1.06f, stageSz.y * 1.06f);
 
         // Deck up the right side, flanking the character row (opposite Life).
         var deckMin = top ? new Vector2(0.00f, 0.36f) : new Vector2(0.87f, 0.34f);
         var deckMax = top ? new Vector2(0.13f, 0.66f) : new Vector2(1.00f, 0.64f);
         var deck = MatZone(half, "DECK", deckMin, deckMax, new Color32(221, 226, 211, 225), top);
-        boardDeckPileRects[seat] = AddPileCardToZone(deck, "Deck", p.Deck.Count, true, null, top);
-        if (isNetworked) { presenceGlowRects["pile:deck:" + seat] = deck; deck.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:deck:" + seat); }
-        var deckSz = FittedCardSize(deck);
+        var deckContent = ZoneContent(cardLayer, "DECK", deckMin, deckMax);
+        boardDeckPileRects[seat] = AddPileCardToZone(deckContent, "Deck", p.Deck.Count, true, null, top);
+        if (isNetworked) { presenceGlowRects["pile:deck:" + seat] = deckContent; deckContent.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:deck:" + seat); }
+        var deckSz = FittedCardSize(deckContent);
         float deckDepth = p.Deck.Count > 0 ? StackDepth(p.Deck.Count) : 0f;
-        SnugZone(deck, deckMin, deckMax, deckSz.x * 1.06f, deckSz.y * 1.06f + deckDepth);
+        SnugZonePair(deck, deckContent, deckMin, deckMax, deckSz.x * 1.06f, deckSz.y * 1.06f + deckDepth);
 
         // DON!! deck mid-side beside the leader row (reference mat).
         var donDeckMin = top ? new Vector2(0.87f, 0.69f) : new Vector2(0.00f, 0.02f);
         var donDeckMax = top ? new Vector2(1.00f, 0.98f) : new Vector2(0.13f, 0.31f);
         var donDeck = MatZone(half, "DON!! DECK", donDeckMin, donDeckMax, new Color32(221, 226, 211, 225), top);
-        moveZoneAnchors["dondeck:" + seat] = donDeck;
-        AddDonDeckPileToZone(donDeck, p.DonDeck, top);
-        if (isNetworked) { presenceGlowRects["pile:dondeck:" + seat] = donDeck; donDeck.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:dondeck:" + seat); }
-        var donSz = FittedCardSize(donDeck);
+        var donDeckContent = ZoneContent(cardLayer, "DON!! DECK", donDeckMin, donDeckMax);
+        moveZoneAnchors["dondeck:" + seat] = donDeckContent;
+        AddDonDeckPileToZone(donDeckContent, p.DonDeck, top);
+        if (isNetworked) { presenceGlowRects["pile:dondeck:" + seat] = donDeckContent; donDeckContent.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:dondeck:" + seat); }
+        var donSz = FittedCardSize(donDeckContent);
         float donDepth = p.DonDeck > 0 ? StackDepth(p.DonDeck) : 0f;
-        SnugZone(donDeck, donDeckMin, donDeckMax, donSz.x * 1.06f, donSz.y * 1.06f + donDepth);
+        SnugZonePair(donDeck, donDeckContent, donDeckMin, donDeckMax, donSz.x * 1.06f, donSz.y * 1.06f + donDepth);
 
         var trashMin = top ? new Vector2(0.00f, 0.69f) : new Vector2(0.87f, 0.02f);
         var trashMax = top ? new Vector2(0.13f, 0.98f) : new Vector2(1.00f, 0.31f);
         var trash = MatZone(half, "TRASH", trashMin, trashMax, new Color32(172, 169, 73, 220), top);
-        moveZoneAnchors["trash:" + seat] = trash;
-        AddPileCardToZone(trash, "Trash", p.Trash.Count, false, p.Trash.LastOrDefault(), top);
-        if (isNetworked) { presenceGlowRects["pile:trash:" + seat] = trash; trash.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:trash:" + seat); }
+        var trashContent = ZoneContent(cardLayer, "TRASH", trashMin, trashMax);
+        moveZoneAnchors["trash:" + seat] = trashContent;
+        DrawTrashPile(trashContent, p, seat, top);
+        // A re-render during a reform destroys the overlay with the zone. Put it back mid-flight
+        // so playing again doesn't cut the dissolve short and pop the card in.
+        SpawnReformOverlay(seat);
+        if (isNetworked) { presenceGlowRects["pile:trash:" + seat] = trashContent; trashContent.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:trash:" + seat); }
         // Clicking a trash pile (yours or the opponent's) opens the trash viewer for that side.
         {
             string trashSeatCap = p.Seat;
-            var trashBtn = trash.gameObject.GetComponent<Button>();
-            if (trashBtn == null) trashBtn = trash.gameObject.AddComponent<Button>();
+            // On the mount: the pile card sits in the card layer and no longer bubbles to the panel.
+            var trashBtn = trashContent.gameObject.GetComponent<Button>();
+            if (trashBtn == null) trashBtn = trashContent.gameObject.AddComponent<Button>();
             trashBtn.transition = Selectable.Transition.None;
             trashBtn.onClick.AddListener(() =>
             {
@@ -6847,42 +6922,33 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 Render();
             });
         }
-        var trashSz = FittedCardSize(trash);
+        var trashSz = FittedCardSize(trashContent);
         float trashDepth = p.Trash.Count > 1 ? StackDepth(p.Trash.Count) : 0f;
-        SnugZone(trash, trashMin, trashMax, trashSz.x * 1.06f, trashSz.y * 1.06f + trashDepth);
+        SnugZonePair(trash, trashContent, trashMin, trashMax, trashSz.x * 1.06f, trashSz.y * 1.06f + trashDepth);
 
         // Life in the player-edge corner (reference mat).
         // Life: tall column up the left side, flanking the character row.
         var lifeMin = top ? new Vector2(0.85f, 0.03f) : new Vector2(0.02f, 0.40f);
         var lifeMax = top ? new Vector2(0.98f, 0.60f) : new Vector2(0.15f, 0.97f);
         var life = MatZone(half, "LIFE", lifeMin, lifeMax, new Color32(226, 230, 216, 235), top);
-        lifeZoneRects[seat] = life;
+        var lifeContent = ZoneContent(cardLayer, "LIFE", lifeMin, lifeMax);
+        lifeZoneRects[seat] = lifeContent;
         moveZoneAnchors["life:" + seat] = life;
         // At the end of the match, reveal BOTH players' remaining Life cards face-up (View Board);
         // during play they stay hidden.
         // Puzzle proofs know the exact Life order, but the player sees normal game information: only cards
         // explicitly turned face-up by an effect (or the finished-match reveal) show their face.
-        AddLifeStackToZone(life, p.Life.Count, top, seat, p.Life, RevealFinishedInfo());
+        AddLifeStackToZone(lifeContent, p.Life.Count, top, seat, p.Life, RevealFinishedInfo());
         // "Add from the top or bottom of your Life" effects (Zeus OP11-106): overlay this Life zone
         // with clickable TOP / BOTTOM halves so the player picks the card right on the board.
-        MaybeAddLifeTargetPicker(life, p, seat);
+        MaybeAddLifeTargetPicker(lifeContent, p, seat);
 
-        // ---- Card content above the pile ZONE PANELS -------------------------------------------
-        // This board has no explicit sorting: uGUI draws later siblings on top, so layering here is
-        // purely creation order. The four pile zones (DECK, DON!! DECK, TRASH, LIFE) are created LAST,
-        // which means their panels painted over anything that overflowed its own zone — and the
-        // character row is deliberately sized to reach out to the deck/trash on its far side. A card
-        // is a child of its zone, so it always beats its OWN background, but not a later sibling's;
-        // the visible cases were a RESTED character (rotated 90°, so far wider than its snug zone) or
-        // one carrying a glow at the outer end of the row, which is why it only showed sometimes.
-        // Lifting the two content ROWS above the pile panels fixes that without reordering any zone:
-        // the piles' own cards are children of their zones and so are unaffected, and the rows carry
-        // no background of their own, so nothing new can be painted over.
-        // NOTE: the leader/stage zones are NOT lifted here — their overflow is still handled by the
-        // SiblingRestore in ShowAttackTargetIndicator. Splitting zone backgrounds from zone contents
-        // into two layers would retire that hack and close the class properly.
-        charRow.SetAsLastSibling();
-        donRow.SetAsLastSibling();
+        // ---- Card content above every zone panel ------------------------------------------
+        // Structural now, not a per-zone patch: cardLayer is the last child of `half`, so every
+        // card in it draws above every zone background regardless of the order the zones were
+        // created in. This replaces the individual lifts that used to live here (charRow, the
+        // character zone, donRow) and the SiblingRestore hack in ShowAttackTargetIndicator.
+        cardLayer.SetAsLastSibling();
     }
 
     private void DrawExternalHand(PlayerState p, string seat, bool top)
@@ -7744,7 +7810,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
     // A cyan count chip at a pile's top-right corner (deck/trash/DON/life), matching the mock.
-    private void AddCountBadge(RectTransform zone, int count)
+    private RectTransform AddCountBadge(RectTransform zone, int count)
     {
         var badge = PanelObject("Count Badge", zone, Accent);
         badge.anchorMin = badge.anchorMax = new Vector2(1f, 1f);
@@ -7755,6 +7821,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var t = TextObject("Count", badge, count.ToString(), 11, BadgeInk, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        return badge;
     }
 
     // "Available / total DON!!" pill at the Cost Area's top-right corner (e.g. "2/7"), same cyan
@@ -7774,7 +7841,91 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
     }
 
-    private RectTransform AddPileCardToZone(RectTransform zone, string label, int count, bool faceDown, CardInstance topCard, bool inverted = false)
+    // Cards mid-burn: already in Trash as far as the engine is concerned, but the pile must not
+    // show them until the reform actually delivers them.
+    private readonly HashSet<string> pendingReformIds = new HashSet<string>();
+
+    // Both states of a hiding trash pile, built together. The revealed one is created up front and
+    // switched on when the reform lands - a visibility flip, NOT a Render(). Rebuilding the board
+    // to un-hide a single pile card is what caused the hitch right at the payoff.
+    private sealed class TrashReveal
+    {
+        public RectTransform BeforeHolder, BeforeBadge, AfterHolder, AfterBadge;
+    }
+    private readonly Dictionary<string, TrashReveal> trashReveals = new Dictionary<string, TrashReveal>();
+
+    private void DrawTrashPile(RectTransform trash, PlayerState p, string seat, bool top)
+    {
+        var realTop = p.Trash.LastOrDefault();
+        int realCount = p.Trash.Count;
+
+        if (realTop == null || !pendingReformIds.Contains(realTop.InstanceId))
+        {
+            trashReveals.Remove(seat);
+            AddPileCardToZone(trash, "Trash", realCount, false, realTop, top);
+            return;
+        }
+
+        // Hiding: show the pile exactly as it was, and build the delivered state alongside it,
+        // switched off. Both are real UI, so revealing costs one SetActive pair.
+        int beforeCount = Mathf.Max(0, realCount - 1);
+        var prevTop = realCount >= 2 ? p.Trash[realCount - 2] : null;
+
+        var beforeHolder = AddPileCardToZone(trash, "Trash", beforeCount, false, prevTop, top, withBadge: false);
+        var beforeBadge = AddCountBadge(trash, beforeCount);
+
+        var afterHolder = AddPileCardToZone(trash, "Trash Delivered", realCount, false, realTop, top, withBadge: false);
+        var afterBadge = AddCountBadge(trash, realCount);
+        // Hidden by ALPHA, not SetActive. AddCard attaches RoundedCardMask, whose driver feeds the
+        // shader _Size/_Radius from Update() - which does not run on an inactive object. Enabling it
+        // would therefore render one frame at the default radius before the driver corrected it,
+        // and that one-frame pop is what read as the art reloading. Alpha keeps it fully live.
+        Hide(afterHolder);
+        Hide(afterBadge);
+
+        trashReveals[seat] = new TrashReveal
+        {
+            BeforeHolder = beforeHolder, BeforeBadge = beforeBadge,
+            AfterHolder = afterHolder, AfterBadge = afterBadge,
+        };
+    }
+
+    // Alpha-based show/hide, so every driver and lazy initialiser on the object keeps running
+    // while it is invisible and there is nothing left to do on the frame it appears.
+    private static CanvasGroup GroupOf(RectTransform rt)
+    {
+        if (rt == null) return null;
+        var g = rt.GetComponent<CanvasGroup>();
+        return g != null ? g : rt.gameObject.AddComponent<CanvasGroup>();
+    }
+
+    private static void Hide(RectTransform rt)
+    {
+        var g = GroupOf(rt);
+        if (g == null) return;
+        g.alpha = 0f; g.blocksRaycasts = false; g.interactable = false;
+    }
+
+    private static void Show(RectTransform rt)
+    {
+        var g = GroupOf(rt);
+        if (g == null) return;
+        g.alpha = 1f; g.blocksRaycasts = true; g.interactable = true;
+    }
+
+    /// <summary>The reform landed: swap the pile to its delivered state. No board rebuild.</summary>
+    private void RevealTrashTop(string seat, string instanceId)
+    {
+        if (!string.IsNullOrEmpty(instanceId)) pendingReformIds.Remove(instanceId);
+        if (!trashReveals.TryGetValue(seat, out var r)) return;
+        Hide(r.BeforeHolder);
+        Hide(r.BeforeBadge);
+        Show(r.AfterHolder);
+        Show(r.AfterBadge);
+        trashReveals.Remove(seat);
+    }
+
+    private RectTransform AddPileCardToZone(RectTransform zone, string label, int count, bool faceDown, CardInstance topCard, bool inverted = false, bool withBadge = true)
     {
         var holder = new GameObject(label + " Card Holder").AddComponent<RectTransform>();
         holder.SetParent(zone, false);
@@ -7801,7 +7952,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             holder.anchoredPosition += new Vector2(0f, (inverted ? -1f : 1f) * StackDepth(count) * 0.5f);
         }
 
-        AddCountBadge(zone, count);
+        if (withBadge) AddCountBadge(zone, count);
         return holder;
     }
 
@@ -7865,17 +8016,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddCountBadge(zone, count);
     }
 
-    private void AddDonCardVisual(RectTransform parent, bool rested, bool stretch)
+    private void AddDonCardVisualById(RectTransform parent, bool rested, bool stretch,
+                                      string donInstanceId, string seat = null)
+        => AddDonCardVisual(parent, rested, stretch, null, seat, donInstanceId);
+
+    private void AddDonCardVisual(RectTransform parent, bool rested, bool stretch,
+                                  DonInstance don = null, string seat = null, string donInstanceId = null)
     {
         var root = PanelObject("DON!! Card", parent, new Color(0, 0, 0, 0));
         if (stretch) Stretch(root, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         AddOutline(root.gameObject, new Color(0, 0, 0, 0), 1f);
-        RoundedCardVisual("DON Art", root, GetDonSprite(), out var img);
+        RoundedCardVisual("DON Art", root, GetDonSpriteForId(donInstanceId ?? don?.InstanceId, seat), out var img);
         img.raycastTarget = false;
         // Rested DON stay fully opaque/bold - the rotation alone conveys "rested" (matches characters).
 
         var hover = root.gameObject.AddComponent<DonHover>();
-        hover.Init(this);
+        hover.Init(this, donInstanceId ?? don?.InstanceId);
     }
 
     private void DrawMatBackground()
@@ -9027,7 +9183,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     AddButton(body, $"Play{costHint}",
                         () =>
                         {
-                            if (burn) StartEventBurn(burnCard);
+                            if (burn) BeginBurnToTrash(burnCard, hSeat, BurnTiming.Event);
                             Dispatch(new GameCommand { Type = "playCard", Seat = hSeat, InstanceId = selectedId });
                         },
                         canAfford);
@@ -9576,6 +9732,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 cell.gameObject.AddComponent<Button>().onClick.AddListener(() =>
                 {
                     CounterTileHoverExit(cardRef);
+                    // Counters played off this tile panel (anything with an effect, e.g.
+                    // Love-Love Beam) come through here, NOT the click-a-hand-card path.
+                    BeginBurnToTrash(cardRef, b.TargetSeat, BurnTiming.Counter);
                     Dispatch(new GameCommand { Type = "counterWithCard", Seat = b.TargetSeat, InstanceId = cardRef.InstanceId });
                 });
             }
@@ -10177,7 +10336,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (state.Battle != null)
             {
                 if (state.Battle.Step == "counter" && state.Battle.TargetSeat == handSeat)
+                {
+                    // A Counter is spent exactly like an Event - show it the same way, so the
+                    // opponent can see what just got played instead of a card silently leaving hand.
+                    BeginBurnToTrash(card, handSeat, BurnTiming.Counter);
                     Dispatch(new GameCommand { Type = "counterWithCard", Seat = handSeat, InstanceId = card.InstanceId });
+                }
                 else
                     Render();
                 return;
@@ -10351,13 +10515,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var glow = valid ? AddUsableGlow(host) : AddInvalidGlow(host);
         if (glow == null) return null;
 
-        // The glow overflows the card, and a leader sits in a snug zone hemmed in by other zones that
-        // are drawn LATER in the same half (stage, deck, trash, ...). Those later siblings paint over
-        // the overflow, so the ring looks clipped/masked by the board. Lift only the target's direct
-        // zone and its known playmat half while the indicator is shown; a SiblingRestore on the glow
-        // puts them back the instant the indicator is destroyed.
+        // The glow overflows the card. Zone-vs-zone clipping is no longer a concern — every card
+        // (and its glow) now lives in the half's cardLayer, above all zone panels by construction —
+        // but HALF-vs-half still is: a target on the far half would be painted over by the near
+        // half. So only the half is lifted while the indicator is shown, and a SiblingRestore on
+        // the glow puts it back the instant the indicator is destroyed.
         //
-        // Do not infer these ancestors by indexing backward from boardRoot. The card hierarchy also
+        // Do not infer the half by indexing backward from boardRoot. The card hierarchy also
         // contains Reference Playmat and Play Area, so that approach could raise Reference Playmat
         // above the external hand panels and make every cost-area DON!! render in front of the hand.
         var restore = glow.gameObject.AddComponent<SiblingRestore>();
@@ -10373,12 +10537,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         if (targetHalf != null)
         {
-            Transform targetZone = cardRect;
-            while (targetZone != null && targetZone.parent != targetHalf)
-                targetZone = targetZone.parent;
-
-            if (targetZone != null && targetZone.parent == targetHalf)
-                restore.Remember(targetZone);
             restore.Remember(targetHalf);
             restore.RaiseAll();
         }
@@ -10463,113 +10621,548 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void PlayEventFromHand(CardInstance card, string handSeat)
     {
         if (!CanActivateEventFromHand(card, handSeat)) return;
-        StartEventBurn(card);
+        BeginBurnToTrash(card, handSeat, BurnTiming.Event);
         Dispatch(new GameCommand { Type = "playCard", Seat = handSeat, InstanceId = card.InstanceId });
+    }
+
+    /// <summary>Burn a spent Event/Counter at centre, then reform it into the trash.
+    /// Suppresses the normal hand-to-trash flight - two animations for one action is what
+    /// made this read as clunky - and holds the trash pile on its previous top card until
+    /// the reform actually lands.</summary>
+    private void BeginBurnToTrash(CardInstance card, string seat, BurnTiming timing)
+    {
+        if (card == null) return;
+        suppressMoveAnim.Add(card.InstanceId);      // the burn IS the movement
+        pendingReformIds.Add(card.InstanceId);      // pile stays as-is until the reform delivers it
+        StartEventBurn(card, onBurnComplete: () => StartTrashReform(card, seat), timing: timing);
     }
 
     // ---- Experimental: event cards "incinerate" with a green burn when played ------------------
     private static Shader _dissolveShader;
     private static Texture2D _burnNoiseTex;
 
+    // The largest value in the noise. The last pixel of the card clips away the instant the
+    // cutoff passes this, so it - not a hand-picked constant - is the correct cutoff ceiling.
+    // Anything higher leaves a dead tail where the card is already gone but the clock runs on.
+    private static float _burnNoiseMax;
+    // ...and the smallest. A pixel is LIT while (noise - cutoff) < _EdgeWidth and SCORCHED while
+    // it is under _CharWidth + _EdgeWidth, so cutoff 0 is NOT a clean card: any pixel whose noise
+    // sits below that band renders pre-burnt. Near the card's top the top-bias contributes nothing,
+    // so Unity's Perlin routinely lands there - which is why the art arrived washed out.
+    private static float _burnNoiseMin;
+
+    private const float BurnNoiseScale = 3.5f;               // tuned in the VFX bench
+    private const float BurnTopBias    = 0.24f;
+    private const float BurnEdgeWidth  = 0.115f;             // glowing rim
+    private const float BurnCharWidth  = 0.045f;             // scorch band under it
+
+
+    // Presentation timeline: the card leaves hand, is held large enough to read, then burns.
+    // Two presets, because they are played at very different rates. An Event is a deliberate
+    // once-a-turn beat and can afford the full 3.10s (0.82 travel, 0.43 readable hold, 1.85 burn).
+    // A Counter fires several times inside a single battle, so it keeps the same pacing but a
+    // smaller card, rather than burying the board it is meant to be commenting on.
+    private const float BurnFadeStart      = 0.58f;          // when the card starts fading out
+    private const float BurnShowcaseHeight = 0.46f;          // fraction of screen height
+
+    private struct BurnTiming
+    {
+        /// <summary>Travel = hand to centre. BurnAt = when the dissolve starts, measured from the
+        /// same zero, so (BurnAt - Travel) is how long the card sits fully readable at centre.
+        /// Drift = extra scale spread across everything after the travel, so that readable hold
+        /// still carries motion - a hold with nothing moving in it reads as the game having
+        /// stalled rather than as a deliberate beat.</summary>
+        public float Travel, BurnAt, Duration, Height, Drift;
+
+        // BurnAt = Travel + 0.43s: the card lands, holds dead still long enough to be read, and
+        // only then starts to burn. Drift is 0 - the card creeping bigger through that hold read as
+        // "growing, then vanishing" rather than as a held beat. It was only ever there to mask a
+        // stutter that turned out to be the spawn-frame delta spike and the ease-out lurch, both
+        // since fixed, so the hold no longer needs disguising.
+        public static readonly BurnTiming Event   = new BurnTiming { Travel = 0.82f, BurnAt = 1.25f, Duration = 1.85f, Height = 0.46f, Drift = 0f };
+        // Counter now runs at the Event's pace - the shorter version read as "super fast" next
+        // to it. It keeps a smaller card instead, so repeated counters stay less intrusive
+        // without being quicker.
+        public static readonly BurnTiming Counter = new BurnTiming { Travel = 0.82f, BurnAt = 1.25f, Duration = 1.85f, Height = 0.38f, Drift = 0f };
+    }
+
     private static Texture2D GetBurnNoiseTexture()
     {
         if (_burnNoiseTex != null) return _burnNoiseTex;
         const int S = 128;
-        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
+        // linear:true — this is DATA, not colour. The project renders in Linear space, so a texture
+        // created without it is treated as sRGB and the shader reads the linearised value instead
+        // of the byte written here: 0.185 stored comes back as 0.029. Every cutoff below is derived
+        // in C# from the raw floats, so that mismatch put the whole card inside the burning band
+        // before the burn had started — the pre-burnt art. Ramps stay sRGB; they ARE colour.
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false, true) { wrapMode = TextureWrapMode.Clamp };
         var px = new Color32[S * S];
-        const float scale = 5f;
+        float max = 0f, min = 1f;
         for (int y = 0; y < S; y++)
         {
             float v = (float)y / (S - 1);                 // 0 bottom, 1 top
             for (int x = 0; x < S; x++)
             {
                 float u = (float)x / (S - 1);
-                float p = Mathf.PerlinNoise(u * scale, v * scale);
-                float p2 = Mathf.PerlinNoise(u * scale * 2.3f + 11f, v * scale * 2.3f + 7f) * 0.5f;
+                float p = Mathf.PerlinNoise(u * BurnNoiseScale, v * BurnNoiseScale);
+                float p2 = Mathf.PerlinNoise(u * BurnNoiseScale * 2.3f + 11f, v * BurnNoiseScale * 2.3f + 7f) * 0.5f;
                 float noise = Mathf.Clamp01((p + p2) / 1.5f);
                 // Bias so the TOP of the card has the lowest values - it burns away first.
-                float val = Mathf.Clamp01(noise * 0.55f + (1f - v) * 0.45f);
+                float val = Mathf.Clamp01(noise * (1f - BurnTopBias) + (1f - v) * BurnTopBias);
+                if (val > max) max = val;
+                if (val < min) min = val;
                 byte b = (byte)(val * 255f);
                 px[y * S + x] = new Color32(b, b, b, 255);
             }
         }
         tex.SetPixels32(px);
         tex.Apply(false);
+        // Quantising to a byte can only round a value UP by half a step; include that or the
+        // very last pixel survives a frame past the end.
+        _burnNoiseMax = Mathf.Min(1f, max + (0.5f / 255f));
+        _burnNoiseMin = Mathf.Max(0f, min - (0.5f / 255f));
         _burnNoiseTex = tex;
         return tex;
     }
 
-    private Material CreateDissolveMaterial()
+    /// <summary>The cutoff at which the card is guaranteed to render completely untouched: one
+    /// whole char+edge band below the FAINTEST pixel in the noise, so nothing can be lit or
+    /// scorched. This - not zero - is where a burn has to start, and it is measured rather than
+    /// assumed, so it holds whatever Unity's Perlin actually produces.</summary>
+    private static float BurnCleanStart()
+    {
+        GetBurnNoiseTexture();
+        return _burnNoiseMin - (BurnEdgeWidth + BurnCharWidth) - 0.01f;
+    }
+
+    /// <summary>True for the far side of the board, whose cards render rotated 180 so they
+    /// face their owner. AddPileCardToZone does this to the trash pile, so any effect that
+    /// hands off to a pile has to match it or the card visibly flips at the handoff.</summary>
+    private bool IsInvertedSeat(string seat) => seat == TopSeat;
+
+    /// <summary>Moves an overlay onto its own nested canvas.
+    ///
+    /// Both burn overlays change their size every single frame. A geometry change on a uGUI
+    /// element marks its canvas dirty, and the board canvas carries hundreds of elements - so
+    /// without this, every frame of the animation rebuilds and rebatches the entire board.
+    /// That is a sustained framerate drop for the whole effect, not a visual artifact.
+    ///
+    /// A nested Canvas isolates the rebuild to just this object. overrideSorting also keeps it
+    /// on top by draw order, which is stronger than re-asserting sibling index each frame (and
+    /// costs nothing, where reordering siblings dirties the parent canvas in turn).</summary>
+    private static void IsolateOnOwnCanvas(GameObject go, int sortingOrder, bool overrideSorting = true)
+    {
+        var c = go.AddComponent<Canvas>();
+        // overrideSorting:false still isolates the rebuild, but leaves draw order to the
+        // hierarchy - which is what you want for something that has to slot in UNDER a
+        // sibling (the pile's count badge) rather than on top of the whole board.
+        c.overrideSorting = overrideSorting;
+        if (overrideSorting) c.sortingOrder = sortingOrder;
+    }
+
+    /// <summary>Feeds UI/CardDissolve the rounded-corner clip. Must run every frame the card
+    /// resizes - the radius is a fraction of the CURRENT size. Same constant as every other
+    /// card surface, so a dissolving card rounds identically to the one it replaced.</summary>
+    private static void PushCardCorners(Material mat, RectTransform rt)
+    {
+        if (mat == null || rt == null) return;
+        Vector2 s = rt.rect.size;
+        if (s.x <= 1f || s.y <= 1f) return;
+        mat.SetVector("_Size", new Vector4(s.x, s.y, 0f, 0f));
+        mat.SetFloat("_Radius", Mathf.Min(s.x, s.y) * RoundedCardMask.CornerFraction);
+    }
+
+    /// <summary>Cutoff ceiling that makes the card clear exactly when the burn phase ends.</summary>
+    private static float BurnCutoffCeiling()
+    {
+        GetBurnNoiseTexture();                                // ensures _burnNoiseMax is populated
+        return _burnNoiseMax > 0f ? _burnNoiseMax : 1f;
+    }
+
+    // Heat ramp per card colour: 256x8 gradients in Resources, hot at u=0. The dissolve
+    // shader samples one across the burning edge and the tail supplies the char colour, so
+    // a purple card burns purple with no per-card code. A missing ramp just falls back to
+    // the original green edge.
+    private static readonly Dictionary<string, string> BurnRampByColor =
+        new Dictionary<string, string>(System.StringComparer.OrdinalIgnoreCase)
+    {
+        { "Red",   "ramp_ember" }, { "Green",  "ramp_jade" },
+        { "Blue",  "ramp_frost" }, { "Purple", "ramp_void" },
+        { "Black", "ramp_ash"   }, { "Yellow", "ramp_gold" },
+    };
+    // ramp_jade/gold/ash replace the package's toxic/solar/arcane, whose hues sat 40 degrees
+    // off the deck colours (arcane was violet, i.e. a second purple) and whose tails weren't
+    // dark - ramp_solar ended at luminance 0.89, so a yellow card never visibly charred.
+    private readonly Dictionary<string, Texture2D> _burnRampCache = new Dictionary<string, Texture2D>();
+
+    private Texture2D BurnRampFor(CardInstance card) =>
+        BurnRampFor(card != null ? GameEngine.GetCard(card) : null);
+
+    /// <summary>By card id — a reform re-attached after a re-render only has the id, since the
+    /// CardInstance has already moved on into the trash pile.</summary>
+    private Texture2D BurnRampFor(string cardId) =>
+        BurnRampFor(string.IsNullOrEmpty(cardId) ? null : CardData.GetCard(cardId));
+
+    private Texture2D BurnRampFor(CardDef def)
+    {
+        // Dual-colour cards ("Red/Green") burn in the first colour listed.
+        string first = (def?.Color ?? "").Split('/')[0].Trim();
+        if (!BurnRampByColor.TryGetValue(first, out var res)) return null;
+        if (_burnRampCache.TryGetValue(res, out var cached)) return cached;
+        var tex = Resources.Load<Texture2D>(res);
+        _burnRampCache[res] = tex;
+        return tex;
+    }
+
+    /// <summary>The cool end of a ramp, used as the scorch colour so a purple card chars
+    /// purple-black. This tail is otherwise unused: the edge blend weights it to zero at
+    /// exactly the point it would have shown.</summary>
+    private static Color BurnRampChar(Texture2D ramp)
+    {
+        if (ramp == null || !ramp.isReadable) return new Color(0.045f, 0.025f, 0.018f, 1f);
+        var c = ramp.GetPixelBilinear(0.95f, 0.5f);
+        // Not every ramp ends dark - ramp_solar's tail is near-white, which would scorch
+        // the card LIGHTER than the art. Keep the tail's hue, force scorch luminance.
+        const float target = 0.14f;
+        float peak = Mathf.Max(c.r, Mathf.Max(c.g, c.b));
+        if (peak > target) c *= target / peak;
+        c.a = 1f;
+        return c;
+    }
+
+    private Material CreateDissolveMaterial(Texture2D ramp)
     {
         if (_dissolveShader == null) _dissolveShader = Shader.Find("UI/CardDissolve");
         if (_dissolveShader == null) return null;          // shader not imported yet - skip the effect
         var m = new Material(_dissolveShader);
         m.SetTexture("_NoiseTex", GetBurnNoiseTexture());
-        m.SetFloat("_Cutoff", 0f);
-        m.SetFloat("_EdgeWidth", 0.14f);
+        m.SetFloat("_Cutoff", BurnCleanStart());     // NOT 0 - see BurnCleanStart
+        m.SetFloat("_EdgeWidth", BurnEdgeWidth);
         // Match the green of the "usable" hover glow.
         m.SetColor("_EdgeColor", new Color(0.16f, 1f, 0.36f, 1f) * 1.25f);
         m.SetColor("_EmberColor", new Color(0.85f, 1f, 0.55f, 1f) * 1.2f);
+        m.SetFloat("_CharWidth", BurnCharWidth);
+        m.SetColor("_CharColor", BurnRampChar(ramp));
+        if (ramp != null)
+        {
+            m.SetTexture("_RampTex", ramp);
+            m.SetFloat("_UseRamp", 1f);
+        }
         return m;
     }
 
-    private void StartEventBurn(CardInstance card)
+    /// <summary>Burn a card away.
+    /// <paramref name="onBurnComplete"/> fires the moment the card's last pixel clips away.
+    /// It is guaranteed to fire exactly once even if the effect can't be shown at all, so a
+    /// caller sequencing on it can never hang.</summary>
+    private void StartEventBurn(CardInstance card,
+                                System.Action onBurnComplete = null,
+                                BurnTiming? timing = null)
     {
-        if (card == null || canvas == null) return;
-        var sprite = GetCardSprite(card.CardId);
-        if (sprite == null || sprite.texture == null) return;
-        var mat = CreateDissolveMaterial();
-        if (mat == null) return;
+        var tm = timing ?? BurnTiming.Event;
+        void Abort() { onBurnComplete?.Invoke(); }
 
-        Vector2 size = new Vector2(150f, 210f);
-        Vector3 pos = new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f);
+        if (card == null || canvas == null) { Abort(); return; }
+        var sprite = GetCardSprite(card.CardId);
+        if (sprite == null || sprite.texture == null) { Abort(); return; }
+        var ramp = BurnRampFor(card);
+        var mat = CreateDissolveMaterial(ramp);
+        if (mat == null) { Abort(); return; }
+
+        // Start wherever the card is sitting in hand, so the showcase reads as THAT card
+        // leaving THAT slot. No hand rect (played from a panel, or by the opponent) just
+        // means it starts small at centre and grows in place.
+        Vector2 fromSize = new Vector2(150f, 210f);
+        Vector3 fromPos = new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f);
         if (handCardRects.TryGetValue(card.InstanceId, out var rect) && rect != null)
         {
-            size = rect.rect.size * 1.2f;
-            pos = rect.position;
+            fromSize = rect.rect.size;
+            fromPos = rect.position;
         }
+
+        // Showcase size: a fraction of screen height, card aspect preserved, clamped so it
+        // can't swallow a short window or vanish on a tall one.
+        float showH = Mathf.Clamp(Screen.height * tm.Height, 220f, 560f);
+        Vector2 toSize = new Vector2(showH * (5f / 7f), showH);
+        Vector3 toPos = new Vector3(Screen.width * 0.5f, Screen.height * 0.5f, 0f);
 
         var go = new GameObject("Event Burn");
         go.transform.SetParent(canvas.transform, false);
-        go.transform.SetAsLastSibling();
         var rt = go.AddComponent<RectTransform>();
-        rt.sizeDelta = size;
-        rt.position = pos;
+        IsolateOnOwnCanvas(go, 620);
+        // Deliberately NOT rotated for the far player. The centre showcase exists to be read by
+        // whoever is looking at this screen, so it stays upright whoever played it; only the
+        // trash reform matches the far side's orientation. Nothing flips visibly between the
+        // two - the card is fully burned away before the reform begins.
+        rt.sizeDelta = fromSize;
+        rt.position = fromPos;
         var img = go.AddComponent<RawImage>();
         img.texture = sprite.texture;
         img.material = mat;
         img.raycastTarget = false;
-        go.AddComponent<EventBurn>().Init(img, mat, 0.8f);
+
+        go.AddComponent<EventBurn>()
+          .Init(img, mat, fromPos, fromSize, toPos, toSize, tm, BurnCutoffCeiling(), BurnCleanStart(), this, onBurnComplete);
+    }
+
+    private const float BurnReformDuration = 1.40f;
+
+    /// <summary>A reform currently playing. The overlay lives inside the trash zone so it layers
+    /// under the pile's count badge — but that means any Render() (the opponent acting, you playing
+    /// again) clears boardRoot and takes it with it. Keeping the run here lets the trash zone
+    /// re-attach it mid-flight instead of the card just popping in.</summary>
+    private sealed class ReformRun
+    {
+        public string Seat, CardId, InstanceId;
+        public float StartedUnscaled;
+    }
+    private ReformRun reformRun;
+
+    /// <summary>The burn played backwards, at the trash pile: the card reassembles out of the
+    /// same heat ramp it burned away in. This is what the card "arriving" in the trash looks
+    /// like now - the old ghost flying across the board fought the burn for attention.</summary>
+    private void StartTrashReform(CardInstance card, string seat)
+    {
+        // Nothing to do on completion. That is the point: the pile already holds the real card,
+        // so the overlay just stops covering it. Calling Render() here - which is what un-hiding
+        // a held-back pile card used to require - rebuilds boardRoot/sideRoot/leftRoot in a
+        // single frame, and that full rebuild WAS the hitch felt right after the card landed.
+        if (card == null || canvas == null) { RevealTrashTop(seat, card?.InstanceId); return; }
+        reformRun = new ReformRun
+        {
+            Seat = seat, CardId = card.CardId, InstanceId = card.InstanceId,
+            StartedUnscaled = Time.unscaledTime,
+        };
+        SpawnReformOverlay(seat);
+    }
+
+    /// <summary>Draw the reform for the run in flight, resuming from however far it has got.
+    /// Called when the run starts and again from the trash zone whenever the board re-renders.</summary>
+    private void SpawnReformOverlay(string seat)
+    {
+        var run = reformRun;
+        if (run == null || run.Seat != seat) return;
+
+        float elapsed = Time.unscaledTime - run.StartedUnscaled;
+        // Overran (or can't be drawn at all) — deliver the card rather than leaving it hidden.
+        void Deliver() { reformRun = null; RevealTrashTop(run.Seat, run.InstanceId); }
+
+        if (elapsed >= BurnReformDuration) { Deliver(); return; }
+        if (!moveZoneAnchors.TryGetValue("trash:" + seat, out var trash) || trash == null) return;
+        var sprite = GetCardSprite(run.CardId);
+        if (sprite == null || sprite.texture == null) { Deliver(); return; }
+        var mat = CreateDissolveMaterial(BurnRampFor(run.CardId));
+        if (mat == null) { Deliver(); return; }
+
+        // Lives INSIDE the trash zone, not on the root canvas. On the root it drew above the
+        // pile's count badge and then dropped behind it the moment the real card took over.
+        // Parented here and slotted just under the badge, it is layered correctly the whole way.
+        // NO nested canvas here, unlike the burn. A nested Canvas is drawn after its parent's
+        // own geometry whatever its sibling index, so it always sat in front of the pile's count
+        // badge and then dropped behind it at the handoff. It doesn't need one either: this
+        // effect animates ONLY material properties (_Cutoff, _Size, _Radius), which don't touch
+        // the mesh and so never mark the canvas dirty. Nothing here may animate a transform.
+        var go = new GameObject("Trash Reform");
+        var rt = go.AddComponent<RectTransform>();
+        rt.SetParent(trash, false);
+        FitCardAspect(trash, rt);
+        if (IsInvertedSeat(seat)) rt.localRotation = Quaternion.Euler(0f, 0f, 180f);
+
+        // Align to the DELIVERED pile card, not to the zone. AddPileCardToZone shifts its holder
+        // by half the stack depth, so a zone-aligned overlay sits a few px off and the card
+        // visibly jumps the instant the real one takes over — which reads as the art reloading.
+        if (trashReveals.TryGetValue(seat, out var rev) && rev.AfterHolder != null)
+        {
+            var h = rev.AfterHolder;
+            rt.anchorMin = h.anchorMin;
+            rt.anchorMax = h.anchorMax;
+            rt.pivot = h.pivot;
+            rt.sizeDelta = h.sizeDelta;
+            rt.anchoredPosition = h.anchoredPosition;
+            rt.localRotation = h.localRotation;
+            rt.localScale = h.localScale;
+        }
+
+        var badge = trash.Find("Count Badge");
+        if (badge != null) rt.SetSiblingIndex(badge.GetSiblingIndex());
+        else rt.SetAsLastSibling();
+        var img = go.AddComponent<RawImage>();
+        img.texture = sprite.texture;
+        img.material = mat;
+        img.raycastTarget = false;
+
+        go.AddComponent<CardReform>()
+          .Init(img, mat, BurnCutoffCeiling(), BurnCleanStart(), BurnReformDuration, elapsed, Deliver);
+    }
+
+    private sealed class CardReform : MonoBehaviour
+    {
+        private RawImage img;
+        private RectTransform rt;
+        private Material mat;
+        private float ceiling, cleanEnd, dur, t;
+        private bool primed;
+        private System.Action onFinished;
+
+        public void Init(RawImage image, Material material, float cutoffCeiling, float cutoffCleanEnd,
+                         float duration, float elapsed = 0f, System.Action finished = null)
+        {
+            img = image; mat = material; rt = image.rectTransform;
+            ceiling = cutoffCeiling; cleanEnd = cutoffCleanEnd; dur = Mathf.Max(0.05f, duration);
+            t = Mathf.Clamp(elapsed, 0f, dur);           // resume, if this is a re-attach
+            onFinished = finished;
+            mat.SetFloat("_Cutoff", ceiling);            // start fully burned away
+            PushCardCorners(mat, rt);
+        }
+
+        private void Update()
+        {
+            if (!primed) { primed = true; return; }
+            t += Mathf.Min(Time.unscaledDeltaTime, 1f / 30f);
+            float k = Mathf.Clamp01(t / dur);
+            float e = k * k * k * (k * (k * 6f - 15f) + 10f);
+
+            // Material-only, by design: this object shares the board canvas (so it can sit under
+            // the count badge), and animating a transform here would dirty and rebatch the whole
+            // board every frame. Runs down to the measured clean cutoff so the last stretch lifts the
+            // scorch off rather than holding a smear that vanishes when this object dies.
+            if (mat != null) mat.SetFloat("_Cutoff", Mathf.Lerp(ceiling, cleanEnd, e));
+
+            if (k >= 1f) Finish();
+        }
+
+        // The real trash card is already sitting underneath this overlay, so finishing is just
+        // getting out of the way - no re-render, nothing to settle.
+        private void Finish()
+        {
+            var done = onFinished;
+            onFinished = null;                           // ran to completion, not interrupted
+            if (img != null) img.enabled = false;        // Destroy is deferred a frame; stop drawing now
+            Destroy(gameObject);
+            done?.Invoke();
+        }
+
+        // A Render() clearing boardRoot takes this overlay with it. The material is created per
+        // overlay, so it has to be released here or every interrupted reform leaks one. onFinished
+        // is deliberately NOT invoked - the run is still in flight and the trash zone re-attaches it.
+        private void OnDestroy()
+        {
+            if (mat != null) { Destroy(mat); mat = null; }
+        }
     }
 
     private sealed class EventBurn : MonoBehaviour
     {
         private RawImage img;
+        private RectTransform rt;
         private Material mat;
-        private float dur;
-        private float t;
+        private System.Action onBurnComplete;
 
-        public void Init(RawImage image, Material material, float duration)
+        private Vector3 fromPos, toPos;
+        private Vector2 fromSize, toSize;
+        private BurnTiming tm;
+        private float ceiling, cleanStart;
+        private float t;
+        private bool primed;
+        private GameManager owner;
+        private bool sfxFired;
+
+        public void Init(RawImage image, Material material,
+                         Vector3 startPos, Vector2 startSize,
+                         Vector3 endPos, Vector2 endSize,
+                         BurnTiming timing, float cutoffCeiling, float cutoffCleanStart,
+                         GameManager manager = null, System.Action burnComplete = null)
         {
-            img = image; mat = material; dur = Mathf.Max(0.1f, duration);
+            owner = manager;
+            img = image; mat = material; rt = image.rectTransform;
+            fromPos = startPos; fromSize = startSize;
+            toPos = endPos; toSize = endSize;
+            tm = timing; ceiling = cutoffCeiling; cleanStart = cutoffCleanStart;
+            onBurnComplete = burnComplete;
+            PushCornerRadius();     // or the spawn frame draws with square corners
         }
+
+        private void PushCornerRadius() => PushCardCorners(mat, rt);
 
         private void Update()
         {
-            t += Time.unscaledDeltaTime;
-            float p = Mathf.Clamp01(t / dur);
-            if (mat != null) mat.SetFloat("_Cutoff", p * 1.18f);
+            // The frame this spawned on ALSO ran Dispatch -> engine resolve -> a full Render(),
+            // so that frame's delta covers all of it. Feeding it straight into the clock drops
+            // the card a third of the way through its travel on the very first animated frame,
+            // which is exactly the "hangs, then snaps into place" read. Throw that frame away,
+            // and never trust a delta longer than a slow frame afterwards.
+            if (!primed) { primed = true; return; }
+            t += Mathf.Min(Time.unscaledDeltaTime, 1f / 30f);
+
+            // (Draw order is handled by the nested canvas's overrideSorting, so nothing to
+            // re-assert here - a sibling reorder would dirty the board canvas every frame.)
+
+            // Travel - hand to centre. This is NOT gated against the burn; the two deliberately
+            // overlap so there is never a frame where the card is simply sitting there.
+            Vector2 baseSize;
+            if (t < tm.Travel)
+            {
+                float k = Mathf.Clamp01(t / tm.Travel);
+                // Smootherstep. An ease-out cubic leaves the hand at 3x average speed - a lurch
+                // from a standstill - where this accelerates away and decelerates in.
+                float e = k * k * k * (k * (k * 6f - 15f) + 10f);
+                rt.position = Vector3.Lerp(fromPos, toPos, e);
+                baseSize = Vector2.Lerp(fromSize, toSize, e);
+            }
+            else
+            {
+                rt.position = toPos;
+                baseSize = toSize;
+            }
+
+            // Drift spans everything AFTER the travel - the readable hold as well as the burn.
+            // A hold that is perfectly static is what read as a stutter the first time round; the
+            // card carrying on expanding through it keeps the pause deliberate rather than stuck.
+            float sinceTravel = Mathf.Max(0f, t - tm.Travel);
+            float driftSpan = Mathf.Max(0.01f, (tm.BurnAt + tm.Duration) - tm.Travel);
+            rt.sizeDelta = baseSize * (1f + tm.Drift * Mathf.Clamp01(sinceTravel / driftSpan));
+            PushCornerRadius();
+
+            float burnT = t - tm.BurnAt;
+            if (burnT < 0f) return;                          // holding, fully readable
+
+            if (!sfxFired)
+            {
+                sfxFired = true;                             // the travel and hold are silent
+                if (owner != null) owner.PlayEventBurnSfx(tm.Duration);
+            }
+
+            // Burn. The cutoff runs to the noise's true maximum, so the last pixel clips away
+            // exactly at p = 1 and there is no dead tail.
+            float p = Mathf.Clamp01(burnT / tm.Duration);
+
+            // From guaranteed-clean to fully-cleared, so p=0 is untouched art and p=1 is gone.
+            // Scaling a raw 0..1 fraction by the ceiling instead started the card mid-burn.
+            if (mat != null) mat.SetFloat("_Cutoff", Mathf.Lerp(cleanStart, ceiling, p));
             if (img != null)
             {
                 var c = img.color;
-                c.a = 1f - Mathf.Clamp01((p - 0.72f) / 0.28f);   // fade the last embers out
+                c.a = 1f - Mathf.Clamp01((p - BurnFadeStart) / (1f - BurnFadeStart));
                 img.color = c;
             }
             if (p >= 1f)
             {
+                var done = onBurnComplete;
+                onBurnComplete = null;                       // fire exactly once
+                done?.Invoke();
                 if (mat != null) Destroy(mat);
                 Destroy(gameObject);
             }
+        }
+
+        // Torn down mid-burn (scene change, match end) still has to settle the contract, or the
+        // trash pile hides that card for the rest of the session waiting on a reform that never
+        // comes. Harmless when the normal path already fired - onBurnComplete is nulled there.
+        private void OnDestroy()
+        {
+            var done = onBurnComplete;
+            onBurnComplete = null;
+            done?.Invoke();
         }
     }
 
@@ -10694,10 +11287,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         previewRoot.SetAsLastSibling();
     }
 
-    private void ShowDonPreview()
+    private void ShowDonPreview(string donInstanceId = null)
     {
         previewRoot.gameObject.SetActive(true);
-        previewImage.sprite = GetDonSprite();
+        previewImage.sprite = GetDonSpriteForId(donInstanceId);
         previewTitle.text = "DON!! Card";
         previewRoot.SetAsLastSibling();
     }
@@ -10987,7 +11580,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 don.pivot = new Vector2(0.5f, 0.5f);
                 don.sizeDelta = new Vector2(donW, donH);
                 don.anchoredPosition = new Vector2(startX + i * step, centerY);
-                AddDonCardVisual(don, false, true);
+                AddDonCardVisualById(don, false, true,
+                    i < card.AttachedDonIds.Count ? card.AttachedDonIds[i] : null, card.Owner);
 
                 // During a "DON!! −N" payment, attached DON!! are returnable — bring them to the front,
                 // highlight them, and let a click return that specific DON!! (engine detaches it).
@@ -11007,7 +11601,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var holder = new GameObject("DON!!").AddComponent<RectTransform>();
         holder.SetParent(parent, false);
         SetPreferred(holder, new Vector2(34, 48));
-        AddDonCardVisual(holder, don.Rested, true);
+        AddDonCardVisual(holder, don.Rested, true, don);
         if (don.Rested) holder.localRotation = Quaternion.Euler(0, 0, inverted ? 270f : 90f);
         else if (inverted) holder.localRotation = Quaternion.Euler(0, 0, 180f);
     }
@@ -11215,6 +11809,24 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     // Resize a mat zone so its colored region hugs the card(s) inside it instead of leaving slack.
     // Centered on the same spot the min/max rect would occupy; pxW/pxH are the content's pixel size.
+    /// <summary>A zone's content mount: same rect as the zone panel, but living in the card layer
+    /// so anything inside it is drawn above EVERY zone background.</summary>
+    private RectTransform ZoneContent(RectTransform cardLayer, string label, Vector2 min, Vector2 max)
+    {
+        var mount = new GameObject(label + " Content").AddComponent<RectTransform>();
+        mount.SetParent(cardLayer, false);
+        Stretch(mount, min, max, Vector2.zero, Vector2.zero);
+        return mount;
+    }
+
+    /// <summary>Snug the panel and its content mount together — they must stay geometrically
+    /// identical, or cards would sit off the zone art they belong to.</summary>
+    private void SnugZonePair(RectTransform zone, RectTransform content, Vector2 min, Vector2 max, float pxW, float pxH)
+    {
+        SnugZone(zone, min, max, pxW, pxH);
+        if (content != null) SnugZone(content, min, max, pxW, pxH);
+    }
+
     private void SnugZone(RectTransform zone, Vector2 min, Vector2 max, float pxW, float pxH)
     {
         float cx = (min.x + max.x) * 0.5f;
@@ -11676,7 +12288,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Places one character cell occupying [xMin, xMin+widthFrac] of the fitted character row.
     // Cell is the transparent drop target; card is aspect-fitted inside. Empty cells read as an
     // open band (faint card-shaped hint, gold only where a card can drop).
-    private void AddCharacterSlot(RectTransform parent, PlayerState player, string seat, int slotIndex, bool inverted, float xMin, float widthFrac)
+    private RectTransform AddCharacterSlot(RectTransform parent, PlayerState player, string seat, int slotIndex, bool inverted, float xMin, float widthFrac)
     {
         var slot = PanelObject($"Character Slot {slotIndex + 1}", parent, new Color(0, 0, 0, 0));
         Stretch(slot, new Vector2(xMin, 0f), new Vector2(xMin + widthFrac, 1f), Vector2.zero, Vector2.zero);
@@ -11823,6 +12435,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 }
             }
         }
+        return slot;
     }
 
     // Blocker shield art: drop a PNG at Assets/Resources/blocker_shield.png and it replaces the
@@ -12950,22 +13563,86 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return backSprite;
     }
 
-    private Sprite GetDonSprite()
+    // ── Personalised DON!! art ────────────────────────────────────────────────
+    // Each seat renders its OWN art: yours from DonDeckSettings, the opponent's from the config
+    // they sent at match start. Unknown ids resolve to the stock art in DonArtCatalog, so a
+    // player who lacks a file sees a normal DON rather than a hole.
+    private readonly Dictionary<string, System.Func<int, string>> donArtResolvers =
+        new Dictionary<string, System.Func<int, string>>();
+    private readonly Dictionary<string, Sprite> donSpriteById = new Dictionary<string, Sprite>();
+
+    /// <summary>Install a seat's DON layout. Null/empty = stock art.</summary>
+    public void SetDonConfig(string seat, string serialized)
     {
-        if (donSprite != null) return donSprite;
-        if (donTex == null)
+        if (string.IsNullOrEmpty(seat)) return;
+        donArtResolvers[seat] = DonDeckSettings.Resolver(serialized);
+        donSpriteById.Clear();
+    }
+
+    private System.Func<int, string> DonResolverFor(string seat)
+    {
+        if (seat != null && donArtResolvers.TryGetValue(seat, out var r) && r != null) return r;
+        // No config for this seat: if it's the local player use their live settings, so the
+        // deck-builder preview and solo play reflect edits without a match round-trip.
+        if (seat == null || seat == BottomSeat) return DonDeckSettings.ArtForSlot;
+        return _ => DonArtCatalog.DefaultId;
+    }
+
+    /// <summary>Which of the player's DON slots an instance id refers to. The id is "{seat}-DON-{n}"
+    /// (and "{seat}-DON{n}" on one older path), n being draw order = the DON's position in the deck.
+    /// Reads the LAST run of digits rather than splitting on a separator, so both spellings work.</summary>
+    private static int DonSlotIndexOfId(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return 0;
+        int end = id.Length;
+        while (end > 0 && !char.IsDigit(id[end - 1])) end--;
+        int start = end;
+        while (start > 0 && char.IsDigit(id[start - 1])) start--;
+        if (start == end || !int.TryParse(id.Substring(start, end - start), out int n)) return 0;
+        int m = DonDeckSettings.MaxSlots;
+        return ((n % m) + m) % m;
+    }
+
+    private static string DonSeatOfId(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        int dash = id.IndexOf('-');
+        return dash > 0 ? id.Substring(0, dash) : null;
+    }
+
+    /// <summary>Art for a DON by its instance id ALONE — no object lookup, so it cannot fall back
+    /// to a default because a DON wasn't where the caller expected it (attached DON!! in particular
+    /// are referenced by id from the character, and a failed lookup silently showed the wrong art).</summary>
+    private Sprite GetDonSpriteForId(string donInstanceId, string seatOverride = null)
+        => GetDonSpriteById(DonResolverFor(seatOverride ?? DonSeatOfId(donInstanceId))
+                            (DonSlotIndexOfId(donInstanceId)));
+
+    private static int DonSlotIndex(DonInstance don) => DonSlotIndexOfId(don?.InstanceId);
+
+    private Sprite GetDonSprite(DonInstance don = null, string seat = null)
+        => GetDonSpriteForId(don?.InstanceId, seat);
+
+    private Sprite GetDonSpriteById(string artId)
+    {
+        artId = artId ?? DonArtCatalog.DefaultId;
+        if (donSpriteById.TryGetValue(artId, out var cached)) return cached;
+
+        string rel = DonArtCatalog.RelPathFor(artId);
+        Texture2D tex = null;
+        if (CardAssets.UseCdn)
         {
-            if (CardAssets.UseCdn)
-            {
-                KickSharedTexLoad("donCardAltArt.png", t => donTex = t);
-                return null;
-            }
-            var projectPath = CardAssets.LocalPath("donCardAltArt.png");
-            donTex = LoadFile(File.Exists(projectPath) ? projectPath : DonImageFallbackPath);
+            KickSharedTexLoad(rel, t => { if (t != null) { donSpriteById.Remove(artId); donTex = donTex ?? t; } });
         }
-        if (donTex == null) return null;
-        donSprite = Sprite.Create(donTex, new Rect(0, 0, donTex.width, donTex.height), new Vector2(0.5f, 0.5f), 100f);
-        return donSprite;
+        else
+        {
+            var projectPath = CardAssets.LocalPath(rel);
+            tex = LoadFile(File.Exists(projectPath) ? projectPath : DonImageFallbackPath);
+        }
+        if (tex == null) return null;
+
+        var sprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+        donSpriteById[artId] = sprite;
+        return sprite;
     }
 
     // White/teal ONE PIECE DON!! card back (from the reference mat) for the DON!! deck pile.
@@ -13359,7 +14036,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
             var card = manager.PanelObject("DON Ghost Card", rect, new Color(0, 0, 0, 0));
             manager.Stretch(card, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            manager.AddDonCardVisual(card, false, true);
+            // The dragged DON!!'s own art — selectedDonIds[0] is the one under the cursor. Without
+            // this every drag ghost rendered with whatever the argument-less lookup returned.
+            var draggedId = manager.selectedDonIds.Count > 0 ? manager.selectedDonIds[0] : null;
+            manager.AddDonCardVisualById(card, false, true, draggedId);
             manager.AddMysticalCardOutline(card, true);
 
             int count = manager.selectedDonIds.Count;
@@ -13440,6 +14120,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         public CardInstance Card => card;
         public string HandSeat => handSeat;
+
+        // Events aren't aimed at anything - the gesture is just "lift it out of hand and let
+        // go" - so a targeting arrow implies a choice of target that doesn't exist. Characters
+        // and Stages still get one, because those DO pick a slot.
+        private bool IsEventDrag => card != null && GameEngine.GetCard(card)?.Type == "event";
 
         public void Init(GameManager owner, Canvas canvas, CardInstance cardInstance, string seat, bool invertedHand = false)
         {
@@ -13735,8 +14420,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             group.blocksRaycasts = false;
             // Free drag: the card follows the cursor 1:1; it only snaps into place while
             // hovering a character slot it can legally drop into. The targeting arrow
-            // appears from the card's hand slot to the drop zone while over one.
-            CreateArrow();
+            // appears from the card's hand slot to the drop zone while over one - but not
+            // for Events, which have no target to aim at. UpdateArrow no-ops without a root.
+            if (!IsEventDrag) CreateArrow();
             MoveGhost(eventData);
             UpdateArrow(eventData);
         }
@@ -13810,10 +14496,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         private Color originalOutlineColor;
         private Vector2 originalOutlineDistance;
         private RectTransform hoverGlow;
+        private string donId;         // which DON!! this is — the preview resolves art from the id
 
-        public void Init(GameManager owner)
+        public void Init(GameManager owner, string instanceId = null)
         {
             manager = owner;
+            donId = instanceId;
             outline = GetComponent<Outline>();
             if (outline != null)
             {
@@ -13824,7 +14512,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         public void OnPointerEnter(PointerEventData eventData)
         {
-            manager.ShowDonPreview();
+            manager.ShowDonPreview(donId);
             ShowHoverGlow();
         }
 

@@ -1,0 +1,6 @@
+=SCN=
+Scenarios: 28 passed, 0 failed.
+=INV=
+games=2178  gamesWithViolation=0
+=BOT=
+games=3267  crashes=0  stalls(non-finishing)=0  invariantFails=0

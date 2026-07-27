@@ -257,6 +257,7 @@ namespace OnePieceTcg.Engine
                 default: Log(state, "system", $"Unknown command: {command.Type}"); break;
             }
             CheckRuleProcessing(state);
+            RetireUnresolvablePendingEffects(state);
             Record(state, command);
             return state;
         }
@@ -7621,6 +7622,116 @@ namespace OnePieceTcg.Engine
                 || text.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
+        // A clause that must pick one of the OPPONENT'S Characters can never be satisfied when
+        // they have none - and if the clause is mandatory there is no skip button either, so the
+        // game simply stops. Gum-Gum Champion Rifle (EB01-028) froze exactly here: its "Then,
+        // your opponent returns 1 of their active Characters to the owner's hand" fired against
+        // an empty board.
+        //
+        // Deliberately conservative. It only reports "impossible" for a clause that targets the
+        // opponent's board, names no other source zone, and has literally zero candidates - no
+        // power/cost/type filter is evaluated. A false positive here would silently eat a card's
+        // effect, which is worse than the freeze it prevents.
+        // How many of the opponent's Characters could satisfy this clause?
+        //
+        // Only filters that can be read straight off the clause text are applied (power/cost
+        // caps, the active/rested qualifier). Anything unparsed counts as "no restriction", so
+        // this can only ever OVER-count - and over-counting merely declines to skip, which is
+        // the safe direction. Under-counting would silently eat a card's effect.
+        private static int CountOpponentCharacterCandidates(GameState state, string seat, string text)
+        {
+            var area = Player(state, OtherSeat(seat))?.CharacterArea;
+            if (area == null) return 0;
+
+            bool basePower = text.IndexOf("base power", StringComparison.OrdinalIgnoreCase) >= 0;
+            int powCap = ParseLimit(text, @"(\d{1,5})\s+(?:base\s+)?power or less");
+            int costCap = ParseLimit(text, @"cost of (\d+) or less");
+            bool needsActive = System.Text.RegularExpressions.Regex.IsMatch(text,
+                @"active\s+Character", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            bool needsRested = System.Text.RegularExpressions.Regex.IsMatch(text,
+                @"rested\s+Character", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            int n = 0;
+            foreach (var c in area)
+            {
+                if (c == null) continue;
+                if (needsActive && c.Rested) continue;
+                if (needsRested && !c.Rested) continue;
+                // "base power" means the printed value; a plain "power" cap reads the live one.
+                if (powCap >= 0 && (basePower ? (GetCard(c)?.Power ?? 0) : GetPower(state, c)) > powCap) continue;
+                if (costCap >= 0 && GetCost(state, c) > costCap) continue;
+                n++;
+            }
+            return n;
+        }
+
+        private static bool ClauseHasNoOpponentCharacter(GameState state, string seat, string text)
+        {
+            if (state == null || string.IsNullOrWhiteSpace(text)) return false;
+            if (text.IndexOf("Character", StringComparison.OrdinalIgnoreCase) < 0) return false;
+            if (text.IndexOf("opponent", StringComparison.OrdinalIgnoreCase) < 0) return false;
+            // Can land on a Leader instead → an empty Character area doesn't block it.
+            if (text.IndexOf("Leader or Character", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            if (text.IndexOf("Character or Leader", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            // Drawn from a non-board zone ("play up to 1 Character from your hand") → not a
+            // board selection at all, so the board being empty says nothing about it.
+            if (System.Text.RegularExpressions.Regex.IsMatch(text,
+                    @"\b(from|in)\s+(your|their|the)\s+(hand|deck|trash|life)",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return false;
+
+            // Only a COUNTED selection ("1 of their active Characters") creates a choice that can
+            // stall. Two things this deliberately excludes:
+            //   "Rest ALL of your opponent's Characters" (OP06-041) - no choice, and an empty
+            //   board just makes it a no-op.
+            //   "When this Character battles and K.O.'s your opponent's Character, set THIS
+            //   Character as active" (OP02-094 Isuka) - the opponent is named in the condition,
+            //   but the action targets our own card, and it fires just after that Character was
+            //   K.O.'d, so the opponent's board is routinely empty here. Skipping it would
+            //   silently break the card.
+            var counted = System.Text.RegularExpressions.Regex.Match(text,
+                @"\b(\d+)\s+of\s+(?:your\s+opponent's|their)\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!counted.Success) return false;
+
+            // Comprehensive Rules 1-3-2: an impossible action is simply not carried out - the
+            // card is still legal to play. "Select 2 …" needs TWO; with one candidate the swap
+            // it feeds (OP14-017 Chambres) cannot happen at all, so the whole clause is dropped
+            // rather than left waiting on a second pick that can never come.
+            if (!int.TryParse(counted.Groups[1].Value, out int required) || required < 1) return false;
+            return CountOpponentCharacterCandidates(state, seat, text) < required;
+        }
+
+        /// <summary>Runs after EVERY command: retires any pending effect that can never be
+        /// satisfied, so a mandatory clause with no possible target can't stop the game.
+        ///
+        /// Deliberately a post-command sweep rather than a check inside QueueEffect. Nine call
+        /// sites read PendingEffects[Count-1] back immediately after queueing (to stamp OnceKey,
+        /// FirstPickId, to front a body, …), so removing an effect during the queue would hand
+        /// them the wrong effect or an empty list. By the time a command has finished, every one
+        /// of those reads is done and removal is safe.
+        ///
+        /// Loops because retiring one clause can queue its "Then, …" continuation, which may
+        /// itself be unsatisfiable. The bound is a runaway guard, not an expected depth.</summary>
+        private static void RetireUnresolvablePendingEffects(GameState state)
+        {
+            if (state?.PendingEffects == null) return;
+            for (int pass = 0; pass < 8; pass++)
+            {
+                PendingEffect stuck = null;
+                foreach (var e in state.PendingEffects)
+                {
+                    if (e == null || string.IsNullOrEmpty(e.Text)) continue;
+                    if (!ClauseHasNoOpponentCharacter(state, e.Seat, e.Text)) continue;
+                    stuck = e; break;
+                }
+                if (stuck == null) return;
+
+                Log(state, stuck.Seat,
+                    $"{NameId(CardData.GetCard(stuck.SourceCardId))}: your opponent has no legal target — that part of the effect is not carried out (rule 1-3-2).");
+                PassEffect(state, stuck.Seat, stuck.EffectId);
+            }
+        }
+
         private static void QueueEffect(GameState state, string seat, CardInstance source, string timing, string text, bool optional,
             EffectScope scope = EffectScope.Instant, EffectTargetZone targetZone = EffectTargetZone.Play,
             string originalText = null, List<string> doneParts = null, List<string> skippedParts = null,
@@ -7653,6 +7764,19 @@ namespace OnePieceTcg.Engine
             Log(state, seat, $"{NameId(GetCard(source))} {TimingLabel(timing)} effect is pending.");
         }
 
+        /// <summary>Test seam: push one clause through the real queue path so Tools/Sim
+        /// regressions exercise the shipping logic rather than a reimplementation of it.
+        ///
+        /// The sweep at the end is not optional dressing — every real command finishes with it,
+        /// and leaving it out is exactly how these tests passed while the shipping [Counter] path
+        /// still froze: they were exercising the wrapper the guard used to live in, not the path
+        /// the game actually takes.</summary>
+        public static void QueueClauseForTest(GameState state, string seat, CardInstance source, string timing, string text)
+        {
+            QueueAndAutoResolve(state, seat, source, timing, text, IsOptionalEffectText(text));
+            RetireUnresolvablePendingEffects(state);
+        }
+
         // Queues an effect exactly like QueueEffect, then immediately resolves it if
         // TryResolveKnownEffect can handle it without a player-chosen target (e.g. "Search
         // your deck for a card and add it to hand", "Look at N from the top of your deck").
@@ -7669,6 +7793,12 @@ namespace OnePieceTcg.Engine
             text = NormalizeQueuedClause(timing, text);   // clean clause drives BOTH the queue and the auto-resolve decision below
             QueueEffect(state, seat, source, timing, text, optional, scope, targetZone, originalText, doneParts,
                 skippedParts, finalizesActivatedTrigger);
+
+            // (The unsatisfiable-clause guard is NOT here. It used to be, and it silently missed
+            // this card: the [Counter] path calls QueueEffect directly, as do 18 other sites, so
+            // guarding this wrapper only covered a fraction of them. It now runs from the
+            // post-command sweep instead - see RetireUnresolvablePendingEffects.)
+
             // Never auto-pay a circled activation cost. It must remain pending so the owning player
             // can explicitly click glowing active DON!! (or the equivalent action-panel button).
             if (ParseCircledDonCost(text) > 0) return;

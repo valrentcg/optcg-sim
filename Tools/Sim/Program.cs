@@ -96,6 +96,9 @@ switch (mode)
     case "retargetlooptest":
         return OnePieceTcg.Sim.ChampionRetargetLoopTest.Run();
 
+    case "notargettest":
+        return OnePieceTcg.Sim.NoLegalTargetTest.Run();
+
     case "sealedtest":
         return OnePieceTcg.Sim.SealedTest.Run(args);
 

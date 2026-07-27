@@ -51,7 +51,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         new MenuMode { Id = "soloSelf",    Parent = "SOLO PLAY",   Label = "Versus Self",   Status = ModeStatus.Ready, Launch = "ENTER SANDBOX" },
         new MenuMode { Id = "soloAi",      Parent = "SOLO PLAY",   Label = "Versus A.I.",   Status = ModeStatus.Ready, Launch = "START MATCH"   },
-        new MenuMode { Id = "soloSandbox", Parent = "SOLO PLAY",   Label = "Sandbox",       Status = ModeStatus.Ready, Launch = "ENTER SANDBOX" },
+        new MenuMode { Id = "soloSandbox", Parent = "SOLO PLAY",   Label = "Sandbox",       Status = ModeStatus.Dev,   Launch = "ENTER SANDBOX" },
         new MenuMode { Id = "soloPuzzle",  Parent = "SOLO PLAY",   Label = "Puzzles",       Status = ModeStatus.Ready, Launch = "PLAY PUZZLES"  },
         new MenuMode { Id = "sealed",      Parent = "SOLO PLAY",   Label = "Sealed / Pre-Release", Status = ModeStatus.Ready, Launch = "OPEN PACKS" },
         new MenuMode { Id = "casual",      Parent = "MULTIPLAYER", Label = "Casual Match",  Status = ModeStatus.Ready, Launch = "QUEUE MATCH"   },
@@ -1118,6 +1118,35 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.27", "Events burn away, and your DON!! are your own", "Jul 26, 2026", new (string, string[])[]
+        {
+            ("Playing an Event or Counter", new[]
+            {
+                "The card now travels out of your hand to the middle of the screen, holds long enough to read, and burns away — so both players can see what was used instead of a card quietly vanishing.",
+                "It reforms into your trash pile as the burn finishes, rather than sliding there separately.",
+                "The burn takes its colour from the card: red burns like fire, blue like frost, purple like void, and so on.",
+                "Counters played from the counter panel now show it too — before, anything with an effect (Love-Love Beam and the like) was spent with no feedback at all.",
+                "Dragging an Event no longer draws a targeting arrow. There is nothing to aim at — drag it up and let go, or drag it back to your hand to cancel.",
+            }),
+            ("Your own DON!!", new[]
+            {
+                "A DON!! DECK button on the deck-select screen lets you choose the art your DON!! wear.",
+                "Thirty alternate DON!! from PRB01 are included. Use the stock art, put one art on all ten, or set each of the ten individually.",
+                "Your choice travels with you — your opponent sees your DON!! the way you built them.",
+            }),
+            ("Sealed / Pre-Release", new[]
+            {
+                "Pack openings now have SKIP PACK as well as SKIP ALL, so you can rush one pack without giving up the rest of the ceremony. A skipped pack still shows you everything that was in it.",
+                "Every Sealed screen can now reach the menu. The loading screen, the pack opening and the deck builder had no way out — an illegal pool could leave you stuck in the builder with no exit.",
+            }),
+            ("Fixes", new[]
+            {
+                "Gum-Gum Champion Rifle froze the game when it was played as a Counter and the opponent had no Characters to return. Its power boost still applies; the impossible part of the effect is simply skipped, as the rules require.",
+                "Cards now always draw in front of the field zones. Attached DON!! were being clipped by the stage and leader panels they hung over.",
+                "The DON!! card front was showing the card back after an art update.",
+                "Sandbox is labelled as in development, alongside Puzzles and Sealed.",
+            }),
+        }),
         ("v1.0.26", "The coin flip tells the truth — gold heads, silver tails", "Jul 25, 2026", new (string, string[])[]
         {
             ("Coin flip", new[]
@@ -6047,7 +6076,12 @@ public partial class MainMenuManager : MonoBehaviour
     private static void ShareLobbyDeck()
     {
         var deck = DeckStore.Get(lobbyDeckId);
-        if (deck != null) MatchNetworkSync.SendDeckShare(NetworkDeck.From(deck));
+        if (deck != null)
+        {
+            var shared = NetworkDeck.From(deck);
+            shared.don = DonDeckSettings.Serialize();   // cosmetic DON art travels with the deck pick
+            MatchNetworkSync.SendDeckShare(shared);
+        }
     }
 
     // Fresh lobby: forget any peer name/deck carried over from a PRIOR session, so
@@ -6189,6 +6223,8 @@ public partial class MainMenuManager : MonoBehaviour
             format = lobbyMode == "custom" ? lobbyFormat : "standard", // card format; casual/ranked are Standard
             blitz = lobbyMode == "custom" ? LobbyBlitzConfig() : null, // timed-match settings; custom lobbies only
             build = UpdateChecker.CurrentBuildNumber,               // guest aborts on a version mismatch (anti-desync)
+            southDon = DonDeckSettings.Serialize(),                 // host's own DON art
+            northDon = lobbyPeerDeck != null ? lobbyPeerDeck.don : null,   // guest's, as shared in the lobby
         };
         MatchNetworkSync.SendMatchStart(payload);
         LaunchNetworkedMatch(payload, "south");
@@ -6614,6 +6650,8 @@ public partial class MainMenuManager : MonoBehaviour
         GameManager.PendingNetworkedBlitz = payload.blitz;
         GameManager.PendingNetworkedSouthDeck = payload.south;
         GameManager.PendingNetworkedNorthDeck = payload.north;
+        GameManager.PendingNetworkedSouthDon = payload.southDon;
+        GameManager.PendingNetworkedNorthDon = payload.northDon;
         GameManager.EnsureBoard();
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);
@@ -7457,7 +7495,9 @@ public partial class MainMenuManager : MonoBehaviour
 
         BuildMultiSubTile(subRow, "Versus Self", "soloSelf",   ModeStatus.Ready, 0, 5, 6f);
         BuildMultiSubTile(subRow, "Versus A.I.", "soloAi",     ModeStatus.Ready, 1, 5, 6f);
-        BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Ready, 2, 5, 6f);
+        // Sandbox is a free-form testing board, not a play mode — DEV chip so it reads as a tool.
+        // Still launchable, same as Puzzles and Sealed below.
+        BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Dev,   2, 5, 6f);
         // Puzzles is playable but still being expanded — show a DEV chip (same treatment as ranked/casual),
         // while keeping the mode itself launchable.
         BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Dev,   3, 5, 6f);

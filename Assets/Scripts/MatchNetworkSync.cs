@@ -31,6 +31,9 @@ public class NetworkDeck
     public string name;
     public string leader;
     public NetworkDeckEntry[] cards;
+    // Sender's personalised DON!! layout (DonDeckSettings.Serialize). Rides the deck share so the
+    // guest's choice reaches the host with no new message. Cosmetic only; null on older clients.
+    public string don;
 
     public static NetworkDeck From(DeckData d)
     {
@@ -77,6 +80,12 @@ public class MatchStartPayload
     // GameCommand log, so a version mismatch would silently desync into different boards. Absent
     // field (old client) deserializes to 0, which correctly mismatches any real build.
     public int build;
+    // Each seat's personalised DON!! layout (DonDeckSettings.Serialize), so you see the opponent's
+    // DON art the way they chose it. Purely cosmetic and never fed to the engine, so it cannot
+    // desync. Absent on an older client → null → both sides render the stock art, and any art id
+    // the receiver doesn't have installed falls back to stock rather than rendering nothing.
+    public string southDon;
+    public string northDon;
 }
 
 /// <summary>Host -> guest broadcast of a custom lobby's rules, so the guest can SEE what they're joining
