@@ -46,6 +46,8 @@ namespace OnePieceTcg.Sim
             AddToLifeCostActuallyMovesTheCharacter();
             HalfPaidCostIsRefundedButAFullyPaidOneIsNot();
             RedAceLeaderTargetsItsDottedNameFilter();
+            OldRedAceLeaderScalesWithEveryCardTrashed();
+            OldRedAceAlsoTriggersOnDefence();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -336,6 +338,96 @@ namespace OnePieceTcg.Sim
 
             var after = b.S.CharacterArea.FirstOrDefault(c => c != null && c.InstanceId == tid);
             return after != null && GameEngine.HasRush(b.St, after);
+        }
+
+        // OP03-001 Portgas.D.Ace, the ORIGINAL red Ace Leader: "When this Leader attacks or is attacked,
+        // you may trash any number of Event or Stage cards from your hand. This Leader gains +1000 power
+        // during this battle for every card trashed."
+        //
+        // Three ways this shape goes wrong, all silent: the buff does not SCALE (a generic "+N power"
+        // handler reads the first number and grants a flat +1000 while trashing nothing — the player gets
+        // the buff for free), the "Event or Stage" type filter is not enforced (any hand card pays), and
+        // the unbounded pick stops after one card. All three are checked here, on a real battle.
+        private static void OldRedAceLeaderScalesWithEveryCardTrashed()
+        {
+            var b = new Fixture();
+            b.S.Leader.CardId = "OP03-001";              // 5000-power red Ace Leader
+            b.S.Leader.Rested = false; b.S.Leader.PlayedOnTurn = 0;
+            b.N.Leader.Rested = false; b.N.Leader.PlayedOnTurn = 0;
+
+            var ev1 = b.Hand("south", "EB01-009");       // Event
+            var ev2 = b.Hand("south", "EB01-010");       // Event
+            var stage = b.Hand("south", "EB01-011");     // Stage — the "or Stage" half of the filter
+            var chr = b.Hand("south", "EB01-002");       // Character — must NOT be payable
+            string leaderId = b.S.Leader.InstanceId;
+
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "declareAttack", Seat = "south", Attacker = leaderId, Target = b.N.Leader.InstanceId });
+
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e.SourceCardId == "OP03-001");
+            Check("old red Ace offers its trash-for-power on attack", pe != null,
+                "no pending effect after the Leader attacked");
+            if (pe == null) return;
+            string eid = pe.EffectId;
+
+            int Bonus() => b.St.Battle != null && b.St.Battle.BattlePowerBonus.TryGetValue(leaderId, out var v) ? v : 0;
+            void Pick(string id) => b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = eid, Target = id });
+
+            // A Character in hand does not match "Event or Stage" — it must be refused, and refusing it
+            // must not consume the pick or trash the card.
+            Pick(chr.InstanceId);
+            Check("old red Ace refuses a Character as the trash cost",
+                Bonus() == 0 && b.S.Hand.Any(c => c.InstanceId == chr.InstanceId),
+                $"bonus={Bonus()} stillInHand={b.S.Hand.Any(c => c.InstanceId == chr.InstanceId)}");
+
+            Pick(ev1.InstanceId);
+            int afterOne = Bonus();
+            Pick(ev2.InstanceId);
+            int afterTwo = Bonus();
+            Pick(stage.InstanceId);
+            int afterThree = Bonus();
+
+            Check("old red Ace scales +1000 for EVERY card trashed",
+                afterOne == 1000 && afterTwo == 2000 && afterThree == 3000,
+                $"1 card={afterOne}, 2 cards={afterTwo}, 3 cards={afterThree} (want 1000/2000/3000)");
+            Check("old red Ace's Leader power reflects the trashes mid-battle",
+                GameEngine.GetPower(b.St, b.S.Leader) == 5000 + 3000,
+                $"power={GameEngine.GetPower(b.St, b.S.Leader)} want 8000");
+            Check("old red Ace actually trashed the cards it was paid",
+                b.S.Trash.Count(c => c.InstanceId == ev1.InstanceId || c.InstanceId == ev2.InstanceId
+                                  || c.InstanceId == stage.InstanceId) == 3,
+                $"in trash={b.S.Trash.Count(c => c.InstanceId == ev1.InstanceId || c.InstanceId == ev2.InstanceId || c.InstanceId == stage.InstanceId)}");
+        }
+
+        // The other half of the same ability: "attacks OR IS ATTACKED". The defensive side is a separate
+        // trigger path and is the one a player leans on to survive a swing, so it is checked on its own —
+        // an ability that only works on offence would look like the card was half-implemented.
+        private static void OldRedAceAlsoTriggersOnDefence()
+        {
+            var b = new Fixture();
+            b.St.ActiveSeat = "north";                   // the opponent is attacking us
+            b.S.Leader.CardId = "OP03-001";
+            b.S.Leader.Rested = false; b.S.Leader.PlayedOnTurn = 0;
+            b.N.Leader.Rested = false; b.N.Leader.PlayedOnTurn = 0;
+            var ev = b.Hand("south", "EB01-009");
+            string leaderId = b.S.Leader.InstanceId;
+
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "declareAttack", Seat = "north", Attacker = b.N.Leader.InstanceId, Target = leaderId });
+
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e.SourceCardId == "OP03-001");
+            if (pe == null)
+            {
+                Check("old red Ace also triggers when it IS attacked", false, "no pending effect on defence");
+                return;
+            }
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = ev.InstanceId });
+
+            int bonus = b.St.Battle != null && b.St.Battle.BattlePowerBonus.TryGetValue(leaderId, out var v) ? v : 0;
+            Check("old red Ace also triggers when it IS attacked", bonus == 1000,
+                $"defensive bonus={bonus} want 1000");
         }
 
         // ---- plumbing -------------------------------------------------------------------------
