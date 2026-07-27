@@ -495,6 +495,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void Update()
     {
+        if (UseBeamArrow) RetireUnusedBeams();
         // Coalesced re-render when async CDN card art/definitions arrive: many
         // fetches can complete in one frame — rebuild once, and never mid-drag
         // (Render() would destroy the dragged object under the EventSystem).
@@ -7518,7 +7519,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (!cardTargetRects.TryGetValue(b.TargetId, out var target) || target == null) return;
 
         var root = NewArrowRoot("Battle Target Arrow", boardRoot);
-        DrawCurvedTargetingArrow(root, source, target, new Color(1f, 0.36f, 0.12f, 0.96f), 14f);
+        DrawCurvedTargetingArrow(root, source, target, new Color(1f, 0.36f, 0.12f, 0.96f), 14f,
+            TargetingArrowGraphic.ArrowState.Valid);   // a declared attack has already found its target
 
         // Live power readouts on each combatant during the attack (attacker = warm, defender = cool).
         var atkInst = FindAny(b.AttackerSeat, b.AttackerId);
@@ -7616,7 +7618,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         if (source == null || source == target) return;
         hoverTargetArrowRoot = NewArrowRoot("Hover Target Arrow", canvas.transform).gameObject;
-        DrawCurvedTargetingArrow(hoverTargetArrowRoot.transform as RectTransform, source, target, color, 13f);
+        DrawCurvedTargetingArrow(hoverTargetArrowRoot.transform as RectTransform, source, target, color, 13f,
+            TargetingArrowGraphic.ArrowState.Valid);
     }
 
     private void HideHoverTargetArrow()
@@ -7642,31 +7645,53 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // arrow. Flip this to false to fall back to RenderEnergyArrow, which is left intact below.
     private const bool UseBeamArrow = true;
 
-    /// <summary>The persistent beam component for an arrow root. It lives on the ROOT rather than
-    /// on a child because Clear(root) destroys children every frame, and the spring that gives the
-    /// arrow its weight only reads as weight if its velocity survives between frames.</summary>
-    private TargetingArrowGraphic BeamArrowOn(RectTransform root)
+    // Beams are keyed and PERSISTENT. They cannot live on the arrow roots: those are rebuilt
+    // (NewArrowRoot) every frame, so a component on one is destroyed and re-added constantly —
+    // which reset `grow`, left the materialize gate permanently sweeping, and made the tail
+    // vanish and regrow from the tip backwards every frame. It also threw away the spring
+    // velocity, which is the entire source of the arrow's weight. They hang off the canvas
+    // instead, where nothing clears them.
+    private readonly Dictionary<string, TargetingArrowGraphic> beams =
+        new Dictionary<string, TargetingArrowGraphic>();
+    // Frame-stamped rather than swept at the end of Render(): the board arrows are drawn from
+    // Render(), but the drag arrow is driven from pointer events, so no single pass sees them all.
+    private readonly Dictionary<string, int> beamLastFrame = new Dictionary<string, int>();
+
+    private TargetingArrowGraphic Beam(string key, Transform parentCanvas)
     {
-        if (root == null) return null;
-        var beam = root.GetComponent<TargetingArrowGraphic>();
-        if (beam == null)
+        if (parentCanvas == null) return null;
+        if (beams.TryGetValue(key, out var beam) && beam != null)
         {
-            beam = root.gameObject.AddComponent<TargetingArrowGraphic>();
-            beam.raycastTarget = false;
+            beamLastFrame[key] = Time.frameCount;
+            beam.transform.SetAsLastSibling();
+            return beam;
         }
+        var go = new GameObject("Beam " + key, typeof(RectTransform));
+        go.transform.SetParent(parentCanvas, false);
+        var rt = (RectTransform)go.transform;
+        Stretch(rt, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        beam = go.AddComponent<TargetingArrowGraphic>();
+        beam.raycastTarget = false;
+        beams[key] = beam;
+        beamLastFrame[key] = Time.frameCount;
         return beam;
     }
 
-    private static TargetingArrowGraphic.ArrowState BeamStateFor(Color color)
+    /// <summary>A beam nobody asked to draw for a few frames collapses. The grace period matters:
+    /// Render() and the drag handler run on different schedules, so a one-frame test would retire a
+    /// live arrow on any frame the other system happened to drive it.</summary>
+    private void RetireUnusedBeams()
     {
-        // The old API carried intent as a colour. Map it back: warm/red reads as invalid,
-        // green as valid, anything else (the orange battle arrow, gold drag) as the neutral aim.
-        if (color.r > 0.6f && color.g < 0.45f && color.b < 0.45f) return TargetingArrowGraphic.ArrowState.Invalid;
-        if (color.g > 0.55f && color.r < 0.5f) return TargetingArrowGraphic.ArrowState.Valid;
-        return TargetingArrowGraphic.ArrowState.Aim;
+        foreach (var kv in beams)
+        {
+            if (kv.Value == null) continue;
+            if (beamLastFrame.TryGetValue(kv.Key, out int last) && Time.frameCount - last <= 3) continue;
+            if (kv.Value.IsShowing) kv.Value.End();
+        }
     }
 
-    private void DrawCurvedTargetingArrow(RectTransform root, RectTransform source, RectTransform target, Color color, float thickness)
+    private void DrawCurvedTargetingArrow(RectTransform root, RectTransform source, RectTransform target, Color color, float thickness,
+        TargetingArrowGraphic.ArrowState beamState = TargetingArrowGraphic.ArrowState.Aim)
     {
         if (root == null || source == null || target == null) return;
         var sourceCenter = RectScreenCenter(source);
@@ -7680,15 +7705,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var end = targetCenter - dir * RectScreenRadius(target, 0.50f);
         if (UseBeamArrow)
         {
-            var beam = BeamArrowOn(root);
-            if (beam != null) { beam.Track(start, end, BeamStateFor(color)); return; }
+            var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
+            if (beam != null) { beam.Track(start, end, beamState); return; }
         }
         RenderEnergyArrow(root, start, end, color, thickness, true);
     }
 
     // Same curved arrow, but the tip follows an arbitrary screen point (the cursor) instead of a
     // target rect. Used by the live drag-to-attack arrow.
-    private void DrawCurvedTargetingArrowToPoint(RectTransform root, RectTransform source, Vector2 screenPoint, Color color, float thickness)
+    private void DrawCurvedTargetingArrowToPoint(RectTransform root, RectTransform source, Vector2 screenPoint, Color color, float thickness,
+        TargetingArrowGraphic.ArrowState beamState = TargetingArrowGraphic.ArrowState.Aim)
     {
         if (root == null || source == null) return;
         var sourceCenter = RectScreenCenter(source);
@@ -7699,10 +7725,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var end = screenPoint;
         if (UseBeamArrow)
         {
-            var beam = BeamArrowOn(root);
+            var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
             // The surge is a shader effect on a persistent mesh, so unlike the old sprite sparks
             // it costs nothing to keep running while the pointer moves.
-            if (beam != null) { beam.Track(start, end, BeamStateFor(color)); return; }
+            if (beam != null) { beam.Track(start, end, beamState); return; }
         }
         // Rebuilt every frame while dragging — no travelling sparks (they'd re-spawn per frame).
         RenderEnergyArrow(root, start, end, color, thickness, false);
@@ -14601,7 +14627,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             var target = manager.GetDragTargetRect(eventData, card, handSeat, out var valid);
             if (target == null)
             {
-                arrowRoot.SetActive(false);
+                // No target under the pointer: keep the arrow, aimed at the cursor, in the neutral
+                // AIM colour. Hiding it here is what made the arrow only ever read valid-or-invalid
+                // and never show its resting state.
+                arrowRoot.SetActive(true);
+                arrowRoot.transform.SetAsLastSibling();
+                manager.DrawCurvedTargetingArrowToPoint(root, sourceRect, eventData.position,
+                    new Color(1f, 0.78f, 0.24f, 0.95f), 10f, TargetingArrowGraphic.ArrowState.Aim);
                 return;
             }
 
@@ -14621,7 +14653,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             var pulse = 0.38f + 0.62f * Mathf.Abs(Mathf.Sin(Time.unscaledTime * 7.5f));
             var color = valid ? Gold : RedAccent;
             color.a = valid ? pulse : 0.28f + 0.22f * pulse;
-            manager.DrawCurvedTargetingArrow(root, sourceRect, target, color, valid ? 12f : 8f);
+            manager.DrawCurvedTargetingArrow(root, sourceRect, target, color, valid ? 12f : 8f,
+                valid ? TargetingArrowGraphic.ArrowState.Valid : TargetingArrowGraphic.ArrowState.Invalid);
         }
     }
 

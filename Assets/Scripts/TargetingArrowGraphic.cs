@@ -83,7 +83,9 @@ public class TargetingArrowGraphic : MaskableGraphic
     // ------------------------------------------------------------- constants
     const int   DENSE     = 80;    // bezier samples used for arc-length lookup
     const int   SHAFT     = 34;    // shaft quads
-    const int   ARM       = 9;     // quads per head arm
+    // 16, not the spec's 9. The arms taper on a (1-f)^0.55 curve, which bends hardest near the
+    // outer ends; at 9 segments that reads as visible faceting on a head this large on screen.
+    const int   ARM       = 16;    // quads per head arm
     const float ARM_SPAN  = 0.16f; // flow parameter length of each arm
     const float MESH_MUL  = 3.4f;  // mesh half-width vs. core half-width
     const float SWELL     = 0.16f; // width gain at the crest of the surge
@@ -146,8 +148,10 @@ public class TargetingArrowGraphic : MaskableGraphic
     /// <summary>Per-frame drive for callers that recompute BOTH ends each frame — the board's
     /// arrows anchor their origin just outside the source card, so it slides as the aim swings
     /// round. Starts the arrow on first call, so callers do not have to track that themselves.
-    /// The spring state survives because this component lives on the arrow ROOT, which the
-    /// per-frame Clear() does not destroy (it only clears children).</summary>
+    /// The spring state survives because GameManager keeps these beams PERSISTENT and parented to
+    /// the canvas — the arrow roots themselves are rebuilt every frame, and a beam living on one
+    /// was destroyed and re-created constantly, which reset the materialize sweep every frame and
+    /// threw away the spring velocity that gives the arrow its weight.</summary>
     public void Track(Vector2 screenOrigin, Vector2 screenTip, ArrowState s)
     {
         if (!active)
@@ -394,7 +398,13 @@ public class TargetingArrowGraphic : MaskableGraphic
                 float f  = (float)k / ARM;
                 float u  = 1f + f * ARM_SPAN;
                 // 0.45 damps the swell on the head so it conducts rather than inflates
-                float hw = wMax * Mathf.Pow(1f - f, 0.55f)
+                // Leading ramp, then the spec's taper. Without the ramp both arms are at FULL width
+                // exactly at the tip, so two wide quads cross there and the arrow ends in a blunt
+                // notch with nothing covering the point — the apex reads as missing. Ramping from
+                // zero over the first ~18% gives the barbs somewhere to converge, so the shaft's own
+                // narrowing end forms the point.
+                float apex = Mathf.SmoothStep(0f, 1f, Mathf.Min(1f, f / 0.18f));
+                float hw = wMax * apex * Mathf.Pow(1f - f, 0.55f)
                          * (1f + SWELL * 0.45f * Surge(u, time, surge));
                 Vector2 p = tipP + dir * (f * armLen);
                 outVerts[v] = p + nrm * hw; outUvs[v] = new Vector2(u, 1f); v++;
