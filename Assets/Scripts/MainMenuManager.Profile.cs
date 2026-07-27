@@ -1708,13 +1708,19 @@ public partial class MainMenuManager
             return;
         }
 
-        string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername;
+        string myName = AccountManager.DisplayName;
+        // Identify "me" by player id, not by display name. Two players may share a name, and — worse —
+        // a player whose name is missing from the ladder could never be highlighted at all, which is
+        // precisely the case this screen was getting wrong.
+        string myId = null;
+        try { myId = Unity.Services.Authentication.AuthenticationService.Instance?.PlayerId; } catch { }
         int shown = Mathf.Min(leaderboardEntries.Count, 10);
         float y = 0f;
         for (int i = 0; i < shown; i++)
         {
             var e = leaderboardEntries[i];
-            bool isMe = !string.IsNullOrEmpty(myName) && e.username == myName;
+            bool isMe = !string.IsNullOrEmpty(myId) && e.playerId == myId
+                     || (string.IsNullOrEmpty(myId) && !string.IsNullOrEmpty(myName) && e.username == myName);
             int tIndex = RankedStore.TierIndexForBounty(e.bounty);
             Color tierColor = ProfileTiers[Mathf.Clamp(tIndex, 0, ProfileTiers.Length - 1)].color;
             Color rankColor = e.rank <= 3 ? Gold : Muted;

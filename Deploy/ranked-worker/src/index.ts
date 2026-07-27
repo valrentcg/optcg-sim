@@ -202,7 +202,18 @@ async function handleProfile(url: URL, env: Env): Promise<Response> {
   const row = await env.DB.prepare("SELECT * FROM ranked_profiles WHERE player_id = ?")
     .bind(playerId).first<any>();
   const p = rowToProfile(row);
-  return json({ profile: publicProfile(playerId, p, row?.username ?? null) });
+  // Same NULL-username fallback the leaderboard uses, so a player's own profile and their row on the
+  // board never disagree about who they are.
+  let name: string | null = row?.username ?? null;
+  if (!name) {
+    const reported = await env.DB.prepare(
+      `SELECT username FROM match_reports
+        WHERE reporter_id = ? AND username IS NOT NULL
+        ORDER BY created_at DESC LIMIT 1`,
+    ).bind(playerId).first<{ username: string }>();
+    name = reported?.username ?? null;
+  }
+  return json({ profile: publicProfile(playerId, p, name) });
 }
 
 // All /queue/* endpoints are authenticated (identity = token sub), like /report.
@@ -249,11 +260,23 @@ async function handleSocialRoute(req: Request, url: URL, env: Env): Promise<Resp
 
 async function handleLeaderboard(url: URL, env: Env): Promise<Response> {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "100", 10) || 100, 1), 200);
+  // A profile row can carry a NULL username: it was written before both sides were named at
+  // settlement, or that player's client had no display name to send at the time. Settlement only
+  // names players going forward, so such a row shows as "Unknown Pirate" on the board forever,
+  // however many matches they go on to play. Fall back to the most recent name they DID report, so
+  // an existing row is repaired on read instead of waiting for something to rewrite it.
   const rows = await env.DB.prepare(
-    `SELECT player_id, username, bounty, peak_bounty, games
-       FROM ranked_profiles
-      WHERE placement_games_left = 0
-      ORDER BY bounty DESC
+    `SELECT p.player_id,
+            COALESCE(p.username,
+                     (SELECT r.username
+                        FROM match_reports r
+                       WHERE r.reporter_id = p.player_id AND r.username IS NOT NULL
+                       ORDER BY r.created_at DESC
+                       LIMIT 1)) AS username,
+            p.bounty, p.peak_bounty, p.games
+       FROM ranked_profiles p
+      WHERE p.placement_games_left = 0
+      ORDER BY p.bounty DESC
       LIMIT ?`,
   ).bind(limit).all<any>();
   const entries = (rows.results ?? []).map((r: any, i: number) => ({

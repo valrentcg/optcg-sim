@@ -269,6 +269,15 @@ public static class AccountManager
     public static string GuestId { get; private set; }
     public static bool IsGuest => string.IsNullOrEmpty(CurrentUsername) && !string.IsNullOrEmpty(GuestDisplayName);
 
+    /// <summary>The name to show for this player, wherever a name is shown or sent.
+    ///
+    /// A guest HAS a name — it is what the lobby, the profile card and the in-match log all display.
+    /// The ranked paths resolved only CurrentUsername ?? CachedUsername, both of which are null for a
+    /// guest, so a guest reported to the ladder anonymously and appeared on the Most Wanted board as
+    /// "Unknown Pirate" even while everyone in the match saw their name. Resolve it in ONE place so
+    /// the ladder cannot disagree with the rest of the app about who someone is.</summary>
+    public static string DisplayName => CurrentUsername ?? CachedUsername ?? GuestDisplayName;
+
     public static void StartGuestSession(string displayName)
     {
         // Guests are throwaway profiles - clear out the previous one's local

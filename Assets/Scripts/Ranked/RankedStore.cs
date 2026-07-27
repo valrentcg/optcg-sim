@@ -232,7 +232,7 @@ public static class RankedStore
                 matchId = matchId,
                 opponentId = opponentId,
                 result = won ? "win" : "loss",
-                username = AccountManager.CurrentUsername ?? AccountManager.CachedUsername,
+                username = AccountManager.DisplayName,
             };
 
             using var req = new UnityWebRequest($"{WorkerBase}/report", "POST");

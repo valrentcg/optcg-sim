@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS match_reports (
   PRIMARY KEY (match_id, reporter_id)
 );
 
+-- The leaderboard falls back to a player's most recently REPORTED username when their profile row
+-- has none. The table's PK is (match_id, reporter_id), whose leading column is match_id, so it cannot
+-- serve a lookup by reporter alone — without this index that fallback scans the whole table.
+CREATE INDEX IF NOT EXISTS idx_reports_reporter ON match_reports (reporter_id, created_at DESC);
+
 -- Settlement guard: PK on match_id means a match is computed exactly once.
 CREATE TABLE IF NOT EXISTS match_results (
   match_id   TEXT PRIMARY KEY,

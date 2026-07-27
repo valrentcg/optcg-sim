@@ -6375,7 +6375,7 @@ public partial class MainMenuManager : MonoBehaviour
         var profile = await RankedStore.LoadAsync();
         if (this == null || menuRoot == null || !rankedQueueActive) return;
         int mmr = Mathf.RoundToInt((float)profile.rating);
-        string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername;
+        string myName = AccountManager.DisplayName;   // guests have a name too — see AccountManager.DisplayName
         var status = await RankedStore.QueueJoinAsync(mmr, myName, mode);
         if (this == null || menuRoot == null || !rankedQueueActive) return;
         if (status != null && status.status != "error") HandleRankedStatus(status);
