@@ -72,7 +72,12 @@ public class TargetingArrowGraphic : MaskableGraphic
 
     /// <summary>Smallest ribbon half-width, in canvas pixels. Guards the shader's core against
     /// going sub-pixel, which aliases into a zig-zag rather than simply looking thin.</summary>
-    public float minRibbonPixels = 7f;
+    public float minRibbonPixels = 5f;
+
+    /// <summary>How far back along each barb, as a fraction of its length, the barb reaches full
+    /// width. Small values give a sharper apex; 0 restores the spec's full-width-at-the-tip barbs
+    /// and with them the rounded dome.</summary>
+    public float barbApexRamp = 0.22f;
 
     /// <summary>Barb thickness, as a multiple of the shaft's width. The shader's blur scales with
     /// ribbon width, so a fat barb is also a SOFT barb — at the spec's 1.85 the barbs carried about
@@ -80,7 +85,7 @@ public class TargetingArrowGraphic : MaskableGraphic
     /// noticeable now that the shaft tapers to a crisp point beside them. 1.10 keeps them solid
     /// while sharpening the edge; below ~0.8 they go wispy and stop reading as a head at all.
     /// 1.50 after a request for a thicker head — past ~1.7 the apex starts rounding off again.</summary>
-    public float barbWidth = 1.50f;
+    public float barbWidth = 1.70f;
 
     [Header("Look")]
     [Range(0f, 1f)] public float bloom = 0.52f;
@@ -433,11 +438,18 @@ public class TargetingArrowGraphic : MaskableGraphic
                 // "make a point" and it did the opposite: the arms at full width are what COVERS the
                 // shaft's blunt end cap, and thinning them exposed it. The missing tip was never this
                 // curve — it was armLen (below).
-                // Barbs get a much smaller floor than the shaft: they SHOULD taper to fine ends,
-                // and flooring them at the shaft's value leaves them blunt. 2 px is just enough to
-                // stay off the sub-pixel aliasing the shaft ran into.
-                float hw = Mathf.Max(2f,
-                           wMax * Mathf.Pow(1f - f, 0.55f)
+                // A POINT ONLY FORMS IF EVERY RIBBON NARROWS AT THE TIP. At full width the two barbs
+                // and the shaft end pile ~45 px of ribbon on the apex, and the additive blur rounds
+                // that into a dome — which is what "no tip" has been throughout. So the barbs ramp
+                // up from nearly nothing at f=0 and reach full width a fifth of the way back.
+                //
+                // I tried this ramp once before and reverted it, correctly at the time: the shaft
+                // still ended in a blunt 0.55 cap then, so thinning the barbs merely uncovered it.
+                // It works now because the shaft tapers too — the two changes are only useful
+                // together, which is why each looked wrong on its own.
+                float apex = Mathf.SmoothStep(0f, 1f, Mathf.Min(1f, f / Mathf.Max(0.01f, barbApexRamp)));
+                float hw = Mathf.Max(1.5f,
+                           wMax * apex * Mathf.Pow(1f - f, 0.55f)
                          * (1f + SWELL * 0.45f * Surge(u, time, surge)));
                 Vector2 p = tipP + dir * (f * armLen);
                 outVerts[v] = p + nrm * hw; outUvs[v] = new Vector2(u, 1f); v++;
