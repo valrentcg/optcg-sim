@@ -50,6 +50,7 @@ namespace OnePieceTcg.Sim
             OldRedAceAlsoTriggersOnDefence();
             MandatoryHandDiscardWithNoHandDoesNotFreeze();
             OtherThanExclusionIsEnforcedByTheResolver();
+            NamedCostCardMustActuallyBeThatCard();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -486,6 +487,33 @@ namespace OnePieceTcg.Sim
                 $"onBoard={stillOnBoard} life {lifeBefore}->{b.S.Life.Count}");
             Check("the excluded card does not glow either",
                 !GameEngine.IsValidEffectTarget(b.St, pe, momo));
+        }
+
+        // "You may trash 1 [Ice Oni] from your hand …: Play 1 [Ice Oni] from your trash." (OP04-055 Plague
+        // Rounds). The [Name] on a from-hand cost was never checked, so ANY card paid it — and that then
+        // FROZE the game, because paying the cost correctly is what puts an [Ice Oni] in the trash for the
+        // mandatory body to play. Paying with the wrong card left the body with no legal target and no way
+        // to dismiss it. One unchecked filter, two bugs.
+        private static void NamedCostCardMustActuallyBeThatCard()
+        {
+            const string Clause = "You may trash 1 [Ice Oni] from your hand: Play 1 [Ice Oni] from your trash.";
+
+            var b = new Fixture();
+            var wrong = b.Hand("south", "ST01-005");            // Jinbe — not an [Ice Oni]
+            var src = b.Hand("south", "OP04-055");
+            GameEngine.QueueClauseForTest(b.St, "south", src, "main", Clause);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("a named cost refuses the wrong card", false, "no pending effect"); return; }
+
+            GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = wrong.InstanceId });
+
+            Check("a named cost refuses the wrong card",
+                b.S.Hand.Any(c => c.InstanceId == wrong.InstanceId)
+                    && !b.S.Trash.Any(c => c.InstanceId == wrong.InstanceId),
+                $"stillInHand={b.S.Hand.Any(c => c.InstanceId == wrong.InstanceId)} inTrash={b.S.Trash.Any(c => c.InstanceId == wrong.InstanceId)}");
+            Check("the wrong card does not glow for a named cost",
+                !GameEngine.IsValidEffectTarget(b.St, pe, wrong));
         }
 
         // ---- plumbing -------------------------------------------------------------------------

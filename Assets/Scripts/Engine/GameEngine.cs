@@ -8515,6 +8515,28 @@ namespace OnePieceTcg.Engine
                 }
             }
             if (ContainsAll(costText, "with a [Trigger]") && string.IsNullOrEmpty(def.Trigger)) return false;
+            // A NAMED cost card: "trash 1 [Ice Oni] from your hand" (OP04-055 Plague Rounds). The name was
+            // never checked, so ANY card in hand paid a cost that names a specific one — and the body that
+            // follows ("Play 1 [Ice Oni] from your trash") then had nothing to play, because paying the
+            // cost correctly is what puts that card in the trash. Keyword tags in the same text
+            // ([Trigger], [Blocker], …) are not names and must not be treated as one.
+            foreach (System.Text.RegularExpressions.Match nm in
+                System.Text.RegularExpressions.Regex.Matches(costText, @"\[([^\]]+)\]"))
+            {
+                string tag = nm.Groups[1].Value.Trim();
+                if (IsKeywordTag(tag)) continue;
+                // A wildcard-identity card (Sealed's Rainbow Luffy) counts as every name.
+                if (def.WildcardIdentity) return true;
+                if (string.Equals(def.Name, tag, StringComparison.OrdinalIgnoreCase)) continue;
+                var alias = (def.Effect ?? "");
+                bool aliased = alias.IndexOf("treat this card's name as", StringComparison.OrdinalIgnoreCase) >= 0
+                    && System.Text.RegularExpressions.Regex.Matches(alias,
+                           @"treat this card's name as \[([^\]]+)\](?: and \[([^\]]+)\])?")
+                       .Cast<System.Text.RegularExpressions.Match>()
+                       .Any(am => string.Equals(am.Groups[1].Value.Trim(), tag, StringComparison.OrdinalIgnoreCase)
+                               || (am.Groups[2].Success && string.Equals(am.Groups[2].Value.Trim(), tag, StringComparison.OrdinalIgnoreCase)));
+                if (!aliased) return false;
+            }
             // "Character card" → the cost card must be a Character (OP16 Ace/Whitebeard "reveal/trash 1 Character
             // card with 8000 power").
             if (System.Text.RegularExpressions.Regex.IsMatch(costText, @"\bCharacter cards?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)

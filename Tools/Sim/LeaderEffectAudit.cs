@@ -38,7 +38,17 @@ namespace OnePieceTcg.Sim
         {
             "On Play", "On K.O.", "When this Character is K.O.'d", "When Attacking", "On Block",
             "Activate: Main", "Main", "On Your Opponent's Attack", "End of Your Turn", "End of Your Opponent's Turn",
+            // [Counter] belongs here for one blunt reason: Gum-Gum Champion Rifle, the freeze report that
+            // started all of this, IS a Counter. Leaving the tag out meant the sweep covered every path
+            // except the one the original bug came from. 173 clauses.
+            "Counter",
         };
+
+        /// <summary>The timing a clause is queued under. A [Counter] clause queued as "main" would not be
+        /// the thing the engine actually runs during a block, and the counter path is exactly where the
+        /// known freeze lived, so it is queued as itself.</summary>
+        static string TimingFor(List<string> tags) =>
+            tags.Any(t => t.Equals("Counter", StringComparison.OrdinalIgnoreCase)) ? "counter" : "main";
         static readonly string[] KeywordOnly = { "Rush", "Blocker", "Double Attack", "Banish", "Unblockable" };
         static readonly Regex LeadingTags = new Regex(@"^\s*((?:\[[^\]]+\]\s*/?\s*)+)");
         static readonly Regex TagInner = new Regex(@"\[([^\]]+)\]");
@@ -107,7 +117,7 @@ namespace OnePieceTcg.Sim
                         PendingEffect pe;
                         try
                         {
-                            GameEngine.QueueClauseForTest(st, "south", src, "main", clause);
+                            GameEngine.QueueClauseForTest(st, "south", src, TimingFor(tags), clause);
                             pe = st.PendingEffects.FirstOrDefault();
                         }
                         catch (Exception ex)
@@ -121,20 +131,29 @@ namespace OnePieceTcg.Sim
                         }
                         if (pe == null) continue;                       // resolved or correctly retired
 
+                        // WALK THE WHOLE CHAIN, not just the first step. Gum-Gum Champion Rifle — the
+                        // freeze that started all of this — hides its unsatisfiable part in a ". Then, …"
+                        // rider, which does not exist until the first part has resolved. Checking only the
+                        // first pending effect meant the sweep could not see the very bug it was built for
+                        // (verified by disabling the engine's retire guard: 14 freezes reappeared, and
+                        // EB01-028 was not among them). Each step is advanced the way a player would: click
+                        // a legal target if one is offered, otherwise press "Use Effect".
+                        var seenEffects = new HashSet<string>();
+                        for (int step = 0; step < 8 && pe != null; step++)
+                        {
+                            if (!seenEffects.Add(pe.EffectId + ":" + pe.SelectionsRemaining)) break;
+                            if (ReportIfStuck(st, pe, d, body, scenario.Name, findings)) break;
+                            if (!AdvanceOneStep(st, pe)) break;
+                            pe = st.PendingEffects.FirstOrDefault();
+                        }
+                        pe = st.PendingEffects.FirstOrDefault();
+                        if (pe == null) continue;
+
                         bool clickable = AnyValidTarget(st, pe);
                         // With nothing clickable the panel still shows an enabled "Use Effect" button, so
                         // this is only a freeze if pressing that ALSO fails to move the game on. Without
                         // this second half the sweep flagged every "rest ALL of your opponent's Characters"
                         // against an empty board — nothing to click, but Use Effect resolves it fine.
-                        bool useEffectStuck = !clickable && UseEffectLeavesItPending(st, pe);
-                        if (useEffectStuck && !pe.Optional)
-                            findings.Add(new Finding
-                            {
-                                CardId = d.Id, CardName = d.Name, Kind = "STUCK", Scenario = scenario.Name,
-                                Clause = body,
-                                Detail = "mandatory, nothing clickable anywhere, Skip disabled → the panel cannot be dismissed",
-                            });
-
                         // Nothing glows. That is only a DEFECT if the player was supposed to click
                         // something. Three cases, and only two of them are bugs:
                         //
@@ -243,12 +262,22 @@ namespace OnePieceTcg.Sim
                 else if (string.Equals(def.Type, "event", StringComparison.OrdinalIgnoreCase)) { src = Inst(def.Id, "south", "hand"); south.Hand.Add(src); }
                 else { src = Inst(def.Id, "south", "character"); int sl = south.CharacterArea.FindIndex(c => c == null); south.CharacterArea[sl < 0 ? 0 : sl] = src; }
 
-                GameEngine.QueueClauseForTest(st, "south", src, "main", clause);
+                GameEngine.QueueClauseForTest(st, "south", src, TimingFor(tags), clause);
                 var pe = st.PendingEffects.FirstOrDefault();
                 Console.WriteLine($"\n  clause: {clause}");
                 if (pe == null) { Console.WriteLine("    -> resolved / retired, nothing pending"); continue; }
                 Console.WriteLine($"    pending text : {pe.Text}");
                 Console.WriteLine($"    targetZone   : {pe.TargetZone}   optional={pe.Optional}  selections={pe.SelectionsRemaining}");
+                // Walk the chain so a rider's step is visible too, printing the log each time.
+                for (int step = 0; step < 6; step++)
+                {
+                    var cur = st.PendingEffects.FirstOrDefault();
+                    if (cur == null) { Console.WriteLine($"    step{step}: nothing pending"); break; }
+                    Console.WriteLine($"    step{step}: optional={cur.Optional} clickable={AnyValidTarget(st, cur)} :: {cur.Text}");
+                    if (!AdvanceOneStep(st, cur)) { Console.WriteLine($"    step{step}: NO PROGRESS"); break; }
+                }
+                Console.WriteLine("    log: " + string.Join(" | ",
+                    st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 6)).Select(e => e.Message)));
                 foreach (var kv in st.Players)
                 {
                     var pl = kv.Value;
@@ -262,6 +291,62 @@ namespace OnePieceTcg.Sim
                 }
             }
             return 0;
+        }
+
+        /// <summary>Record a freeze if this step is one. Mandatory + nothing clickable + "Use Effect"
+        /// making no progress means every control the pending panel offers is a no-op.</summary>
+        static bool ReportIfStuck(GameState st, PendingEffect pe, CardDef d, string body,
+                                  string scenario, List<Finding> findings)
+        {
+            if (pe.Optional) return false;
+            if (AnyValidTarget(st, pe)) return false;
+            if (!UseEffectLeavesItPending(st, pe)) return false;
+            findings.Add(new Finding
+            {
+                CardId = d.Id, CardName = d.Name, Kind = "STUCK", Scenario = scenario,
+                Clause = body,
+                Detail = "mandatory, nothing clickable anywhere, Skip disabled → the panel cannot be dismissed"
+                       + " (clause: " + Esc(pe.Text ?? "") + ")",
+            });
+            return true;
+        }
+
+        /// <summary>Move the effect on the way a player would, and report whether anything changed.</summary>
+        static bool AdvanceOneStep(GameState st, PendingEffect pe)
+        {
+            int beforeCount = st.PendingEffects.Count;
+            string beforeId = pe.EffectId;
+            int beforeSel = pe.SelectionsRemaining;
+
+            CardInstance pick = null;
+            foreach (var kv in st.Players)
+            {
+                var p = kv.Value;
+                if (p == null) continue;
+                if (p.Leader != null && GameEngine.IsValidEffectTarget(st, pe, p.Leader)) { pick = p.Leader; break; }
+                if (p.CharacterArea != null)
+                    foreach (var c in p.CharacterArea)
+                        if (c != null && GameEngine.IsValidEffectTarget(st, pe, c)) { pick = c; break; }
+                if (pick != null) break;
+                foreach (var list in new[] { p.Hand, p.Trash, p.Life })
+                    if (list != null)
+                        foreach (var c in list)
+                            if (c != null && GameEngine.IsValidEffectTarget(st, pe, c)) { pick = c; break; }
+                if (pick != null) break;
+            }
+            try
+            {
+                GameEngine.ApplyCommand(st, new GameCommand
+                {
+                    Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId,
+                    Target = pick?.InstanceId,
+                });
+            }
+            catch { return false; }
+
+            var after = st.PendingEffects.FirstOrDefault();
+            return st.PendingEffects.Count != beforeCount
+                || after == null || after.EffectId != beforeId || after.SelectionsRemaining != beforeSel;
         }
 
         // ---- the player's own "is anything clickable?" test ----------------------------------------
