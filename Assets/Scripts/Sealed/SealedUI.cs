@@ -146,6 +146,107 @@ namespace OnePieceTcg.Sealed
             return row;
         }
 
+        // ---- Rounded corners -------------------------------------------------------------------
+        // The shared DeckStatsPanel draws through host-supplied Round/RoundCircle/Border hooks so it
+        // can render inside either builder. Sealed had no rounded-rect primitive of its own, so these
+        // generate the same kind of 9-sliced SDF sprite the constructed builder uses — without that,
+        // every bar and swatch in the composition graphs would come out as a hard rectangle.
+
+        private static Sprite roundSprite, circleSprite;
+        private static readonly System.Collections.Generic.Dictionary<int, Sprite> borderSprites
+            = new System.Collections.Generic.Dictionary<int, Sprite>();
+
+        public static Sprite RoundSprite() => roundSprite != null ? roundSprite : (roundSprite = MakeRounded(24, 5f));
+
+        public static Sprite CircleSprite()
+        {
+            if (circleSprite != null) return circleSprite;
+            const int S = 48; const float R = S * 0.5f;
+            var tex = new Texture2D(S, S, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Bilinear; tex.wrapMode = TextureWrapMode.Clamp;
+            var px = new Color32[S * S];
+            for (int y = 0; y < S; y++)
+                for (int x = 0; x < S; x++)
+                {
+                    float d = Mathf.Sqrt((x + 0.5f - R) * (x + 0.5f - R) + (y + 0.5f - R) * (y + 0.5f - R));
+                    float a = Mathf.Clamp01(R - d);
+                    px[y * S + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            tex.SetPixels32(px); tex.Apply(false, true);
+            circleSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f), 100f);
+            return circleSprite;
+        }
+
+        private static Sprite MakeRounded(int S, float r)
+        {
+            var tex = new Texture2D(S, S, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Bilinear; tex.wrapMode = TextureWrapMode.Clamp;
+            var px = new Color32[S * S];
+            for (int y = 0; y < S; y++)
+                for (int x = 0; x < S; x++)
+                {
+                    float cx = Mathf.Min(x + 0.5f, S - x - 0.5f);
+                    float cy = Mathf.Min(y + 0.5f, S - y - 0.5f);
+                    float dx = Mathf.Max(0f, r - cx), dy = Mathf.Max(0f, r - cy);
+                    float a = Mathf.Clamp01(r + 0.75f - Mathf.Sqrt(dx * dx + dy * dy));
+                    px[y * S + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            tex.SetPixels32(px); tex.Apply(false, true);
+            return Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f), 100f, 0,
+                SpriteMeshType.FullRect, new Vector4(r, r, r, r));
+        }
+
+        public static void Round(RectTransform rt)
+        {
+            var img = rt != null ? rt.GetComponent<Image>() : null;
+            if (img == null) return;
+            img.sprite = RoundSprite(); img.type = Image.Type.Sliced;
+        }
+
+        public static void RoundCircle(RectTransform rt)
+        {
+            var img = rt != null ? rt.GetComponent<Image>() : null;
+            if (img == null) return;
+            img.sprite = CircleSprite(); img.type = Image.Type.Simple;
+        }
+
+        public static void Border(RectTransform parent, Color colour, float thickness)
+        {
+            if (parent == null || colour.a <= 0f || thickness <= 0f) return;
+            int key = Mathf.Clamp(Mathf.RoundToInt(thickness * 10f), 1, 80);
+            if (!borderSprites.TryGetValue(key, out var sprite))
+            {
+                const int W = 64, H = 64; const float R = 6.5f;
+                float th = Mathf.Clamp(key / 10f, 0.75f, 8f);
+                var tex = new Texture2D(W, H, TextureFormat.RGBA32, false);
+                tex.filterMode = FilterMode.Bilinear; tex.wrapMode = TextureWrapMode.Clamp;
+                var px = new Color32[W * H];
+                for (int y = 0; y < H; y++)
+                    for (int x = 0; x < W; x++)
+                    {
+                        float outer = RoundRect(x + 0.5f, y + 0.5f, W, H, R);
+                        float inner = RoundRect(x + 0.5f - th, y + 0.5f - th, W - th * 2f, H - th * 2f, Mathf.Max(0f, R - th));
+                        float a = Mathf.Clamp01(outer * (1f - inner));
+                        px[y * W + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                    }
+                tex.SetPixels32(px); tex.Apply(false, true);
+                sprite = Sprite.Create(tex, new Rect(0, 0, W, H), new Vector2(0.5f, 0.5f), 100f, 0,
+                    SpriteMeshType.FullRect, new Vector4(R, R, R, R));
+                borderSprites[key] = sprite;
+            }
+            var rt = Panel(parent, "Border", colour);
+            rt.GetComponent<Image>().sprite = sprite;
+            rt.GetComponent<Image>().type = Image.Type.Sliced;
+            Fill(rt);
+        }
+
+        private static float RoundRect(float x, float y, float w, float h, float r)
+        {
+            float cx = Mathf.Min(x, w - x), cy = Mathf.Min(y, h - y);
+            float dx = Mathf.Max(0f, r - cx), dy = Mathf.Max(0f, r - cy);
+            return Mathf.Clamp01(r + 0.75f - Mathf.Sqrt(dx * dx + dy * dy));
+        }
+
         /// <summary>Routes left/right clicks separately — the builder needs right-click to remove.</summary>
         public sealed class ClickRouter : MonoBehaviour, IPointerClickHandler
         {

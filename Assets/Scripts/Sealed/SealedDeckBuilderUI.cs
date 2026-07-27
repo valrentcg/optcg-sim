@@ -23,7 +23,7 @@ using OnePieceTcg.Engine;
 
 namespace OnePieceTcg.Sealed
 {
-    public sealed class SealedDeckBuilderUI : MonoBehaviour
+    public sealed partial class SealedDeckBuilderUI : MonoBehaviour
     {
         private RectTransform root, body;
         private SealedPool pool;
@@ -114,10 +114,10 @@ namespace OnePieceTcg.Sealed
 
             var title = SealedUI.Label(bar, "Title",
                 $"SEALED · {pool.SetCode} · seed {pool.Seed}", 14, SealedUI.Accent, TextAnchor.MiddleLeft, true);
-            SealedUI.Stretch(title.rectTransform, new Vector2(0.01f, 0f), new Vector2(0.28f, 1f));
+            SealedUI.Stretch(title.rectTransform, new Vector2(0.01f, 0f), new Vector2(0.24f, 1f));
 
             // Search
-            var field = NewInput(bar, new Vector2(0.29f, 0.15f), new Vector2(0.46f, 0.85f), "Search...");
+            var field = NewInput(bar, new Vector2(0.25f, 0.15f), new Vector2(0.40f, 0.85f), "Search...");
             field.onValueChanged.AddListener(v => { view.Search = v; RefreshGrid(); });
 
             // Sort cycle
@@ -126,7 +126,7 @@ namespace OnePieceTcg.Sealed
                 var all = (SealedSort[])Enum.GetValues(typeof(SealedSort));
                 view.Sort = all[(Array.IndexOf(all, view.Sort) + 1) % all.Length];
                 Render();
-            }).let(rt => SealedUI.Stretch(rt, new Vector2(0.47f, 0.15f), new Vector2(0.60f, 0.85f)));
+            }).let(rt => SealedUI.Stretch(rt, new Vector2(0.41f, 0.15f), new Vector2(0.525f, 0.85f)));
 
             // Quick view cycle
             SealedUI.Button(bar, "VIEW: " + view.QuickView, SealedUI.ChipOff, SealedUI.Ink, () =>
@@ -134,20 +134,33 @@ namespace OnePieceTcg.Sealed
                 var all = (SealedQuickView[])Enum.GetValues(typeof(SealedQuickView));
                 view.QuickView = all[(Array.IndexOf(all, view.QuickView) + 1) % all.Length];
                 Render();
-            }).let(rt => SealedUI.Stretch(rt, new Vector2(0.61f, 0.15f), new Vector2(0.74f, 0.85f)));
+            }).let(rt => SealedUI.Stretch(rt, new Vector2(0.53f, 0.15f), new Vector2(0.645f, 0.85f)));
 
             SealedUI.Button(bar, "RESET", SealedUI.ChipOff, SealedUI.Ink, () => { view.Reset(); Render(); })
-                .let(rt => SealedUI.Stretch(rt, new Vector2(0.75f, 0.15f), new Vector2(0.83f, 0.85f)));
+                .let(rt => SealedUI.Stretch(rt, new Vector2(0.65f, 0.15f), new Vector2(0.71f, 0.85f)));
+
+            // POOL ⇄ SHOWCASE. The showcase is a view of the DECK, so it belongs in the builder next
+            // to the pool rather than behind a separate screen — the whole point is seeing the deck
+            // take shape while you are still cutting cards.
+            SealedUI.Button(bar, showcase ? "◧ POOL" : "◧ SHOWCASE",
+                showcase ? SealedUI.Accent : SealedUI.ChipOff,
+                showcase ? SealedUI.BadgeInk : SealedUI.Ink,
+                () => { showcase = !showcase; Render(); })
+                .let(rt => SealedUI.Stretch(rt, new Vector2(0.715f, 0.15f), new Vector2(0.825f, 0.85f)));
 
             // Build timer (tournament mode only)
             if (deadlineUnscaled >= 0f)
             {
                 timerText = SealedUI.Label(bar, "Timer", "--:--", 18, SealedUI.Ink, TextAnchor.MiddleCenter, true);
-                SealedUI.Stretch(timerText.rectTransform, new Vector2(0.84f, 0f), new Vector2(0.93f, 1f));
+                SealedUI.Stretch(timerText.rectTransform, new Vector2(0.83f, 0f), new Vector2(0.93f, 1f));
             }
 
+            // Vertically inset more than the other controls on purpose. SealedManager lays its "MENU"
+            // overlay across y 0.915-0.96 of the SCREEN, which clips the bottom of this row, and it is
+            // added after the builder so it wins the click — the bottom sliver of DONE used to exit the
+            // builder instead of confirming the deck. Starting at 0.42 of the toolbar clears it.
             SealedUI.Button(bar, "DONE", SealedUI.Accent, SealedUI.BadgeInk, Finish)
-                .let(rt => SealedUI.Stretch(rt, new Vector2(0.94f, 0.15f), new Vector2(0.99f, 0.85f)));
+                .let(rt => SealedUI.Stretch(rt, new Vector2(0.94f, 0.42f), new Vector2(0.99f, 0.88f)));
         }
 
         private void BuildFilterRail()
@@ -181,6 +194,7 @@ namespace OnePieceTcg.Sealed
             deckOnly.gameObject.GetComponent<LayoutElement>().preferredHeight = 24f;
         }
 
+        private RectTransform poolHost;      // the pool grid's outer panel — swapped for the showcase
         private RectTransform gridHost;
         /// <summary>Usable width of the card grid, used to derive the column count. Taken from the live
         /// rect when it has been laid out, else from the canvas reference width times the grid's anchor
@@ -191,6 +205,8 @@ namespace OnePieceTcg.Sealed
         {
             var host = SealedUI.Panel(body, "Pool", new Color(0, 0, 0, 0));
             SealedUI.Stretch(host, new Vector2(0.145f, 0f), new Vector2(0.795f, 0.94f));
+            poolHost = host;
+            if (showcase) { BuildShowcase(host); return; }
             float live = host.rect.width;
             gridWidth = live > 200f ? live : 1920f * (0.795f - 0.145f);
             gridHost = SealedUI.ScrollColumn(host, "Pool", 6f);
@@ -200,6 +216,7 @@ namespace OnePieceTcg.Sealed
 
         private void RefreshGrid()
         {
+            if (showcase) { RefreshShowcase(); return; }
             if (gridHost == null) return;
             for (int i = gridHost.childCount - 1; i >= 0; i--) Destroy(gridHost.GetChild(i).gameObject);
 
@@ -313,41 +330,22 @@ namespace OnePieceTcg.Sealed
             Row($"Leader: {leaderName}", v.LeaderLegal && v.HasLeader ? SealedUI.Good : SealedUI.Bad, 12);
             Row($"Format: {SealedLeaderRules.ModeName(pool.LeaderMode)}", SealedUI.Muted, 10);
 
+            // Composition, counters, curve and colour identity are the SAME graphs the constructed
+            // builder draws (DeckStatsPanel), not a limited-only text readout. The ASCII bars that used
+            // to live here said the same things less clearly, and a player moving between the two
+            // builders should not have to learn a second way of reading their own deck.
             Gap();
-            Row("COMPOSITION", SealedUI.Accent, 11, true);
-            Row($"Characters   {s.Characters}", SealedUI.Ink, 12);
-            Row($"Events       {s.Events}", SealedUI.Ink, 12);
-            Row($"Stages       {s.Stages}", SealedUI.Ink, 12);
-            Row($"Avg. cost    {s.AverageCost:F2}", SealedUI.Ink, 12);
+            SealedDeckGraphs.RenderInto(statsHost, pool.Deck);
 
-            Gap();
-            Row("COUNTER", SealedUI.Accent, 11, true);
-            Row($"No Counter   {s.NoCounter}", s.NoCounter > 20 ? SealedUI.Bad : SealedUI.Ink, 12);
-            Row($"1000         {s.Counter1000}", SealedUI.Ink, 12);
-            Row($"2000         {s.Counter2000}", SealedUI.Ink, 12);
-
+            // Keywords stay as text: they are a LIMITED question ("do I have enough Blockers to
+            // survive a slow board?") with no equivalent in the constructed panel.
             Gap();
             Row("KEYWORDS", SealedUI.Accent, 11, true);
             Row($"Blockers     {s.Blockers}", SealedUI.Ink, 12);
             Row($"Triggers     {s.Triggers}", SealedUI.Ink, 12);
             if (s.Rush > 0) Row($"Rush         {s.Rush}", SealedUI.Ink, 12);
             if (s.DoubleAttack > 0) Row($"Dbl Attack   {s.DoubleAttack}", SealedUI.Ink, 12);
-
-            Gap();
-            Row("CURVE", SealedUI.Accent, 11, true);
-            for (int c = 0; c <= 6; c++)
-            {
-                int n = s.Curve.TryGetValue(c, out var cv) ? cv : 0;
-                Row($"{(c == 6 ? "6+" : c.ToString())}  {new string('█', Mathf.Min(14, n))} {n}", SealedUI.Muted, 11);
-            }
-
-            if (s.Colors.Count > 0)
-            {
-                Gap();
-                Row("COLORS", SealedUI.Accent, 11, true);
-                foreach (var kv in s.Colors.OrderByDescending(k => k.Value))
-                    Row($"{kv.Key,-8} {kv.Value}", SealedUI.Ink, 12);
-            }
+            if (s.NoCounter > 20) Row($"No Counter   {s.NoCounter}", SealedUI.Bad, 12);
 
             if (!v.Ok)
             {
