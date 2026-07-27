@@ -65,6 +65,11 @@ public class TargetingArrowGraphic : MaskableGraphic
     /// old arrow, whose full body width was 12-14 px.</summary>
     public float coreHalfWidth = 6.5f;
 
+    /// <summary>Ceiling on head length, in canvas pixels. Head length tracks arrow length so it
+    /// stays in proportion at normal range, but across the full board that keeps growing — an arrow
+    /// spanning the screen ended up with a head half the size of a card.</summary>
+    public float maxHeadPixels = 90f;
+
     [Header("Look")]
     [Range(0f, 1f)] public float bloom = 0.52f;
     [Range(0f, 1f)] public float surge = 0.55f;
@@ -362,6 +367,7 @@ public class TargetingArrowGraphic : MaskableGraphic
         // apex. Tying it to arrow LENGTH keeps the head in proportion at any range, with the spec's
         // formula as the floor for very short arrows and its 0.34L as the ceiling for very long ones.
         float armLen  = Mathf.Min(L * 0.34f, Mathf.Max(L * 0.16f, scale * (2.6f + head * 5.2f)));
+        armLen = Mathf.Min(armLen, maxHeadPixels);   // a long arrow should not grow a giant head
         float time    = Time.unscaledTime;
 
         // --- shaft, resampled by ARC LENGTH so the head keeps its proportions
@@ -391,7 +397,9 @@ public class TargetingArrowGraphic : MaskableGraphic
         Vector2 tipDir = (dense[DENSE] - back).normalized;
         float tipAng   = Mathf.Atan2(tipDir.y, tipDir.x);
         float spread   = 0.42f + sweep * 0.52f;
-        float wMax     = WidthAtS(L, L, armLen) * scale * 1.85f * MESH_MUL;
+        // Pinned to the spec's 0.55, NOT to WidthAtS — that now tapers to 0.10 at the tip, and
+        // reading the arm width from it would shrink the barbs away along with the shaft.
+        float wMax     = 0.55f * scale * 1.85f * MESH_MUL;
         Vector2 tipP   = dense[DENSE];
 
         for (int side = 0; side < 2; side++)
@@ -467,7 +475,11 @@ public class TargetingArrowGraphic : MaskableGraphic
     {
         float w = 0.32f + 0.68f * Mathf.Pow(Mathf.Min(s / (L * 0.55f), 1f), 0.8f);
         float dEnd = L - s, blend = armLen * 0.55f;
-        if (dEnd < blend) w *= 0.55f + 0.45f * (dEnd / blend);
+        // Taper to almost nothing at the very tip. The spec floors this at 0.55, which leaves the
+        // shaft ending in a blunt cap right where the two barbs meet — and that cap, blurred by the
+        // shader, is the rounded blob that read as "no tip". Running it down to 0.10 lets the shaft
+        // itself form the point, with the barbs flanking it.
+        if (dEnd < blend) w *= 0.10f + 0.90f * (dEnd / blend);
         return w;
     }
 

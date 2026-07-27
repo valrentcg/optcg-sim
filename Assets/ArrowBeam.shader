@@ -100,9 +100,13 @@ Shader "Spellbind/ArrowBeam"
                 // Three nested Gaussians replace the three draw passes of the
                 // 2D prototype. Widths are fractions of the mesh half-width,
                 // which is 3.4x the core half-width.
+                // Tightened from the spec's 0.30 / 0.62. Those put the haze out at ~4.4x the core
+                // radius, which on this board reads as a wide soft wash either side of the beam
+                // rather than a beam with an edge. 0.22 / 0.34 keeps the same three-tier falloff
+                // but hugs it in to ~2.4x. The core tier is untouched.
                 float core = exp(-(v / 0.14) * (v / 0.14));
-                float mid  = exp(-(v / 0.30) * (v / 0.30));
-                float haze = exp(-(v / 0.62) * (v / 0.62));
+                float mid  = exp(-(v / 0.22) * (v / 0.22));
+                float haze = exp(-(v / 0.34) * (v / 0.34));
 
                 float b = 0.5 + _Bloom * 1.1;
 
@@ -181,9 +185,13 @@ Shader "Spellbind/ArrowBeam"
             fixed4 frag(v2f i) : SV_Target
             {
                 float v = abs(i.uv.y * 2.0 - 1.0);
+                // Tightened from the spec's 0.30 / 0.62. Those put the haze out at ~4.4x the core
+                // radius, which on this board reads as a wide soft wash either side of the beam
+                // rather than a beam with an edge. 0.22 / 0.34 keeps the same three-tier falloff
+                // but hugs it in to ~2.4x. The core tier is untouched.
                 float core = exp(-(v / 0.14) * (v / 0.14));
-                float mid  = exp(-(v / 0.30) * (v / 0.30));
-                float haze = exp(-(v / 0.62) * (v / 0.62));
+                float mid  = exp(-(v / 0.22) * (v / 0.22));
+                float haze = exp(-(v / 0.34) * (v / 0.34));
                 float b = 0.5 + _Bloom * 1.1;
 
                 float3 c = _CoreCol.rgb * core
