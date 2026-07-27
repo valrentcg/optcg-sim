@@ -10356,6 +10356,39 @@ namespace OnePieceTcg.Engine
                 {
                     int reduction = int.Parse(pwrRed.Groups[1].Value);
                     bool redBattle = pwrRed.Groups[2].Value.Equals("battle", StringComparison.OrdinalIgnoreCase) && state.Battle != null;
+                    // "Give ALL of your opponent's Characters −N power" is not a choice — it hits every
+                    // one of them at once. Falling through to the pick logic below asked the player to
+                    // "choose an opponent's Character" (so only ONE was ever reduced), and with an empty
+                    // opposing board it waited for a click that could never come: mandatory, nothing to
+                    // click, Skip disabled. EB04-051 Emet is a [Trigger], so it fires exactly when you are
+                    // taking damage — an empty opposing board is ordinary there, not exotic.
+                    if (System.Text.RegularExpressions.Regex.IsMatch(text,
+                            @"[Gg]ive all of your opponent's", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    {
+                        var redAll = Player(state, OtherSeat(effect.Seat));
+                        int redCount = 0;
+                        foreach (var vic in redAll.CharacterArea.Where(c => c != null).ToList())
+                        {
+                            if (!CardPassesFeatureFilter(text, GetCard(vic))) continue;
+                            if (redBattle)
+                            {
+                                state.Battle.BattlePowerBonus.TryGetValue(vic.InstanceId, out var exAll);
+                                state.Battle.BattlePowerBonus[vic.InstanceId] = exAll - reduction;
+                                RegisterPowerModifier(vic, sourceName, -reduction, "endOfBattle");
+                            }
+                            else
+                            {
+                                state.TemporaryPowerBonus.TryGetValue(vic.InstanceId, out var exAll);
+                                state.TemporaryPowerBonus[vic.InstanceId] = exAll - reduction;
+                                RegisterPowerModifier(vic, sourceName, -reduction, "endOfTurn");
+                            }
+                            redCount++;
+                        }
+                        Log(state, effect.Seat, redCount > 0
+                            ? $"{sourceName} gives all {redCount} of the opponent's Characters -{reduction} power this {(redBattle ? "battle" : "turn")}."
+                            : $"{sourceName}: the opponent has no Characters to weaken.");
+                        return EffectResolution.Resolved;
+                    }
                     if (effect.SelectionsRemaining <= 0)
                     {
                         var upM2 = System.Text.RegularExpressions.Regex.Match(text, @"[Uu]p to (?:a total of )?(\d+)");

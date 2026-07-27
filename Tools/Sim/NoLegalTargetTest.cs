@@ -53,6 +53,7 @@ namespace OnePieceTcg.Sim
             NamedCostCardMustActuallyBeThatCard();
             OtherThanIsNotReadAsARequirement();
             ACostOfferingAChoiceCanBePaidEitherWay();
+            GiveAllOpponentCharactersHitsEveryoneAndNeverWaits();
 
             Console.WriteLine($"notargettest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -553,6 +554,30 @@ namespace OnePieceTcg.Sim
                 $"ark={(ark != null && GameEngine.AuditCostCardMatches(Cost, ark.Id))}");
             Check("a power range's \"or\" is not mistaken for a choice",
                 !GameEngine.AuditCostCardMatches("trash 1 Character card with 9000 power or more from your hand", "ST01-005"));
+        }
+
+        // "Give ALL of your opponent's Characters −3000 power" was resolved as a single-target PICK, so
+        // only one Character was ever weakened — and with an empty opposing board it waited for a click
+        // that could never come. EB04-051 Emet is a [Trigger], which fires exactly when you are taking
+        // damage, so facing an empty board there is ordinary. Both halves are checked.
+        private static void GiveAllOpponentCharactersHitsEveryoneAndNeverWaits()
+        {
+            const string Clause = "Give all of your opponent's Characters −3000 power during this turn.";
+
+            var b = new Fixture();
+            var a1 = b.Character("north", "ST01-005");
+            var a2 = b.Character("north", "ST01-006");
+            int p1 = GameEngine.GetPower(b.St, a1), p2 = GameEngine.GetPower(b.St, a2);
+            GameEngine.QueueClauseForTest(b.St, "south", b.Hand("south", "EB04-051"), "trigger", Clause);
+            Check("\"give ALL\" weakens every opposing Character, not just one",
+                GameEngine.GetPower(b.St, a1) == p1 - 3000 && GameEngine.GetPower(b.St, a2) == p2 - 3000
+                    && b.St.PendingEffects.Count == 0,
+                $"{p1}->{GameEngine.GetPower(b.St, a1)}, {p2}->{GameEngine.GetPower(b.St, a2)}, pending={b.St.PendingEffects.Count}");
+
+            var f = new Fixture();     // opponent has nothing: must resolve, not wait
+            GameEngine.QueueClauseForTest(f.St, "south", f.Hand("south", "EB04-051"), "trigger", Clause);
+            Check("\"give ALL\" against an empty board resolves instead of freezing",
+                f.St.PendingEffects.Count == 0, $"pending={f.St.PendingEffects.Count}");
         }
 
         // ---- plumbing -------------------------------------------------------------------------

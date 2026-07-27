@@ -48,7 +48,9 @@ namespace OnePieceTcg.Sim
         /// the thing the engine actually runs during a block, and the counter path is exactly where the
         /// known freeze lived, so it is queued as itself.</summary>
         static string TimingFor(List<string> tags) =>
-            tags.Any(t => t.Equals("Counter", StringComparison.OrdinalIgnoreCase)) ? "counter" : "main";
+            tags.Any(t => t.Equals("Trigger", StringComparison.OrdinalIgnoreCase)) ? "trigger"
+            : tags.Any(t => t.Equals("Counter", StringComparison.OrdinalIgnoreCase)) ? "counter"
+            : "main";
         static readonly string[] KeywordOnly = { "Rush", "Blocker", "Double Attack", "Banish", "Unblockable" };
         static readonly Regex LeadingTags = new Regex(@"^\s*((?:\[[^\]]+\]\s*/?\s*)+)");
         static readonly Regex TagInner = new Regex(@"\[([^\]]+)\]");
@@ -81,8 +83,11 @@ namespace OnePieceTcg.Sim
                     if (clause.Length == 0) continue;
                     var tags = TagsOf(clause);
                     if (tags.Count == 0) continue;                     // passive/continuous — a different path
-                    if (tags.Any(t => t.Equals("Trigger", StringComparison.OrdinalIgnoreCase))) continue;
-                    if (!tags.Any(t => ResolverEventTags.Contains(t))) continue;
+                    bool isTrigger = tags.Any(t => t.Equals("Trigger", StringComparison.OrdinalIgnoreCase));
+                    // [Trigger] is the one path where the engine's gate genuinely REFUSES an effect it
+                    // cannot handle (the Life card diverts to hand instead), so a miss there is a true
+                    // silent no-op rather than something the resolver still catches. 485 cards carry one.
+                    if (!isTrigger && !tags.Any(t => ResolverEventTags.Contains(t))) continue;
                     string body = StripLeadingTags(clause);
                     if (IsKeywordOnly(body)) continue;
                     clausesChecked++;
@@ -272,7 +277,9 @@ namespace OnePieceTcg.Sim
             {
                 string clause = raw.Trim();
                 var tags = TagsOf(clause);
-                if (tags.Count == 0 || !tags.Any(t => ResolverEventTags.Contains(t))) continue;
+                if (tags.Count == 0) continue;
+                if (!tags.Any(t => t.Equals("Trigger", StringComparison.OrdinalIgnoreCase))
+                    && !tags.Any(t => ResolverEventTags.Contains(t))) continue;
 
                 var st = Rich(Board(def.Id, 3, 3, false, 3, 3, 3));
                 var south = st.Players["south"];
@@ -707,14 +714,21 @@ namespace OnePieceTcg.Sim
         static IEnumerable<string> ClausesOf(CardDef d)
         {
             var merged = new List<string>();
-            foreach (var line in (d.Effect ?? "").Split('\n'))
+            void Add(string block, bool asTrigger)
             {
-                var t = line.TrimStart();
-                if (t.Length == 0) continue;
-                bool cont = merged.Count > 0 && (t[0] == '•' || t[0] == '-' || t[0] == '‐');
-                if (cont) merged[merged.Count - 1] += "\n" + line.Trim();
-                else merged.Add(line);
+                foreach (var line in (block ?? "").Split('\n'))
+                {
+                    var t = line.TrimStart();
+                    if (t.Length == 0) continue;
+                    bool cont = merged.Count > 0 && (t[0] == '•' || t[0] == '-' || t[0] == '‐');
+                    if (cont) merged[merged.Count - 1] += "\n" + line.Trim();
+                    // The Trigger field holds the body WITHOUT its tag, so tag it here or it reads as
+                    // untagged passive text and is skipped.
+                    else merged.Add(asTrigger && !t.StartsWith("[Trigger]") ? "[Trigger] " + line.Trim() : line);
+                }
             }
+            Add(d.Effect, false);
+            Add(d.Trigger, true);
             return merged;
         }
 
