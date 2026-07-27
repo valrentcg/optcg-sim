@@ -8759,14 +8759,42 @@ namespace OnePieceTcg.Engine
                         var lfTop = Player(state, effect.Seat).Life;
                         return lfTop.Count > 0 && card.InstanceId == lfTop[lfTop.Count - 1].InstanceId;
                     }
-                    // "rest 1 of your CARDS" (not "Characters") — any of your own cards in play qualifies,
-                    // Leader and Stage included (OP14-020 Dracule Mihawk).
-                    if (System.Text.RegularExpressions.Regex.IsMatch(costTx, @"^rest \d+ of your cards?\b",
+                    // A "rest …" cost that names something OTHER than plain Characters: your own cards
+                    // generally (OP14-020 Mihawk), a named card ("rest 1 of your [Uta] cards" — OP06-011
+                    // Tot Musica, OP06-117 The Ark Maxim), or your Leader/Stage ("rest 1 of your
+                    // {Dressrosa} type Leader or Stage cards" — OP10-043 Moocy, OP10-044 Cub; "rest your
+                    // Leader or 1 of your Stage cards" — OP10-057 Leo). The Characters-only pattern above
+                    // matched none of them, so the card the cost demands sat there unclickable.
+                    if (System.Text.RegularExpressions.Regex.IsMatch(costTx, @"^rest\b",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                        && System.Text.RegularExpressions.Regex.IsMatch(costTx, @"\b(?:cards?|Leader|Stage)\b",
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                        return card.Owner == effect.Seat && !card.Rested
-                            && (card.Zone == "character" || card.Zone == "leader" || card.Zone == "stage");
+                    {
+                        if (card.Owner != effect.Seat || card.Rested) return false;
+                        if (card.Zone != "character" && card.Zone != "leader" && card.Zone != "stage") return false;
+                        // Honour whichever of the three zones the cost actually names; a cost that says
+                        // only "Leader or Stage" must not light Characters.
+                        bool saysLeader = ContainsAll(costTx, "Leader"), saysStage = ContainsAll(costTx, "Stage");
+                        if (saysLeader || saysStage)
+                        {
+                            if (card.Zone == "leader" && !saysLeader) return false;
+                            if (card.Zone == "stage" && !saysStage) return false;
+                            if (card.Zone == "character") return false;
+                        }
+                        var costName = System.Text.RegularExpressions.Regex.Match(costTx, @"of your \[([^\]]+)\]",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (costName.Success && !NameMatches(state, card, costName.Groups[1].Value.Trim())) return false;
+                        return CardPassesFeatureFilter(costTx, def);
+                    }
                     if (ContainsAll(costTx, "place") && ContainsAll(costTx, "from your trash"))
                         return Player(state, effect.Seat).Trash.Any(c => c.InstanceId == card.InstanceId);
+                    // "place N card(s) from your HAND at the top/bottom of your deck" — the same shape as
+                    // the from-trash cost above, but from the other zone, and it was never lit: the card
+                    // the cost demands sat in hand unclickable (EB01-030 Loguetown, OP01-011 Gordon,
+                    // OP09-060 Emptee Bluffs Island, ST17-005 Marshall.D.Teach).
+                    if (ContainsAll(costTx, "place") && ContainsAll(costTx, "from your hand"))
+                        return Player(state, effect.Seat).Hand.Any(c => c.InstanceId == card.InstanceId)
+                            && CostCardMatches(costTx, def);
                     // Shares CostPickPattern with the resolver rather than restating it. A comment here
                     // used to say the verb list MUST match the resolver's — it drifted anyway, twice.
                     // A compound cost ("rest this Leader AND return 1 of your {Dressrosa} type Characters")

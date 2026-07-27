@@ -241,6 +241,36 @@ namespace OnePieceTcg.Sim
         // lights nothing, the player can SEE the card but cannot click it.
         static string ResolverAcceptsSomeBoardCard(GameState st, PendingEffect pe)
         {
+            // CONTROL RUN. Press "Use Effect" (no target) once and record every card it changes. Those
+            // cards change for reasons that have nothing to do with what was clicked — an auto-payable
+            // cost paying itself, a self-rest, a self-trash. Without subtracting them, the source card
+            // sitting on the board counts as "accepted" for every clause that rests or trashes itself,
+            // which is what produced 137 findings that were all the same artifact.
+            var control = new Dictionary<string, string>();
+            {
+                var cst = GameClone.Clone(st);
+                foreach (var kv in cst.Players)
+                {
+                    var p0 = kv.Value;
+                    if (p0 == null) continue;
+                    var pre = new List<CardInstance>();
+                    if (p0.CharacterArea != null) pre.AddRange(p0.CharacterArea.Where(c => c != null));
+                    foreach (var l in new[] { p0.Hand, p0.Trash, p0.Life })
+                        if (l != null) pre.AddRange(l.Where(c => c != null));
+                    foreach (var c in pre) control[c.InstanceId] = CardFingerprint(cst, c.InstanceId);
+                }
+                try
+                {
+                    GameEngine.ApplyCommand(cst, new GameCommand
+                    {
+                        Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId,
+                    });
+                }
+                catch { }
+                foreach (var id in control.Keys.ToList())
+                    if (CardFingerprint(cst, id) == control[id]) control.Remove(id);   // unchanged = not noise
+            }
+
             foreach (var kv in st.Players)
             {
                 var p = kv.Value;
@@ -273,7 +303,7 @@ namespace OnePieceTcg.Sim
                     // having changed — moved zone, rested, gained a modifier or an attached DON!!, or left
                     // play entirely — is the only honest evidence that the click was accepted.
                     string after = CardFingerprint(clone, cand.InstanceId);
-                    if (after != before)
+                    if (after != before && !control.ContainsKey(cand.InstanceId))
                         return cand.CardId + " (" + (kv.Key == pe.Seat ? "own " : "opponent ") + cand.Zone
                              + ") [" + before + " -> " + after + "]";
                 }
@@ -319,10 +349,20 @@ namespace OnePieceTcg.Sim
                 RegexOptions.IgnoreCase | RegexOptions.Singleline);
             if (!costGate.Success) return true;              // not a cost step — the body wants the target
             string cost = costGate.Groups["cost"].Value;
+            // A SELF cost ("trash this Character", "rest this Leader") names no card the player picks — the
+            // source pays it and the panel's button drives the whole thing. Stripping those phrases before
+            // looking for a card noun is what separates "click one of your Characters" from "this
+            // Character". Without it, 133 perfectly good cards were reported dead purely because the word
+            // "Character" appeared inside a self-sacrifice.
+            cost = Regex.Replace(cost, @"\bthis (?:Character|card|Leader|Stage)\b", "", RegexOptions.IgnoreCase);
             return Regex.IsMatch(cost, @"\b(?:K\.O\.|trash|rest|return|place|add|reveal)\b[^:]*\b(?:Characters?|cards?)\b",
                        RegexOptions.IgnoreCase)
                 && !Regex.IsMatch(cost, @"DON!!|top of your deck|top of your Life|Life cards face-up",
-                       RegexOptions.IgnoreCase);
+                       RegexOptions.IgnoreCase)
+                // "return N cards from your trash to the bottom of your deck" is paid automatically — the
+                // engine takes the last N, the player picks nothing — so nothing glowing is correct.
+                && !(Regex.IsMatch(cost, @"from your trash", RegexOptions.IgnoreCase)
+                     && Regex.IsMatch(cost, @"to (?:the bottom of )?your deck", RegexOptions.IgnoreCase));
         }
 
         // ---- library-wide reach --------------------------------------------------------------------
@@ -346,17 +386,24 @@ namespace OnePieceTcg.Sim
                 foreach (var owner in new[] { "south", "north" })
                 {
                     var p = owner == "south" ? south : north;
-                    foreach (var zone in new[] { "character", "hand", "trash", "life" })
+                    bool isLeaderDef = string.Equals(def.Type, "leader", StringComparison.OrdinalIgnoreCase);
+                    foreach (var zone in new[] { "character", "hand", "trash", "life", "leader" })
                     {
-                        if (zone == "character" && string.Equals(def.Type, "leader", StringComparison.OrdinalIgnoreCase))
-                            continue;
+                        if (zone == "character" && isLeaderDef) continue;
+                        if (zone == "leader" && !isLeaderDef) continue;
                         var inst = new CardInstance
                         {
                             InstanceId = $"reach-{serial++}", CardId = def.Id, Owner = owner, Zone = zone,
                         };
                         var list = zone == "hand" ? p.Hand : zone == "trash" ? p.Trash : zone == "life" ? p.Life : null;
                         if (list != null) list.Add(inst);
+                        // A Leader is only ever reachable while it IS the seat's Leader — putting one in a
+                        // list reaches nothing, so the real slot is swapped for the probe and restored after.
+                        // Skipping this made every "your [Name] Leader gains …" clause look dead.
+                        var savedLeader = p.Leader;
+                        if (zone == "leader") p.Leader = inst;
                         bool ok = GameEngine.IsValidEffectTarget(st, pe, inst);
+                        if (zone == "leader") p.Leader = savedLeader;
                         if (list != null) list.RemoveAt(list.Count - 1);
                         if (ok) { found = true; break; }
                     }
