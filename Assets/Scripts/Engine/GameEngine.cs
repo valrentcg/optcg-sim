@@ -8075,7 +8075,15 @@ namespace OnePieceTcg.Engine
         /// the game actually takes.</summary>
         public static void QueueClauseForTest(GameState state, string seat, CardInstance source, string timing, string text)
         {
-            QueueAndAutoResolve(state, seat, source, timing, text, IsOptionalEffectText(text));
+            // InferTargetZone, exactly as every real queue site passes it. Without it the seam queued
+            // every clause with the DEFAULT zone (Play), so a clause reading "from your trash" or "from
+            // your hand" was audited against the board: the glow lit nothing and the sweep reported the
+            // card as unclickable when the shipping path would have routed the click correctly
+            // (OP06-086 Gecko Moria was exactly this). A seam that omits an argument the real caller
+            // supplies is testing a path the game never takes — which is the one thing this seam exists
+            // to avoid.
+            QueueAndAutoResolve(state, seat, source, timing, text, IsOptionalEffectText(text),
+                EffectScope.Instant, InferTargetZone(text));
             RetireUnresolvablePendingEffects(state);
         }
 

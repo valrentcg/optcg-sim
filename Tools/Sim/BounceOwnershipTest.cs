@@ -31,6 +31,7 @@ namespace OnePieceTcg.Sim
             BuffFiltersAreEnforced();
             OpponentOnlyTargetingOnTwoMoreHandlers();
             MiniMerryCostProbe();
+            MoriaTrashPickProbe();
             SweepEveryOpponentOnlyBounceClause();
             Console.WriteLine($"bouncetest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -280,6 +281,26 @@ namespace OnePieceTcg.Sim
                 $"active={gActive} rested={gRested} — the rest-verb restriction is leaking onto a place conjunct");
         }
 
+        // OP06-086 Gecko Moria: "[On Play] Choose up to 1 Character card with a cost of 4 or less and up
+        // to 1 Character card with a cost of 2 or less from your trash. Play 1 card and play the other
+        // card rested." The resolver has a dedicated two-pick handler; the question is whether the GLOW
+        // lights the trash cards it accepts.
+        private static void MoriaTrashPickProbe()
+        {
+            const string Moria = "Choose up to 1 Character card with a cost of 4 or less and up to 1 Character card with a cost of 2 or less from your trash. Play 1 card and play the other card rested.";
+            var b = new Board();
+            var src = b.Character("south", "OP06-086");
+            var cheap = b.Trash("south", "ST01-006");     // cost 1 — within both caps
+            var mid = b.Trash("south", "ST29-009");       // cost 4 — within the high cap only
+            GameEngine.QueueClauseForTest(b.St, "south", src, "onPlay", Moria);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("Moria's trash pick queues", false, "no pending effect"); return; }
+            Console.WriteLine($"    [probe] zone={pe.TargetZone} cheapGlows={GameEngine.IsValidEffectTarget(b.St, pe, cheap)} midGlows={GameEngine.IsValidEffectTarget(b.St, pe, mid)}");
+            Check("Moria lights the trash Characters it will accept",
+                GameEngine.IsValidEffectTarget(b.St, pe, cheap) && GameEngine.IsValidEffectTarget(b.St, pe, mid),
+                "the resolver takes them but the glow lights nothing");
+        }
+
         // Every printed opponent-only bounce, not just the one the sweep happened to name.
         private static void SweepEveryOpponentOnlyBounceClause()
         {
@@ -348,6 +369,13 @@ namespace OnePieceTcg.Sim
                     S.CostArea.Add(new DonInstance { InstanceId = $"s-bo-don-{serial++}", Rested = i >= 3 });
                     N.CostArea.Add(new DonInstance { InstanceId = $"n-bo-don-{serial++}", Rested = i >= 3 });
                 }
+            }
+
+            public CardInstance Trash(string seat, string id)
+            {
+                var c = Card(id, seat, "trash");
+                (seat == "south" ? S : N).Trash.Add(c);
+                return c;
             }
 
             public CardInstance Character(string seat, string id)
