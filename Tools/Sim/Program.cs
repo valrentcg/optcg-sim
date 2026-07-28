@@ -122,6 +122,18 @@ switch (mode)
     case "resolvesweep":
         return OnePieceTcg.Sim.ResolveShapeSweep.Run();
 
+    case "wastedremoval":
+        return OnePieceTcg.Sim.WastedRemovalEventTest.Run();
+
+    case "stallsweep":
+        return OnePieceTcg.Sim.SilentStallSweep.Run();
+
+    case "wypertest":
+        return OnePieceTcg.Sim.WyperOnPlayTest.Run();
+
+    case "handtrashtest":
+        return OnePieceTcg.Sim.HandTrashKoTest.Run();
+
     case "sealedtest":
         return OnePieceTcg.Sim.SealedTest.Run(args);
 

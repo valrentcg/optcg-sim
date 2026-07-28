@@ -5505,23 +5505,61 @@ namespace OnePieceTcg.Engine
         public static bool RemovalEventHasTarget(GameState state, string seat, CardDef eventDef)
         {
             if (eventDef == null || state == null) return true;
-            string eff = System.Text.RegularExpressions.Regex.Replace(eventDef.Effect ?? "", @"^\s*(\[[^\]]+\]\s*)+", "");
+            // Judge the [Main] clause ONLY. A [Counter] line on the same card is a different mode, and
+            // letting it count made a pointless Main play look useful: OP13-098 "Never Existed… in the
+            // First Place…" is a Stage-removal [Main] plus a +4000 [Counter], and the bot kept playing
+            // it as a Main into an empty board — spending a DON, resting a second as the cost, and
+            // binning the Counter.
+            string eff = eventDef.Effect ?? "";
+            if (HasTiming(eff, "Main")) eff = ExtractTimedClause(eff, "Main");
+            eff = System.Text.RegularExpressions.Regex.Replace(eff, @"^\s*(\[[^\]]+\]\s*)+", "");
             if (eff.IndexOf(". Then", StringComparison.OrdinalIgnoreCase) >= 0) return true;   // multi-clause rider → not pure removal
-            if (eff.IndexOf("opponent's Character", StringComparison.OrdinalIgnoreCase) < 0) return true;
+            // A cost prefix ("You may rest 1 of your DON!! cards:") and a leading condition ("If your
+            // Leader is [Imu],") sit in FRONT of the removal verb, so the anchored verb test below could
+            // never match them. Neither changes whether the removal has something to hit.
+            eff = System.Text.RegularExpressions.Regex.Replace(eff, @"^You (?:may|can) [^:]{0,80}:\s*", "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            eff = System.Text.RegularExpressions.Regex.Replace(eff, @"^If [^,]{0,80},\s*", "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase).Trim();
+
+            bool hitsChars = eff.IndexOf("opponent's Character", StringComparison.OrdinalIgnoreCase) >= 0;
+            bool hitsStages = eff.IndexOf("opponent's Stage", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!hitsChars && !hitsStages) return true;
+            // A clause naming BOTH carries a filter PER TARGET TYPE — OP03-096 Tempest Kick is "Characters
+            // with a cost of 0 OR Stages with a cost of 3 or less", and OP07-017 Dragon Breath hits both
+            // with different caps. Reading those filters as one set ANDs alternatives that were never meant
+            // to combine, which is exactly how the red Ace Leader ended up targeting nothing at all. This is
+            // a pruning heuristic, so the honest answer for a shape it cannot parse is to not judge it.
+            if (hitsChars && hitsStages) return true;
             // A following space, NOT \b — "K.O." ends in a period, so \b never matches before the space.
             if (!System.Text.RegularExpressions.Regex.IsMatch(eff, @"^(K\.O\.|Return|Rest) ",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return true;
             int powCap = ParseLimit(eff, @"(\d{1,5}) power or less");
             int costCap = ParseLimit(eff, @"cost of (\d+) or less");
+            // "with a cost of 7" (no "or less") is an EXACT filter, not a cap — OP13-098 hits only cost-7
+            // Stages, so a Stage of any other cost is not a target either.
+            int costExact = ParseLimit(eff, @"cost of (\d+)(?! or (?:less|more))");
             var opp = Player(state, OtherSeat(seat));
-            if (opp?.CharacterArea == null) return true;
-            foreach (var c in opp.CharacterArea)
+            if (opp == null) return true;
+
+            if (hitsStages && opp.Stage != null)
             {
-                if (c == null) continue;
-                if (powCap >= 0 && GetPower(state, c) > powCap) continue;
-                if (costCap >= 0 && GetCost(state, c) > costCap) continue;
-                if (RemovalBlocked(state, c, seat)) continue;   // immune (e.g. 7+ trash Five Elders)
-                return true;                                     // a legal removal target exists
+                int stCost = GetCost(state, opp.Stage);
+                bool stOk = (costCap < 0 || stCost <= costCap) && (costExact < 0 || stCost == costExact);
+                if (stOk) return true;
+            }
+            if (hitsChars)
+            {
+                if (opp.CharacterArea == null) return true;
+                foreach (var c in opp.CharacterArea)
+                {
+                    if (c == null) continue;
+                    if (powCap >= 0 && GetPower(state, c) > powCap) continue;
+                    if (costCap >= 0 && GetCost(state, c) > costCap) continue;
+                    if (costExact >= 0 && GetCost(state, c) != costExact) continue;
+                    if (RemovalBlocked(state, c, seat)) continue;   // immune (e.g. 7+ trash Five Elders)
+                    return true;                                     // a legal removal target exists
+                }
             }
             return false;   // pure removal event with no legal target — a wasted play
         }
@@ -17235,6 +17273,17 @@ namespace OnePieceTcg.Engine
                     && !ContainsAll(text, "Choose one")
                     && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle"))
                     && (ContainsAll(text, "Leader") || ContainsAll(text, "Character")))
+                // "<verb> ALL …" — a SWEEP names no target, so there is nothing for the player to pick and
+                // it has to run on its own. Every entry around it is an "up to N" pick; the sweep shape was
+                // simply never listed. OP15-114 Wyper is the card that showed it: ". Then, K.O. all of your
+                // opponent's Characters with 0 power or less" queued and then sat there, so you paid a Life
+                // card, the whole board took −2000, and the wipe it was setting up never happened. The
+                // resolver handles these clauses correctly — only the auto-resolve gate did not know them.
+                // Generalised past K.O. because `stallsweep` found the identical stall on Rest/Set/Place/Give
+                // sweeps (OP06-041 The Ark Noah, OP13-028 Shanks, OP16-030 Law, OP05-058, OP09-004 Shanks).
+                || System.Text.RegularExpressions.Regex.IsMatch(text,
+                       @"\b(?:K\.O\.|Rest|Set|Place|Return|Trash|Give|Add) all\b",
+                       System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 || ContainsAll(text, "K.O. up to 1", "Blocker", "cost of 3 or less")
                 || ContainsAll(text, "Set up to 2", "DON!! cards as active")
                 || ContainsAll(text, "set up to 1", "DON!!", "as active")
@@ -17253,7 +17302,12 @@ namespace OnePieceTcg.Engine
                 || (ContainsAll(text, "Return") && ContainsAll(text, "to your hand") && ContainsAll(text, "your ") && !(ContainsAll(text, "Play") && ContainsAll(text, "from your hand")))
                 // Session 4 additions
                 || ContainsAll(text, "Choose one")
-                || (ContainsAll(text, "Look at") && ContainsAll(text, "from the top of your deck") && ContainsAll(text, "to your hand"))
+                // A deck-look opens the scry overlay; the decision happens INSIDE that overlay, so there is
+                // nothing for the pending panel to ask first. This used to require the payoff be "to your
+                // hand", which stalled every look whose payoff is to PLAY the card instead (10 cards:
+                // EB01-009, EB02-056, OP01-116, OP03-083, OP04-084, OP06-003, OP08-007, OP08-100, OP14-010,
+                // ST17-003) — same silent stall as the sweeps above, found by `stallsweep`.
+                || (ContainsAll(text, "Look at") && ContainsAll(text, "from the top of your deck"))
                 || ((ContainsAll(text, "Place the top") || ContainsAll(text, "place the top")) && ContainsAll(text, "of your deck") && ContainsAll(text, "Life"))
                 || ((ContainsAll(text, "Add") || ContainsAll(text, "add")) && ContainsAll(text, "from the top of your deck") && ContainsAll(text, "top of your Life"))   // OP05-098 Enel recovery
                 || (ContainsAll(text, "trash the top") && ContainsAll(text, "card") && ContainsAll(text, "of your deck"))
