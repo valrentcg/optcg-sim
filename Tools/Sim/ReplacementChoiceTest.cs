@@ -36,6 +36,7 @@ namespace OnePieceTcg.Sim
             OptedInThePlayerIsAskedAndCanDecline();
             OptedInThePlayerCanAcceptAndKeepTheCard();
             AnUnansweredQuestionStillKillsTheCard();
+            DecliningReplaysTheSAMERemovalKind();
             Console.WriteLine($"replacementchoice: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -132,6 +133,28 @@ namespace OnePieceTcg.Sim
             Check("an unanswered question still kills the card — a delay, not an escape",
                 !b.N.CharacterArea.Any(c => c != null && c.InstanceId == victim.InstanceId),
                 "the Character survived without anyone paying for it");
+        }
+
+        // Skip must carry out the removal that was POSTPONED, not a generic K.O. A trash that is not a
+        // K.O. (rule 10-2-1-3) must stay a non-K.O. trash, or declining a protection would fire every
+        // [On K.O.] on the board that a plain trash never triggers. This is why the deferred record
+        // carries a KIND rather than a bool.
+        private static void DecliningReplaysTheSAMERemovalKind()
+        {
+            var b = Fixture(optIn: true);
+            var victim = b.N.CharacterArea.First(c => c != null && c.CardId == "ST29-009");
+            b.KoViaEffect(victim);
+            var q = b.St.PendingEffects.FirstOrDefault(e => e.Timing == "removalChoice");
+            if (q == null) { Check("declining replays the same removal kind", false, "no question"); return; }
+            var rec = b.St.DeferredRemovals.FirstOrDefault(d => d.EffectId == q.EffectId);
+            Check("the postponement records the removal KIND it must replay",
+                rec != null && rec.Kind == DeferredRemovalKind.Ko,
+                $"kind={rec?.Kind.ToString() ?? "<none>"}");
+
+            while (b.St.PendingEffects.FirstOrDefault(e => e.Timing == "removalChoice") is PendingEffect open)
+                b.Apply(new GameCommand { Type = "passEffect", Seat = open.Seat, EffectId = open.EffectId });
+            Check("…and nothing is left postponed once every question is answered",
+                b.St.DeferredRemovals.Count == 0, $"{b.St.DeferredRemovals.Count} still pending");
         }
 
         // ---- plumbing ---------------------------------------------------------------------------

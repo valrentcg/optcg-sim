@@ -56,20 +56,30 @@ namespace OnePieceTcg.Engine
         public bool Rested;
     }
 
-    /// <summary>One player's board and resources.</summary>
+    /// <summary>How the postponed removal must be carried out if the player declines. Only kinds that a
+    /// deferred record can replay FAITHFULLY appear here; a call site whose removal is a Life-place or a
+    /// deck-place carries card-specific detail (face-up or face-down, top or bottom) that this record
+    /// does not hold, so those keep applying protections immediately.</summary>
+    public enum DeferredRemovalKind
+    {
+        Ko,          // MoveToTrash as a K.O. — [On K.O.] fires, "when K.O.'d" reactions run
+        TrashNonKo,  // MoveToTrash WITHOUT the K.O. flag (rule 10-2-1-3: trashed ≠ K.O.'d)
+    }
+
     /// <summary>A removal postponed while its owner answers a "you may … instead" protection.
-    /// Everything MoveToTrash needs to carry it out later is recorded, so answering Skip performs
-    /// exactly the removal that would have happened had the protection never existed.</summary>
+    /// Everything the replay needs is recorded, so answering Skip performs exactly the removal that
+    /// would have happened had the protection never existed.</summary>
     public sealed class DeferredRemoval
     {
         public string EffectId;          // the decision offered to the victim's controller
         public string VictimSeat;
         public string VictimInstanceId;
         public string GuardInstanceId;   // the card offering the protection
-        public bool IsKo;
+        public DeferredRemovalKind Kind;
         public bool ByBattleKo;
     }
 
+    /// <summary>One player's board and resources.</summary>
     public sealed class PlayerState
     {
         public string Seat;
