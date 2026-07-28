@@ -9234,12 +9234,28 @@ namespace OnePieceTcg.Engine
             // NOT the target's ownership — so it only makes the TARGET owner-agnostic when the text
             // doesn't otherwise specify a side. "Place up to 1 of your OPPONENT's Characters … at the
             // bottom of the owner's deck" (EB02-027 Vista) must glow OPPONENT Characters only, not your own.
+            // Read the ownership words from the TARGET DESCRIPTION — everything up to the destination —
+            // not from the whole clause. A trailing rider mentions zones of its own, and "…to the owner's
+            // hand, AND YOU MAY TRASH 2 CARDS FROM THE TOP OF YOUR DECK" (OP11-056 Brook) contains
+            // "of your ", which switched an unqualified bounce off owner-agnostic and left it lighting
+            // nothing at all. The rider is a separate step and has no say in whose Characters this one
+            // may take. (". Then," riders are already cut above; ", and …" riders are not.)
+            string ownDesc = text;
+            {
+                int destAt = -1;
+                foreach (var dest in new[] { "to the owner's", "at the bottom of the owner's", "at the top of the owner's" })
+                {
+                    int at = ownDesc.IndexOf(dest, StringComparison.OrdinalIgnoreCase);
+                    if (at > 0 && (destAt < 0 || at < destAt)) destAt = at;
+                }
+                if (destAt > 0) ownDesc = ownDesc.Substring(0, destAt);
+            }
             bool ownerAgnostic = ((ContainsAll(text, "owner's hand") || ContainsAll(text, "owner's deck")
                     || ContainsAll(text, "owner's Life"))
-                    && !ContainsAll(text, "your opponent's") && !ContainsAll(text, "of your "))
+                    && !ContainsAll(ownDesc, "your opponent's") && !ContainsAll(ownDesc, "of your "))
                 || (System.Text.RegularExpressions.Regex.IsMatch(text, @"K\.O\. up to \d+ (rested )?Characters?\b",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase)
-                    && !ContainsAll(text, "your opponent's") && !ContainsAll(text, "of your "));
+                    && !ContainsAll(ownDesc, "your opponent's") && !ContainsAll(ownDesc, "of your "));
 
             // Dual-zone plays ("from your hand or trash"): a card in EITHER of the owner's
             // hand or trash is a candidate; the generic filters below still apply.
@@ -10686,7 +10702,22 @@ namespace OnePieceTcg.Engine
                     Log(state, effect.Seat, $"Choose a Character{(bounceCap >= 0 ? $" (cost ≤ {bounceCap})" : "")}{(bpBounceM.Success ? $" ({bpBounceM.Groups[1].Value} base power{(bpBounceM.Groups[2].Success ? " or " + bpBounceM.Groups[2].Value : "")})" : "")} to return to its owner's hand ({sourceName}).");
                     return EffectResolution.WaitingForTarget;
                 }
+                // WHOSE Characters the clause names was never enforced, on either side. So "Return up to 1
+                // of your opponent's Characters …" accepted a click on one of YOUR OWN and bounced it to
+                // your hand — reachable by a misclick, since OnCardClick dispatches for any rendered card
+                // and leaves the engine to validate. The glow already refused it; only the resolver did
+                // not. Read from the TARGET DESCRIPTION (up to "to the owner's hand") so a ". Then, …"
+                // rider naming the other side cannot flip the ownership of this pick.
+                int bDescEnd = text.IndexOf("to the owner's hand", StringComparison.OrdinalIgnoreCase);
+                string bDesc = bDescEnd > 0 ? text.Substring(0, bDescEnd) : text;
+                bool bOppOnly = bDesc.IndexOf("opponent's Character", StringComparison.OrdinalIgnoreCase) >= 0;
+                // An unqualified "Return up to 1 Character with a cost of N or less" may hit EITHER side
+                // (OP04-044 Kaido), so only a clause that actually says "your … Character" is own-only.
+                bool bOwnOnly = !bOppOnly && System.Text.RegularExpressions.Regex.IsMatch(bDesc,
+                    @"\byour (?:[^.]*? )?Characters?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (GetCard(bTarget).Type != "character"
+                    || (bOppOnly && bSeat == effect.Seat)
+                    || (bOwnOnly && bSeat != effect.Seat)
                     || (bounceCap >= 0 && GetCost(state, bTarget) > bounceCap)
                     || bpBounceFail(bTarget)
                     || (ContainsAll(text, "active Character") && bTarget.Rested)
