@@ -57,12 +57,24 @@ namespace OnePieceTcg.Sim
                         if (b.St.PendingEffects.Count == 0) continue;   // retired/handled — not a stall
 
                         var pe = b.St.PendingEffects[0];
+                        // If the glow lights ANY card, the clause is waiting for a pick it genuinely
+                        // wants, and it is right to wait. Resolving such a clause with a null target is
+                        // the player DECLINING an "up to N" — a legitimate outcome, not proof the step
+                        // never needed a click. Counting it as a stall accused nine cards that behave
+                        // correctly: Sabo adding from hand, Moria selecting from trash, Bao Huang picking
+                        // blind from the opponent's hand, Bepo choosing between itself and a DON!!,
+                        // Caesar and Oden searching a deck, and the three DON!!-give recipients.
+                        if (AnythingGlows(b.St, pe)) continue;
                         b.Apply(new GameCommand
                         { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = null });
 
                         // Resolved by a null target AND it visibly did something ⇒ it never needed the
                         // click, so leaving it pending is the Wyper failure.
                         if (b.St.PendingEffects.Count != 0) continue;   // genuinely wanted a pick
+                        // Opening a choice or a deck/trash overlay IS the next step, not a stall — the
+                        // decision simply lives in that surface instead of on the board (OP14-104 Moria
+                        // offers "play it, or add it to the top of your Life").
+                        if (b.St.ActiveChoice != null || b.St.DeckLook != null) continue;
                         // "acknowledged for manual resolution" is the NOT-AUTOMATED fallback: the engine
                         // gives up on the clause and clears it. That is a different problem (an
                         // unimplemented effect), not a clause that works but is never fired, so it must
@@ -72,6 +84,12 @@ namespace OnePieceTcg.Sim
                                             && m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) < 0)
                                    .ToList();
                         if (did.Count == 0) continue;                   // resolved to a no-op — not a payoff
+                        // "no eligible card in hand", "nothing to …" — the clause found nothing to act on
+                        // because THIS BOARD had nothing matching its filter, which says the fixture is
+                        // narrow, not that the clause stalls (OP09-104 Sabo wants a {Revolutionary Army}
+                        // card in hand and the probe hand has none).
+                        if (did.All(m => Regex.IsMatch(m, @"\bno eligible\b|\bnothing to\b|\bno valid\b", RegexOptions.IgnoreCase)))
+                            continue;
                         findings.Add((def.Id, def.Name, Trim(clause, 96), Trim(did[did.Count - 1], 76)));
                     }
                     catch (Exception) { threw++; }
@@ -88,6 +106,24 @@ namespace OnePieceTcg.Sim
             // Reporting tool, not a gate: it prints what it finds and always exits 0 so it can be run
             // against a dirty tree while the findings are being triaged.
             return 0;
+        }
+
+        /// <summary>Does the engine light anything at all for this step? Uses IsValidEffectTarget, the
+        /// same predicate that decides the glow, across every zone a click can come from.</summary>
+        private static bool AnythingGlows(GameState st, PendingEffect pe)
+        {
+            foreach (var p in st.Players.Values)
+            {
+                if (p == null) continue;
+                if (p.Leader != null && GameEngine.IsValidEffectTarget(st, pe, p.Leader)) return true;
+                if (p.Stage != null && GameEngine.IsValidEffectTarget(st, pe, p.Stage)) return true;
+                foreach (var c in p.CharacterArea)
+                    if (c != null && GameEngine.IsValidEffectTarget(st, pe, c)) return true;
+                foreach (var list in new[] { p.Hand, p.Trash, p.Life })
+                    foreach (var c in list)
+                        if (c != null && GameEngine.IsValidEffectTarget(st, pe, c)) return true;
+            }
+            return false;
         }
 
         // One clause per line, then split again at a sentence-level ". Then," / ". After that," — the
@@ -110,6 +146,15 @@ namespace OnePieceTcg.Sim
                     // "(This card can attack on the turn in which it is played.)" and friends are keyword
                     // REMINDER text, not clauses — they are never queued in a real game.
                     if (c.StartsWith("(")) continue;
+                    // Reactive and continuous text is dispatched by its own scanner, never handed to the
+                    // pending panel: "When a Character is removed …" (OP08-046 Shakuyaku, OP02-085
+                    // Magellan, OP06-044 Gion), "This effect can be activated when …" (OP12-081 Koala),
+                    // "All of your Characters … cannot be K.O.'d" (OP10-070 Trebol), "The cost of playing
+                    // … is reduced" (OP05-097 Mary Geoise). Some of it rides on a tagged line, which is
+                    // how it survived the tag filter — but a clause that is never queued cannot be
+                    // "waiting for a click".
+                    if (Regex.IsMatch(c, @"^(?:When\b|This effect can be activated\b|All of your\b|The cost of\b|Under the rules of this game\b)",
+                            RegexOptions.IgnoreCase)) continue;
                     if (c.Length >= 12) yield return c;
                 }
             }

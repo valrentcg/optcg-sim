@@ -17492,6 +17492,14 @@ namespace OnePieceTcg.Engine
                     && !ContainsAll(text, "Choose one")
                     && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle"))
                     && (ContainsAll(text, "Leader") || ContainsAll(text, "Character")))
+                // A DECK SEARCH — "Play up to 1 green {Land of Wano} type Character card with a cost of 3
+                // FROM YOUR DECK" (OP02-030 Oden), "Play up to 1 [Smiley] from your deck, then shuffle"
+                // (OP01-069 Caesar) — opens the search overlay, and the pick happens INSIDE that overlay.
+                // The deck is not a clickable zone on the board, so waiting here means waiting for a click
+                // that has nowhere to land. Same reasoning as the deck-LOOK rule below.
+                || (ContainsAll(text, "from your deck")
+                    && System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*(?:Play|Add|Reveal|Search)\b",
+                           System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 // "you cannot <do something> during this turn" — a RESTRICTION the effect places on its own
                 // controller (EB03-024 Vivi, OP06-026 Koushirou, OP13-028 Shanks). It records a modifier;
                 // there has never been anything to click, and it sat waiting to be clicked.

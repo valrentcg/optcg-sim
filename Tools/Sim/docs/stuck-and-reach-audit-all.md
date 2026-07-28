@@ -1,7 +1,7 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-28 15:49
-- Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **375**
+- Generated: 2026-07-28 16:02
+- Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **374**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
 
@@ -179,14 +179,6 @@ _none_
 | OP01-048 | Nekomamushi | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 3 or less. |
 | OP01-058 | Punk Gibson | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters. |
 | OP01-058 | Punk Gibson | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters. |
-| OP01-069 | Caesar Clown | full-board | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
-| OP01-069 | Caesar Clown | full-board | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
-| OP01-069 | Caesar Clown | full-board | ST01-006 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
-| OP01-069 | Caesar Clown | full-board | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
-| OP01-069 | Caesar Clown | in-battle | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
-| OP01-069 | Caesar Clown | in-battle | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
-| OP01-069 | Caesar Clown | in-battle | ST01-006 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
-| OP01-069 | Caesar Clown | in-battle | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Smiley] from your deck, then shuffle your deck. |
 | OP01-093 | Ulti | full-board | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | ① (You may rest the specified number of DON!! cards in your cost area.): Add up to 1 DON!! card from your DON!! deck and rest it. |
 | OP01-093 | Ulti | full-board | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | ① (You may rest the specified number of DON!! cards in your cost area.): Add up to 1 DON!! card from your DON!! deck and rest it. |
 | OP01-093 | Ulti | full-board | ST01-006 (own character) LIGHTS UP but the resolver does nothing with it | ① (You may rest the specified number of DON!! cards in your cost area.): Add up to 1 DON!! card from your DON!! deck and rest it. |
@@ -255,6 +247,14 @@ _none_
 | OP02-016 | Magura | in-battle | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your red Characters with a cost of 1 gains +3000 power during this turn. |
 | OP02-030 | Kouzuki Oden | full-board | OP02-030 (own character) LIGHTS UP but the resolver does nothing with it | ③ (You may rest the specified number of DON!! cards in your cost area.): Set this Character as active. |
 | OP02-030 | Kouzuki Oden | in-battle | OP02-030 (own character) LIGHTS UP but the resolver does nothing with it | ③ (You may rest the specified number of DON!! cards in your cost area.): Set this Character as active. |
+| OP02-030 | Kouzuki Oden | full-board | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
+| OP02-030 | Kouzuki Oden | full-board | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
+| OP02-030 | Kouzuki Oden | full-board | ST01-006 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
+| OP02-030 | Kouzuki Oden | full-board | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
+| OP02-030 | Kouzuki Oden | in-battle | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
+| OP02-030 | Kouzuki Oden | in-battle | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
+| OP02-030 | Kouzuki Oden | in-battle | ST01-006 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
+| OP02-030 | Kouzuki Oden | in-battle | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 green {Land of Wano} type Character card with a cost of 3 from your deck. Then, shuffle your deck. |
 | OP02-032 | Shishilian | full-board | OP02-032 (own character) LIGHTS UP but the resolver does nothing with it | ② (You may rest the specified number of DON!! cards in your cost area.): Set up to 1 of your {Minks} type Characters with a cost of 5 or less as active. |
 | OP02-032 | Shishilian | in-battle | OP02-032 (own character) LIGHTS UP but the resolver does nothing with it | ② (You may rest the specified number of DON!! cards in your cost area.): Set up to 1 of your {Minks} type Characters with a cost of 5 or less as active. |
 | OP02-034 | Tony Tony.Chopper | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 2 or less. |
