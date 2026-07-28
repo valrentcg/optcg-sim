@@ -9021,7 +9021,16 @@ namespace OnePieceTcg.Engine
                         // elsewhere — "rest this Stage AND add 1 card from the top or bottom of your Life
                         // cards" (ST07-017 Queen Mama Chanter). Claiming it here would shadow the Life
                         // branch below and light nothing.
-                        && !ContainsAll(costTx, "of your Life"))
+                        && !ContainsAll(costTx, "of your Life")
+                        // Same point, generalised: a cost beginning "rest THIS card/Character/Leader/Stage"
+                        // pays that half with no click at all, and the clickable half is the OTHER conjunct,
+                        // which has its own verb — "rest this card AND PLACE 1 of your Characters with 1000
+                        // base power at the bottom of your deck" (EB01-011 Mini-Merry). Claiming the whole
+                        // cost here applied this branch's "must be active" rule to a PLACE target, so a
+                        // rested Character the cost accepts perfectly well never lit up.
+                        && !System.Text.RegularExpressions.Regex.IsMatch(costTx,
+                                @"^rest this (?:card|Character|Leader|Stage)\b.*\band\s+(?:K\.O\.|trash|return|place|add)\b",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                     {
                         if (card.Owner != effect.Seat || card.Rested) return false;
                         if (card.Zone != "character" && card.Zone != "leader" && card.Zone != "stage") return false;

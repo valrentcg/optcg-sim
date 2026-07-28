@@ -1,7 +1,7 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-28 14:56
-- Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **300**
+- Generated: 2026-07-28 15:05
+- Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **301**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
 
@@ -15,15 +15,10 @@ _none_
 
 _none_
 
-## GLOW-MISMATCH — 1872
+## GLOW-MISMATCH — 1865
 
 | Card | Name | Board | Detail | Clause |
 |---|---|---|---|---|
-| EB01-011 | Mini-Merry | full-board | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | You may rest this card and place 1 of your Characters with 1000 base power at the bottom of your deck: Draw 1 card. |
-| EB01-011 | Mini-Merry | full-board | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | You may rest this card and place 1 of your Characters with 1000 base power at the bottom of your deck: Draw 1 card. |
-| EB01-011 | Mini-Merry | full-board | ST02-004 (own character) is accepted by the resolver but never lights up | You may rest this card and place 1 of your Characters with 1000 base power at the bottom of your deck: Draw 1 card. |
-| EB01-011 | Mini-Merry | in-battle | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | You may rest this card and place 1 of your Characters with 1000 base power at the bottom of your deck: Draw 1 card. |
-| EB01-011 | Mini-Merry | in-battle | ST02-004 (own character) is accepted by the resolver but never lights up | You may rest this card and place 1 of your Characters with 1000 base power at the bottom of your deck: Draw 1 card. |
 | EB01-015 | Scratchmen Apoo | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 2 or less. |
 | EB01-015 | Scratchmen Apoo | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 2 or less. |
 | EB01-035 | Ms. Monday | full-board | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | DON!! −1 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Play this card. |
@@ -1351,8 +1346,6 @@ _none_
 | OP15-032 | Brook | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's cards. |
 | OP15-038 | It's an Order! Do Not Defy Me!!! | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's rested Characters with a cost of 8 or less that has 2 or more DON!! cards given will not become active in your opponent's next Refresh Phase. |
 | OP15-038 | It's an Order! Do Not Defy Me!!! | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's rested Characters with a cost of 8 or less that has 2 or more DON!! cards given will not become active in your opponent's next Refresh Phase. |
-| OP15-039 | Rebecca | full-board | OP15-039 (own leader) LIGHTS UP but the resolver does nothing with it | You may rest this Leader and return 1 of your {Dressrosa} type Characters to the owner's hand: Play up to 1 {Dressrosa} type Character card with a cost of 3 from your hand. |
-| OP15-039 | Rebecca | in-battle | OP15-039 (own leader) LIGHTS UP but the resolver does nothing with it | You may rest this Leader and return 1 of your {Dressrosa} type Characters to the owner's hand: Play up to 1 {Dressrosa} type Character card with a cost of 3 from your hand. |
 | OP15-047 | Sanji | full-board | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your Characters gains [Unblockable] during this turn. |
 | OP15-047 | Sanji | full-board | ST01-006 (own character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your Characters gains [Unblockable] during this turn. |
 | OP15-047 | Sanji | full-board | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your Characters gains [Unblockable] during this turn. |
@@ -1643,12 +1636,12 @@ _none_
 | ST02-017 | Straw Sword | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters. |
 | ST02-017 | Straw Sword | full-board | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
 | ST02-017 | Straw Sword | full-board | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
-| ST02-017 | Straw Sword | full-board | ST02-017 (own hand) is accepted by the resolver but never lights up | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
 | ST02-017 | Straw Sword | full-board | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
+| ST02-017 | Straw Sword | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
 | ST02-017 | Straw Sword | in-battle | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
 | ST02-017 | Straw Sword | in-battle | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
-| ST02-017 | Straw Sword | in-battle | ST02-017 (own hand) is accepted by the resolver but never lights up | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
 | ST02-017 | Straw Sword | in-battle | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
+| ST02-017 | Straw Sword | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Play up to 1 {Supernovas} type card with a cost of 2 or less from your hand. |
 | ST03-001 | Crocodile | full-board | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −4 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Return up to 1 Character with a cost of 5 or less to the owner's hand. |
 | ST03-001 | Crocodile | full-board | ST01-006 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −4 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Return up to 1 Character with a cost of 5 or less to the owner's hand. |
 | ST03-001 | Crocodile | full-board | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −4 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Return up to 1 Character with a cost of 5 or less to the owner's hand. |

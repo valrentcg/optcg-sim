@@ -30,6 +30,7 @@ namespace OnePieceTcg.Sim
             TypeFilteredBounceIsEnforced();
             BuffFiltersAreEnforced();
             OpponentOnlyTargetingOnTwoMoreHandlers();
+            MiniMerryCostProbe();
             SweepEveryOpponentOnlyBounceClause();
             Console.WriteLine($"bouncetest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -255,6 +256,28 @@ namespace OnePieceTcg.Sim
                         && b.S.Life.Count == myLifeBefore && b.N.Life.Count == oppLifeBefore,
                     $"myLife {myLifeBefore}->{b.S.Life.Count}, oppLife {oppLifeBefore}->{b.N.Life.Count}");
             }
+        }
+
+        // EB01-011 Mini-Merry: "You may rest this card and place 1 of your Characters with 1000 base
+        // power at the bottom of your deck: Draw 1 card." Both probe Characters are exactly 1000 base
+        // power; the only difference between them is rested state, which a PLACE cost does not care about.
+        private static void MiniMerryCostProbe()
+        {
+            var b = new Board();
+            var stage = new CardInstance { InstanceId = "s-stage-mm", CardId = "EB01-011", Owner = "south", Zone = "stage" };
+            b.S.Stage = stage;
+            var active = b.Character("south", "ST01-006");            // 1000 base power, active
+            var rested = b.Character("south", "ST02-004");            // 1000 base power, rested
+            rested.Rested = true;
+            GameEngine.QueueClauseForTest(b.St, "south", stage, "activateMain",
+                "You may rest this card and place 1 of your Characters with 1000 base power at the bottom of your deck: Draw 1 card.");
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("Mini-Merry cost queues", false, "no pending effect"); return; }
+            bool gActive = GameEngine.IsValidEffectTarget(b.St, pe, active);
+            bool gRested = GameEngine.IsValidEffectTarget(b.St, pe, rested);
+            Console.WriteLine($"    [probe] active1000={gActive} rested1000={gRested}");
+            Check("a PLACE cost does not care whether the Character is rested", gActive == gRested,
+                $"active={gActive} rested={gRested} — the rest-verb restriction is leaking onto a place conjunct");
         }
 
         // Every printed opponent-only bounce, not just the one the sweep happened to name.

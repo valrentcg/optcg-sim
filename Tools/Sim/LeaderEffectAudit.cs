@@ -109,8 +109,12 @@ namespace OnePieceTcg.Sim
                         }
                         else if (string.Equals(d.Type, "event", StringComparison.OrdinalIgnoreCase))
                         {
-                            src = Inst(d.Id, "south", "hand");
-                            south.Hand.Add(src);
+                            // A [Trigger] fires while the card is in the LIFE area being revealed — it is
+                            // never in hand at that moment. Putting it in hand let a clause like ST02-017
+                            // Straw Sword's "play up to 1 {Supernovas} card with a cost of 2 or less from
+                            // your hand" match ITSELF, a position that cannot occur in a real game.
+                            src = Inst(d.Id, "south", isTrigger ? "trash" : "hand");
+                            if (isTrigger) south.Trash.Add(src); else south.Hand.Add(src);
                         }
                         else
                         {
@@ -162,7 +166,8 @@ namespace OnePieceTcg.Sim
                         south = st.Players["south"];
                         if (string.Equals(d.Type, "leader", StringComparison.OrdinalIgnoreCase)) src = south.Leader;
                         else if (string.Equals(d.Type, "stage", StringComparison.OrdinalIgnoreCase)) { src = Inst(d.Id, "south", "stage"); south.Stage = src; }
-                        else if (string.Equals(d.Type, "event", StringComparison.OrdinalIgnoreCase)) { src = Inst(d.Id, "south", "hand"); south.Hand.Add(src); }
+                        else if (string.Equals(d.Type, "event", StringComparison.OrdinalIgnoreCase))
+                        { src = Inst(d.Id, "south", isTrigger ? "trash" : "hand"); if (isTrigger) south.Trash.Add(src); else south.Hand.Add(src); }
                         else
                         {
                             src = Inst(d.Id, "south", "character");
