@@ -39,6 +39,10 @@ static class EffectCoverage
         public string Snapshot;       // normalized outcome for golden-regression comparison
     }
 
+    /// <summary>Card id to dump in detail when its scenario trips an invariant. Set by
+    /// `coverage &lt;cardId&gt;`; null during a normal sweep, which stays byte-identical.</summary>
+    public static string TraceId;
+
     public static int Run()
     {
         var results = new List<Result>();
@@ -231,7 +235,31 @@ static class EffectCoverage
             }
             var inv = Invariants.Structural(st);
             inv.AddRange(Invariants.Conservation(st));
-            if (inv.Count > 0) { r.Verdict = Verdict.Invariant; r.Detail = string.Join("; ", inv); return r; }
+            if (inv.Count > 0)
+            {
+                // One summary line is not enough to see WHICH step put an instance in two zones, so a
+                // named card dumps where every copy of it actually sits, plus the log that got it there.
+                if (string.Equals(TraceId, def.Id, StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine($"\n=== TRACE {def.Id} / {timing} ===");
+                    foreach (var kv in st.Players)
+                    {
+                        var pp = kv.Value; if (pp == null) continue;
+                        void Show(string zone, IEnumerable<CardInstance> list)
+                        {
+                            foreach (var c in list.Where(x => x != null && x.CardId == def.Id))
+                                Console.WriteLine($"   {kv.Key,-5} list={zone,-9} Zone='{c.Zone}' id={c.InstanceId}");
+                        }
+                        Show("character", pp.CharacterArea); Show("hand", pp.Hand);
+                        Show("trash", pp.Trash); Show("life", pp.Life); Show("deck", pp.Deck);
+                        if (pp.Stage != null && pp.Stage.CardId == def.Id)
+                            Console.WriteLine($"   {kv.Key,-5} list=stage     Zone='{pp.Stage.Zone}' id={pp.Stage.InstanceId}");
+                    }
+                    foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 14)))
+                        Console.WriteLine("   log| " + l.Message);
+                }
+                r.Verdict = Verdict.Invariant; r.Detail = string.Join("; ", inv); return r;
+            }
             if (st.PendingEffects.Any(e => e.Seat == actor) || (st.DeckLook != null && st.DeckLook.Seat == actor) || (st.ActiveChoice != null && st.ActiveChoice.Seat == actor))
             {
                 r.Verdict = Verdict.Stuck;

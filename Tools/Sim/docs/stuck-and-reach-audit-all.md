@@ -1,6 +1,6 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-28 15:05
+- Generated: 2026-07-28 15:37
 - Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **301**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.

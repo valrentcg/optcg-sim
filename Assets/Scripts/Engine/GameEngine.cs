@@ -5078,13 +5078,13 @@ namespace OnePieceTcg.Engine
         {
             var p = Player(state, defenderSeat);
             var cardFromLife = state.Battle?.RevealedLife;
-            if (cardFromLife != null)
-            {
-                cardFromLife.Zone = "trash";
-                cardFromLife.FaceUp = false;
-                if (!p.Trash.Any(c => c.InstanceId == cardFromLife.InstanceId))
-                    p.Trash.Add(cardFromLife);
-            }
+            // This guarded its Trash.Add against a duplicate IN THE TRASH, but set Zone unconditionally
+            // and never looked at the FIELD. A trigger whose own clause plays the card out of the trash
+            // it was just put in — OP14-082 Oinkchuck plays ITSELF — therefore came back here, had its
+            // Zone stamped 'trash' while it stood on the board, and was re-added to a trash it was no
+            // longer in. One instance, two zones. That is every one of the 11 INVARIANT violations the
+            // coverage sweep reports, all of them [Trigger] cards whose text moves a card.
+            TrashUsedTriggerCard(state, defenderSeat, cardFromLife);
             if (state.Battle != null && state.Battle.PendingLifeDamage > 0)
             {
                 state.Battle.PendingLifeDamage--;
@@ -17363,8 +17363,7 @@ namespace OnePieceTcg.Engine
                     FinalizesActivatedTrigger = true,
                 };
                 state.PendingEffects.Add(pending);
-                cardFromLife.Zone = "trash";
-                Player(state, defenderSeat).Trash.Add(cardFromLife);
+                TrashUsedTriggerCard(state, defenderSeat, cardFromLife);
                 Log(state, defenderSeat, $"{NameId(def)} Trigger activates its {wantTiming} effect.");
                 // Auto-open no-decision effects (deck-looks, searches, mandatory bodies) instead of
                 // leaving the effect WaitingForTarget with a board TargetZone — that lit EVERY unit as a
@@ -17394,8 +17393,7 @@ namespace OnePieceTcg.Engine
                     FinalizesActivatedTrigger = true,
                 };
                 state.PendingEffects.Add(pending);
-                cardFromLife.Zone = "trash";
-                Player(state, defenderSeat).Trash.Add(cardFromLife);
+                TrashUsedTriggerCard(state, defenderSeat, cardFromLife);
                 Log(state, defenderSeat, $"{NameId(def)} Trigger: play up to 1 Supernovas card (cost ≤ 2) from hand.");
                 return true;
             }
@@ -17424,8 +17422,7 @@ namespace OnePieceTcg.Engine
                 // Activating [Trigger] trashes the Life card after resolution regardless of card
                 // type, unless the effect itself moves it elsewhere (the "Play this card" cases
                 // are handled above). The old Character/Stage path incorrectly added it to hand.
-                cardFromLife.Zone = "trash";
-                Player(state, defenderSeat).Trash.Add(cardFromLife);
+                TrashUsedTriggerCard(state, defenderSeat, cardFromLife);
                 return true;
             }
 
@@ -17807,6 +17804,29 @@ namespace OnePieceTcg.Engine
             while (end < text.Length && char.IsDigit(text[end])) end++;
             if (end == idx || !int.TryParse(text.Substring(idx, end - idx), out int v)) return -1;
             return v;
+        }
+
+        /// <summary>Send a USED [Trigger] card to the trash — unless its own clause has already moved it.
+        /// Several triggers play a Character out of the trash the card is itself being put into, and
+        /// OP14-082 Oinkchuck is one of them: it plays ITSELF, so trashing it again left the same instance
+        /// in the character area AND the trash at once. That is the whole of the coverage sweep's
+        /// INVARIANT count — every one of the 11 is a [Trigger] whose text moves a card.</summary>
+        private static void TrashUsedTriggerCard(GameState state, string seat, CardInstance card)
+        {
+            if (card == null || state == null) return;
+            var p = Player(state, seat);
+            if (p == null) return;
+            bool alreadyElsewhere =
+                (p.CharacterArea != null && p.CharacterArea.Any(c => c != null && c.InstanceId == card.InstanceId))
+                || (p.Stage != null && p.Stage.InstanceId == card.InstanceId)
+                || p.Hand.Any(c => c.InstanceId == card.InstanceId)
+                || p.Trash.Any(c => c.InstanceId == card.InstanceId)
+                || p.Deck.Any(c => c.InstanceId == card.InstanceId)
+                || p.Life.Any(c => c.InstanceId == card.InstanceId);
+            if (alreadyElsewhere) return;
+            card.Zone = "trash";
+            card.FaceUp = false;
+            p.Trash.Add(card);
         }
 
         // Fire [On KO] effects for a character being sent to trash from the field.

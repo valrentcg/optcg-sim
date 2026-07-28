@@ -18,6 +18,7 @@ class Program
         int loaded = CardLibraryLoader.Load(CardJsonPath);
         Console.WriteLine($"Loaded {loaded} card definitions from JSON.\n");
         if (args.Length > 0 && args[0] == "scenario") return Scenarios.Run();
+        if (args.Length > 1 && args[0] == "coverage") { EffectCoverage.TraceId = args[1]; return EffectCoverage.Run(); }
         if (args.Length > 0 && args[0] == "coverage") return EffectCoverage.Run();
         if (args.Length > 0 && args[0] == "golden") return EffectCoverage.Golden(args.Length > 1 && args[1] == "write");
         if (args.Length > 0 && args[0] == "invariants") return InvariantSweep(args.Length > 1 && int.TryParse(args[1], out var q) ? q : 2);
