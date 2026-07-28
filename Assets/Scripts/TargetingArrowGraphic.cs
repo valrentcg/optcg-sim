@@ -2,23 +2,19 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Procedural targeting arrow. Builds a single quad-strip mesh (shaft + two head
-/// arms) whose UVs carry a continuous flow parameter, so one additive material
-/// draws the whole thing in one draw call.
-///
-/// UV layout:
-///   uv.x = flow parameter. 0 at the origin, 1 at the tip, 1..1.16 out each arm.
-///   uv.y = 0 at one edge, 1 at the other. The shader builds the cross-section
-///          from this, so the mesh is a flat ribbon with no internal detail.
+/// Procedural targeting arrow rendered as one analytic distance field. The
+/// sampled curved shaft, its zero-width point, both barbs, and their shared
+/// blue convergence are unioned before shading, so no separately rendered
+/// shaft/head boundary can clip, gap, or add twice.
 ///
 /// PORT NOTE — why this is a uGUI Graphic and not a MeshFilter/MeshRenderer.
 /// Every canvas in this project is ScreenSpaceOverlay. A world-space MeshRenderer
 /// draws BEHIND the whole UI there, silently — the same reason ParticleSystem was
 /// unusable for the card-burn VFX. Rendering through a CanvasRenderer is the only
 /// way the beam appears above the board. Nothing the design depends on is lost:
-/// it is still ONE mesh in ONE draw call, uv.x still runs continuously across the
-/// branch so a single pulse splits at the point, and the shader still does the
-/// entire cross-section. Two things did have to change:
+/// it is still ONE mesh in ONE draw call, the flow remains continuous across
+/// the branch so a single pulse splits at the point, and the shader still does
+/// the entire cross-section. Two things did have to change:
 ///   • units are canvas pixels, not world units (see coreHalfWidth);
 ///   • a CanvasRenderer ignores MaterialPropertyBlock, so each arrow owns a
 ///     material instance and the ramp is pushed onto that.
@@ -65,39 +61,13 @@ public class TargetingArrowGraphic : MaskableGraphic
     /// old arrow, whose full body width was 12-14 px.</summary>
     public float coreHalfWidth = 6.5f;
 
-    /// <summary>Ceiling on head length, in canvas pixels. Head length tracks arrow length so it
-    /// stays in proportion at normal range, but across the full board that keeps growing — an arrow
-    /// spanning the screen ended up with a head half the size of a card.</summary>
-    public float maxHeadPixels = 60f;
-
-    /// <summary>Smallest ribbon half-width, in canvas pixels. Guards the shader's core against
-    /// going sub-pixel, which aliases into a zig-zag rather than simply looking thin.</summary>
-    public float minRibbonPixels = 2f;
-
-    /// <summary>How far back along each barb, as a fraction of its length, the barb reaches full
-    /// width. Small values give a sharper apex; 0 restores the spec's full-width-at-the-tip barbs
-    /// and with them the rounded dome.</summary>
-    public float barbApexRamp = 0.22f;
-
-    /// <summary>Barb thickness, as a multiple of the shaft's width. The shader's blur scales with
-    /// ribbon width, so a fat barb is also a SOFT barb — at the spec's 1.85 the barbs carried about
-    /// twice the shaft's blur radius and read as smears rather than blades, which is the more
-    /// noticeable now that the shaft tapers to a crisp point beside them. 1.10 keeps them solid
-    /// while sharpening the edge; below ~0.8 they go wispy and stop reading as a head at all.
-    /// 1.50 after a request for a thicker head — past ~1.7 the apex starts rounding off again.</summary>
-    public float barbWidth = 1.70f;
-
     [Header("Look")]
     [Range(0f, 1f)] public float bloom = 0.52f;
     [Range(0f, 1f)] public float surge = 0.55f;
     [Range(0f, 1f)] public float shift = 0.45f;   // state cross-fade speed
-    /// <summary>Output multiplier. The spec's 1.6 assumes an HDR target with Bloom downstream; on
-    /// this overlay canvas there is neither, so the tiers sum to ~1.56 at the centreline and 1.6x
-    /// takes that to ~2.5 — the middle of the beam clips to flat white about 6 px across. A clipped
-    /// region has a THRESHOLD edge, not a gradient one, which is what made the point read as gnawed
-    /// and the barbs as low resolution: their shape was being defined by where the clipping stopped.
-    /// 0.75 puts the peak just over 1.0, so only the very centre saturates and the falloff survives.</summary>
-    public float intensity = 0.75f;
+    /// <summary>Master alpha for the v8 ribbon passes. At one, the shader uses
+    /// the reference's native 0.115 / 0.26 / 0.48 pass opacities.</summary>
+    public float intensity = 1f;
 
     [Header("Timing (seconds)")]
     public float materializeTime = 0.13f;
@@ -109,29 +79,25 @@ public class TargetingArrowGraphic : MaskableGraphic
     public Ramp invalid;
 
     // ------------------------------------------------------------- constants
-    const int   DENSE     = 80;    // bezier samples used for arc-length lookup
-    const int   SHAFT     = 34;    // shaft quads
-    // 16, not the spec's 9. The arms taper on a (1-f)^0.55 curve, which bends hardest near the
-    // outer ends; at 9 segments that reads as visible faceting on a head this large on screen.
-    const int   ARM       = 16;    // quads per head arm
+    const int   DENSE     = 160;   // dense arc-length lookup for the strongly bowed quadratic
+    const int   FIELD_SPINE_POINTS = 33;
     const float ARM_SPAN  = 0.16f; // flow parameter length of each arm
-    const float MESH_MUL  = 3.4f;  // mesh half-width vs. core half-width
-    const float SWELL     = 0.16f; // width gain at the crest of the surge
 
     // ----------------------------------------------------------------- state
     readonly Vector2[] dense = new Vector2[DENSE + 1];
     readonly float[]   cum   = new float[DENSE + 1];
-    readonly Vector2[] sPos  = new Vector2[SHAFT + 1];
-    readonly float[]   sHalf = new float[SHAFT + 1];
-    readonly float[]   sU    = new float[SHAFT + 1];
+    readonly Vector4[] fieldSpine = new Vector4[FIELD_SPINE_POINTS];
 
-    // Local-space (canvas) geometry, produced by Rebuild and consumed by OnPopulateMesh.
-    readonly Vector2[] outVerts = new Vector2[(SHAFT + 1) * 2 + (ARM + 1) * 2 * 2];
-    readonly Vector2[] outUvs   = new Vector2[(SHAFT + 1) * 2 + (ARM + 1) * 2 * 2];
-    // Local half-width in canvas px, handed to the shader so it can floor its cross-section in
-    // pixels instead of only in fractions of the ribbon.
-    readonly float[]   outHalf  = new float[(SHAFT + 1) * 2 + (ARM + 1) * 2 * 2];
+    // One carrier quad contains one analytic field for shaft, point, and barbs.
+    // There are no overlapping shaft/head triangles and therefore no seam.
+    readonly Vector2[] outVerts = new Vector2[4];
     bool hasGeometry;
+    Vector2 headAxisA;
+    Vector2 headAxisB;
+    float headLengthLocal;
+    float headMaxHalfLocal;
+    float headLengthPixels;
+    float pixelToLocal;
 
     Vector2 origin, aimPoint, tip, vel;
     bool active;
@@ -151,6 +117,13 @@ public class TargetingArrowGraphic : MaskableGraphic
     static readonly int ID_SURGE  = Shader.PropertyToID("_Surge");
     static readonly int ID_FROM   = Shader.PropertyToID("_From");
     static readonly int ID_FADE   = Shader.PropertyToID("_Fade");
+    static readonly int ID_SPINE       = Shader.PropertyToID("_Spine");
+    static readonly int ID_HEAD_AXIS_A = Shader.PropertyToID("_HeadAxisA");
+    static readonly int ID_HEAD_AXIS_B = Shader.PropertyToID("_HeadAxisB");
+    static readonly int ID_HEAD_LENGTH_LOCAL = Shader.PropertyToID("_HeadLengthLocal");
+    static readonly int ID_HEAD_MAX_HALF = Shader.PropertyToID("_HeadMaxHalfLocal");
+    static readonly int ID_HEAD_LENGTH = Shader.PropertyToID("_HeadLengthPx");
+    static readonly int ID_PIXEL_TO_LOCAL = Shader.PropertyToID("_PixelToLocal");
 
     /// <summary>No texture — the shader is entirely procedural.</summary>
     public override Texture mainTexture => s_WhiteTexture;
@@ -242,15 +215,6 @@ public class TargetingArrowGraphic : MaskableGraphic
         canvasRenderer.cull = true;
     }
 
-    protected override void OnEnable()
-    {
-        base.OnEnable();
-        // uGUI strips every vertex channel the canvas has not opted into, so without this the
-        // shader would read zero for the half-width and floor every sigma at its widest.
-        var c = canvas;
-        if (c != null) c.additionalShaderChannels |= AdditionalCanvasShaderChannels.TexCoord1;
-    }
-
     protected override void OnDestroy()
     {
         base.OnDestroy();
@@ -263,20 +227,20 @@ public class TargetingArrowGraphic : MaskableGraphic
     {
         if (aim.core.a > 0f) return;   // already configured in the inspector
 
-        aim.fringe     = New32( 20,  46, 110);  // #142E6E
-        aim.hue        = New32( 62, 110, 224);  // #3E6EE0
-        aim.light      = New32(136, 178, 252);  // #88B2FC
-        aim.core       = New32(240, 247, 255);  // #F0F7FF
+        aim.fringe     = New32(  8,  30, 116);  // #081E74
+        aim.hue        = New32( 26,  86, 238);  // #1A56EE
+        aim.light      = New32( 82, 146, 250);  // #5292FA
+        aim.core       = New32(178, 212, 255);  // #B2D4FF
 
-        valid.fringe   = New32( 10,  74,  48);  // #0A4A30
-        valid.hue      = New32( 36, 170, 104);  // #24AA68
-        valid.light    = New32(126, 224, 168);  // #7EE0A8
-        valid.core     = New32(238, 254, 246);  // #EEFEF6
+        valid.fringe   = New32(  4,  92,  40);  // #045C28
+        valid.hue      = New32( 14, 210,  88);  // #0ED258
+        valid.light    = New32( 76, 238, 132);  // #4CEE84
+        valid.core     = New32(196, 255, 216);  // #C4FFD8
 
-        invalid.fringe = New32(104,  16,  30);  // #68101E
-        invalid.hue    = New32(206,  48,  62);  // #CE303E
-        invalid.light  = New32(248, 132, 124);  // #F8847C
-        invalid.core   = New32(255, 238, 232);  // #FFEEE8
+        invalid.fringe = New32(132,   8,  26);  // #84081A
+        invalid.hue    = New32(236,  32,  48);  // #EC2030
+        invalid.light  = New32(255,  92,  92);  // #FF5C5C
+        invalid.core   = New32(255, 202, 196);  // #FFCAC4
     }
 
     static Color New32(int r, int g, int b) { return new Color32((byte)r, (byte)g, (byte)b, 255); }
@@ -291,12 +255,11 @@ public class TargetingArrowGraphic : MaskableGraphic
         {
             grow = Mathf.Min(1f, grow + dt / Mathf.Max(0.01f, materializeTime));
 
-            // Critically-ish damped spring. This lag is what gives the arrow weight.
-            // Stiffness is in canvas pixels here, so dt is clamped: a hitch big enough
-            // to make the explicit integrator overshoot would fling the tip.
-            float step = Mathf.Min(dt, 0.033f);
+            // Exact v8 spring. ColorMask RGB in the beam shader prevents this
+            // intentional positional weight from contaminating the canvas alpha.
+            float step = Mathf.Min(dt, 0.05f);
             float stiff = 340f - weight * 230f;
-            float damp  = 2f * Mathf.Sqrt(stiff) * 0.82f;
+            float damp = 2f * Mathf.Sqrt(stiff) * 0.82f;
             Vector2 acc = (aimPoint - tip) * stiff - vel * damp;
             vel += acc * step;
             tip += vel * step;
@@ -326,7 +289,14 @@ public class TargetingArrowGraphic : MaskableGraphic
         mat.SetFloat(ID_SURGE,  surge);
         mat.SetFloat(ID_FROM,   from);
         mat.SetFloat(ID_FADE,   fade);
-        SetVerticesDirty();     // geometry animates (the surge swells the ribbon)
+        mat.SetVectorArray(ID_SPINE, fieldSpine);
+        mat.SetVector(ID_HEAD_AXIS_A, headAxisA);
+        mat.SetVector(ID_HEAD_AXIS_B, headAxisB);
+        mat.SetFloat(ID_HEAD_LENGTH_LOCAL, headLengthLocal);
+        mat.SetFloat(ID_HEAD_MAX_HALF, headMaxHalfLocal);
+        mat.SetFloat(ID_HEAD_LENGTH, headLengthPixels);
+        mat.SetFloat(ID_PIXEL_TO_LOCAL, pixelToLocal);
+        SetVerticesDirty();     // the tip spring and collapse animation move the mesh
     }
 
     void FadeColour(float dt)
@@ -361,7 +331,8 @@ public class TargetingArrowGraphic : MaskableGraphic
         float v = 0f;
         for (int i = 0; i < 2; i++)
         {
-            float headPos = Mathf.Repeat(t * 0.50f + i * 0.5f, 1f) * (1f + ARM_SPAN + 0.30f) - 0.18f;
+            // v8 uses 0.50. The requested half-speed pulse is therefore 0.25.
+            float headPos = Mathf.Repeat(t * 0.25f + i * 0.5f, 1f) * (1f + ARM_SPAN + 0.30f) - 0.18f;
             float d   = u - headPos;
             float sig = d > 0f ? 0.055f : 0.20f;
             float x   = d / sig;
@@ -371,145 +342,122 @@ public class TargetingArrowGraphic : MaskableGraphic
     }
 
     // ------------------------------------------------------------ mesh build
+    /// <summary>
+    /// Builds a single analytic distance field. Each sample stores local x/y,
+    /// the visible core half-width, and continuous flow. The carrier itself is
+    /// one padded quad; the shader unions the sampled curve and both barbs before
+    /// shading, so there is no shaft/head boundary to clip or double.
+    /// </summary>
     bool Rebuild(Vector2 p0, Vector2 tipPos)
     {
-        // --- control point: horizontal offset ONLY. dx == 0 means dead straight.
-        float dx = tipPos.x - p0.x;
-        Vector2 p1 = (p0 + tipPos) * 0.5f;
-        p1.x += dx * 0.62f * splay;
-        // sag: MINUS y. uGUI local space is Y-UP like the rest of Unity, so this keeps
-        // the spec's sign. (The browser prototype's canvas is Y-down — porting the
-        // sign across without flipping it is what bows the arrow the wrong way.)
-        p1.y -= Mathf.Abs(dx) * 0.09f * splay;
-
-        for (int i = 0; i <= DENSE; i++)
-        {
-            float t = (float)i / DENSE, u = 1f - t;
-            dense[i] = u * u * p0 + 2f * u * t * p1 + t * t * tipPos;
-        }
-        cum[0] = 0f;
-        for (int i = 1; i <= DENSE; i++)
-            cum[i] = cum[i - 1] + Vector2.Distance(dense[i], dense[i - 1]);
-
+        SampleSpine(p0, tipPos);
         float L = cum[DENSE];
         if (L < coreHalfWidth * 0.5f) return false;
 
-        float scale   = coreHalfWidth * (0.45f + width * 1.1f);
-        // THE MISSING TIP. The spec derives the head length from `scale` alone, which works in world
-        // units where the arrow is only a couple of dozen core-widths long. In canvas pixels a board
-        // arrow runs ~500 px against a 6.5 px core — roughly twice as slender — so that formula gave
-        // a head ~33 px long and ~46 px wide: wider than it was long, a bowtie with no barbs and no
-        // apex. Tying it to arrow LENGTH keeps the head in proportion at any range, with the spec's
-        // formula as the floor for very short arrows and its 0.34L as the ceiling for very long ones.
-        float armLen  = Mathf.Min(L * 0.34f, Mathf.Max(L * 0.16f, scale * (2.6f + head * 5.2f)));
-        armLen = Mathf.Min(armLen, maxHeadPixels);   // a long arrow should not grow a giant head
-        float time    = Time.unscaledTime;
+        float canvasMin = Mathf.Min(
+            Mathf.Abs(rectTransform.rect.width),
+            Mathf.Abs(rectTransform.rect.height));
+        float unitScale = canvasMin > 1f ? canvasMin * 0.0105f : coreHalfWidth;
+        float scale = unitScale * (0.45f + width * 1.1f);
+        float thicknessScale = scale * 1.08f;
+        float armLen = Mathf.Min(L * 0.34f, scale * (2.6f + head * 5.2f));
+        float taperLength = armLen * 0.55f;
+        float canvasScale = canvas != null ? Mathf.Max(0.001f, canvas.scaleFactor) : 1f;
+        pixelToLocal = 1f / canvasScale;
 
-        // --- shaft, resampled by ARC LENGTH so the head keeps its proportions
-        for (int i = 0; i <= SHAFT; i++)
+        Vector2 boundsMin = new Vector2(float.PositiveInfinity, float.PositiveInfinity);
+        Vector2 boundsMax = new Vector2(float.NegativeInfinity, float.NegativeInfinity);
+        for (int i = 0; i < FIELD_SPINE_POINTS; i++)
         {
-            float s = (float)i / SHAFT * L;
-            sPos[i]  = PointAt(s, L);
-            sU[i]    = s / L;
-            // Floored in PIXELS. The shader's core is 0.14 of the LOCAL half-width, so once the
-            // ribbon thins past ~7 px that core is sub-pixel — it aliases into a visible zig-zag
-            // along the shaft, and the last stretch before the tip renders as almost nothing, which
-            // reads as the tip being missing. Both of those were my 0.10 end taper going too far.
-            sHalf[i] = Mathf.Max(minRibbonPixels,
-                       WidthAtS(s, L, armLen) * scale * MESH_MUL
-                     * (1f + SWELL * Surge(sU[i], time, surge)));
+            float s = (float)i / (FIELD_SPINE_POINTS - 1) * L;
+            Vector2 p = PointAt(s, L);
+            float endEnvelope = Mathf.Pow(
+                Mathf.Clamp01((L - s)
+                              / Mathf.Max(0.001f, taperLength)), 0.55f);
+            float half = WidthAtS(s, L) * thicknessScale * endEnvelope;
+            fieldSpine[i] = new Vector4(p.x, p.y, half, s / L);
+            boundsMin = Vector2.Min(boundsMin, p);
+            boundsMax = Vector2.Max(boundsMax, p);
         }
 
-        int v = 0;
-        for (int i = 0; i <= SHAFT; i++)
-        {
-            Vector2 tan = (i == 0)      ? sPos[1] - sPos[0]
-                        : (i == SHAFT)  ? sPos[SHAFT] - sPos[SHAFT - 1]
-                                        : sPos[i + 1] - sPos[i - 1];
-            Vector2 n = new Vector2(-tan.y, tan.x).normalized;
-            outVerts[v] = sPos[i] + n * sHalf[i]; outUvs[v] = new Vector2(sU[i], 1f); outHalf[v] = sHalf[i]; v++;
-            outVerts[v] = sPos[i] - n * sHalf[i]; outUvs[v] = new Vector2(sU[i], 0f); outHalf[v] = sHalf[i]; v++;
-        }
+        Vector2 tipP = dense[DENSE];
+        Vector2 tipDir = (tipP - PointAt(Mathf.Max(0f, L - 8f), L)).normalized;
+        float spread = 0.42f + sweep * 0.52f;
+        float wMax = thicknessScale * 0.55f * 1.85f;
+        headLengthLocal = armLen;
+        headMaxHalfLocal = wMax;
+        headLengthPixels = armLen * canvasScale;
 
-        // --- head: two arms starting AT the tip, sweeping back.
-        // Anchoring them at the tip is what stops the shaft protruding through.
-        Vector2 back   = PointAt(Mathf.Max(0f, L - scale * 0.8f), L);
-        Vector2 tipDir = (dense[DENSE] - back).normalized;
-        float tipAng   = Mathf.Atan2(tipDir.y, tipDir.x);
-        float spread   = 0.42f + sweep * 0.52f;
-        // Pinned to the spec's 0.55, NOT to WidthAtS — that now tapers to 0.10 at the tip, and
-        // reading the arm width from it would shrink the barbs away along with the shaft.
-        float wMax     = 0.55f * scale * barbWidth * MESH_MUL;
-        Vector2 tipP   = dense[DENSE];
+        headAxisA = Rotate(-tipDir,  spread);
+        headAxisB = Rotate(-tipDir, -spread);
+        Vector2 armEndA = tipP + headAxisA * armLen;
+        Vector2 armEndB = tipP + headAxisB * armLen;
+        boundsMin = Vector2.Min(boundsMin, Vector2.Min(armEndA, armEndB));
+        boundsMax = Vector2.Max(boundsMax, Vector2.Max(armEndA, armEndB));
 
-        for (int side = 0; side < 2; side++)
-        {
-            float a = tipAng + Mathf.PI + (side == 0 ? -spread : spread);
-            Vector2 dir = new Vector2(Mathf.Cos(a), Mathf.Sin(a));
-            Vector2 nrm = new Vector2(-dir.y, dir.x);
-            for (int k = 0; k <= ARM; k++)
-            {
-                float f  = (float)k / ARM;
-                float u  = 1f + f * ARM_SPAN;
-                // 0.45 damps the swell on the head so it conducts rather than inflates
-                // Full width AT the tip, exactly as specified. I briefly ramped this from zero to
-                // "make a point" and it did the opposite: the arms at full width are what COVERS the
-                // shaft's blunt end cap, and thinning them exposed it. The missing tip was never this
-                // curve — it was armLen (below).
-                // A POINT ONLY FORMS IF EVERY RIBBON NARROWS AT THE TIP. At full width the two barbs
-                // and the shaft end pile ~45 px of ribbon on the apex, and the additive blur rounds
-                // that into a dome — which is what "no tip" has been throughout. So the barbs ramp
-                // up from nearly nothing at f=0 and reach full width a fifth of the way back.
-                //
-                // I tried this ramp once before and reverted it, correctly at the time: the shaft
-                // still ended in a blunt 0.55 cap then, so thinning the barbs merely uncovered it.
-                // It works now because the shaft tapers too — the two changes are only useful
-                // together, which is why each looked wrong on its own.
-                float apex = Mathf.SmoothStep(0f, 1f, Mathf.Min(1f, f / Mathf.Max(0.01f, barbApexRamp)));
-                float hw = Mathf.Max(1f,
-                           wMax * apex * Mathf.Pow(1f - f, 0.55f)
-                         * (1f + SWELL * 0.45f * Surge(u, time, surge)));
-                Vector2 p = tipP + dir * (f * armLen);
-                outVerts[v] = p + nrm * hw; outUvs[v] = new Vector2(u, 1f); outHalf[v] = hw; v++;
-                outVerts[v] = p - nrm * hw; outUvs[v] = new Vector2(u, 0f); outHalf[v] = hw; v++;
-            }
-        }
+        // v8's widest pass is 3.4x. Add surge room around every structural edge.
+        float pad = Mathf.Max(
+            thicknessScale * 3.4f * 1.10f, 7f * pixelToLocal);
+        boundsMin -= Vector2.one * pad;
+        boundsMax += Vector2.one * pad;
+        outVerts[0] = new Vector2(boundsMin.x, boundsMin.y);
+        outVerts[1] = new Vector2(boundsMin.x, boundsMax.y);
+        outVerts[2] = new Vector2(boundsMax.x, boundsMin.y);
+        outVerts[3] = new Vector2(boundsMax.x, boundsMax.y);
 
         hasGeometry = true;
         return true;
     }
 
-    /// <summary>Emits the strip built by Rebuild. One mesh, one draw call — the shaft
-    /// and both arms share it so the flow parameter can cross the branch.</summary>
+    static Vector2 Rotate(Vector2 v, float radians)
+    {
+        float c = Mathf.Cos(radians), s = Mathf.Sin(radians);
+        return new Vector2(v.x * c - v.y * s, v.x * s + v.y * c);
+    }
+
+    void SampleSpine(Vector2 p0, Vector2 p3)
+    {
+        float dx = p3.x - p0.x;
+        Vector2 p1 = (p0 + p3) * 0.5f;
+        p1.x += dx * 0.62f * splay;
+        // Browser canvas Y grows downward; uGUI Y grows upward, so the artifact's
+        // positive sag becomes a negative local-space offset here.
+        p1.y -= Mathf.Abs(dx) * 0.09f * splay;
+        for (int i = 0; i <= DENSE; i++)
+        {
+            float t = (float)i / DENSE, u = 1f - t;
+            dense[i] = u * u * p0 + 2f * u * t * p1 + t * t * p3;
+        }
+        cum[0] = 0f;
+        for (int i = 1; i <= DENSE; i++)
+            cum[i] = cum[i - 1] + Vector2.Distance(dense[i], dense[i - 1]);
+    }
+
+    float WidthAtS(float s, float L)
+    {
+        return 0.32f + 0.68f
+            * Mathf.Pow(Mathf.Min(s / Mathf.Max(0.001f, L * 0.55f), 1f), 0.8f);
+    }
+
     protected override void OnPopulateMesh(VertexHelper vh)
     {
         vh.Clear();
         if (!hasGeometry) return;
-        float canvasScale = canvas != null ? canvas.scaleFactor : 1f;
-        if (canvasScale <= 0f) canvasScale = 1f;
-
         var vert = UIVertex.simpleVert;
-        vert.color = Color.white;          // the ramp lives in the material, not here
+        vert.color = Color.white;
         for (int i = 0; i < outVerts.Length; i++)
         {
             vert.position = outVerts[i];
-            vert.uv0 = outUvs[i];
+            vert.uv0 = new Vector2((i & 2) != 0 ? 1f : 0f,
+                                   (i & 1) != 0 ? 1f : 0f);
             // SCREEN pixels, not canvas units. The CanvasScaler is ScaleWithScreenSize against a
             // 1600x900 reference, so a canvas unit is not a pixel — feeding the shader canvas units
             // made its pixel floor under-correct by exactly that factor, which is why thin ribbons
             // still aliased after the floor was added.
-            vert.uv1 = new Vector2(outHalf[i] * canvasScale, 0f);
             vh.AddVert(vert);
         }
 
-        int baseV = 0;
-        for (int i = 0; i < SHAFT; i++) EmitQuad(vh, baseV + i * 2);
-        baseV = (SHAFT + 1) * 2;
-        for (int a = 0; a < 2; a++)
-        {
-            for (int i = 0; i < ARM; i++) EmitQuad(vh, baseV + i * 2);
-            baseV += (ARM + 1) * 2;
-        }
+        EmitQuad(vh, 0);
     }
 
     static void EmitQuad(VertexHelper vh, int v)
@@ -526,20 +474,6 @@ public class TargetingArrowGraphic : MaskableGraphic
         while (hi - lo > 1) { int m = (lo + hi) >> 1; if (cum[m] <= s) lo = m; else hi = m; }
         float f = (s - cum[lo]) / Mathf.Max(1e-5f, cum[hi] - cum[lo]);
         return Vector2.Lerp(dense[lo], dense[hi], f);
-    }
-
-    /// <summary>Width curve in arc-length space, normalized to the core half-width.</summary>
-    float WidthAtS(float s, float L, float armLen)
-    {
-        float w = 0.32f + 0.68f * Mathf.Pow(Mathf.Min(s / (L * 0.55f), 1f), 0.8f);
-        // The taper has to reach a point WITHOUT stepping. The spec's 0.55 floor leaves a blunt cap
-        // that blurs into a blob; my first attempt (0.10 over 0.55*armLen) went to the other extreme
-        // and dropped the core from ~3 px to ~1 px across barely 30 px, which reads as a thinner
-        // line spliced onto the end of the shaft — the "zig-zag before the head". 0.34 over a much
-        // longer 1.6*armLen narrows it gradually enough that the eye follows it into the point.
-        float dEnd = L - s, blend = armLen * 1.6f;
-        if (dEnd < blend) w *= 0.34f + 0.66f * (dEnd / blend);
-        return w;
     }
 
     static float EaseOutQuint(float t) { float u = 1f - t; return 1f - u * u * u * u * u; }

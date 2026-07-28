@@ -7511,11 +7511,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawResolvedTargetingArrows()
     {
         if (state == null || state.DeckLook != null) return;
-        if (state.Battle == null) { if (UseBeamArrow) HideBeam("Battle Target Arrow"); return; }
+        if (state.Battle == null) { HideBeam("Battle Target Arrow"); return; }
 
         var b = state.Battle;
-        if (!cardTargetRects.TryGetValue(b.AttackerId, out var source) || source == null) return;
-        if (!cardTargetRects.TryGetValue(b.TargetId, out var target) || target == null) return;
+        if (!cardTargetRects.TryGetValue(b.AttackerId, out var source) || source == null
+            || !cardTargetRects.TryGetValue(b.TargetId, out var target) || target == null)
+        {
+            HideBeam("Battle Target Arrow");
+            return;
+        }
 
         var root = NewArrowRoot("Battle Target Arrow", boardRoot);
         DrawCurvedTargetingArrow(root, source, target, new Color(1f, 0.36f, 0.12f, 0.96f), 14f,
@@ -7623,7 +7627,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void HideHoverTargetArrow()
     {
-        if (UseBeamArrow) HideBeam("Hover Target Arrow");
+        HideBeam("Hover Target Arrow");
         if (hoverTargetArrowRoot == null) return;
         Destroy(hoverTargetArrowRoot);
         hoverTargetArrowRoot = null;
@@ -7641,9 +7645,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return root;
     }
 
-    // The beam arrow (TargetingArrowGraphic + Spellbind/ArrowBeam) replaces the sprite-strip
-    // arrow. Flip this to false to fall back to RenderEnergyArrow, which is left intact below.
-    private const bool UseBeamArrow = true;
+    // Targeting arrows are the procedural beam (TargetingArrowGraphic + ArrowBeam.shader). The
+    // sprite-strip arrow it replaced (RenderEnergyArrow) used to sit below behind a UseBeamArrow
+    // flag; the beam is the shipping arrow now, so the flag and the dead branch are gone. The old
+    // renderer is still recoverable from history if it is ever wanted back.
 
     // Beams are keyed and PERSISTENT. They cannot live on the arrow roots: those are rebuilt
     // (NewArrowRoot) every frame, so a component on one is destroyed and re-added constantly —
@@ -7658,6 +7663,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private TargetingArrowGraphic Beam(string key, Transform parentCanvas)
     {
         if (parentCanvas == null) return null;
+
+        // A hover, resolved battle, hand drag, and attack drag can all request
+        // independently keyed persistent beams. Only one targeting gesture may
+        // own the board at a time: hard-clear every competing beam before showing
+        // this one. End() is intentionally not used here because its 150 ms
+        // collapse would still display two arrows during the ownership handoff.
+        foreach (var pair in beams)
+        {
+            if (pair.Key != key && pair.Value != null && pair.Value.IsShowing)
+                pair.Value.Clear();
+        }
+
         if (beams.TryGetValue(key, out var beam) && beam != null)
         {
             beamLastFrame[key] = Time.frameCount;
@@ -7687,22 +7704,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawCurvedTargetingArrow(RectTransform root, RectTransform source, RectTransform target, Color color, float thickness,
         TargetingArrowGraphic.ArrowState beamState = TargetingArrowGraphic.ArrowState.Aim)
     {
-        if (root == null || source == null || target == null) return;
+        if (root == null || source == null || target == null)
+        {
+            if (root != null) HideBeam(root.name);
+            return;
+        }
         var sourceCenter = RectScreenCenter(source);
         var targetCenter = RectScreenCenter(target);
         var delta = targetCenter - sourceCenter;
-        if (delta.magnitude < 20f) return;
+        if (delta.magnitude < 20f) { HideBeam(root.name); return; }
 
         var dir = delta.normalized;
         // Origin sits just past the card edge so the ribbon never overlays the source art.
         var start = sourceCenter + dir * RectScreenRadius(source, 0.56f);
         var end = targetCenter - dir * RectScreenRadius(target, 0.50f);
-        if (UseBeamArrow)
-        {
-            var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
-            if (beam != null) { beam.Track(start, end, beamState); return; }
-        }
-        RenderEnergyArrow(root, start, end, color, thickness, true);
+        var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
+        if (beam != null) beam.Track(start, end, beamState);
     }
 
     // Same curved arrow, but the tip follows an arbitrary screen point (the cursor) instead of a
@@ -7710,87 +7727,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawCurvedTargetingArrowToPoint(RectTransform root, RectTransform source, Vector2 screenPoint, Color color, float thickness,
         TargetingArrowGraphic.ArrowState beamState = TargetingArrowGraphic.ArrowState.Aim)
     {
-        if (root == null || source == null) return;
+        if (root == null || source == null)
+        {
+            if (root != null) HideBeam(root.name);
+            return;
+        }
         var sourceCenter = RectScreenCenter(source);
         var delta = screenPoint - sourceCenter;
-        if (delta.magnitude < 12f) return;
+        if (delta.magnitude < 12f) { HideBeam(root.name); return; }
         var dir = delta.normalized;
         var start = sourceCenter + dir * RectScreenRadius(source, 0.56f);
         var end = screenPoint;
-        if (UseBeamArrow)
-        {
-            var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
-            // The surge is a shader effect on a persistent mesh, so unlike the old sprite sparks
-            // it costs nothing to keep running while the pointer moves.
-            if (beam != null) { beam.Track(start, end, beamState); return; }
-        }
-        // Rebuilt every frame while dragging — no travelling sparks (they'd re-spawn per frame).
-        RenderEnergyArrow(root, start, end, color, thickness, false);
-    }
-
-    // ── Solid targeting arrow ───────────────────────────────────────────────
-    // Restored design (the assets outlived the code): a CLEAN, BOLD, OPAQUE arrow —
-    // an opaque tapered body (arrow_core_opaque cross-section) over a soft halo
-    // (arrow_glow_soft), capped by a flat solid triangle head (arrow_head_solid),
-    // all tinted with the arrow color. No prongs, sparks or particles.
-    private void RenderEnergyArrow(RectTransform root, Vector2 start, Vector2 end, Color color, float thickness, bool withFlow)
-    {
-        var delta = end - start;
-        float dist = delta.magnitude;
-        if (dist < 24f) return;
-        var dir = delta / dist;
-        var n = new Vector2(-dir.y, dir.x);
-        // Bow varies continuously with horizontal offset — no side-flip crossing centre.
-        float arc = Mathf.Clamp((end.x - start.x) * 0.22f, -80f, 80f);
-        var p0 = start;
-        var p1 = start + dir * (dist * 0.25f) + n * arc;
-        var p2 = end - dir * (dist * 0.25f) + n * arc;
-        var p3 = end;
-
-        // Head geometry (400x300 art: tip at x≈0.89, blade tail at x≈0.14).
-        float headW = Mathf.Clamp(dist * 0.20f, thickness * 4.0f, thickness * 7.5f);
-        float headH = headW * (300f / 400f);
-        const float tipFrac = 0.89f;
-        float bodySpan = Mathf.Clamp01(1f - (headW * 0.55f) / dist);
-
-        var jointPrev = CubicBezier(p0, p1, p2, p3, bodySpan - 0.02f);
-        var joint = CubicBezier(p0, p1, p2, p3, bodySpan);
-        var hDir = (joint - jointPrev).normalized;
-        float headAng = Mathf.Atan2(hDir.y, hDir.x) * Mathf.Rad2Deg;
-
-        // Body: soft halo + opaque core, both from vertical-profile strips whose columns
-        // are uniform — quads can never show seams through taper or curvature.
-        var coreSprite = LoadFxSprite("arrow_core_opaque");
-        var coreCol = Color.Lerp(color, Color.white, 0.12f);
-        const int SegN = 30;
-        for (int i = 0; i < SegN; i++)
-        {
-            float t0 = i / (float)SegN * bodySpan;
-            float t1 = (i + 1) / (float)SegN * bodySpan;
-            var a = CubicBezier(p0, p1, p2, p3, t0);
-            var b = CubicBezier(p0, p1, p2, p3, t1);
-            var mid = (a + b) * 0.5f;
-            float segLen = (b - a).magnitude * 1.07f;
-            float segAng = Mathf.Atan2(b.y - a.y, b.x - a.x) * Mathf.Rad2Deg;
-            float taper = 1f - 0.30f * (i / (float)SegN);   // gentle taper toward the head
-            var c = ImageObject("Arrow Body", root, coreSprite);
-            c.color = new Color(coreCol.r, coreCol.g, coreCol.b, 0.97f);
-            c.raycastTarget = false;
-            c.rectTransform.position = mid;
-            c.rectTransform.sizeDelta = new Vector2(segLen, thickness * 1.15f * taper);
-            c.rectTransform.localRotation = Quaternion.Euler(0, 0, segAng);
-        }
-
-        // Head: soft tinted glow copy behind, then the solid tinted triangle with its
-        // tip landing exactly on the target point.
-        Vector2 headCenter = p3 - (Vector2)(hDir * (headW * (tipFrac - 0.5f)));
-        var headSolid = LoadFxSprite("arrow_head_solid");
-        var hs = ImageObject("Arrow Head", root, headSolid);
-        hs.color = new Color(coreCol.r, coreCol.g, coreCol.b, 0.97f);
-        hs.raycastTarget = false;
-        hs.rectTransform.position = headCenter;
-        hs.rectTransform.sizeDelta = new Vector2(headW, headH);
-        hs.rectTransform.localRotation = Quaternion.Euler(0, 0, headAng);
+        var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
+        // The surge is a shader effect on a persistent mesh, so unlike the old sprite sparks
+        // it costs nothing to keep running while the pointer moves.
+        if (beam != null) beam.Track(start, end, beamState);
     }
 
     // Runtime-loaded FX sprites (StreamingAssets/fx/<name>.png). Cached; soft dot fallback.
@@ -7814,67 +7765,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (sprite == null) sprite = GetSoftDotSprite();
         _fxSprites[name] = sprite;
         return sprite;
-    }
-
-    private static Vector2 CubicBezier(Vector2 p0, Vector2 p1, Vector2 p2, Vector2 p3, float t)
-    {
-        float u = 1f - t;
-        return u * u * u * p0 + 3f * u * u * t * p1 + 3f * u * t * t * p2 + t * t * t * p3;
-    }
-
-    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band    // Soft-edged chevron (">" pointing +X) drawn as a signed-distance band — smooth at any size.
-    private Sprite _chevronSprite;
-    private Sprite GetChevronSprite()
-    {
-        if (_chevronSprite != null) return _chevronSprite;
-        const int S = 64;
-        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
-        var px = new Color32[S * S];
-        for (int y = 0; y < S; y++)
-            for (int x = 0; x < S; x++)
-            {
-                float fx = x / (S - 1f), fy = y / (S - 1f) - 0.5f;   // fy in [-0.5, 0.5]
-                // Chevron band: the "arm line" runs from (0.15,±0.5) to (0.85,0); distance to it.
-                float armX = Mathf.Lerp(0.15f, 0.85f, 1f - Mathf.Abs(fy) * 2f);
-                float d = Mathf.Abs(fx - armX);
-                float aVal = Mathf.Clamp01(1f - d / 0.16f);
-                aVal = aVal * aVal * (3f - 2f * aVal);
-                px[y * S + x] = new Color32(255, 255, 255, (byte)(aVal * 255f));
-            }
-        tex.SetPixels32(px);
-        tex.Apply();
-        _chevronSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f));
-        return _chevronSprite;
-    }
-
-    // Sleek kite arrowhead with a concave base (MTGA-style), soft anti-aliased edges,
-    // pointing +X. Layered twice (color + white core) at render time.
-    private Sprite _energyHeadSprite;
-    private Sprite GetEnergyHeadSprite()
-    {
-        if (_energyHeadSprite != null) return _energyHeadSprite;
-        const int S = 96;
-        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
-        var px = new Color32[S * S];
-        for (int y = 0; y < S; y++)
-            for (int x = 0; x < S; x++)
-            {
-                float fx = x / (S - 1f), fy = Mathf.Abs(y / (S - 1f) - 0.5f) * 2f;   // fy in [0,1]
-                // Kite: leading edge tip at fx=1; width shrinks toward the tip; concave back edge.
-                float halfWidth = (1f - fx) < 0f ? 0f : Mathf.Pow(1f - fx, 0.62f) * 0.92f;
-                float backCut = 0.22f * (1f - fy * fy);   // concave notch at the back
-                bool inside = fx > backCut && fy < halfWidth;
-                float edge = Mathf.Min(
-                    (halfWidth - fy) * 3.2f,
-                    (fx - backCut) * 6f);
-                float aVal = inside ? Mathf.Clamp01(edge) : 0f;
-                aVal = aVal * aVal * (3f - 2f * aVal);
-                px[y * S + x] = new Color32(255, 255, 255, (byte)(aVal * 255f));
-            }
-        tex.SetPixels32(px);
-        tex.Apply();
-        _energyHeadSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f));
-        return _energyHeadSprite;
     }
 
     private void AddArrowSegment(RectTransform root, Vector2 a, Vector2 b, Color color, float thickness)
@@ -14382,7 +14272,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             manager.SetHandDropRaycastActive(handSeat, false);
             RestoreLiftedSource();
             if (ghost != null) Destroy(ghost);
-            if (UseBeamArrow && arrowRoot != null) manager.HideBeam(arrowRoot.name);
+            if (arrowRoot != null) manager.HideBeam(arrowRoot.name);
             if (arrowRoot != null) Destroy(arrowRoot);
             ghost = null;
             arrowRoot = null;
@@ -14638,6 +14528,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             var distance = delta.magnitude;
             if (distance < 8f)
             {
+                manager.HideBeam(arrowRoot.name);
                 arrowRoot.SetActive(false);
                 return;
             }
@@ -14951,14 +14842,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             }
             bool overOpp = hovered != null && !string.IsNullOrEmpty(hovered.Owner) && hovered.Owner != seat;
             bool valid = overOpp && manager.IsValidAttackTarget(seat, card, hovered);
-            string newHoverId = overOpp ? hovered.InstanceId : null;
+            bool overOtherCard = hovered != null && hovered.InstanceId != card.InstanceId;
+            string newHoverId = overOtherCard ? hovered.InstanceId : null;
 
             // Refresh the on-card valid/invalid indicator only when the hovered card changes.
             if (newHoverId != hoverTargetId)
             {
                 if (indicator != null) { Destroy(indicator); indicator = null; }
                 hoverTargetId = newHoverId;
-                if (overOpp)
+                if (overOtherCard)
                 {
                     var tr = manager.GetCardRect(hovered.InstanceId);
                     if (tr != null)
@@ -14973,11 +14865,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (arrowRoot != null) Destroy(arrowRoot);
             arrowRoot = manager.NewArrowRoot("Attack Drag Arrow", ownerCanvas.transform).gameObject;
             var root = arrowRoot.transform as RectTransform;
-            var snapRect = overOpp ? manager.GetCardRect(hovered.InstanceId) : null;
+            var snapRect = overOtherCard ? manager.GetCardRect(hovered.InstanceId) : null;
             if (snapRect != null)
-                manager.DrawCurvedTargetingArrow(root, sourceRect, snapRect, valid ? ValidColor : InvalidColor, 14f);
+                manager.DrawCurvedTargetingArrow(root, sourceRect, snapRect, valid ? ValidColor : InvalidColor, 14f,
+                    valid ? TargetingArrowGraphic.ArrowState.Valid : TargetingArrowGraphic.ArrowState.Invalid);
             else
-                manager.DrawCurvedTargetingArrowToPoint(root, sourceRect, eventData.position, AttackColor, 14f);
+                manager.DrawCurvedTargetingArrowToPoint(root, sourceRect, eventData.position, AttackColor, 14f,
+                    TargetingArrowGraphic.ArrowState.Aim);
         }
 
         public void OnEndDrag(PointerEventData eventData)
@@ -15001,6 +14895,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         private void Cleanup()
         {
+            if (manager != null) manager.HideBeam("Attack Drag Arrow");
             if (arrowRoot != null) { Destroy(arrowRoot); arrowRoot = null; }
             if (indicator != null) { Destroy(indicator); indicator = null; }
             hoverTargetId = null;
@@ -15175,8 +15070,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
-
 
 
 
