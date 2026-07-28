@@ -10718,6 +10718,11 @@ namespace OnePieceTcg.Engine
                 if (GetCard(bTarget).Type != "character"
                     || (bOppOnly && bSeat == effect.Seat)
                     || (bOwnOnly && bSeat != effect.Seat)
+                    // The {type} and [name] the clause names were never checked either, so "return up to 1
+                    // of your {The Vinsmoke Family} type Characters" accepted any Character you owned.
+                    // Read from the target description so a rider's own tags cannot widen or narrow it.
+                    || !CardPassesFeatureFilter(bDesc, GetCard(bTarget))
+                    || !DonGiveNameOk(state, bDesc, bTarget)
                     || (bounceCap >= 0 && GetCost(state, bTarget) > bounceCap)
                     || bpBounceFail(bTarget)
                     || (ContainsAll(text, "active Character") && bTarget.Rested)
@@ -10815,7 +10820,15 @@ namespace OnePieceTcg.Engine
                 int sinkBpCap = ParseLimit(text, @"(\d{3,5}) base power or less");
                 bool sinkPwrOk = (sinkPwrCap < 0 || GetPower(state, sTarget) <= sinkPwrCap)
                     && (sinkBpCap < 0 || GetCard(sTarget).Power <= sinkBpCap);
-                if (GetCard(sTarget).Type != "character" || !sinkCapOk || !sinkPwrOk
+                // "with a base cost of 1" — no "or less" — is an EXACT filter, not a cap. Only the
+                // "or less" form was ever parsed, so OP03-047 Zeff, which may sink only a base-cost-1
+                // Character, happily took a cost-2 or cost-3 one. Base cost is the PRINTED cost; the
+                // undecorated "cost of N" is the current one.
+                int sinkBaseExact = ParseLimit(text, @"base cost of (\d+)(?! or)");
+                int sinkCostExact = sinkBaseExact >= 0 ? -1 : ParseLimit(text, @"\bcost of (\d+)(?! or)");
+                bool sinkExactOk = (sinkBaseExact < 0 || GetCard(sTarget).Cost == sinkBaseExact)
+                    && (sinkCostExact < 0 || GetCost(state, sTarget) == sinkCostExact);
+                if (GetCard(sTarget).Type != "character" || !sinkCapOk || !sinkPwrOk || !sinkExactOk
                     || (sinkOppOnly && sSeat != OtherSeat(effect.Seat))
                     || (sinkOwnOnly && sSeat != effect.Seat))
                 {

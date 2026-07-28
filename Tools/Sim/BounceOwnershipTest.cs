@@ -26,6 +26,8 @@ namespace OnePieceTcg.Sim
             OpponentOnlyBounceRefusesMyOwnCharacters();
             OwnBounceStillWorks();
             UnqualifiedBounceOffersBothSides();
+            ExactBaseCostIsAFilterNotACap();
+            TypeFilteredBounceIsEnforced();
             SweepEveryOpponentOnlyBounceClause();
             Console.WriteLine($"bouncetest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -102,6 +104,66 @@ namespace OnePieceTcg.Sim
                 GameEngine.IsValidEffectTarget(b.St, pe, theirs));
             Check("an unqualified bounce also lights MY Character (the card names no side)",
                 GameEngine.IsValidEffectTarget(b.St, pe, mine));
+        }
+
+        // OP03-047 Zeff: "[On Play] Place up to 1 Character with a base cost of 1 at the bottom of the
+        // owner's deck." Only the "cost of N OR LESS" form was ever parsed, so an exact "base cost of 1"
+        // parsed as no filter at all and any Character could be sunk. The glow and the resolver must agree
+        // on which ones qualify.
+        private static void ExactBaseCostIsAFilterNotACap()
+        {
+            const string Zeff = "Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck.";
+            var b = new Board();
+            var src = b.Character("south", "OP03-047");
+            var costOne = b.Character("north", "ST01-006");    // base cost 1 — the only legal target
+            var costThree = b.Character("north", "ST01-005");  // base cost 3 — must be refused
+            GameEngine.QueueClauseForTest(b.St, "south", src, "main", Zeff);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("Zeff's placement queues", false, "no pending effect"); return; }
+
+            Check("exact base cost: the cost-1 Character lights up",
+                GameEngine.IsValidEffectTarget(b.St, pe, costOne));
+            Check("exact base cost: a cost-3 Character does NOT light up",
+                !GameEngine.IsValidEffectTarget(b.St, pe, costThree));
+
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = costThree.InstanceId });
+            Check("exact base cost: the resolver refuses the cost-3 Character",
+                b.N.CharacterArea.Any(c => c != null && c.InstanceId == costThree.InstanceId),
+                "a cost-3 Character was sunk by a base-cost-1 effect");
+
+            var pe2 = b.St.PendingEffects.FirstOrDefault();
+            if (pe2 == null) { Check("Zeff survives a refused click", false, "effect consumed"); return; }
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe2.EffectId, Target = costOne.InstanceId });
+            Check("exact base cost: the cost-1 Character IS sunk",
+                !b.N.CharacterArea.Any(c => c != null && c.InstanceId == costOne.InstanceId));
+        }
+
+        // A bounce may be restricted to a {type} — "return up to 1 of your {The Vinsmoke Family} type
+        // Characters to the owner's hand" — and the handler checked type/cost/power/rested/ownership but
+        // never the tag, so any Character you owned could be returned.
+        private static void TypeFilteredBounceIsEnforced()
+        {
+            const string Typed = "Return up to 1 of your {Straw Hat Crew} type Characters to the owner's hand.";
+            var b = new Board();
+            var src = b.Character("south", "OP07-102");
+            var inType = b.Character("south", "ST01-005");     // Jinbe — {Straw Hat Crew}
+            var offType = b.Character("south", "OP15-040");    // Viola — {Dressrosa}, must be refused
+            GameEngine.QueueClauseForTest(b.St, "south", src, "main", Typed);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("type-filtered bounce queues", false, "no pending effect"); return; }
+
+            Check("type-filtered bounce lights a Character of that type",
+                GameEngine.IsValidEffectTarget(b.St, pe, inType));
+            Check("type-filtered bounce does NOT light one outside the type",
+                !GameEngine.IsValidEffectTarget(b.St, pe, offType));
+
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = offType.InstanceId });
+            Check("type-filtered bounce: the resolver refuses the wrong type too",
+                b.S.CharacterArea.Any(c => c != null && c.InstanceId == offType.InstanceId),
+                "a Character outside the named type was returned");
         }
 
         // Every printed opponent-only bounce, not just the one the sweep happened to name.

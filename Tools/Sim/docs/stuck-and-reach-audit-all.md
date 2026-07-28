@@ -1,6 +1,6 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-28 14:38
+- Generated: 2026-07-28 14:43
 - Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **300**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
@@ -15,7 +15,7 @@ _none_
 
 _none_
 
-## GLOW-MISMATCH — 1977
+## GLOW-MISMATCH — 1964
 
 | Card | Name | Board | Detail | Clause |
 |---|---|---|---|---|
@@ -797,12 +797,6 @@ _none_
 | OP07-051 | Boa Hancock | in-battle | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Characters other than [Monkey.D.Luffy] cannot attack until the end of your opponent's next turn. Then, place up to 1 Character with a cost of 1 or less at the bottom of the owner's deck. |
 | OP07-051 | Boa Hancock | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Characters other than [Monkey.D.Luffy] cannot attack until the end of your opponent's next turn. Then, place up to 1 Character with a cost of 1 or less at the bottom of the owner's deck. |
 | OP07-051 | Boa Hancock | in-battle | EB01-017 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Characters other than [Monkey.D.Luffy] cannot attack until the end of your opponent's next turn. Then, place up to 1 Character with a cost of 1 or less at the bottom of the owner's deck. |
-| OP07-062 | Vinsmoke Reiju | full-board | ST01-005 (own character) is accepted by the resolver but never lights up | If the number of DON!! cards on your field is equal to or less than the number on your opponent's field, return up to 1 of your {The Vinsmoke Family} type Characters with a cost of 1 to the owner's hand. |
-| OP07-062 | Vinsmoke Reiju | full-board | ST01-006 (own character) is accepted by the resolver but never lights up | If the number of DON!! cards on your field is equal to or less than the number on your opponent's field, return up to 1 of your {The Vinsmoke Family} type Characters with a cost of 1 to the owner's hand. |
-| OP07-062 | Vinsmoke Reiju | full-board | ST02-004 (own character) is accepted by the resolver but never lights up | If the number of DON!! cards on your field is equal to or less than the number on your opponent's field, return up to 1 of your {The Vinsmoke Family} type Characters with a cost of 1 to the owner's hand. |
-| OP07-062 | Vinsmoke Reiju | in-battle | ST01-005 (own character) is accepted by the resolver but never lights up | If the number of DON!! cards on your field is equal to or less than the number on your opponent's field, return up to 1 of your {The Vinsmoke Family} type Characters with a cost of 1 to the owner's hand. |
-| OP07-062 | Vinsmoke Reiju | in-battle | ST01-006 (own character) is accepted by the resolver but never lights up | If the number of DON!! cards on your field is equal to or less than the number on your opponent's field, return up to 1 of your {The Vinsmoke Family} type Characters with a cost of 1 to the owner's hand. |
-| OP07-062 | Vinsmoke Reiju | in-battle | ST02-004 (own character) is accepted by the resolver but never lights up | If the number of DON!! cards on your field is equal to or less than the number on your opponent's field, return up to 1 of your {The Vinsmoke Family} type Characters with a cost of 1 to the owner's hand. |
 | OP07-072 | Porche | full-board | OP07-072 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −1 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Look at 5 cards from the top of your deck; reveal up to 1 {Foxy Pirates} type card and add it to your hand. Then, place the rest at the bottom of your deck in any order and play up to 1 purple Character card with 4000 power or less from your hand. |
 | OP07-072 | Porche | in-battle | OP07-072 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −1 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Look at 5 cards from the top of your deck; reveal up to 1 {Foxy Pirates} type card and add it to your hand. Then, place the rest at the bottom of your deck in any order and play up to 1 purple Character card with 4000 power or less from your hand. |
 | OP07-073 | Monkey.D.Luffy | full-board | OP07-073 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −3 (You may return the specified number of DON!! cards from your field to your DON!! deck.): If your opponent has 3 or more Characters, set this Character as active. |
@@ -1110,13 +1104,6 @@ _none_
 | OP11-035 | Fisher Tiger | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters. |
 | OP11-039 | Vagabond Drill | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 4 or less. |
 | OP11-039 | Vagabond Drill | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 4 or less. |
-| OP11-056 | Brook | full-board | ST01-005 (own character) is accepted by the resolver but never lights up | Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck. |
-| OP11-056 | Brook | full-board | OP11-056 (own character) is accepted by the resolver but never lights up | Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck. |
-| OP11-056 | Brook | full-board | ST01-005 (opponent character) is accepted by the resolver but never lights up | Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck. |
-| OP11-056 | Brook | in-battle | ST01-005 (own character) is accepted by the resolver but never lights up | Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck. |
-| OP11-056 | Brook | in-battle | OP11-056 (own character) is accepted by the resolver but never lights up | Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck. |
-| OP11-056 | Brook | in-battle | ST01-005 (opponent character) is accepted by the resolver but never lights up | Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck. |
-| OP11-056 | Brook | in-battle | EB01-017 (opponent character) is accepted by the resolver but never lights up | Place up to 1 Character with a base cost of 1 at the bottom of the owner's deck. |
 | OP11-062 | Charlotte Katakuri | full-board | OP11-062 (own leader) LIGHTS UP but the resolver does nothing with it | DON!! −1: Look at 1 card from the top of your opponent's deck. Then, this Leader gains +1000 power during this battle. |
 | OP11-062 | Charlotte Katakuri | in-battle | OP11-062 (own leader) LIGHTS UP but the resolver does nothing with it | DON!! −1: Look at 1 card from the top of your opponent's deck. Then, this Leader gains +1000 power during this battle. |
 | OP11-070 | Charlotte Pudding | full-board | OP11-070 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −1, You may rest this Character: Look at 1 card from the top of your opponent's deck. |
