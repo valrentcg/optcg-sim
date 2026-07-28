@@ -175,6 +175,46 @@ namespace OnePieceTcg.Sim
                         if (pe == null) continue;
 
                         bool clickable = AnyValidTarget(st, pe);
+                        // GLOW MISMATCH. "Is anything clickable at all" is too weak a question: it passes
+                        // as soon as SOMETHING lights, even when the thing that lights is the wrong card.
+                        // OP15-002 Lucy is exactly that — her "trash any number of Event or Stage cards
+                        // from your hand" lit board cards (the clause also says "gains +1000 power") while
+                        // the hand cards that actually pay lit nothing, and with the fix reverted this
+                        // sweep still reported a clean bill because clickable was true. So compare the
+                        // glow against the resolver PER CARD, in both directions: a card the resolver
+                        // accepts must light, and a card that lights must be accepted.
+                        // Only ask the glow question of steps that actually ask for a CARD. The noise this
+                        // removes is not marginal: DON!!-cost reminders ("DON!! −2 (You may return …)"),
+                        // delegating clauses ("Activate this card's [Main] effect", "Play this card") and
+                        // self-paid costs accounted for ~1,600 of the first run's findings, none of which
+                        // involve clicking a card at all.
+                        bool delegating = Regex.IsMatch(body,
+                            @"^\s*(?:Activate this card's \[[^\]]+\] effect|Play this card)\.?\s*$",
+                            RegexOptions.IgnoreCase);
+                        // A clause gated on a condition the fixture does not meet ("If your Leader has the
+                        // {Water Seven} type…") legitimately does nothing when clicked, so glow-vs-resolver
+                        // disagreement there says nothing about the card — it says the board was wrong.
+                        // 611 findings were this one shape.
+                        bool condFails = false;
+                        {
+                            var condM = Regex.Match(StripCostPrefix(body), @"^If ([^,]{3,80}),",
+                                RegexOptions.IgnoreCase);
+                            if (condM.Success)
+                            {
+                                try { condFails = !GameEngine.AuditConditionValue(st, "south", condM.Groups[1].Value.Trim()); }
+                                catch { condFails = false; }
+                            }
+                        }
+                        if ((scenario.Name == "full-board" || scenario.Name == "in-battle")
+                            && WantsACardTarget(pe) && !delegating && !condFails)
+                        {
+                            foreach (var mm in GlowMismatches(st, pe))
+                                findings.Add(new Finding
+                                {
+                                    CardId = d.Id, CardName = d.Name, Kind = "GLOW-MISMATCH",
+                                    Scenario = scenario.Name, Clause = body, Detail = mm,
+                                });
+                        }
                         // With nothing clickable the panel still shows an enabled "Use Effect" button, so
                         // this is only a freeze if pressing that ALSO fails to move the game on. Without
                         // this second half the sweep flagged every "rest ALL of your opponent's Characters"
@@ -189,7 +229,7 @@ namespace OnePieceTcg.Sim
                         //    the description describes no card that exists (the OP16-001 Ace bug).
                         //  * neither — the step is driven by the panel's "Use Effect" button (rest DON!!,
                         //    turn a Life card face-up, reveal from hand). Normal, not a finding.
-                        if (scenario.Name == "full-board" && !clickable)
+                        if ((scenario.Name == "full-board" || scenario.Name == "in-battle") && !clickable)
                         {
                             string accepted = ResolverAcceptsSomeBoardCard(st, pe);
                             if (accepted != null)
@@ -243,6 +283,9 @@ namespace OnePieceTcg.Sim
             Console.WriteLine($"  STUCK (mandatory + nothing clickable + Skip disabled): {stuck} across {findings.Where(f => f.Kind == "STUCK").Select(f => f.CardId).Distinct().Count()} cards");
             Console.WriteLine($"  UNREACHABLE (no card in the library can satisfy it): {dead} across {findings.Where(f => f.Kind == "UNREACHABLE").Select(f => f.CardId).Distinct().Count()} cards");
             Console.WriteLine($"  UNCLICKABLE (resolver accepts a board card the glow never lights): {unclickable}");
+            int glowMm = findings.Count(f => f.Kind == "GLOW-MISMATCH");
+            Console.WriteLine($"  GLOW-MISMATCH (glow and resolver disagree on a card): {glowMm} across "
+                + $"{findings.Where(f => f.Kind == "GLOW-MISMATCH").Select(f => f.CardId).Distinct().Count()} cards");
             Console.WriteLine($"  THREW: {threw}");
             Console.WriteLine($"  report: {outPath}");
             return stuck + dead + unclickable + threw == 0 ? 0 : 1;
@@ -473,6 +516,81 @@ namespace OnePieceTcg.Sim
         // (ApplyCommand mutates in place), and "accepted" means the click actually moved the game: a pick
         // consumed, the effect finished, or cards changed zones. If such a card exists while the glow
         // lights nothing, the player can SEE the card but cannot click it.
+        /// <summary>Per-card glow-vs-resolver disagreement, in both directions. Reuses the same
+        /// control-run subtraction as ResolverAcceptsSomeBoardCard: pressing "Use Effect" with no target
+        /// changes some cards for reasons that have nothing to do with what was clicked (a self-rest, an
+        /// auto-paying cost), and those must not read as acceptance.</summary>
+        static List<string> GlowMismatches(GameState st, PendingEffect pe)
+        {
+            var found = new List<string>();
+            var control = ControlRunChanges(st, pe);
+
+            foreach (var kv in st.Players)
+            {
+                var p = kv.Value;
+                if (p == null) continue;
+                var candidates = new List<CardInstance>();
+                if (p.Leader != null) candidates.Add(p.Leader);
+                if (p.CharacterArea != null) candidates.AddRange(p.CharacterArea.Where(c => c != null));
+                foreach (var list in new[] { p.Hand, p.Trash, p.Life })
+                    if (list != null) candidates.AddRange(list.Where(c => c != null));
+
+                foreach (var cand in candidates)
+                {
+                    bool glows = GameEngine.IsValidEffectTarget(st, pe, cand);
+                    var clone = GameClone.Clone(st);
+                    var clonePe = clone.PendingEffects.FirstOrDefault(e => e.EffectId == pe.EffectId);
+                    if (clonePe == null) continue;
+                    string before = CardFingerprint(clone, cand.InstanceId);
+                    try
+                    {
+                        GameEngine.ApplyCommand(clone, new GameCommand
+                        {
+                            Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId, Target = cand.InstanceId,
+                        });
+                    }
+                    catch { continue; }
+                    bool accepted = CardFingerprint(clone, cand.InstanceId) != before
+                                    && !control.Contains(cand.InstanceId);
+                    if (glows == accepted) continue;
+                    string where = (kv.Key == pe.Seat ? "own " : "opponent ") + cand.Zone;
+                    found.Add(glows
+                        ? $"{cand.CardId} ({where}) LIGHTS UP but the resolver does nothing with it"
+                        : $"{cand.CardId} ({where}) is accepted by the resolver but never lights up");
+                    if (found.Count >= 4) return found;   // enough to identify the clause
+                }
+            }
+            return found;
+        }
+
+        /// <summary>Cards changed by pressing "Use Effect" with no target — noise for acceptance tests.</summary>
+        static HashSet<string> ControlRunChanges(GameState st, PendingEffect pe)
+        {
+            var changed = new HashSet<string>();
+            var cst = GameClone.Clone(st);
+            var before = new Dictionary<string, string>();
+            foreach (var kv in cst.Players)
+            {
+                var p0 = kv.Value;
+                if (p0 == null) continue;
+                var pre = new List<CardInstance>();
+                if (p0.Leader != null) pre.Add(p0.Leader);
+                if (p0.CharacterArea != null) pre.AddRange(p0.CharacterArea.Where(c => c != null));
+                foreach (var l in new[] { p0.Hand, p0.Trash, p0.Life })
+                    if (l != null) pre.AddRange(l.Where(c => c != null));
+                foreach (var c in pre) before[c.InstanceId] = CardFingerprint(cst, c.InstanceId);
+            }
+            try
+            {
+                GameEngine.ApplyCommand(cst, new GameCommand
+                { Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId });
+            }
+            catch { }
+            foreach (var kv in before)
+                if (CardFingerprint(cst, kv.Key) != kv.Value) changed.Add(kv.Key);
+            return changed;
+        }
+
         static string ResolverAcceptsSomeBoardCard(GameState st, PendingEffect pe)
         {
             // CONTROL RUN. Press "Use Effect" (no target) once and record every card it changes. Those
@@ -562,11 +680,32 @@ namespace OnePieceTcg.Sim
                 if (p.Stage != null) all.Add(p.Stage);
                 var c2 = all.FirstOrDefault(c => c.InstanceId == instanceId);
                 if (c2 != null)
+                    // The card object is only half of a card's state. Power changes — by far the most
+                    // common thing an effect does to a target — live in STATE dictionaries keyed by
+                    // instance id, not on the CardInstance. A fingerprint that ignores them says
+                    // "nothing happened" for every buff and debuff in the game, which is what made the
+                    // glow-mismatch sweep report thousands of targets as accepted-but-inert.
                     return string.Join("/", kv.Key, c2.Zone, c2.Rested,
                         c2.AttachedDonIds == null ? 0 : c2.AttachedDonIds.Count,
-                        c2.Modifiers == null ? 0 : c2.Modifiers.Count);
+                        c2.Modifiers == null ? 0 : c2.Modifiers.Count,
+                        st.TemporaryPowerBonus != null && st.TemporaryPowerBonus.TryGetValue(instanceId, out var tp) ? tp : 0,
+                        st.Battle != null && st.Battle.BattlePowerBonus != null
+                            && st.Battle.BattlePowerBonus.TryGetValue(instanceId, out var bp) ? bp : 0,
+                        st.TimedPowerBonuses == null ? 0 : st.TimedPowerBonuses.Count(t => t.TargetInstanceId == instanceId),
+                        st.BasePowerOverrides == null ? 0 : st.BasePowerOverrides.Count(o => o.TargetInstanceId == instanceId),
+                        st.NameOverrides != null && st.NameOverrides.ContainsKey(instanceId) ? 1 : 0,
+                        GameEngine.GetPower(st, c2));
             }
             return "gone";
+        }
+
+        /// <summary>Leading timing tags and any DON!!/circled cost prefix removed, so a leading
+        /// "If &lt;condition&gt;," is actually at the front where it can be read.</summary>
+        static string StripCostPrefix(string text)
+        {
+            string t = Regex.Replace(text ?? "", @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+            t = Regex.Replace(t, @"^\s*(?:[➀-➉①-⑩]|DON!!\s*[-−–‑‒—]\s*\d+)\s*(?:\([^)]*\))?\s*[:：]?\s*", "");
+            return t.Trim();
         }
 
         // Is the step even asking for a CARD? A cost paid by resting DON!!, turning a Life card face-up
@@ -580,7 +719,11 @@ namespace OnePieceTcg.Sim
             // "Give up to N rested DON!! card(s) to 1 of your {type} Characters" — what the player clicks
             // is a rested DON!!, which the panel handles on its own path (GameManager's DonGivePickActive)
             // and which is not a CARD at all, so a card-based reach check can never see it.
-            if (Regex.IsMatch(pe.Text ?? "", @"give (?:up to )?[\d\w]+ rested DON!!", RegexOptions.IgnoreCase))
+            // ...unless the clause offers a RECIPIENT you choose ("to 1 of your {Sky Island} type Leader
+            // or Character cards"), which is a board click after all. Singular "Character" on purpose —
+            // the plural test is exactly what hid those five cards from the glow in the first place.
+            if (Regex.IsMatch(pe.Text ?? "", @"give (?:up to )?[\d\w]+ rested DON!!", RegexOptions.IgnoreCase)
+                && (pe.Text ?? "").IndexOf("Character", StringComparison.OrdinalIgnoreCase) < 0)
                 return false;
             string t = Regex.Replace(pe.Text ?? "", @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
             t = Regex.Replace(t, @"^\s*(?:[➀-➉①-⑩]|DON!!\s*[-−–‑‒—]\s*\d+)\s*(?:\([^)]*\))?\s*[:：]?\s*", "");
@@ -675,7 +818,13 @@ namespace OnePieceTcg.Sim
         // A spread of ordinary cards to populate boards with — deliberately plain ones, so a scenario
         // never accidentally satisfies an exotic filter and hides a stuck case.
         const string CharA = "ST01-005", CharB = "ST01-006", CharC = "ST02-004";
-        const string EventA = "ST01-013", TrashA = "ST01-007";
+        // EventA was ST01-013 and TrashA ST01-007 — both of which are CHARACTERS. So no board this sweep
+        // ever built contained a single Event or Stage card, and every clause that targets one ("trash 1
+        // Event from your hand", "K.O. 1 Stage", "activate an Event from your hand") was compared against
+        // a board that could not satisfy it: glow said no, resolver said no, they agreed, no finding.
+        // That blind spot is why the sweep reported 0 UNCLICKABLE with the OP15-002 Lucy bug reverted —
+        // her cost wants "Event or Stage cards from your hand" and there were none to light up.
+        const string EventA = "ST01-015", StageA = "EB01-011", TrashA = "ST01-007";
 
         static readonly Scenario[] Scenarios =
         {
@@ -689,7 +838,37 @@ namespace OnePieceTcg.Sim
             // Everything present — anything still unclickable here is suspicious, and this is the board
             // the library-wide reach check runs against.
             new Scenario { Name = "full-board",         Build = id => Rich(Board(id, ownChars: 3, oppChars: 3, oppRested: false, hand: 3, trash: 3, life: 3)) },
+            // A LIVE BATTLE. Without one, every [When Attacking] / [On Your Opponent's Attack] /
+            // [Counter] clause hits a `state.Battle == null` early return, resolves to nothing, leaves no
+            // pending effect, and the sweep skips it — so those tags were being counted as swept while
+            // never actually being exercised. That is precisely where the reported OP15-002 Lucy bug
+            // lived (her trash-for-power lit nothing in hand), and this sweep could not see it: with the
+            // fix reverted, it still reported 0 UNCLICKABLE.
+            new Scenario { Name = "in-battle",          Build = id => InBattle(Rich(Board(id, ownChars: 3, oppChars: 3, oppRested: false, hand: 3, trash: 3, life: 3))) },
         };
+
+        // Put the board into a battle that is still OPEN. A bare leader-vs-leader swing resolves fully
+        // inside declareAttack and leaves Battle null again, so the defender gets a [Blocker] to hold the
+        // battle at the block step — which is also where these abilities genuinely fire.
+        static GameState InBattle(GameState st)
+        {
+            var s = st.Players["south"]; var n = st.Players["north"];
+            int slot = n.CharacterArea.FindIndex(c => c == null);
+            if (slot < 0) slot = n.CharacterArea.Count - 1;
+            n.CharacterArea[slot] = Inst("EB01-017", "north", "character");   // vanilla [Blocker]
+            s.Leader.Rested = false; s.Leader.PlayedOnTurn = 0;
+            try
+            {
+                st = GameEngine.ApplyCommand(st, new GameCommand
+                {
+                    Type = "declareAttack", Seat = "south",
+                    Attacker = s.Leader.InstanceId, Target = st.Players["north"].Leader.InstanceId,
+                });
+            }
+            catch { }
+            st.PendingEffects.Clear();   // the swing's own reactives are not what is under audit
+            return st;
+        }
 
         // The board the reach check runs against has to be able to satisfy the AWKWARD descriptions too,
         // or a perfectly good card gets reported as dead because the audit never built a board it could
@@ -750,15 +929,19 @@ namespace OnePieceTcg.Sim
                 c.Rested = oppRested;
                 n.CharacterArea[i] = c;
             }
+            // Hand and trash cycle Character / Event / Stage so a clause naming any of the three has
+            // something real to match. A hand of three Characters made every Event- or Stage-targeting
+            // cost look correctly dead.
+            string[] mixed = { CharA, EventA, StageA };
             for (int i = 0; i < hand; i++)
             {
-                s.Hand.Add(Inst(i % 2 == 0 ? CharA : EventA, "south", "hand"));
-                n.Hand.Add(Inst(CharA, "north", "hand"));
+                s.Hand.Add(Inst(mixed[i % mixed.Length], "south", "hand"));
+                n.Hand.Add(Inst(mixed[i % mixed.Length], "north", "hand"));
             }
             for (int i = 0; i < trash; i++)
             {
-                s.Trash.Add(Inst(TrashA, "south", "trash"));
-                n.Trash.Add(Inst(TrashA, "north", "trash"));
+                s.Trash.Add(Inst(i == 0 ? TrashA : mixed[i % mixed.Length], "south", "trash"));
+                n.Trash.Add(Inst(i == 0 ? TrashA : mixed[i % mixed.Length], "north", "trash"));
             }
             for (int i = 0; i < life; i++)
             {
@@ -769,8 +952,11 @@ namespace OnePieceTcg.Sim
             // very stuck case we are looking for behind a "cannot pay" early return).
             for (int i = 0; i < 10; i++)
             {
-                s.CostArea.Add(new DonInstance { InstanceId = $"la-don-s{serialCounter++}", Rested = false });
-                n.CostArea.Add(new DonInstance { InstanceId = $"la-don-n{serialCounter++}", Rested = false });
+                // Half rested, half active. With every DON!! active, all 100+ "give up to 1 RESTED DON!!
+                // card to …" clauses lit their targets while the resolver had nothing to hand over —
+                // reported as a glow/resolver disagreement that was purely the fixture's doing.
+                s.CostArea.Add(new DonInstance { InstanceId = $"la-don-s{serialCounter++}", Rested = i >= 5 });
+                n.CostArea.Add(new DonInstance { InstanceId = $"la-don-n{serialCounter++}", Rested = i >= 5 });
             }
             return st;
         }
@@ -840,7 +1026,7 @@ namespace OnePieceTcg.Sim
                 + "what glows). The effect is recognized and resolves — it just can never do anything.");
             sb.AppendLine();
 
-            foreach (var kind in new[] { "STUCK", "UNCLICKABLE", "UNREACHABLE", "THREW" })
+            foreach (var kind in new[] { "STUCK", "UNCLICKABLE", "GLOW-MISMATCH", "UNREACHABLE", "THREW" })
             {
                 var rows = findings.Where(f => f.Kind == kind).ToList();
                 sb.AppendLine($"## {kind} — {rows.Count}");

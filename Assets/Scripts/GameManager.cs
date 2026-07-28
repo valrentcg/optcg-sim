@@ -1465,10 +1465,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (pe.Seat != seat || (isNetworked && seat != localSeat)) return false;
         if (aiSeat != null && seat == aiSeat) return false;
         string t = pe.Text ?? "";
+        // "Character" not "Characters". This is the DON-PICK flow — click a rested DON!! and it goes to
+        // your Leader — and it must only claim clauses that offer NO recipient choice. Five cards name
+        // the recipient in the singular ("to 1 of your {Sky Island} type Leader or Character cards" —
+        // OP15-114 Wyper, OP14-114 Ran, OP16-094 Ace, P-096 Girl, ST21-009 Nami), and the plural test
+        // swallowed them: the panel said "give to your Leader" and there was no way to hand the DON!! to
+        // a Character the card explicitly allows. The engine's glow rule had the same plural test.
         return t.IndexOf("rested DON!!", System.StringComparison.OrdinalIgnoreCase) >= 0
             && t.IndexOf("Give", System.StringComparison.OrdinalIgnoreCase) >= 0
             && t.IndexOf("Leader", System.StringComparison.OrdinalIgnoreCase) >= 0
-            && t.IndexOf("Characters", System.StringComparison.OrdinalIgnoreCase) < 0;
+            && t.IndexOf("Character", System.StringComparison.OrdinalIgnoreCase) < 0;
     }
 
     // A pending ①/②/... cost is paid by resting active cost-area DON!! at every supported timing

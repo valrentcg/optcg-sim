@@ -9124,13 +9124,28 @@ namespace OnePieceTcg.Engine
                 // "…to your Leader" (no Character option) is the DON-PICK flow: the rested DON!! itself
                 // is the target (chosen via the DON!! click path), NOT a board card — so glow nothing
                 // here, otherwise the Leader wrongly lights up.
-                if (!ContainsAll(firstClause, "Characters")) return false;
+                // "Character" not "Characters": five cards word the recipient in the SINGULAR — "to 1 of
+                // your {Sky Island} type Leader or Character cards" (OP15-114 Wyper, OP14-114 Ran,
+                // OP16-094 Ace, P-096 Girl, ST21-009 Nami). The plural test read those as the no-choice
+                // form, so the recipient the card explicitly lets you choose never lit up. The client's
+                // DonGivePickActive had the identical plural test and so routed the DON!! to the Leader
+                // regardless — both sides had to change, or one of them still ignores the choice.
+                if (!ContainsAll(firstClause, "Character")) return false;
                 // "…or 1 of your Characters": the recipient is chosen on the board — YOUR side only,
                 // and it must be IN PLAY (a Leader, or a Character in the character area). A Character
                 // card sitting in your HAND or LIFE is not a legal recipient and must not glow.
                 if (card.Owner != effect.Seat) return false;
-                return (def.Type == "leader" && card.Zone == "leader")
-                    || (def.Type == "character" && card.Zone == "character");
+                if (!((def.Type == "leader" && card.Zone == "leader")
+                      || (def.Type == "character" && card.Zone == "character"))) return false;
+                // The recipient carries the clause's OWN filters — "{Sky Island} type", "1 of your [Nami]
+                // cards" — and the resolver enforces them. Without the same test here the glow lights
+                // every card you own and the ones that do not match simply refuse the click: a dead
+                // target that looks legal, which is the other half of the same bug.
+                if (!CardPassesFeatureFilter(firstClause, def)) return false;
+                var donNameM = System.Text.RegularExpressions.Regex.Match(firstClause, @"your \[([^\]]+)\]",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (donNameM.Success && !NameMatches(state, card, donNameM.Groups[1].Value.Trim())) return false;
+                return true;
             }
             // "Give up to N of your opponent's rested DON!! cards to 1 of your opponent's Characters"
             // (Don Krieg OP15-008/OP15-015, Higuma) — the recipient is an OPPONENT's Character. Checked
