@@ -17487,6 +17487,26 @@ namespace OnePieceTcg.Engine
                     && !ContainsAll(text, "Choose one")
                     && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle"))
                     && (ContainsAll(text, "Leader") || ContainsAll(text, "Character")))
+                // "you cannot <do something> during this turn" — a RESTRICTION the effect places on its own
+                // controller (EB03-024 Vivi, OP06-026 Koushirou, OP13-028 Shanks). It records a modifier;
+                // there has never been anything to click, and it sat waiting to be clicked.
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*you cannot\b",
+                       System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                // "at the end of this battle/turn, <do something>" — a DELAYED action registered now and
+                // carried out later (OP02-064 Mr.2 places itself at the bottom of the deck). Nothing to
+                // pick at the moment it is queued.
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*at the end of (?:this|your|your opponent's)\b",
+                       System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                // "Negate the effects of your opponent's Leader and all of their Characters" (P-100 Teach)
+                // — names every card on that side, so there is no choice to make.
+                || (System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*Negate the effects? of",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    && ContainsAll(text, "all of their"))
+                // "Give <colour> Events in your hand −N cost" (OP01-067 Crocodile) — an aura over a whole
+                // zone, not a target.
+                || System.Text.RegularExpressions.Regex.IsMatch(text,
+                       @"^\s*Give [^.]*\bin your hand\b[^.]*[-−–‑‒—]\d+ cost",
+                       System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 // "Add up to N card(s) from the TOP of your opponent's Life cards to the owner's hand" —
                 // the top card is a fixed card, so there is nothing to choose (EB04-054 Kuma, OP16-107
                 // Burgess, OP14-112 Boa, OP16-116). These queued and waited for a click on a face-down

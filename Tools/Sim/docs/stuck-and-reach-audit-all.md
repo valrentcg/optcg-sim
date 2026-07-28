@@ -1,6 +1,6 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-28 15:45
+- Generated: 2026-07-28 15:49
 - Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **375**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
@@ -22,7 +22,7 @@
 
 _none_
 
-## GLOW-MISMATCH — 1703
+## GLOW-MISMATCH — 1689
 
 | Card | Name | Board | Detail | Clause |
 |---|---|---|---|---|
@@ -997,12 +997,6 @@ _none_
 | OP12-117 | Slam Gibson | in-battle | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Your Leader gains +3000 power during this battle. |
 | OP13-019 | But Ace Here Said You Deserved It!! | full-board | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Your Leader gains +3000 power during this battle. |
 | OP13-019 | But Ace Here Said You Deserved It!! | in-battle | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Your Leader gains +3000 power during this battle. |
-| OP13-028 | Shanks | full-board | ST01-005 (own hand) LIGHTS UP but the resolver does nothing with it | Set all of your DON!! cards as active. Then, you cannot play cards from your hand during this turn. |
-| OP13-028 | Shanks | full-board | ST01-015 (own hand) LIGHTS UP but the resolver does nothing with it | Set all of your DON!! cards as active. Then, you cannot play cards from your hand during this turn. |
-| OP13-028 | Shanks | full-board | EB01-011 (own hand) LIGHTS UP but the resolver does nothing with it | Set all of your DON!! cards as active. Then, you cannot play cards from your hand during this turn. |
-| OP13-028 | Shanks | in-battle | ST01-005 (own hand) LIGHTS UP but the resolver does nothing with it | Set all of your DON!! cards as active. Then, you cannot play cards from your hand during this turn. |
-| OP13-028 | Shanks | in-battle | ST01-015 (own hand) LIGHTS UP but the resolver does nothing with it | Set all of your DON!! cards as active. Then, you cannot play cards from your hand during this turn. |
-| OP13-028 | Shanks | in-battle | EB01-011 (own hand) LIGHTS UP but the resolver does nothing with it | Set all of your DON!! cards as active. Then, you cannot play cards from your hand during this turn. |
 | OP13-032 | Nico Robin | full-board | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Characters with a cost of 8 or less cannot be rested until the end of your opponent's next End Phase. |
 | OP13-032 | Nico Robin | full-board | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Characters with a cost of 8 or less cannot be rested until the end of your opponent's next End Phase. |
 | OP13-032 | Nico Robin | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Characters with a cost of 8 or less cannot be rested until the end of your opponent's next End Phase. |
@@ -1449,14 +1443,6 @@ _none_
 | P-097 | Shanks | in-battle | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | Your opponent cannot activate [Blocker] during this turn. |
 | P-099 | Monkey.D.Luffy | full-board | P-099 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −10 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Set this Character as active. |
 | P-099 | Monkey.D.Luffy | in-battle | P-099 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −10 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Set this Character as active. |
-| P-100 | Marshall.D.Teach | full-board | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
-| P-100 | Marshall.D.Teach | full-board | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
-| P-100 | Marshall.D.Teach | full-board | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
-| P-100 | Marshall.D.Teach | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
-| P-100 | Marshall.D.Teach | in-battle | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
-| P-100 | Marshall.D.Teach | in-battle | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
-| P-100 | Marshall.D.Teach | in-battle | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
-| P-100 | Marshall.D.Teach | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Negate the effects of your opponent's Leader and all of their Characters during this turn. |
 | P-135 | Monkey.D.Luffy | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 5 or less. |
 | P-135 | Monkey.D.Luffy | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 5 or less. |
 | PRB01-001 | Sanji | full-board | ST01-005 (own character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your Characters without an [On Play] effect and with a cost of 8 or less gains [Rush] during this turn. |
