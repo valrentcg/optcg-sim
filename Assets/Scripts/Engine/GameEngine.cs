@@ -5691,6 +5691,19 @@ namespace OnePieceTcg.Engine
             return -1;
         }
 
+        /// <summary>The recipient of a DON!!-give may be NAMED rather than typed: "to 1 of your [Nami]
+        /// cards" (P-096 Girl, OP13-006 Woop Slap, OP13-021 Gum-Gum Gatling Gun, ST29-012 Luffy) or "to
+        /// your [Roronoa Zoro] Leader" (OP12-026 Kuina, OP12-031 Tashigi). Only the {type} filter was ever
+        /// enforced, so with a named recipient ANY of your Characters could take the DON!!. Shared by the
+        /// glow and by all three resolver paths so the two can never disagree about who may receive it.</summary>
+        private static bool DonGiveNameOk(GameState state, string text, CardInstance target)
+        {
+            if (target == null) return false;
+            var m = System.Text.RegularExpressions.Regex.Match(text ?? "", @"your \[([^\]]+)\]",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return !m.Success || NameMatches(state, target, m.Groups[1].Value.Trim());
+        }
+
         // Removal replacement: "If (this|your {T} type) Character would be removed from the
         // field by your opponent's effect, you may <X> instead." Scans the victim's own board
         // (the victim card itself plus any aura card whose text protects the victim's type)
@@ -9142,9 +9155,7 @@ namespace OnePieceTcg.Engine
                 // every card you own and the ones that do not match simply refuse the click: a dead
                 // target that looks legal, which is the other half of the same bug.
                 if (!CardPassesFeatureFilter(firstClause, def)) return false;
-                var donNameM = System.Text.RegularExpressions.Regex.Match(firstClause, @"your \[([^\]]+)\]",
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                if (donNameM.Success && !NameMatches(state, card, donNameM.Groups[1].Value.Trim())) return false;
+                if (!DonGiveNameOk(state, firstClause, card)) return false;
                 return true;
             }
             // "Give up to N of your opponent's rested DON!! cards to 1 of your opponent's Characters"
@@ -14879,7 +14890,8 @@ namespace OnePieceTcg.Engine
                         Log(state, effect.Seat, $"Choose one of your Characters to receive {gdN} rested DON!! ({sourceName}).");
                         return EffectResolution.WaitingForTarget;
                     }
-                    if (gdSeat != effect.Seat || GetCard(gdT).Type != "character" || !CardPassesFeatureFilter(text, GetCard(gdT)))
+                    if (gdSeat != effect.Seat || GetCard(gdT).Type != "character" || !CardPassesFeatureFilter(text, GetCard(gdT))
+                        || !DonGiveNameOk(state, text, gdT))
                     {
                         Log(state, effect.Seat, "That is not a valid DON!! attachment target.");
                         return EffectResolution.WaitingForTarget;
@@ -14957,6 +14969,14 @@ namespace OnePieceTcg.Engine
                         Log(state, effect.Seat, "There are no rested DON!! cards to attach.");
                         return EffectResolution.Resolved;
                     }
+                    // "to your [Roronoa Zoro] Leader" (OP12-026 Kuina, OP12-031 Tashigi): the recipient is
+                    // fixed, so the name is a CONDITION on this Leader rather than a target filter. With a
+                    // different Leader the clause does nothing instead of ramping it anyway.
+                    if (!DonGiveNameOk(state, text, owner.Leader))
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: your Leader is not the named card — no DON!! is given.");
+                        return EffectResolution.Resolved;
+                    }
                     if (effect.SelectionsRemaining <= 0) effect.SelectionsRemaining = giveCount;
                     var pickDon = owner.CostArea.FirstOrDefault(d => d.Rested && d.InstanceId == targetId);
                     if (pickDon == null)
@@ -14987,7 +15007,7 @@ namespace OnePieceTcg.Engine
                 // unchecked, so the DON!! could be attached to ANY of your Leader/Characters. CardPassesFeatureFilter
                 // collects EVERY {Tag} and matches any, so the dual-type OR is honored.
                 if (targetSeat != effect.Seat || (targetDef.Type != "leader" && targetDef.Type != "character")
-                    || !CardPassesFeatureFilter(text, targetDef))
+                    || !CardPassesFeatureFilter(text, targetDef) || !DonGiveNameOk(state, text, target))
                 {
                     Log(state, effect.Seat, "That is not a valid DON!! attachment target.");
                     return EffectResolution.WaitingForTarget;

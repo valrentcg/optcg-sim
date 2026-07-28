@@ -1,7 +1,7 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-28 13:20
-- Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **299**
+- Generated: 2026-07-28 14:18
+- Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **300**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
 
@@ -11,12 +11,9 @@
 
 _none_
 
-## UNCLICKABLE — 2
+## UNCLICKABLE — 0
 
-| Card | Name | Board | Detail | Clause |
-|---|---|---|---|---|
-| P-096 | Girl | full-board | the resolver accepts ST01-005 (own character) [south/character/False/0/0/0/0/0/0/0/5000 -> south/character/False/1/0/0/0/0/0/0/6000] but the glow lights nothing | Give up to 1 rested DON!! card to 1 of your [Nami] cards. |
-| P-096 | Girl | in-battle | the resolver accepts ST01-005 (own character) [south/character/False/0/0/0/0/0/0/0/5000 -> south/character/False/1/0/0/0/0/0/0/6000] but the glow lights nothing | Give up to 1 rested DON!! card to 1 of your [Nami] cards. |
+_none_
 
 ## GLOW-MISMATCH — 2052
 

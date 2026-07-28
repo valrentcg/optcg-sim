@@ -36,6 +36,7 @@ namespace OnePieceTcg.Sim
             RecipientLightsUp(PluralClause, "plural \"or 1 of your Characters\"", expectGlow: true);
             RecipientLightsUp(LeaderOnlyClause, "no-choice \"to your Leader\"", expectGlow: false);
             ClickingACharacterActuallyGivesItTheDon();
+            NamedRecipientIsEnforced();
             Console.WriteLine($"donrecipient: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -93,6 +94,45 @@ namespace OnePieceTcg.Sim
             Check("clicking a Character actually gives it the rested DON!!",
                 after != null && after.AttachedDonIds.Count == before + 1,
                 $"attached {before} -> {after?.AttachedDonIds.Count}");
+        }
+
+        // Six cards name the recipient rather than typing it — "to 1 of your [Nami] cards" (P-096 Girl),
+        // "[Monkey.D.Luffy]" (OP13-006, OP13-021, ST29-012), "your [Roronoa Zoro] Leader" (OP12-026,
+        // OP12-031). The glow enforces that name; the resolver did not, so any Character could take the
+        // DON!!. Surfaced as the last UNCLICKABLE pair once the audit fixture finally had rested DON!!.
+        private static void NamedRecipientIsEnforced()
+        {
+            const string Named = "Give up to 1 rested DON!! card to 1 of your [Nami] cards.";
+            var b = new Board();
+            var src = b.Character("south", "P-096");
+            var nami = b.Character("south", "ST29-008");      // named [Nami] — the only legal recipient
+            var other = b.Character("south", "ST29-010");     // Franky — must be refused
+            b.Don("south", 4, rested: 2);
+            GameEngine.QueueClauseForTest(b.St, "south", src, "main", Named);
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            if (pe == null) { Check("named recipient: clause queues", false, "no pending effect"); return; }
+
+            Check("named recipient: the [Nami] card lights up",
+                GameEngine.IsValidEffectTarget(b.St, pe, nami));
+            Check("named recipient: a card with the wrong name does NOT light",
+                !GameEngine.IsValidEffectTarget(b.St, pe, other));
+
+            // And the resolver has to agree — a name the glow refuses must not be accepted by a click.
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = other.InstanceId });
+            var otherAfter = b.S.CharacterArea.FirstOrDefault(c => c != null && c.InstanceId == other.InstanceId);
+            Check("named recipient: the resolver refuses the wrong name too",
+                otherAfter != null && otherAfter.AttachedDonIds.Count == 0,
+                $"Franky ended up with {otherAfter?.AttachedDonIds.Count} DON!!");
+
+            var pe2 = b.St.PendingEffects.FirstOrDefault();
+            if (pe2 == null) { Check("named recipient: still resolvable after a bad click", false, "effect gone"); return; }
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe2.EffectId, Target = nami.InstanceId });
+            var namiAfter = b.S.CharacterArea.FirstOrDefault(c => c != null && c.InstanceId == nami.InstanceId);
+            Check("named recipient: the [Nami] card does receive the DON!!",
+                namiAfter != null && namiAfter.AttachedDonIds.Count == 1,
+                $"Nami has {namiAfter?.AttachedDonIds.Count} DON!!");
         }
 
         // ---- plumbing ---------------------------------------------------------------------------
