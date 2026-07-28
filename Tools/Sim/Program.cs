@@ -122,6 +122,9 @@ switch (mode)
     case "resolvesweep":
         return OnePieceTcg.Sim.ResolveShapeSweep.Run();
 
+    case "replacementchoice":
+        return OnePieceTcg.Sim.ReplacementChoiceTest.Run();
+
     case "bouncetest":
         return OnePieceTcg.Sim.BounceOwnershipTest.Run();
 
