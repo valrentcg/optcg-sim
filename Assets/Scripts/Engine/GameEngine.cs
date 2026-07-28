@@ -17479,6 +17479,29 @@ namespace OnePieceTcg.Engine
                     && !ContainsAll(text, "Choose one")
                     && (ContainsAll(text, "during this turn") || ContainsAll(text, "during this battle"))
                     && (ContainsAll(text, "Leader") || ContainsAll(text, "Character")))
+                // "Add up to N card(s) from the TOP of your opponent's Life cards to the owner's hand" —
+                // the top card is a fixed card, so there is nothing to choose (EB04-054 Kuma, OP16-107
+                // Burgess, OP14-112 Boa, OP16-116). These queued and waited for a click on a face-down
+                // card the player cannot even see.
+                || (ContainsAll(text, "from the top of your opponent's Life") && ContainsAll(text, "to the owner's hand"))
+                // "Rest up to N of your opponent's DON!! cards" (ST02-008 Apoo, EB03-061 Uta) — DON!! are
+                // fungible and the engine rests them itself; the board has no card to click for it.
+                || (System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*[Rr]est up to \d+ of your opponent's",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                    && ContainsAll(text, "DON!!"))
+                // "YOUR OPPONENT <does something>" — the opponent performs the action (returns DON!!,
+                // places cards from their trash or hand, reveals, shuffles their deck), so there is
+                // nothing for the player resolving it to click. These queued and then waited for a click
+                // that was never theirs to make: OP14-065 / OP16-074 Magellan return DON!!, OP05-079 Viola
+                // and OP11-091 Berry Good bury trash, OP15-048 Chinjao and OP06-047 Pudding empty a hand.
+                // Found by `stallsweep`, same failure as the sweeps below.
+                || System.Text.RegularExpressions.Regex.IsMatch(text, @"^\s*Your opponent\b",
+                       System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+                // "Give THIS Character −N power" is a self-debuff: the source is the target (EB02-005
+                // Fake Straw Hat Crew, P-092 Koby), so again there is no pick to make.
+                || System.Text.RegularExpressions.Regex.IsMatch(text,
+                       @"^\s*Give this (?:Character|card) [-−–‑‒—]\d{3,5} power",
+                       System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                 // "<verb> ALL …" — a SWEEP names no target, so there is nothing for the player to pick and
                 // it has to run on its own. Every entry around it is an "up to N" pick; the sweep shape was
                 // simply never listed. OP15-114 Wyper is the card that showed it: ". Then, K.O. all of your

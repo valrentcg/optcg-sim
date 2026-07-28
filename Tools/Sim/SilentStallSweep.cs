@@ -97,6 +97,13 @@ namespace OnePieceTcg.Sim
             foreach (var line in effect.Split('\n'))
             {
                 if (string.IsNullOrWhiteSpace(line)) continue;
+                // Only a TAGGED clause is ever queued as an effect. An untagged line is continuous or
+                // reactive text — "All of your Characters … cannot be K.O.'d", "The cost of playing … is
+                // reduced", "Under the rules of this game …", "When this Character is K.O.'d, …" — read
+                // by aura scans and reactive dispatchers, never handed to the pending panel. Reporting
+                // them as clauses that "wait for a click" is meaningless, and they were 8 of the
+                // remaining findings.
+                if (!Regex.IsMatch(line, @"^\s*\[[^\]]+\]")) continue;
                 foreach (var part in Regex.Split(line, @"(?<=\.)\s*(?:Then|After that),\s*"))
                 {
                     var c = StripTags(part).Trim();
