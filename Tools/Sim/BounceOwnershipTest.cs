@@ -28,6 +28,7 @@ namespace OnePieceTcg.Sim
             UnqualifiedBounceOffersBothSides();
             ExactBaseCostIsAFilterNotACap();
             TypeFilteredBounceIsEnforced();
+            BuffFiltersAreEnforced();
             SweepEveryOpponentOnlyBounceClause();
             Console.WriteLine($"bouncetest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -164,6 +165,48 @@ namespace OnePieceTcg.Sim
             Check("type-filtered bounce: the resolver refuses the wrong type too",
                 b.S.CharacterArea.Any(c => c != null && c.InstanceId == offType.InstanceId),
                 "a Character outside the named type was returned");
+        }
+
+        // Power-buff targeting carried two unenforced filters. OP09-106 Nico Olvia says "Up to 1 of your
+        // [Nico Robin] LEADER gains +3000 power" — the name regex accepted the nouns cards/Characters but
+        // not Leader, so any Leader took it. OP09-007 Heat says "Up to 1 of your Leader with 4000 power or
+        // less gains +1000 power" — only BASE-power caps were parsed, so a 5000-power Leader took it too.
+        private static void BuffFiltersAreEnforced()
+        {
+            // Name filter with a Leader noun.
+            {
+                var b = new Board();
+                var src = b.Character("south", "OP09-106");
+                GameEngine.QueueClauseForTest(b.St, "south", src, "main",
+                    "Up to 1 of your [Nico Robin] Leader gains +3000 power during this turn.");
+                var pe = b.St.PendingEffects.FirstOrDefault();
+                if (pe == null) { Check("named-Leader buff queues", false, "no pending effect"); return; }
+                int before = GameEngine.GetPower(b.St, b.S.Leader);
+                Check("a Leader that is not the named card does NOT light",
+                    !GameEngine.IsValidEffectTarget(b.St, pe, b.S.Leader));
+                b.Apply(new GameCommand
+                { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = b.S.Leader.InstanceId });
+                Check("…and the resolver refuses it too",
+                    GameEngine.GetPower(b.St, b.S.Leader) == before,
+                    $"Leader power {before} -> {GameEngine.GetPower(b.St, b.S.Leader)}");
+            }
+            // Current-power cap on a Leader buff (the fixture Leader is 5000, the cap is 4000).
+            {
+                var b = new Board();
+                var src = b.Character("south", "OP09-007");
+                GameEngine.QueueClauseForTest(b.St, "south", src, "main",
+                    "Up to 1 of your Leader with 4000 power or less gains +1000 power during this turn.");
+                var pe = b.St.PendingEffects.FirstOrDefault();
+                if (pe == null) { Check("power-capped buff queues", false, "no pending effect"); return; }
+                int before = GameEngine.GetPower(b.St, b.S.Leader);
+                Check("a Leader above the power cap does NOT light",
+                    !GameEngine.IsValidEffectTarget(b.St, pe, b.S.Leader), $"leader power={before}");
+                b.Apply(new GameCommand
+                { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = b.S.Leader.InstanceId });
+                Check("…and the resolver refuses it too",
+                    GameEngine.GetPower(b.St, b.S.Leader) == before,
+                    $"Leader power {before} -> {GameEngine.GetPower(b.St, b.S.Leader)}");
+            }
         }
 
         // Every printed opponent-only bounce, not just the one the sweep happened to name.

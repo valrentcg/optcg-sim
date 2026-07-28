@@ -10685,8 +10685,14 @@ namespace OnePieceTcg.Engine
                 // OP14-058 6000) or "with N base power or less/more" (OP11-051 Sanji "5000 base power or less").
                 // The handler previously parsed ONLY a cost cap, so every base-power restriction was silently
                 // dropped and ANY Character could be bounced. Read the PRINTED base power (GetCard().Power).
+                // Two printed spellings: "with 6000 base power [or less]" and "with a base power of 6000
+                // [or less]" (OP13-062 Crocus). Only the first was matched, so Crocus's "base power of
+                // 3000 or less" parsed as no filter and bounced a 5000-power Character.
                 var bpBounceM = System.Text.RegularExpressions.Regex.Match(text,
                     @"with (\d{3,5}) base power(?:\s+or\s+(less|more))?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (!bpBounceM.Success)
+                    bpBounceM = System.Text.RegularExpressions.Regex.Match(text,
+                        @"with a base power of (\d{3,5})(?:\s+or\s+(less|more))?", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 System.Func<CardInstance, bool> bpBounceFail = tc =>
                 {
                     if (!bpBounceM.Success) return false;
@@ -15321,8 +15327,11 @@ namespace OnePieceTcg.Engine
                 // the name went unchecked and any Character took the buff: EB01-044 Funkfreed ("Up to 1 of
                 // your [Spandam] Characters gains +3000 power") buffed Jinbe. The glow enforced it, the
                 // resolver did not. A [Keyword] in that position is not a name.
+                // "Leaders?" belongs in that noun list too: OP09-106 Nico Olvia reads "Up to 1 of your
+                // [Nico Robin] LEADER gains +3000 power", and with only cards/Characters matched the name
+                // went unchecked, so any Leader took the buff.
                 var buffNameF = System.Text.RegularExpressions.Regex.Match(text,
-                    @"of your \[([^\]]+)\]\s*(cards?|Characters?)",
+                    @"of your \[([^\]]+)\]\s*(cards?|Characters?|Leaders?)",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (buffNameF.Success && IsKeywordTag(buffNameF.Groups[1].Value))
                     buffNameF = System.Text.RegularExpressions.Match.Empty;
@@ -15364,11 +15373,19 @@ namespace OnePieceTcg.Engine
                 int buffCostExact = buffCostCap >= 0 ? -1 : ParseLimit(text, @"cost of (\d+)\b(?! or)");
                 int buffBpCap = ParseLimit(text, @"(\d{3,5}) base power or less");
                 int buffBpMin = ParseLimit(text, @"(\d{3,5}) base power or more");
+                // CURRENT-power caps were never parsed here, only BASE-power ones: OP09-007 Heat reads
+                // "Up to 1 of your Leader with 4000 power or less gains +1000 power" and happily buffed a
+                // 5000-power Leader. The digits sit immediately before "power", so this cannot collide
+                // with the "N base power or less" spelling above.
+                int buffPwCap = ParseLimit(text, @"(\d{3,5}) power or less");
+                int buffPwMin = ParseLimit(text, @"(\d{3,5}) power or more");
                 if ((buffColor.Success && (targetDef.Color ?? "").IndexOf(buffColor.Groups[1].Value, StringComparison.OrdinalIgnoreCase) < 0)
                     || (buffCostCap >= 0 && GetCost(state, target) > buffCostCap)
                     || (buffCostExact >= 0 && GetCost(state, target) != buffCostExact)
                     || (buffBpCap >= 0 && targetDef.Power > buffBpCap)
-                    || (buffBpMin >= 0 && targetDef.Power < buffBpMin))
+                    || (buffBpMin >= 0 && targetDef.Power < buffBpMin)
+                    || (buffPwCap >= 0 && GetPower(state, target) > buffPwCap)
+                    || (buffPwMin >= 0 && GetPower(state, target) < buffPwMin))
                 {
                     Log(state, effect.Seat, $"{NameId(targetDef)} does not meet the colour/cost/power requirement for {sourceName}.");
                     return EffectResolution.WaitingForTarget;

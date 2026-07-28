@@ -743,8 +743,12 @@ namespace OnePieceTcg.Sim
                        RegexOptions.IgnoreCase)
                 // "return N cards from your trash to the bottom of your deck" is paid automatically — the
                 // engine takes the last N, the player picks nothing — so nothing glowing is correct.
+                // "AT the bottom of your deck" as well as "TO" — OP05-082 Shirahoshi and OP05-088
+                // Mansherry both say "place 2 cards from your trash AT the bottom of your deck in any
+                // order", which is the same auto-paid cost and was being reported as a card the player
+                // could not click.
                 && !(Regex.IsMatch(cost, @"from your trash", RegexOptions.IgnoreCase)
-                     && Regex.IsMatch(cost, @"to (?:the bottom of )?your deck", RegexOptions.IgnoreCase));
+                     && Regex.IsMatch(cost, @"(?:to|at) (?:the bottom of )?your deck", RegexOptions.IgnoreCase));
         }
 
         // ---- library-wide reach --------------------------------------------------------------------

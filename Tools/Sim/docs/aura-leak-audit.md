@@ -1,6 +1,6 @@
 # Passive-aura leak sweep
 
-- Generated: 2026-07-28 10:49
+- Generated: 2026-07-28 14:51
 - Power auras tested: **1**  (skipped 1: no {type} filter to contrast, or opponent-side)
 
 Two boards differing only in whether the aura's source is present, each holding one Character that matches the aura's {type} filter and one that does not. The matching card's power must change; the non-matching card's must not.
