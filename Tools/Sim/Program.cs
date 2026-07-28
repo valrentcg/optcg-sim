@@ -116,6 +116,12 @@ switch (mode)
     case "notargettest":
         return OnePieceTcg.Sim.NoLegalTargetTest.Run();
 
+    case "lucytest":
+        return OnePieceTcg.Sim.LucyPlaytestTest.Run();
+
+    case "resolvesweep":
+        return OnePieceTcg.Sim.ResolveShapeSweep.Run();
+
     case "sealedtest":
         return OnePieceTcg.Sim.SealedTest.Run(args);
 

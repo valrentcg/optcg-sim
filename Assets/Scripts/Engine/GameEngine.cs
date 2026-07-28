@@ -6736,6 +6736,11 @@ namespace OnePieceTcg.Engine
         // Derive the EffectTargetZone a sub-effect needs based on its text.
         /// <summary>Audit seam: the real zone inference, and the same call on an explicitly
         /// pre-split first clause, so a sweep can prove no rider still decides the zone.</summary>
+        /// <summary>Test-only: restore the pre-2026-07-28 auto-resolve gate, which read the WHOLE
+        /// clause instead of just the part before its ". Then, …" rider. Exists so a sweep can run
+        /// every affected clause under both gates and diff the outcome. Never set in the game.</summary>
+        public static bool AuditLegacyWholeTextAutoResolveGate = false;
+
         public static string AuditInferZone(string text) => InferTargetZone(text).ToString();
         public static int AuditThenSplit(string text) => FindThenClause(text ?? "");
 
@@ -6817,6 +6822,27 @@ namespace OnePieceTcg.Engine
             var ic = StringComparison.OrdinalIgnoreCase;
             return text.IndexOf(". Then,", ic) >= 0 || text.IndexOf(".\nThen,", ic) >= 0
                 || text.IndexOf(". After that,", ic) >= 0 || text.IndexOf(".\nAfter that,", ic) >= 0;
+        }
+
+        // "You may trash any number of [{tag} type / Event or Stage ]cards from your hand. <recipient>
+        // gains +N power during this battle for every card trashed." (OP15-002 Lucy, OP03-001 Ace,
+        // P-051 Shanks, OP06-014 Ratchet, ST16-002 Gordon.) Shared by the resolver and by the glow so
+        // what lights up is exactly what a click will accept — they were separate, and the glow simply
+        // had no rule for this shape, so a Lucy player saw the ability offered with nothing clickable.
+        private static System.Text.RegularExpressions.Match MatchTrashAnyNumberForBattlePower(string text) =>
+            System.Text.RegularExpressions.Regex.Match(text ?? "",
+                @"trash any number of (.+?) from your hand\b.*?gains? \+(\d{3,5}) power during this battle for every card trashed",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+
+        // The hand-card filter of that cost: the {tag} type it names, and the "Event or Stage" card-type
+        // restriction. An unfiltered "any number of cards" accepts anything in hand.
+        private static bool TrashAnyNumberCardMatches(string filterPhrase, CardDef hd)
+        {
+            if (hd == null) return false;
+            string tagF = ParseCurlyBraceTag(filterPhrase);
+            if (!string.IsNullOrEmpty(tagF) && !hd.HasFeature(tagF)) return false;
+            if (ContainsAll(filterPhrase, "Event or Stage") && hd.Type != "event" && hd.Type != "stage") return false;
+            return true;
         }
 
         private static int FindThenClause(string text)
@@ -7945,8 +7971,22 @@ namespace OnePieceTcg.Engine
             // ..." — the CONDITION decides, not the player, e.g. Kikunojo's set-Leader-active)
             // fire immediately, and "up to N" targeting effects auto-enter target selection
             // (the pick itself is the decision; SKIP stays available for the zero-pick option).
-            if (!string.IsNullOrEmpty(text) && text.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0) return;
-            if (!IsAutomatedEffectPattern(text)) return;
+            // Both gates read the clause being resolved RIGHT NOW — everything before a ". Then, …"
+            // rider, which is split off and queued as its own effect. Reading the whole string let a
+            // rider's opt-in veto the auto-resolve of a mandatory first clause: OP15-020 Fire Fist
+            // ("Your Leader gains +3000 and give up to 1 opponent Character −8000. Then, YOU MAY trash 2
+            // cards from your hand.") sat waiting on a Use click, and glowed every legal target of both
+            // halves at once, when nothing about the +3000 was ever the player's decision.
+            string lead = text ?? "";
+            {
+                int thenAt = FindThenClause(lead);
+                if (thenAt > 0 && thenAt <= lead.Length) lead = lead.Substring(0, thenAt);
+            }
+            // Test-only: read the WHOLE text again, so a sweep can run every affected clause both ways
+            // and diff them. Never set outside Tools/Sim. (Same pattern as the bot's A/B seat toggles.)
+            if (AuditLegacyWholeTextAutoResolveGate) lead = text ?? "";
+            if (lead.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0) return;
+            if (!IsAutomatedEffectPattern(lead)) return;
             var queued = state.PendingEffects[state.PendingEffects.Count - 1];
             ResolveEffect(state, seat, queued.EffectId, null);
         }
@@ -8870,6 +8910,19 @@ namespace OnePieceTcg.Engine
                 if (ifYouDo.Success && ContainsAll(text, "If you do"))
                     return Player(state, effect.Seat).Hand.Any(c => c.InstanceId == card.InstanceId)
                         && CostCardMatches(ifYouDo.Value, def);
+            }
+            // A third spelling, and the one with no bound on it: "You may trash ANY NUMBER of Event or
+            // Stage cards from your hand. This Leader gains +1000 power … for every card trashed"
+            // (OP15-002 Lucy). No colon and no "If you do", so neither gate saw it; "any number" is not a
+            // digit, so the count-based gate above could not have matched either. The ability queued and
+            // offered itself with NOTHING clickable in hand — reported twice from one Lucy playtest, once
+            // on offence and once on defence. Matched on the whole clause because the "+N … for every card
+            // trashed" half that identifies the shape lives in the NEXT sentence.
+            {
+                var trashAny = MatchTrashAnyNumberForBattlePower(text);
+                if (trashAny.Success)
+                    return Player(state, effect.Seat).Hand.Any(c => c.InstanceId == card.InstanceId)
+                        && TrashAnyNumberCardMatches(trashAny.Groups[1].Value, def);
             }
             // While an optional-cost effect is still paying its cost ("You may <cost>: <body>"),
             // the click chooses a COST card — validate against the cost clause, not the body.
@@ -11264,6 +11317,11 @@ namespace OnePieceTcg.Engine
                     owner.Hand.RemoveAt(aeIdx);
                     aeCard.Zone = "trash";
                     owner.Trash.Add(aeCard);
+                    // This is the third activation path NoteEventActivated exists for — an Event put on
+                    // the stack by ANOTHER card (OP15-046 Sabo / OP15-014 Bartolomeo activating a
+                    // {Dressrosa} Event). It was the one path that never recorded it, so the view could
+                    // not tell this Event apart from one discarded to pay a cost and skipped its burn.
+                    NoteEventActivated(state, aeCard);
                     Log(state, effect.Seat, $"{sourceName} activates {NameId(aeDef)} for free.");
                     if (HasTiming(aeDef.Effect, "Main"))
                     {
@@ -15062,27 +15120,17 @@ namespace OnePieceTcg.Engine
             // generic buff handler below read the first "+N" and gave a FLAT +N while trashing NOTHING — the player
             // got the buff free and it never scaled.
             {
-                var trashAnyM = System.Text.RegularExpressions.Regex.Match(text,
-                    @"trash any number of (.+?) from your hand\b.*?gains? \+(\d{3,5}) power during this battle for every card trashed",
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+                var trashAnyM = MatchTrashAnyNumberForBattlePower(text);
                 if (trashAnyM.Success)
                 {
                     if (state.Battle == null) return EffectResolution.Resolved; // no battle to buff
                     int per = int.Parse(trashAnyM.Groups[2].Value);
                     string filterPhrase = trashAnyM.Groups[1].Value;
-                    string tagF = ParseCurlyBraceTag(filterPhrase);
-                    bool eventOrStage = ContainsAll(filterPhrase, "Event or Stage");
                     // Recipient = the source ("This Character/Leader"; OP06-014's "Your Leader or 1 of your
                     // Characters" defaults to the reacting source — a sensible defensive buff).
                     var recip = FindCardInstance(state, effect.SourceInstanceId);
                     if (recip == null) return EffectResolution.Resolved;
-                    System.Func<CardInstance, bool> okTrash = h =>
-                    {
-                        var hd = GetCard(h);
-                        if (!string.IsNullOrEmpty(tagF) && !hd.HasFeature(tagF)) return false;
-                        if (eventOrStage && hd.Type != "event" && hd.Type != "stage") return false;
-                        return true;
-                    };
+                    System.Func<CardInstance, bool> okTrash = h => TrashAnyNumberCardMatches(filterPhrase, GetCard(h));
                     if (string.IsNullOrEmpty(targetId))
                         return EffectResolution.Resolved; // player skipped / no more to trash → finalize
                     var hc = owner.Hand.FirstOrDefault(h => h.InstanceId == targetId);

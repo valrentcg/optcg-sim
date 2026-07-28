@@ -3923,8 +3923,68 @@ public partial class DeckBuilderManager : MonoBehaviour
     // worker thread) for visible tiles that still need art. Concurrency is capped
     // so we never flood, and because we only look at live tile bindings, a fast
     // scroll only ever requests what's actually on screen.
+    // ── Window-resize rebuild ────────────────────────────────────────────────
+    // These screens measure themselves ONCE, at build time — BuildSelectHexRoster sizes the whole
+    // honeycomb from `parent.rect.width`, and every InputField bakes its caret/selection mesh in the
+    // local space it was built in. Nothing re-ran when the window changed size, so resizing (dragging
+    // the window into a split-screen half) left every metric describing the OLD window: the hex
+    // cluster stayed too big for its column and painted over the decklist panel beside it, and text
+    // highlights sat offset from their glyphs. GameManager already solved this for the board; this is
+    // the same watcher, with the same settle delay so a drag-resize rebuilds once at the end rather
+    // than on every intermediate size.
+    private int _seenW, _seenH, _renderedW, _renderedH;
+    private float _resizeSettleAt;
+    private bool _caretRepaired;
+
+    private void PumpResizeRebuild()
+    {
+        if (root == null) return;
+        if (_renderedW == 0) { _renderedW = Screen.width; _renderedH = Screen.height; }   // first frame: adopt, don't rebuild
+
+        if (Screen.width != _seenW || Screen.height != _seenH)
+        {
+            _seenW = Screen.width; _seenH = Screen.height;
+            _resizeSettleAt = Time.unscaledTime + 0.12f;
+            _caretRepaired = false;
+        }
+        if (_resizeSettleAt <= 0f || Time.unscaledTime < _resizeSettleAt) return;
+        if (_seenW == _renderedW && _seenH == _renderedH) { _resizeSettleAt = 0f; return; }
+
+        // A rebuild destroys and recreates every child of root, so hold off on anything the player is
+        // in the middle of: a hex mid-drag would lose the object the drag is bound to, and a focused
+        // text field would lose its caret mid-word. The timer stays armed, so the rebuild lands as
+        // soon as they let go — which is also when the stale geometry starts mattering to them.
+        if (hexDraggingId != null) return;
+        var focused = UnityEngine.EventSystems.EventSystem.current != null
+            ? UnityEngine.EventSystems.EventSystem.current.currentSelectedGameObject : null;
+        var focusedField = focused != null ? focused.GetComponent<InputField>() : null;
+        if (focusedField != null)
+        {
+            // Deferring the whole rebuild would leave the reported symptom on screen for as long as the
+            // field keeps focus — and a focused field is exactly when the stale selection highlight is
+            // visible. So repair that one thing in place, once per resize: ForceLabelUpdate re-runs the
+            // text generator against the new rect, and re-assigning the selection marks the caret
+            // geometry dirty so the highlight quad is rebaked in the same space the glyphs now occupy.
+            // The full rebuild stays armed and lands on blur.
+            if (!_caretRepaired)
+            {
+                _caretRepaired = true;
+                int anchor = focusedField.selectionAnchorPosition, focus = focusedField.selectionFocusPosition;
+                focusedField.ForceLabelUpdate();
+                focusedField.selectionAnchorPosition = anchor;
+                focusedField.selectionFocusPosition = focus;
+            }
+            return;
+        }
+
+        _resizeSettleAt = 0f; _renderedW = _seenW; _renderedH = _seenH;
+        Render();
+    }
+
     private void Update()
     {
+        PumpResizeRebuild();
+
         if (poolContent != null && tilePool.Count > 0)
         {
             foreach (var tv in tilePool)

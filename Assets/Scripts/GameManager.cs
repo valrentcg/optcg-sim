@@ -2885,7 +2885,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     && !burnedThisRender.Contains(kv.Key)
                     && state.ActivatedEventIds.Contains(kv.Key))   // PLAYED, not discarded to pay a cost
                 {
-                    var evInst = FindAny(kv.Value.owner, kv.Key);
+                    // Look the card up in the TRASH, which is where this branch has just established
+                    // it landed. FindAny searches only the leader/stage/character area, so for an Event
+                    // — a card that can never be in any of those zones — it returned null every single
+                    // time and the burn was skipped unconditionally. That null check was the whole
+                    // feature's off switch: this is its only trigger (the click-handler path was
+                    // deliberately replaced by this diff so opponent and effect-driven plays burn too).
+                    var evOwner = state.Players.TryGetValue(kv.Value.owner, out var evP) ? evP : null;
+                    var evInst = evOwner?.Trash.FirstOrDefault(c => c != null && c.InstanceId == kv.Key);
                     if (evInst != null)
                     {
                         burnedThisRender.Add(kv.Key);
