@@ -27,6 +27,7 @@ namespace OnePieceTcg.Sim
             TrashingFromHandDoesNotFireOnKo();
             ZoroTriggerCostRespectsTheFilterAndAsks();
             NoOnKoCardInThePoolFiresWhenDiscarded();
+            TheReportedSymptomsCannotOccurTogether();
             Console.WriteLine($"handtrashtest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -161,6 +162,56 @@ namespace OnePieceTcg.Sim
             Console.WriteLine($"    swept {koCards.Count} cards carrying an [On K.O.]");
             Check("no [On K.O.] in the pool fires when its card is discarded from hand",
                 fired.Count == 0, fired.Count == 0 ? null : string.Join("; ", fired.Take(6)));
+        }
+
+        // The report, in the player's words: "st29 instantly trashed a card from his hand and didn't let
+        // him select which card", and "when it trashed from his hand it played the on ko part of her
+        // effect where he flipped a life but it didn't let him play a character".
+        //
+        // No in-game report was ever filed, so there is no seed or command history to replay. What can be
+        // done instead is to assert every symptom he described, on the closest reconstruction of his
+        // board — the ST29-001 Luffy Leader swinging at 2 Life, ST29-008 Nami on the field (the one card
+        // in that deck whose text flips a Life card), and EB03-053 Nami in hand (the one card whose
+        // [On K.O.] flips a Life and then plays a Character). If all three symptoms are absent here, the
+        // behaviour he saw cannot be produced by this code, and this test says so if that ever changes.
+        private static void TheReportedSymptomsCannotOccurTogether()
+        {
+            var b = new Board();
+            b.SetLeader("south", "ST29-001");
+            b.Life("south", 2); b.Life("north", 3);
+            b.Character("south", "ST29-008");            // Nami — her replacement is what flips a Life
+            b.Character("north", "EB01-017");            // blocker, so the battle stays open
+            var namiInHand = b.Hand("south", "EB03-053");// [On K.O.] turn a Life face-up: play a Character
+            b.Hand("south", "ST29-004");
+            int faceUpBefore = b.S.Life.Count(l => l.FaceUp);
+            int lifeBefore = b.S.Life.Count;
+
+            b.Attack(b.S.Leader, b.N.Leader);
+
+            // Symptom 1: "instantly trashed a card and didn't let him select which".
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            Check("ST29 report / symptom 1: nothing is trashed without a prompt",
+                b.S.Trash.Count == 0 && pe != null,
+                $"trash={b.S.Trash.Count} pending={b.St.PendingEffects.Count}");
+            if (pe == null) return;
+            Check("ST29 report / symptom 1: BOTH hand cards are offered, not auto-picked",
+                GameEngine.IsValidEffectTarget(b.St, pe, namiInHand)
+                    && b.S.Hand.Count(h => GameEngine.IsValidEffectTarget(b.St, pe, h)) >= 2,
+                $"offered={b.S.Hand.Count(h => GameEngine.IsValidEffectTarget(b.St, pe, h))} of {b.S.Hand.Count}");
+
+            b.Resolve(pe, namiInHand.InstanceId);        // discard the card with the [On K.O.]
+
+            // Symptom 2: the discarded card's [On K.O.] ran.
+            Check("ST29 report / symptom 2: the discarded card's [On K.O.] does not fire",
+                !b.St.PendingEffects.Any(e => e.SourceCardId == "EB03-053"),
+                "an [On K.O.] queued for a card that was discarded from hand");
+            // Symptom 3: "he flipped a life" — nothing may turn a Life card face-up here.
+            Check("ST29 report / symptom 3: no Life card is flipped or lost by the discard",
+                b.S.Life.Count == lifeBefore && b.S.Life.Count(l => l.FaceUp) == faceUpBefore,
+                $"life {lifeBefore}->{b.S.Life.Count}, faceUp {faceUpBefore}->{b.S.Life.Count(l => l.FaceUp)}");
+            Check("ST29 report: the card he chose is the one that went to the trash",
+                b.S.Trash.Any(c => c.InstanceId == namiInHand.InstanceId) && b.S.Trash.Count == 1,
+                $"trash=[{string.Join(",", b.S.Trash.Select(c => c.CardId))}]");
         }
 
         // ---- plumbing ---------------------------------------------------------------------------
