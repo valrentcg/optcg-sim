@@ -13206,8 +13206,17 @@ namespace OnePieceTcg.Engine
                 // their Life cards face-up." (OP05-096 Nami option C, EB01-053) — a REMOVAL that moves the
                 // opponent's Character onto THEIR own Life pile (face-up, on top). Distinct from the add-to-Life
                 // below (own Characters → your Life). Must precede it. Was unhandled → the whole mode was dead.
+                // "ADD … TO the top of your opponent's Life" is the same effect as "PLACE … AT the top or
+                // bottom of their Life" — the opponent's Character leaves the field onto their own Life.
+                // Only the Place/at spelling was matched, so OP04-097 Otama fell through to the add-to-Life
+                // handler for your OWN Characters, which never checks ownership: it accepted a Character of
+                // yours and buried it in your opponent's Life.
                 if (System.Text.RegularExpressions.Regex.IsMatch(text,
-                        @"[Pp]lace up to \d+ of your opponent's Characters?.*at the top or bottom of (?:their|your opponent's) Life",
+                        // `[^.]*?` between "opponent's" and "Characters": the filters live in between —
+                        // OP04-097 reads "of your opponent's {Animal} or {SMILE} TYPE Characters with a
+                        // cost of 3 or less" — and requiring the two words adjacent missed every filtered
+                        // wording.
+                        @"(?:[Pp]lace|[Aa]dd) up to \d+ of your opponent's [^.]*?Characters?.*?(?:at|to) the top (?:or bottom )?of (?:their|your opponent's) Life",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline))
                 {
                     var plTarget = FindAnyInPlay(state, targetId, out var plSeat);
@@ -13219,7 +13228,10 @@ namespace OnePieceTcg.Engine
                     var plDef = GetCard(plTarget);
                     int plCap = ParseCostFilter(text);
                     if (plSeat != OtherSeat(effect.Seat) || plDef.Type != "character"
-                        || (plCap >= 0 && GetCost(state, plTarget) > plCap))
+                        || (plCap >= 0 && GetCost(state, plTarget) > plCap)
+                        // OP04-097 names "{Animal} or {SMILE} type" — CardPassesFeatureFilter collects
+                        // every {Tag} and matches any, so the OR is honoured.
+                        || !CardPassesFeatureFilter(text, plDef))
                     {
                         Log(state, effect.Seat, "That is not a valid target.");
                         return EffectResolution.WaitingForTarget;
@@ -14640,8 +14652,13 @@ namespace OnePieceTcg.Engine
                         mirror = FindAnyInPlay(state, state.Battle.AttackerId, out _) ?? oppLead;
                     if (ContainsAll(text, "the selected Character"))
                     {
+                        // "Select up to 1 of your OPPONENT'S Characters" — the seat came out of
+                        // FindAnyInPlay and was then never looked at, so a click on your own board (the
+                        // source card included) was accepted and this Character copied ITS OWN power
+                        // (EB01-061 Bentham, OP16-104 Catarina Devon). The glow refused it; only the
+                        // resolver did not.
                         var selT = FindAnyInPlay(state, targetId, out var selSeat);
-                        if (selT == null)
+                        if (selT == null || selSeat != OtherSeat(effect.Seat) || GetCard(selT).Type != "character")
                         {
                             Log(state, effect.Seat, $"Select an opponent's Character to copy power from ({sourceName}).");
                             return EffectResolution.WaitingForTarget;

@@ -29,6 +29,7 @@ namespace OnePieceTcg.Sim
             ExactBaseCostIsAFilterNotACap();
             TypeFilteredBounceIsEnforced();
             BuffFiltersAreEnforced();
+            OpponentOnlyTargetingOnTwoMoreHandlers();
             SweepEveryOpponentOnlyBounceClause();
             Console.WriteLine($"bouncetest: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -206,6 +207,53 @@ namespace OnePieceTcg.Sim
                 Check("…and the resolver refuses it too",
                     GameEngine.GetPower(b.St, b.S.Leader) == before,
                     $"Leader power {before} -> {GameEngine.GetPower(b.St, b.S.Leader)}");
+            }
+        }
+
+        // Two more handlers that named "your opponent's Characters" and then never checked the seat.
+        private static void OpponentOnlyTargetingOnTwoMoreHandlers()
+        {
+            // EB01-061 Bentham / OP16-104 Catarina Devon: the copy-power select took the seat out of
+            // FindAnyInPlay and never looked at it, so this Character could copy ITS OWN power.
+            {
+                var b = new Board();
+                var src = b.Character("south", "EB01-061");
+                var mine = b.Character("south", "ST01-005");
+                b.Character("north", "ST01-005");
+                GameEngine.QueueClauseForTest(b.St, "south", src, "main",
+                    "Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn.");
+                var pe = b.St.PendingEffects.FirstOrDefault();
+                if (pe == null) { Check("copy-power select queues", false, "no pending effect"); return; }
+                int before = GameEngine.GetPower(b.St, src);
+                Check("copy-power: one of MY Characters does not light",
+                    !GameEngine.IsValidEffectTarget(b.St, pe, mine));
+                b.Apply(new GameCommand
+                { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = mine.InstanceId });
+                Check("copy-power: the resolver refuses my own Character too",
+                    GameEngine.GetPower(b.St, src) == before,
+                    $"source power {before} -> {GameEngine.GetPower(b.St, src)}");
+            }
+            // OP04-097 Otama: "Add up to 1 of your opponent's {Animal} or {SMILE} type Characters … to the
+            // top of your opponent's Life cards face-up" was routed to the add-to-YOUR-Life handler, which
+            // checks no ownership, so it buried one of YOUR Characters in your opponent's Life.
+            {
+                var b = new Board();
+                var src = b.Character("south", "OP04-097");
+                var mine = b.Character("south", "ST01-006");
+                b.Character("north", "ST01-006");
+                int myLifeBefore = b.S.Life.Count, oppLifeBefore = b.N.Life.Count;
+                GameEngine.QueueClauseForTest(b.St, "south", src, "onPlay",
+                    "Add up to 1 of your opponent's {Animal} or {SMILE} type Characters with a cost of 3 or less to the top of your opponent's Life cards face-up.");
+                var pe = b.St.PendingEffects.FirstOrDefault();
+                if (pe == null) { Check("add-to-opponent-Life queues", false, "no pending effect"); return; }
+                Check("add-to-opponent-Life: one of MY Characters does not light",
+                    !GameEngine.IsValidEffectTarget(b.St, pe, mine));
+                b.Apply(new GameCommand
+                { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = mine.InstanceId });
+                Check("add-to-opponent-Life: the resolver refuses my own Character too",
+                    b.S.CharacterArea.Any(c => c != null && c.InstanceId == mine.InstanceId)
+                        && b.S.Life.Count == myLifeBefore && b.N.Life.Count == oppLifeBefore,
+                    $"myLife {myLifeBefore}->{b.S.Life.Count}, oppLife {oppLifeBefore}->{b.N.Life.Count}");
             }
         }
 

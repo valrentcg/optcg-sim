@@ -1,6 +1,6 @@
 # Stuck / unreachable sweep — every card
 
-- Generated: 2026-07-28 14:50
+- Generated: 2026-07-28 14:56
 - Cards swept: **2636**, tagged clauses: **2622**, clause texts reach-tested: **300**
 
 **STUCK** = after the real queue path (including the engine's retire-unresolvable sweep) a pending effect remains that is NOT `Optional` and has nothing clickable anywhere. The pending panel only enables Skip for optional effects, so this is a hard freeze for the player.
@@ -15,7 +15,7 @@ _none_
 
 _none_
 
-## GLOW-MISMATCH — 1876
+## GLOW-MISMATCH — 1872
 
 | Card | Name | Board | Detail | Clause |
 |---|---|---|---|---|
@@ -68,14 +68,13 @@ _none_
 | EB01-060 | Did Someone Say...Kami? | in-battle | ST01-015 (own hand) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Enel] with a cost of 7 or less from your hand or trash. Then, trash cards from the top of your Life cards until you have 1 Life card. |
 | EB01-060 | Did Someone Say...Kami? | in-battle | EB01-011 (own hand) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Enel] with a cost of 7 or less from your hand or trash. Then, trash cards from the top of your Life cards until you have 1 Life card. |
 | EB01-060 | Did Someone Say...Kami? | in-battle | EB01-060 (own hand) LIGHTS UP but the resolver does nothing with it | Play up to 1 [Enel] with a cost of 7 or less from your hand or trash. Then, trash cards from the top of your Life cards until you have 1 Life card. |
-| EB01-061 | Mr.2.Bon.Kurei(Bentham) | full-board | EB01-061 (own character) is accepted by the resolver but never lights up | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | EB01-061 | Mr.2.Bon.Kurei(Bentham) | full-board | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | EB01-061 | Mr.2.Bon.Kurei(Bentham) | full-board | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | EB01-061 | Mr.2.Bon.Kurei(Bentham) | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
-| EB01-061 | Mr.2.Bon.Kurei(Bentham) | in-battle | EB01-061 (own character) is accepted by the resolver but never lights up | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | EB01-061 | Mr.2.Bon.Kurei(Bentham) | in-battle | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | EB01-061 | Mr.2.Bon.Kurei(Bentham) | in-battle | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | EB01-061 | Mr.2.Bon.Kurei(Bentham) | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
+| EB01-061 | Mr.2.Bon.Kurei(Bentham) | in-battle | EB01-017 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | EB02-015 | Jewelry Bonney | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's rested Characters will not become active in your opponent's next Refresh Phase. Then, set up to 1 of your DON!! cards as active at the end of this turn. |
 | EB02-015 | Jewelry Bonney | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's rested Characters will not become active in your opponent's next Refresh Phase. Then, set up to 1 of your DON!! cards as active at the end of this turn. |
 | EB02-018 | Buggy | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Rest up to 1 of your opponent's Characters with a cost of 4 or less. |
@@ -556,8 +555,6 @@ _none_
 | OP04-076 | Weakness...Is an Unforgivable Sin. | in-battle | ST02-004 (own character) LIGHTS UP but the resolver does nothing with it | DON!! −1 (You may return the specified number of DON!! cards from your field to your DON!! deck.): Up to 1 of your Leader or Character cards gains +1000 power during this turn. |
 | OP04-080 | Gyats | full-board | OP04-080 (own character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your {Dressrosa} type Characters can also attack active Characters during this turn. |
 | OP04-080 | Gyats | in-battle | OP04-080 (own character) LIGHTS UP but the resolver does nothing with it | Up to 1 of your {Dressrosa} type Characters can also attack active Characters during this turn. |
-| OP04-097 | Otama | full-board | ST01-006 (own character) is accepted by the resolver but never lights up | Add up to 1 of your opponent's {Animal} or {SMILE} type Characters with a cost of 3 or less to the top of your opponent's Life cards face-up. |
-| OP04-097 | Otama | in-battle | ST01-006 (own character) is accepted by the resolver but never lights up | Add up to 1 of your opponent's {Animal} or {SMILE} type Characters with a cost of 3 or less to the top of your opponent's Life cards face-up. |
 | OP04-100 | Capone"Gang"Bege | full-board | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Leader or Character cards cannot attack during this turn. |
 | OP04-100 | Capone"Gang"Bege | in-battle | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Up to 1 of your opponent's Leader or Character cards cannot attack during this turn. |
 | OP04-101 | Carmel | full-board | ST01-001 (own leader) LIGHTS UP but the resolver does nothing with it | Play this card. Then, K.O. up to 1 of your opponent's Characters with a cost of 2 or less. |
@@ -1523,14 +1520,13 @@ _none_
 | OP16-102 | Avalo Pizarro | in-battle | ST01-015 (own hand) LIGHTS UP but the resolver does nothing with it | Draw 1 card, then play up to 1 [Fullalead] from your hand or trash. |
 | OP16-102 | Avalo Pizarro | in-battle | EB01-011 (own hand) LIGHTS UP but the resolver does nothing with it | Draw 1 card, then play up to 1 [Fullalead] from your hand or trash. |
 | OP16-102 | Avalo Pizarro | in-battle | ST01-007 (own trash) LIGHTS UP but the resolver does nothing with it | Draw 1 card, then play up to 1 [Fullalead] from your hand or trash. |
-| OP16-104 | Catarina Devon | full-board | OP16-104 (own character) is accepted by the resolver but never lights up | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | OP16-104 | Catarina Devon | full-board | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | OP16-104 | Catarina Devon | full-board | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | OP16-104 | Catarina Devon | full-board | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
-| OP16-104 | Catarina Devon | in-battle | OP16-104 (own character) is accepted by the resolver but never lights up | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | OP16-104 | Catarina Devon | in-battle | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | OP16-104 | Catarina Devon | in-battle | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | OP16-104 | Catarina Devon | in-battle | ST02-004 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
+| OP16-104 | Catarina Devon | in-battle | EB01-017 (opponent character) LIGHTS UP but the resolver does nothing with it | Select up to 1 of your opponent's Characters. This Character's base power becomes the same as the selected Character's power during this turn. |
 | OP16-107 | Jesus Burgess | full-board | ST01-001 (opponent leader) LIGHTS UP but the resolver does nothing with it | Add up to 1 card from the top of your opponent's Life cards to the owner's hand. |
 | OP16-107 | Jesus Burgess | full-board | ST01-005 (opponent character) LIGHTS UP but the resolver does nothing with it | Add up to 1 card from the top of your opponent's Life cards to the owner's hand. |
 | OP16-107 | Jesus Burgess | full-board | ST01-006 (opponent character) LIGHTS UP but the resolver does nothing with it | Add up to 1 card from the top of your opponent's Life cards to the owner's hand. |
