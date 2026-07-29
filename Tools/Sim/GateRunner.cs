@@ -119,6 +119,10 @@ namespace OnePieceTcg.Sim
             // A passive buff that silently fails to apply has no prompt and no log line — the only
             // symptom is a Character losing a fight it should win.
             ("wordingvariant",        WordingVariantTest.Run),
+            // Hidden information: a Life card left face-up with no wording asking for it is the
+            // opponent seeing a card they may not, and knowing a [Trigger] before it is dealt.
+            // Invisible twice over — nothing logs facing, and the Life COUNT is unchanged.
+            ("lifefacing",            LifeFacingSweep.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

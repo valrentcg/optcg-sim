@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**63 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**64 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -189,6 +189,13 @@ than saying "Use Effect".
   neither a heal nor a loss), the FACING is unchanged (looking at your own Life must not make the
   stack public — the sharper version of the heal facing defect), and the opponent-facing wording
   moves THEIR stack, not yours. All hold. The fourth case found the missing deck-placement half.
+- **Hidden information** — `lifefacing`: the facing defect found in the heal path, asked of every
+  clause in the pool that touches Life. **305** distinct clauses driven, both seats inspected;
+  **19** legitimately leave a card face-up (their text says so) and **0** do it unasked. Rule 3-10-2
+  makes Life face-down "unless otherwise specified", so a face-up card with no wording behind it is
+  the opponent seeing a card they may not, and knowing a `[Trigger]` before it is dealt — invisible
+  twice over, since nothing logs facing and the Life COUNT is unchanged. Controlled against the real
+  defect: reintroducing the heal facing bug makes it report 3.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -237,7 +244,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 63 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 64 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
