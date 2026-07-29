@@ -195,6 +195,8 @@ switch (mode)
         return OnePieceTcg.Sim.TriggerFieldSweep.Run();
     case "triggercost":
         return OnePieceTcg.Sim.TriggerCostTest.Run();
+    case "multiclause":
+        return OnePieceTcg.Sim.MultiClauseCardTest.Run();
     case "namedcards":
         return OnePieceTcg.Sim.NamedCardsTest.Run();
     case "crossglow":

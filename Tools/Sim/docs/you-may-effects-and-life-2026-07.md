@@ -20,7 +20,7 @@ what breaks worst if the UI half is wrong.
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**66 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**67 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -242,6 +242,12 @@ than saying "Use Effect".
   the inert count **5 → 4 → 3 → 2** with no engine change; **7 of 9** modals now offer two genuinely
   different outcomes. The 2 remaining are correct: a "turn all your Life face-down" option against
   an already face-down Life area, and a branch gated on the opponent holding exactly 1 Life.
+- **Two abilities on one card** — `multiclause`: 22 cards carry two or more "you may" clauses, and
+  every other sweep drives clauses in ISOLATION, so interference between two abilities on the same
+  card had never been exercised. `OP06-118` is the sharpest case in the pool — two `[Once Per Turn]`
+  abilities with different circled DON!! costs. Using either must leave the other available, and
+  each must still be once per turn on its own. Restoring the documented shared-key bug (the bare
+  instance id for both timings) reddens the first case.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -294,7 +300,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 66 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 67 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
@@ -324,7 +330,7 @@ unreachable, the second grammatically justified (filters say "including", condit
 "includes"). Neither was "fixed". Both now have the assumption they rest on asserted, so the day a
 set breaks it, the gate says so instead of a card quietly going dead.
 
-**How many of the 66 suites actually detect a broken engine?** Asked once, properly, by making
+**How many of the 67 suites actually detect a broken engine?** Asked once, properly, by making
 every effect body a no-op and running the gate: **42 go red**. Of the 24 that stay green, 23 are
 legitimately insensitive — pure-text checks (`costlabel`, `promptzone`, `wordingvariant`), command
 validation (`wrongseat`, `illegaltarget`), dispatch rather than resolution (`timingsweep`,

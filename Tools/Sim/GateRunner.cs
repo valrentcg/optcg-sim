@@ -83,6 +83,9 @@ namespace OnePieceTcg.Sim
             // The cards the brief names, driven individually. Class fixes are proven by the cards
             // they touched; the ones they did NOT touch are where the next bug lives.
             ("namedcards",            NamedCardsTest.Run),
+            // 22 cards carry two or more "you may" clauses; every sweep drives clauses in
+            // ISOLATION, so interference between two abilities on one card was never exercised.
+            ("multiclause",           MultiClauseCardTest.Run),
             // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.
