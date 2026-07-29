@@ -190,6 +190,17 @@ namespace OnePieceTcg.Engine
             var actor = command.Seat;
             // Rosinante's "save all rested" protection is scoped to a single effect resolution.
             state.RestedKoProtectionPaid.Clear();
+            // "…when a card is removed from YOUR OR your opponent's Life cards" (OP11-041 Nami,
+            // OP12-099 Kalgara). The reactive was wired only to the battle-damage path, for the
+            // ATTACKING player — a documented simplification ("the dominant trigger is dealing
+            // damage to the opponent"). It leaves the commonest case on these two cards unfired:
+            // both are [Your Turn]-gated, and on your own turn the usual way your Life shrinks is
+            // PAYING A LIFE COST, which their decks do constantly.
+            //
+            // Watched at the command boundary rather than at the 18 separate removal sites: one
+            // place, catches every path, and cannot drift out of step with a new removal site.
+            int lifeBeforeS = state.Players.TryGetValue("south", out var _ls) ? _ls.Life.Count : 0;
+            int lifeBeforeN = state.Players.TryGetValue("north", out var _ln) ? _ln.Life.Count : 0;
             if (command.Type == "chooseTurnOrder")
             {
                 ChooseTurnOrder(state, actor, command.GoingFirst ?? true);
@@ -256,6 +267,9 @@ namespace OnePieceTcg.Engine
                 case "deckLookScryConfirm": ResolveDeckLookScryConfirm(state, actor, command.OrderedInstanceIds); break;
                 default: Log(state, "system", $"Unknown command: {command.Type}"); break;
             }
+            // Before rule processing, so a draw the player is entitled to happens while the game is
+            // still live rather than after a loss check.
+            FireLifeRemovedWatchers(state, lifeBeforeS, lifeBeforeN);
             CheckRuleProcessing(state);
             RetireUnresolvablePendingEffects(state);
             Record(state, command);
@@ -4779,6 +4793,19 @@ namespace OnePieceTcg.Engine
         // "When a card is removed from your opponent's Life cards, <effect>" board reactions (OP08-105 Jewelry
         // Bonney: [DON!! x1][Your Turn][OPT] draw 2 + trash 1). Fired for the player who just dealt Life damage,
         // scanning their WHOLE board (unlike FireOnLifeDamageDealt which only inspects the attacker itself).
+        /// <summary>Fire the "a card was removed from your or your opponent's Life" reactive for BOTH
+        /// seats after a command, when either Life area shrank. Called from the command boundary so
+        /// every removal path is covered — damage, cost payment, effect trash — without patching the
+        /// 18 sites that can remove a Life card.</summary>
+        private static void FireLifeRemovedWatchers(GameState state, int beforeSouth, int beforeNorth)
+        {
+            if (state?.Players == null) return;
+            bool shrank = (state.Players.TryGetValue("south", out var s) && s.Life.Count < beforeSouth)
+                       || (state.Players.TryGetValue("north", out var n) && n.Life.Count < beforeNorth);
+            if (!shrank) return;
+            foreach (var seat in new[] { "south", "north" }) FireOnOpponentLifeRemoved(state, seat);
+        }
+
         private static void FireOnOpponentLifeRemoved(GameState state, string seat)
         {
             var p = Player(state, seat);

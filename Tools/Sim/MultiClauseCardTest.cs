@@ -37,6 +37,7 @@ namespace OnePieceTcg.Sim
             WhenAttackingDoesNotConsumeActivateMain();
             EachIsStillOncePerTurnOnItsOwn();
             EveryCardPairingTheTwoTimings();
+            NamiLeadersTwoOncePerTurnsAreIndependent();
             Console.WriteLine($"multiclause: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -144,6 +145,44 @@ namespace OnePieceTcg.Sim
                       : $"only {checkedCards} cards were checkable — too few to mean anything");
         }
 
+        /// <summary>OP11-041 Nami — a Leader the brief names, and the only other card whose two
+        /// [Once Per Turn] abilities are both reachable in a normal turn:
+        ///
+        ///   [Your Turn] [Once Per Turn]                     draw when a Life card is removed
+        ///   [DON!! x1] [On Your Opponent's Attack] [OPT]    you may trash 1 card: +2000 power
+        ///
+        /// A different timing PAIR from OP06-118, so a different pair of keys. If they collide, a
+        /// Nami player who draws off their own Life loss silently loses the defensive boost for the
+        /// rest of the turn — and nothing in the log would say why.</summary>
+        private static void NamiLeadersTwoOncePerTurnsAreIndependent()
+        {
+            var b = new Board();
+            var nami = b.SetLeader("OP11-041");
+            if (nami == null) { Check("OP11-041 Nami's two once-per-turns are independent", false, "fixture: leader not set"); return; }
+
+            // Fire the [Your Turn] half by removing a Life card, which is its stated trigger.
+            int hand0 = b.S.Hand.Count, life0 = b.S.Life.Count;
+            b.RemoveOwnLifeCard();
+            bool drew = b.S.Hand.Count > hand0;
+            if (Environment.GetEnvironmentVariable("OPT_DIAG") == "1")
+            {
+                Console.WriteLine($"      [nami-pre] life {life0} -> {b.S.Life.Count}, hand {hand0} -> {b.S.Hand.Count}, "
+                                  + $"pending={b.St.PendingEffects.Count}, activeSeat={b.St.ActiveSeat}");
+                foreach (var e in b.St.EventLog.TakeLast(6)) Console.WriteLine("        log: " + e.Message);
+            }
+
+            // Now the defensive half, on the opponent's attack.
+            bool offered = b.OpponentAttacksAndLeaderAbilityOffers();
+
+            if (Environment.GetEnvironmentVariable("OPT_DIAG") == "1")
+                Console.WriteLine($"      [nami] hand {hand0} -> {b.S.Hand.Count} (drew={drew}), "
+                                  + $"defensiveOffered={offered}, keys=[{string.Join(",", b.S.AbilityUsedThisTurn)}]");
+            Check("OP11-041 Nami: using the [Your Turn] draw leaves the defensive [OPT] available",
+                  drew && offered,
+                  $"drewFromLifeLoss={drew} defensiveOffered={offered} — if the draw fired and the "
+                  + "defence vanished, the two [Once Per Turn]s share a key");
+        }
+
         private sealed class Board
         {
             public GameState St;
@@ -172,6 +211,50 @@ namespace OnePieceTcg.Sim
                 }
                 N.CharacterArea[0] = Make("OP15-040", "north", "character");
                 St.PendingEffects.Clear();
+            }
+
+            /// <summary>Replace south's Leader and hand it enough DON!! for a [DON!! xN] gate.</summary>
+            public CardInstance SetLeader(string cardId)
+            {
+                var l = Make(cardId, "south", "leader");
+                S.Leader = l;
+                for (int i = 0; i < 2 && i < S.CostArea.Count; i++) l.AttachedDonIds.Add(S.CostArea[i].InstanceId);
+                return l;
+            }
+
+            /// <summary>Trash the top Life card, the trigger for Nami's [Your Turn] half.</summary>
+            public void RemoveOwnLifeCard()
+            {
+                // A COST-PREFIXED clause, so the Life card is removed inside a resolveEffect
+                // COMMAND — which is how a Life cost is paid in real play. A bare clause is
+                // auto-resolved by QueueClauseForTest outside ApplyCommand, so the command-boundary
+                // watcher never sees it and the test measures the harness, not the engine.
+                GameEngine.QueueClauseForTest(St, "south", S.CharacterArea[0] ?? S.Leader, "main",
+                    "You may trash 1 card from the top of your Life cards: This Leader gains +1000 power during this turn.");
+                for (int i = 0; i < 6; i++)
+                {
+                    var pe = St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+                    if (pe == null) break;
+                    int before = St.EventLog.Count;
+                    Apply(new GameCommand
+                    { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = null });
+                    if (St.EventLog.Count == before) break;
+                }
+            }
+
+            /// <summary>North attacks; report whether south's Leader ability raises a decision.</summary>
+            public bool OpponentAttacksAndLeaderAbilityOffers()
+            {
+                var atk = Make("EB03-002", "north", "character");
+                N.CharacterArea[1] = atk;
+                atk.Rested = false; atk.PlayedOnTurn = 0;
+                St.ActiveSeat = "north"; St.Phase = "main";
+                int log0 = St.EventLog.Count;
+                Apply(new GameCommand
+                { Type = "declareAttack", Seat = "north", Attacker = atk.InstanceId, Target = S.Leader?.InstanceId });
+                if (Environment.GetEnvironmentVariable("OPT_DIAG") == "1")
+                    foreach (var e in St.EventLog.Skip(log0)) Console.WriteLine("      [def] " + e.Message);
+                return St.PendingEffects.Any(e => e != null && e.Seat == "south");
             }
 
             public CardInstance Subject(string cardId = TwoOnce)
