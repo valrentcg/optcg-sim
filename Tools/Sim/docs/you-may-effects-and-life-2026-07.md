@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**40 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**41 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -59,6 +59,9 @@ than saying "Use Effect".
   121 distinct cost shapes in the pool — place-from-trash-to-deck-bottom (15 cards), mill as a
   cost (7), return-DON!!-to-deck (6), Life-trash as a cost (5). Each asserts the specific zone
   moved by the specific amount, with an unpayable control.
+- **Real plays** — `realplay`: five more cards driven through an actual `playCard` (Flampe,
+  Gordon, Rob Lucci, Megalo, Koby), spanning different cost/body pairs. Everything else queues
+  a clause directly, which skips the card's own cost and the [On Play] dispatch.
 - **Bodies** — `bodyoutcome`: exact outcomes for the two largest body shapes of 161 —
   "K.O. up to N of your opponent's Characters" (54 clauses) and "give -N power" (37). Names
   the victim and checks that card: the targeted one leaves, the bystander stays, the drop is

@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "realplay":
+        return OnePieceTcg.Sim.RealPlayEndToEndTest.Run();
     case "bodyoutcome":
         return OnePieceTcg.Sim.BodyOutcomeTest.Run();
     case "costshapes":
