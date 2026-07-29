@@ -3794,6 +3794,8 @@ namespace OnePieceTcg.Engine
             var p = Player(state, seat);
             if (dl.LifeMode)
             {
+                // Write back to the stack's OWNER, which is not always the looker.
+                if (!string.IsNullOrEmpty(dl.LifeOwnerSeat)) p = Player(state, dl.LifeOwnerSeat);
                 // The player orders left→right = top→bottom. When the clause also sends cards to the
                 // deck, the LEFTMOST go — so ordering IS the choice of which card leaves, and no
                 // extra selection step is needed on top of the rearrange the player already does.
@@ -13622,10 +13624,20 @@ namespace OnePieceTcg.Engine
                 // (LifeMode); the confirmed order is written back to Life.
                 // "Look at all YOUR Life cards" (no "of") is the other printing — ST13-016 and
                 // ST13-004 use it, and requiring "of" meant neither reached this handler.
-                if ((ContainsAll(text, "Look at all of your Life cards") || ContainsAll(text, "Look at all your Life cards"))
+                // The OPPONENT's Life is the third printing (EB01-052): you look at their stack and
+                // set the order they will take damage in. It had no handler at all — the owner-side
+                // condition cannot match "your opponent's Life cards" — so that half of a Choose-one
+                // silently did nothing, and the player picked between a real option and a no-op.
+                bool rearrangeOpp = ContainsAll(text, "Look at all of your opponent's Life cards");
+                if ((rearrangeOpp
+                     || ContainsAll(text, "Look at all of your Life cards")
+                     || ContainsAll(text, "Look at all your Life cards"))
                     && (ContainsAll(text, "any order") || ContainsAll(text, "place them back")))
                 {
-                    if (owner.Life.Count <= 1)
+                    // Whose stack is being reordered; the effect's controller always does the
+                    // reordering, which is the point of the opponent-facing printing.
+                    var lifeOwner = rearrangeOpp ? Player(state, OtherSeat(effect.Seat)) : owner;
+                    if (lifeOwner.Life.Count <= 1)
                     {
                         Log(state, effect.Seat, $"{sourceName}: not enough Life cards to rearrange.");
                         return EffectResolution.Resolved;
@@ -13640,6 +13652,7 @@ namespace OnePieceTcg.Engine
                     var dlLife = new DeckLookState
                     {
                         LifeToDeckTop = toDeckM.Success ? int.Parse(toDeckM.Groups[1].Value) : 0,
+                        LifeOwnerSeat = lifeOwner.Seat,
                         Seat = effect.Seat,
                         SourceInstanceId = effect.SourceInstanceId,
                         SourceName = sourceName,
@@ -13647,13 +13660,13 @@ namespace OnePieceTcg.Engine
                         LifeMode = true,
                         MaxCost = -1,
                     };
-                    for (int i = owner.Life.Count - 1; i >= 0; i--)   // display top-of-Life first
+                    for (int i = lifeOwner.Life.Count - 1; i >= 0; i--)   // display top-of-Life first
                     {
-                        var lc = owner.Life[i];
+                        var lc = lifeOwner.Life[i];
                         lc.Zone = "look";
                         dlLife.Cards.Add(lc);
                     }
-                    owner.Life.Clear();
+                    lifeOwner.Life.Clear();
                     state.DeckLook = dlLife;
                     Log(state, effect.Seat, $"{sourceName}: rearrange your Life cards (leftmost = top).");
                     return EffectResolution.Resolved;

@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "choicediff":
+        return OnePieceTcg.Sim.ChoiceDiffTest.Run();
     case "usevsskip":
         return OnePieceTcg.Sim.UseVsSkipSweep.Run();
     case "lifefacing":

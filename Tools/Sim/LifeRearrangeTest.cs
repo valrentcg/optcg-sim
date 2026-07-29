@@ -85,15 +85,22 @@ namespace OnePieceTcg.Sim
             var southBefore = b.S.Life.Select(x => x.InstanceId).ToList();
             var northBefore = b.N.Life.Select(x => x.InstanceId).ToList();
 
-            b.Drive("Look at all of your opponent's Life cards and place them back in their Life area in any order.");
+            // Assert the look actually OPENS before checking what it left behind. The previous
+            // version only checked north's cards were "intact and hidden" — exactly what an
+            // UNIMPLEMENTED effect produces — so it passed vacuously while EB01-052's option did
+            // nothing at all.
+            b.QueueOnly("Look at all of your opponent's Life cards and place them back in their Life area in any order.");
+            bool lookOpened = b.St.DeckLook != null;
+            b.FinishAnyLook();
 
             bool southIntact = b.S.Life.Select(x => x.InstanceId).SequenceEqual(southBefore);
             bool northSameCards = b.N.Life.Select(x => x.InstanceId).OrderBy(x => x)
                                    .SequenceEqual(northBefore.OrderBy(x => x));
             bool northFaceDown = b.N.Life.All(c => !c.FaceUp);
-            Check("an opponent-facing reorder leaves MY stack alone and keeps theirs intact and hidden",
-                  southIntact && northSameCards && northFaceDown,
-                  $"southUnchanged={southIntact} northSameCards={northSameCards} northFaceDown={northFaceDown}");
+            Check("an opponent-facing reorder OPENS a look, leaves MY stack alone, and keeps theirs hidden",
+                  lookOpened && southIntact && northSameCards && northFaceDown,
+                  $"lookOpened={lookOpened} southUnchanged={southIntact} northSameCards={northSameCards} "
+                  + $"northFaceDown={northFaceDown} (southLife={b.S.Life.Count} northLife={b.N.Life.Count})");
         }
 
         /// <summary>ST13-016: "place 1 at the top of your deck and place the rest back in your Life
@@ -174,6 +181,23 @@ namespace OnePieceTcg.Sim
                 }
                 if (Environment.GetEnvironmentVariable("OPT_DIAG") == "1")
                     foreach (var e in St.EventLog.TakeLast(6)) Console.WriteLine("      log: " + e.Message);
+            }
+
+            /// <summary>Queue without answering, so a caller can inspect the raised decision.</summary>
+            public void QueueOnly(string clause) =>
+                GameEngine.QueueClauseForTest(St, "south", S.CharacterArea[0], "main", clause);
+
+            /// <summary>Confirm any open look in its current order.</summary>
+            public void FinishAnyLook()
+            {
+                for (int i = 0; i < 4 && St.DeckLook != null; i++)
+                {
+                    var order = St.DeckLook.Cards.Select(x => x.InstanceId).ToList();
+                    int before = St.EventLog.Count;
+                    St = GameEngine.ApplyCommand(St, new GameCommand
+                    { Type = "deckLookConfirmOrder", Seat = "south", OrderedInstanceIds = order });
+                    if (St.EventLog.Count == before) break;
+                }
             }
 
             public System.Collections.Generic.IEnumerable<CardInstance> Everything()

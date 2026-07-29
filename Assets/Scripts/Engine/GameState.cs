@@ -455,6 +455,11 @@ namespace OnePieceTcg.Engine
         // rearrange and silently dropped the deck-placement half, because its only matching handler
         // wanted "place THEM at the top of your deck". 0 = a plain rearrange.
         public int LifeToDeckTop;
+        // LifeMode only: WHOSE Life stack is being rearranged. The looker (Seat) is the effect's
+        // controller, and for "look at all of your OPPONENT'S Life cards" that is not the owner —
+        // writing the confirmed order back to the looker would move the opponent's Life into their
+        // own Life area. Null = the looker's own stack.
+        public string LifeOwnerSeat;
 
         // Play mode: the selected card is PLAYED to the character area instead of added to
         // hand ("Play up to 1 … from your deck" / "Look at N … play up to 1 …" effects).

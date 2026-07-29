@@ -127,6 +127,9 @@ namespace OnePieceTcg.Sim
             // Use and Skip, and require the two boards to DIFFER. Baseline is NOT zero — see the
             // suite header; the residual is fixture mismatch, and the value is that it must not grow.
             ("usevsskip",             UseVsSkipSweep.Run),
+            // The OTHER decision type. A "Choose one" whose options produce the same board is a
+            // prompt that changes nothing — theatre that reads as working in every log.
+            ("choicediff",            ChoiceDiffTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),
