@@ -95,6 +95,10 @@ namespace OnePieceTcg.Sim
             // watcher). OP12-099 Kalgara has no [Once Per Turn] key to hide a double-fire, so it is
             // the instrument that can actually see one.
             ("lifewatcher",           LifeWatcherTest.Run),
+
+            // Every prohibition clause in the pool that names a runnable action — the class
+            // `lifewatcher` proved on one clause of one card. Two are Life mechanics.
+            ("prohibitionsweep",      ProhibitionSweep.Run),
             // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.
