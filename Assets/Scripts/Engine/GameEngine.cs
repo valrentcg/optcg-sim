@@ -1938,6 +1938,62 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
+        /// <summary>The short board-anchored instruction for a targeting step — where to click.
+        ///
+        /// Pure text, moved out of the UI so it can be checked against the pool: a prompt naming the
+        /// wrong ZONE is worse than no prompt, because the player hunts in a zone that holds nothing
+        /// legal and concludes the card is broken. Nothing in the engine suites can see that, since
+        /// the engine resolves clicks and never words them.</summary>
+        /// <summary>The same instruction, worded from where the legal targets ACTUALLY are.
+        ///
+        /// The zone-only version below reads `effect.TargetZone`, which is inferred from the whole
+        /// clause — the same over-reading that caused defect #1. When the inference lands on the
+        /// wrong zone the player is told to look in their hand while the highlighted card sits on
+        /// the board. Asking the glow filter instead makes the instruction describe the board in
+        /// front of them; it falls back to the zone wording when nothing is legal yet.</summary>
+        public static string DescribeTargetPrompt(GameState state, PendingEffect effect)
+        {
+            if (state == null || effect == null) return DescribeTargetPrompt(effect);
+            if ((effect.Text ?? "").IndexOf("top or bottom of your Life", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "Click the top or bottom of your Life pile.";
+
+            bool hand = false, trash = false, board = false, life = false;
+            foreach (var p in state.Players.Values)
+            {
+                if (p == null) continue;
+                foreach (var c in p.Hand) if (IsValidEffectTarget(state, effect, c)) { hand = true; break; }
+                foreach (var c in p.Trash) if (IsValidEffectTarget(state, effect, c)) { trash = true; break; }
+                foreach (var c in p.Life) if (IsValidEffectTarget(state, effect, c)) { life = true; break; }
+                if (p.Leader != null && IsValidEffectTarget(state, effect, p.Leader)) board = true;
+                foreach (var c in p.CharacterArea)
+                    if (c != null && IsValidEffectTarget(state, effect, c)) { board = true; break; }
+            }
+
+            if (!hand && !trash && !board && !life) return DescribeTargetPrompt(effect);
+            if (hand && !trash && !board && !life) return "Select a card in your hand.";
+            if (trash && !hand && !board && !life) return "Select a card in your trash.";
+            if (life && !hand && !trash && !board) return "Select a card in your Life area.";
+            if (board && !hand && !trash) return "Select a highlighted target on the board.";
+            if (board && hand) return "Select a highlighted target on the board or in your hand.";
+            return "Select a highlighted target.";
+        }
+
+        public static string DescribeTargetPrompt(PendingEffect effect)
+        {
+            if (effect == null) return "Select a highlighted target on the board.";
+            // The one clause whose target is a PILE END rather than a zone: "top or bottom of your
+            // Life" needs the player pointed at the pile, not at a highlighted card.
+            if ((effect.Text ?? "").IndexOf("top or bottom of your Life", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "Click the top or bottom of your Life pile.";
+            switch (effect.TargetZone)
+            {
+                case EffectTargetZone.Hand:  return "Select a card in your hand.";
+                case EffectTargetZone.Trash: return "Select a card in your trash.";
+                case EffectTargetZone.Any:   return "Select a highlighted target on the board or in your hand.";
+                default:                     return "Select a highlighted target on the board.";
+            }
+        }
+
         /// <summary>True while this effect's first interaction is PAYING a "You may &lt;cost&gt;:" prefix
         /// rather than picking a target.
         ///

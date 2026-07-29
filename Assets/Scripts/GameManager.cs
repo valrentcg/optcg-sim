@@ -9463,19 +9463,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return false;
     }
 
-    // Short, board-anchored prompt for a targeting step (no verbatim card text).
-    private string EffectTargetPrompt(PendingEffect effect)
-    {
-        if ((effect.Text ?? "").IndexOf("top or bottom of your Life", System.StringComparison.OrdinalIgnoreCase) >= 0)
-            return "Click the top or bottom of your Life pile.";
-        switch (effect.TargetZone)
-        {
-            case OnePieceTcg.Engine.EffectTargetZone.Hand:  return "Select a card in your hand.";
-            case OnePieceTcg.Engine.EffectTargetZone.Trash: return "Select a card in your trash.";
-            case OnePieceTcg.Engine.EffectTargetZone.Any:   return "Select a highlighted target on the board or in your hand.";
-            default:                                        return "Select a highlighted target on the board.";
-        }
-    }
+    // Moved to GameEngine.DescribeTargetPrompt so the wording can be checked against the card
+    // pool: a prompt naming the wrong ZONE sends the player hunting where nothing is legal, and
+    // no engine suite can see that, since the engine resolves clicks and never words them.
+    private string EffectTargetPrompt(PendingEffect effect) => GameEngine.DescribeTargetPrompt(state, effect);
 
     // Button label for the resolve button: the card's effect text VERBATIM (players
     // know how to read card text — paraphrasing loses context). Only the leading

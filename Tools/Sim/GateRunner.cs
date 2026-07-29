@@ -100,6 +100,9 @@ namespace OnePieceTcg.Sim
             // The Use-button label, asked for by name and shipped untested because the derivation
             // was private to a MonoBehaviour. Moving it into the engine is what makes it testable.
             ("costlabel",             CostLabelTest.Run),
+            // The other half of the prompt: WHERE to click. No engine suite can see a misdirecting
+            // prompt, because the engine resolves clicks and never words them.
+            ("promptzone",            PromptZoneTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),
