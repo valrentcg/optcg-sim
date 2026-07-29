@@ -76,13 +76,29 @@ using six META decks (starter decks contain none of the affected cards and repor
 | path | firings | per game |
 |---|---|---|
 | optional effect queued for a decision | 45,688 | ~21 |
-| **"up to N" rescued from retirement** | **17,330** | **~8** |
+| "up to N" code path taken | 17,330 | ~8 |
 | counter cost-prefix queued | 0 -> 2,723 | see below |
 | reveal cost handed to the player | 0 | — |
 
-The second row is the one that matters. Before that fix, each of those 17,330 clauses was
-being **retired** — the card did nothing, with a rule citation in the log to make it look
-deliberate. Roughly eight times a game, in decks people actually play.
+**CORRECTION.** I first read that second row as "17,330 clauses rescued, ~8 a game". It is not:
+the counter incremented whenever the up-to code path was TAKEN, not whenever it changed the
+answer. A paired A/B settled it — the same 3,840 games with the fix on and off, identical seeds:
+
+```
+FIXED  (up to N is a ceiling)     P(first) = 47.86%   n=1,920
+LEGACY (up to N == exactly N)     P(first) = 47.86%   n=1,920
+up-to path taken            8,100
+up-to CHANGED the verdict       0
+```
+
+Identical to the digit, because the ceiling only matters when the candidate count falls BELOW
+the printed N while staying above zero — and in 3,840 bot games that never once happened. The
+fix is still correct: OP12-038 with exactly one legal victim is a real board, demonstrated in
+`paidfornothing`, where the player rests two DON!! and gets nothing. But its frequency in bot
+play here is **zero**, not eight a game, and the earlier figure overstated it.
+
+The lesson is the one this session keeps repeating in new clothes: a counter placed on a code
+path measures the path, not the effect.
 
 **The first zero was a regression I had introduced.** Chasing it: the bots pick counters with
 `.Where(GetCounterPower(c) > 0)`, and making the flat path return 0 for a cost-prefixed counter —
