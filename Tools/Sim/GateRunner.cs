@@ -82,6 +82,7 @@ namespace OnePieceTcg.Sim
             ("lifedamageedge",        LifeDamageEdgeTest.Run),
             ("lifeboundary",          LifeBoundaryTest.Run),
             ("lifeshapes",            LifeShapeGapTest.Run),
+            ("costshapes",            CostShapeGapTest.Run),
             ("promptabuse",           PromptAbuseTest.Run),
             // In PvP both clients send commands and the engine is the only referee, so a missing
             // seat check is an action one player can take on the other's behalf.

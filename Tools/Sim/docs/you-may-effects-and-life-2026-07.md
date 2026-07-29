@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**38 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**39 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -55,6 +55,10 @@ than saying "Use Effect".
   This line originally claimed less carefully. Enumerating every Life-bearing sentence in the
   pool — 236 distinct shapes — showed four the suites had never touched, which `lifeshapes`
   now covers. Auditing a coverage claim is not the same as making one.
+- **Costs** — `costshapes`: the four shapes the suites never drove, found by enumerating all
+  121 distinct cost shapes in the pool — place-from-trash-to-deck-bottom (15 cards), mill as a
+  cost (7), return-DON!!-to-deck (6), Life-trash as a cost (5). Each asserts the specific zone
+  moved by the specific amount, with an unpayable control.
 - **Bot** — every prompt added here is answerable by the AI; a hung solo game is the failure.
 
 ## Method notes that earned their place
