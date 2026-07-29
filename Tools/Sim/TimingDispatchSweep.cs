@@ -38,6 +38,9 @@ namespace OnePieceTcg.Sim
             var onPlay = new List<CardDefLite>();
             var actMain = new List<CardDefLite>();
             var onKo = new List<CardDefLite>();
+            var whenAtk = new List<CardDefLite>();
+            var oppAtk = new List<CardDefLite>();
+            var endTurn = new List<CardDefLite>();
 
             foreach (var def in CardData.Library.Values
                         .Where(c => c != null && !string.IsNullOrEmpty(c.Effect))
@@ -48,12 +51,20 @@ namespace OnePieceTcg.Sim
                 {
                     var line = raw.Trim();
                     if (line.Length == 0 || !line.StartsWith("[")) continue;
-                    if (!Regex.IsMatch(line, @"\byou may\b", RegexOptions.IgnoreCase)) continue;
+                    // Cost symbols carry a parenthesised gloss - "➀ (You may rest the specified number
+                    // of DON!! cards in your cost area.)", "DON!! −1 (You may return ...)". That is
+                    // reminder text explaining the SYMBOL, not a decision offered to the player, and
+                    // counting it made OP04-020 Issho and two others look like cards that never prompt.
+                    var speakable = Regex.Replace(line, @"\([^)]*\)", " ");
+                    if (!Regex.IsMatch(speakable, @"\byou may\b", RegexOptions.IgnoreCase)) continue;
                     var tag = Regex.Match(line, @"^\[([^\]]+)\]").Groups[1].Value;
                     var lite = new CardDefLite { Id = def.Id, Name = def.Name ?? "", Type = def.Type ?? "", Line = line };
                     if (tag.Equals("On Play", StringComparison.OrdinalIgnoreCase)) onPlay.Add(lite);
                     else if (tag.Equals("Activate: Main", StringComparison.OrdinalIgnoreCase)) actMain.Add(lite);
                     else if (tag.Equals("On K.O.", StringComparison.OrdinalIgnoreCase)) onKo.Add(lite);
+                    else if (tag.Equals("When Attacking", StringComparison.OrdinalIgnoreCase)) whenAtk.Add(lite);
+                    else if (tag.Equals("On Your Opponent's Attack", StringComparison.OrdinalIgnoreCase)) oppAtk.Add(lite);
+                    else if (tag.Equals("End of Your Turn", StringComparison.OrdinalIgnoreCase)) endTurn.Add(lite);
                 }
             }
 
@@ -61,6 +72,9 @@ namespace OnePieceTcg.Sim
             bad += Drive("[On Play]", onPlay, PlayFromHand);
             bad += Drive("[Activate: Main]", actMain, ActivateOnField);
             bad += Drive("[On K.O.]", onKo, KoOnField);
+            bad += Drive("[When Attacking]", whenAtk, AttackWithIt);
+            bad += Drive("[On Your Opponent's Attack]", oppAtk, BeAttacked);
+            bad += Drive("[End of Your Turn]", endTurn, EndTheTurn);
 
             Console.WriteLine();
             Console.WriteLine(bad == 0
@@ -88,10 +102,10 @@ namespace OnePieceTcg.Sim
             double pct = usable > 0 ? 100.0 * offered / usable : 0;
             Console.WriteLine();
             Console.WriteLine($"  {label}  {cards.Count} clauses");
-            Console.WriteLine($"    offered a decision : {offered}");
-            Console.WriteLine($"    nothing offered    : {notOffered}");
+            Console.WriteLine($"    ability was LIVE     : {offered}");
+            Console.WriteLine($"    never fired        : {notOffered}");
             if (threw > 0) Console.WriteLine($"    threw              : {threw}");
-            Console.WriteLine($"    -> {pct:F1}% of drivable cards ask the player");
+            Console.WriteLine($"    -> {pct:F1}% of drivable cards ask or act");
             // Split the misses by whether the CLAUSE ITSELF explains them. A conditional body
             // ("If your Leader is [X]") or a named type/trait the fixture has no copy of is an unmet
             // precondition, not a dead path. What is left over is the part worth looking at.
@@ -101,12 +115,12 @@ namespace OnePieceTcg.Sim
                 // "[Activate: Main]" on every single card, which marks all of them explained and makes
                 // the whole split meaningless - it reported 0 unexplained out of 115 before this.
                 var body = Regex.Replace(m.Line, @"^(?:\[[^\]]+\]\s*/?\s*)+", "");
-                return Regex.IsMatch(body, @"If (your|you|the|there)", RegexOptions.IgnoreCase)
+                return Regex.IsMatch(body, @"\bIf (your|you|the|there)\b", RegexOptions.IgnoreCase)
                     || Regex.IsMatch(body, @"\{[^}]+\}")                       // a {Type} the fixture lacks
                     || Regex.IsMatch(body, @"\[[A-Z][^\]]*\]")                  // a [Named Card] requirement
-                    || Regex.IsMatch(body, @"cost of \d+ or (less|more)", RegexOptions.IgnoreCase)
-                    || Regex.IsMatch(body, @"\d{4,5} (base )?power", RegexOptions.IgnoreCase)
-                    || Regex.IsMatch(body, @"given DON!!|currently given", RegexOptions.IgnoreCase);
+                    || Regex.IsMatch(body, @"\bcost of \d+ or (less|more)\b", RegexOptions.IgnoreCase)
+                    || Regex.IsMatch(body, @"\b\d{4,5} (base )?power\b", RegexOptions.IgnoreCase)
+                    || Regex.IsMatch(body, @"\bgiven DON!!|\bcurrently given\b", RegexOptions.IgnoreCase);
             }
             // Segment by the two features that recur among the misses. If either segment offers at a
             // much lower rate than the rest, that is a class-level defect rather than 50 separate
@@ -142,13 +156,19 @@ namespace OnePieceTcg.Sim
                 && !c.Type.Equals("stage", StringComparison.OrdinalIgnoreCase)) return true;  // not drivable this way
             var b = new Board();
             var hand = b.Hand("south", c.Id);
+            int logBefore = b.St.EventLog.Count;
             b.Apply(new GameCommand
             { Type = "playCard", Seat = "south", InstanceId = hand.InstanceId, SlotIndex = 0 });
             // If it never reached the field the fixture failed, not the dispatch - do not count it.
             bool landed = b.S.CharacterArea.Any(x => x != null && x.CardId == c.Id)
                        || (b.S.Stage != null && b.S.Stage.CardId == c.Id);
+            if (Environment.GetEnvironmentVariable("OPTCG_PROBE") == c.Id)
+            {
+                Console.WriteLine($"      [probe {c.Id}] landed={landed} offered={b.Offered()} live={b.Live(logBefore)} pending={b.St.PendingEffects.Count} logBefore={logBefore} total={b.St.EventLog.Count}");
+                foreach (var l in b.St.EventLog.Skip(logBefore)) Console.WriteLine("      [probe log] " + l.Message);
+            }
             if (!landed) return true;
-            return b.Offered();
+            return b.Live(logBefore);
         }
 
         /// <summary>[Activate: Main]: the card is already on the field; activate it.</summary>
@@ -160,8 +180,16 @@ namespace OnePieceTcg.Sim
             else if (c.Type.Equals("leader", StringComparison.OrdinalIgnoreCase)) src = b.LeaderCard("south", c.Id);
             else src = b.Character("south", c.Id);
             if (src == null) return true;
+            int logBefore = b.St.EventLog.Count;
+            int before = logBefore;
             b.Apply(new GameCommand { Type = "activateMain", Seat = "south", Target = src.InstanceId });
-            return b.Offered();
+            if (Environment.GetEnvironmentVariable("OPTCG_PROBE") == c.Id)
+            {
+                Console.WriteLine($"      [probe {c.Id}] pending={b.St.PendingEffects.Count} hand={b.S.Hand.Count} trash={b.S.Trash.Count} life={b.S.Life.Count}");
+                foreach (var l in b.St.EventLog.Skip(before)) Console.WriteLine("      [probe log] " + l.Message);
+                if (b.St.EventLog.Count == before) Console.WriteLine("      [probe log] (the command produced NO log at all)");
+            }
+            return b.Live(logBefore);
         }
 
         /// <summary>[On K.O.]: the card is on the field and gets K.O.'d by an effect - the EB03-053
@@ -172,8 +200,59 @@ namespace OnePieceTcg.Sim
             var b = new Board();
             var src = b.Character("south", c.Id);
             if (src == null) return true;
+            int logBefore = b.St.EventLog.Count;
             GameEngine.AuditKoByEffect(b.St, "south", src.InstanceId);
-            return b.Offered();
+            return b.Live(logBefore);
+        }
+
+        /// <summary>[When Attacking]: the card is on the field and swings at the opponent's Leader.</summary>
+        private static bool AttackWithIt(CardDefLite c)
+        {
+            if (!c.Type.Equals("character", StringComparison.OrdinalIgnoreCase)
+                && !c.Type.Equals("leader", StringComparison.OrdinalIgnoreCase)) return true;
+            var b = new Board();
+            CardInstance src = c.Type.Equals("leader", StringComparison.OrdinalIgnoreCase)
+                ? b.LeaderCard("south", c.Id) : b.Character("south", c.Id);
+            if (src == null) return true;
+            src.Rested = false; src.PlayedOnTurn = 0;      // not summoning-sick, able to declare
+            int logBefore = b.St.EventLog.Count;
+            b.Apply(new GameCommand
+            { Type = "declareAttack", Seat = "south", Attacker = src.InstanceId, Target = b.N.Leader?.InstanceId });
+            return b.Live(logBefore);
+        }
+
+        /// <summary>[On Your Opponent's Attack]: the card sits on OUR field while north swings at our
+        /// Leader. The seat has to change hands or the trigger has no attack to react to.</summary>
+        private static bool BeAttacked(CardDefLite c)
+        {
+            if (!c.Type.Equals("character", StringComparison.OrdinalIgnoreCase)
+                && !c.Type.Equals("stage", StringComparison.OrdinalIgnoreCase)
+                && !c.Type.Equals("leader", StringComparison.OrdinalIgnoreCase)) return true;
+            var b = new Board();
+            if (c.Type.Equals("leader", StringComparison.OrdinalIgnoreCase)) b.LeaderCard("south", c.Id);
+            else if (c.Type.Equals("stage", StringComparison.OrdinalIgnoreCase)) b.Stage("south", c.Id);
+            else if (b.Character("south", c.Id) == null) return true;
+
+            var attacker = b.Character("north", "OP15-040");
+            if (attacker == null) return true;
+            attacker.Rested = false; attacker.PlayedOnTurn = 0;
+            b.St.ActiveSeat = "north";
+            int logBefore = b.St.EventLog.Count;
+            b.Apply(new GameCommand
+            { Type = "declareAttack", Seat = "north", Attacker = attacker.InstanceId, Target = b.S.Leader?.InstanceId });
+            return b.Live(logBefore);
+        }
+
+        /// <summary>[End of Your Turn]: end the turn with the card on the field.</summary>
+        private static bool EndTheTurn(CardDefLite c)
+        {
+            var b = new Board();
+            if (c.Type.Equals("stage", StringComparison.OrdinalIgnoreCase)) b.Stage("south", c.Id);
+            else if (c.Type.Equals("leader", StringComparison.OrdinalIgnoreCase)) b.LeaderCard("south", c.Id);
+            else if (b.Character("south", c.Id) == null) return true;
+            int logBefore = b.St.EventLog.Count;
+            b.Apply(new GameCommand { Type = "endTurn", Seat = "south" });
+            return b.Live(logBefore);
         }
 
         private static string Trim(string s, int n) =>
@@ -222,6 +301,33 @@ namespace OnePieceTcg.Sim
             public bool Offered() =>
                 St.PendingEffects.Any(e => e != null && e.Seat == "south")
                 || St.ActiveChoice != null || St.DeckLook != null;
+
+            /// <summary>Was the ability LIVE - either the player was asked, or it went ahead and did
+            /// something? "Still pending" alone is the wrong test for [Activate: Main]: activating IS
+            /// the decision, so the engine pays and resolves in one go and leaves nothing waiting.
+            /// Scoring that as "never offered" put the timing at 57% when EB03-028 Yu had drawn its 2
+            /// cards, OP01-013 Sanji had taken its Life card and gained +2000, and EB01-016 Bingoh had
+            /// rested itself before correctly finding no target.</summary>
+            public bool Live(int logBefore)
+            {
+                if (Offered()) return true;
+                foreach (var l in St.EventLog.Skip(logBefore))
+                {
+                    var m = l.Message ?? "";
+                    // "is pending" is the queue notice, not an outcome. "plays X" is the command
+                    // itself and happens whether or not the ability ever fires - counting it made
+                    // every [On Play] card score LIVE for free. And the two retirement notices are
+                    // the exact failure being hunted: pre-fix Jinbe logged "no legal target ... not
+                    // carried out" and would have passed a looser check.
+                    if (m.IndexOf("is pending", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    if (m.IndexOf("not carried out", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    if (m.IndexOf("effect skipped", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    if (m.IndexOf(" plays ", StringComparison.OrdinalIgnoreCase) >= 0) continue;   // NOT a regex: an earlier "\b...\b" was written with literal backspace bytes and never matched
+                    if (m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    return true;
+                }
+                return false;
+            }
 
             public CardInstance Hand(string seat, string id)
             {

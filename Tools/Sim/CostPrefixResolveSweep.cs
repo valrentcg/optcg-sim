@@ -27,7 +27,7 @@ namespace OnePieceTcg.Sim
         {
             Console.WriteLine("=== \"You may <cost>:\" — does Use actually resolve? ===");
 
-            int tested = 0, acted = 0, waiting = 0, silent = 0, threw = 0;
+            int tested = 0, acted = 0, waiting = 0, silent = 0, threw = 0, unpayable = 0;
             var silentCards = new List<(string Id, string Name, string Clause)>();
             // A cost that names a COUNT of cards in a zone holding several of them is a choice the
             // player owns. If such a clause resolves straight through, the engine picked for them.
@@ -69,7 +69,11 @@ namespace OnePieceTcg.Sim
                         // "acknowledged for manual resolution" is the engine giving up, not a payoff.
                         var did = b.St.EventLog.Skip(logBefore).Select(l => l.Message)
                                    .Where(m => m.IndexOf("is pending", StringComparison.OrdinalIgnoreCase) < 0
-                                            && m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) < 0)
+                                            && m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) < 0
+                                            // "cost cannot be paid" is the engine DECLINING, not
+                                            // acting. Counting it as an action put 21 reveal-from-
+                                            // hand cards on the auto-picked list having done nothing.
+                                            && m.IndexOf("cost cannot be paid", StringComparison.OrdinalIgnoreCase) < 0)
                                    .ToList();
 
                         if (stillWaiting) waiting++;
@@ -78,12 +82,22 @@ namespace OnePieceTcg.Sim
                             acted++;
                             var costM = Regex.Match(clause, @"^You may ([^:]+):", RegexOptions.IgnoreCase);
                             string cost = costM.Success ? costM.Groups[1].Value.ToLowerInvariant() : "";
-                            bool choiceShaped =
-                                Regex.IsMatch(cost, @"(trash|return|reveal|place|add).*(\d+)")
+                            // A cost is only a CHOICE if the player picks WHICH cards. "trash 1 card
+                            // from the top of your Life cards" names one exact card - resolving it
+                            // outright is correct, and counting it made this number look far worse
+                            // than it is. Costs that name an end of a stack are excluded unless the
+                            // wording offers both ("top or bottom").
+                            bool positional = (cost.Contains("the top of") || cost.Contains("the bottom of"))
+                                && !cost.Contains("top or bottom");
+                            bool choiceShaped = !positional
+                                && Regex.IsMatch(cost, @"\b(trash|return|reveal|place|add)\b.*\b(\d+)\b")
                                 && (cost.Contains("from your hand") || cost.Contains("from your trash")
                                  || cost.Contains("of your life") || cost.Contains("from your deck"));
-                            if (choiceShaped) autoPicked.Add((def.Id, def.Name ?? "", clause));
+if (choiceShaped) autoPicked.Add((def.Id, def.Name ?? "", clause));
                         }
+                        else if (b.St.EventLog.Skip(logBefore).Any(l =>
+                                 (l.Message ?? "").IndexOf("cost cannot be paid", StringComparison.OrdinalIgnoreCase) >= 0))
+                            unpayable++;   // the engine said so out loud; the fixture lacked the cards
                         else { silent++; silentCards.Add((def.Id, def.Name ?? "", clause)); }
 
                         // ---- second pass: the same clause, answered with Skip ----
@@ -108,6 +122,7 @@ namespace OnePieceTcg.Sim
             Console.WriteLine($"  cost-prefix clauses tested        : {tested}");
             Console.WriteLine($"  Use produced an observable effect : {acted}");
             Console.WriteLine($"  Use correctly waits for a pick    : {waiting}");
+            Console.WriteLine($"  Cost unpayable on this board      : {unpayable}");
             Console.WriteLine($"  Use did NOTHING (silent failure)  : {silent}");
             if (threw > 0) Console.WriteLine($"  threw                             : {threw}");
 
