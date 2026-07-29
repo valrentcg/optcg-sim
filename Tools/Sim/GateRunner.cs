@@ -52,6 +52,10 @@ namespace OnePieceTcg.Sim
             // Falsifiable, unlike disjunctionsweep: crippling the shared match-any tag loop makes
             // its playability case fail. That is what qualifies it here.
             ("disjunctionresolve",    DisjunctionResolveTest.Run),
+            // Every prompt added this session must be answerable by the BOT too - an unanswerable
+            // pending effect is a hung solo game, and botstall plays random matchups that may
+            // never draw these cards.
+            ("botprompts",            BotAnswersPromptsTest.Run),
             ("sacrifice",             SacrificeProtectionTest.Run),
             ("timingsweep",           TimingDispatchSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt
