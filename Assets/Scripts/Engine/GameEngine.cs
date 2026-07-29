@@ -1905,6 +1905,26 @@ namespace OnePieceTcg.Engine
 
         // Strip a leading "Then," connective and re-capitalize a following "if" so downstream
         // clause handlers (which anchor on "If ") recognize queued second clauses.
+        /// <summary>Rewrite a clause written about the opponent into one addressed TO them.
+        ///
+        /// "Your opponent may trash 1 card from the top of THEIR Life cards" is phrased from the
+        /// controller's chair. Every effect handler resolves relative to its own effect.Seat, so
+        /// handing that text to the opponent verbatim would point "their" straight back at the
+        /// controller and eat the wrong player's Life — the same frame-of-reference inversion that
+        /// `opponentdecides` pins for Choose-one options.</summary>
+        private static string FlipToSecondPerson(string clause)
+        {
+            if (string.IsNullOrEmpty(clause)) return clause;
+            var opts = System.Text.RegularExpressions.RegexOptions.IgnoreCase;
+            string s = System.Text.RegularExpressions.Regex.Replace(clause, "their ", "your ", opts);
+            s = System.Text.RegularExpressions.Regex.Replace(s, "they ", "you ", opts);
+            return s;
+        }
+
+        /// <summary>Lower-case the first character, for splicing a clause into a sentence.</summary>
+        private static string LowerFirst(string s) =>
+            string.IsNullOrEmpty(s) ? s : char.ToLowerInvariant(s[0]) + s.Substring(1);
+
         private static string NormalizeClause(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return text ?? "";
@@ -6720,6 +6740,22 @@ namespace OnePieceTcg.Engine
             if (state.DeckLook != null || state.ActiveChoice != null) return;
             var effect = FindPendingEffect(state, seat, effectId);
             if (effect == null) return;
+            // "Your opponent may <X>. If they do not, <Y>." — X was queued on the opponent's seat and
+            // they are declining it, so Y fires now, for the CONTROLLER (DeclineSeat), not for them.
+            // The retire sweep also passes through here, which is deliberate: an opponent who CANNOT
+            // do X reaches the same branch as one who will not, without a second rule to keep in step.
+            if (!string.IsNullOrEmpty(effect.DeclineContinuation))
+            {
+                string dText = effect.DeclineContinuation;
+                string dSeat = string.IsNullOrEmpty(effect.DeclineSeat) ? OtherSeat(seat) : effect.DeclineSeat;
+                var dSrc = FindCardInstance(state, effect.SourceInstanceId);
+                state.PendingEffects.Remove(effect);
+                Log(state, seat, $"{Player(state, seat).Name} declines — the alternative is carried out instead.");
+                if (dSrc != null)
+                    QueueAndAutoResolve(state, dSeat, dSrc, effect.Timing, dText,
+                        IsOptionalEffectText(dText), effect.Scope, InferTargetZone(dText));
+                return;
+            }
             // A postponed removal being answered NO: carry out the removal that was held back, exactly as
             // it would have happened had the protection never been offered.
             if (effect.Timing == "removalChoice")
@@ -9888,6 +9924,79 @@ namespace OnePieceTcg.Engine
             text = NormalizeClause(text);   // strip stray leading "Then," connectives
             var owner = Player(state, effect.Seat);
             var sourceName = NameId(CardData.GetCard(effect.SourceCardId));
+
+            // ---- "Your opponent may <X>. If they do not, <Y>." (OP05-099, OP15-059) ------------
+            // The OPPONENT owns this decision, and until now they never got it: the clause fell
+            // through to whichever generic handler matched Y, so the penalty fired unconditionally
+            // and the "may" was inert — strictly in the controller's favour. Queue X on THEIR seat
+            // as a real opt-in, and carry Y as a decline branch (see PendingEffect.DeclineSeat).
+            //
+            // Must run before the generic handlers for the same reason the Five Elders block does:
+            // Y here is "give … -2000 power", which several of them match happily.
+            var oppMay = System.Text.RegularExpressions.Regex.Match(text,
+                @"^\s*Your opponent may (.+?)\.\s*If they do not,\s*(.+)$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Singleline);
+            if (oppMay.Success)
+            {
+                string oppSeat = OtherSeat(effect.Seat);
+                // The clause is written from the CONTROLLER's side ("their Life cards"), so flip it
+                // into the second person before handing it over — every handler resolves relative to
+                // the effect's own seat, and "their" would otherwise point back at the controller.
+                string oppClause = FlipToSecondPerson(oppMay.Groups[1].Value.Trim());
+                if (!oppClause.EndsWith(".")) oppClause += ".";
+                string penalty = NormalizeClause(oppMay.Groups[2].Value.Trim());
+                var src = FindCardInstance(state, effect.SourceInstanceId);
+                if (src == null) return EffectResolution.Resolved;
+
+                // No hand-written "can they afford it" table here on purpose. If the opponent has
+                // no Life card / no active DON!! to give, the clause is unresolvable and the
+                // existing retire path removes it — and that path fires the decline branch too, so
+                // "cannot" and "will not" converge without a second rule to keep in sync.
+                QueueEffect(state, oppSeat, src, effect.Timing, oppClause, true,
+                            EffectScope.Instant, InferTargetZone(oppClause));
+                var queued = state.PendingEffects[state.PendingEffects.Count - 1];
+                queued.DeclineContinuation = penalty;
+                queued.DeclineSeat = effect.Seat;
+                // Log the ORIGINAL wording, not the flipped one — the combat log is read from the
+                // controller's side, where "1 of their active DON!!" is correct and "1 of your
+                // active DON!!" names the wrong player.
+                Log(state, effect.Seat,
+                    $"{sourceName}: {Player(state, oppSeat).Name} may {LowerFirst(oppMay.Groups[1].Value.Trim()).TrimEnd('.')} — their choice.");
+                return EffectResolution.Resolved;
+            }
+
+            // ---- "Return N of your [active|rested] DON!! cards to your DON!! deck." as a BODY ----
+            // The engine knew this shape only as a COST prefix; as an effect body it fell through to
+            // "acknowledged for manual resolution", i.e. nothing happened (OP15-059's opponent half).
+            // The active/rested qualifier is load-bearing and must not be delegated to PayDonMinus,
+            // which returns RESTED DON!! first by design — the opposite of what "active" asks for.
+            // No pick prompt: DON!! cards carry no identity, so within the qualifier they are
+            // interchangeable and choosing among them is not a decision the player is being denied.
+            var retDon = System.Text.RegularExpressions.Regex.Match(text,
+                @"^\s*Returns?\s+(\d+)\s+of your(\s+active|\s+rested)?\s+DON!!\s+cards?\s+to your DON!!\s+deck",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (retDon.Success)
+            {
+                int rdN = int.Parse(retDon.Groups[1].Value);
+                string qual = retDon.Groups[2].Value.Trim().ToLowerInvariant();
+                Func<DonInstance, bool> want =
+                    qual == "active" ? (Func<DonInstance, bool>)(d => !d.Rested)
+                  : qual == "rested" ? (d => d.Rested)
+                  : (d => true);
+                int moved = 0;
+                for (int i = owner.CostArea.Count - 1; i >= 0 && moved < rdN; i--)
+                {
+                    if (!want(owner.CostArea[i])) continue;
+                    owner.CostArea.RemoveAt(i);
+                    owner.DonDeck += 1;
+                    moved++;
+                }
+                Log(state, effect.Seat, moved > 0
+                    ? $"{owner.Name} returns {moved}{(qual.Length > 0 ? " " + qual : "")} DON!! to their DON!! deck."
+                    : $"{owner.Name} has no{(qual.Length > 0 ? " " + qual : "")} DON!! to return.");
+                if (moved > 0) NotifyDonReturned(state, effect.Seat, moved);
+                return EffectResolution.Resolved;
+            }
 
             // EB02-030 [Counter]: "If any of your Characters would be K.O.'d in battle during this turn, you may
             // trash 1 card from your hand instead." Register a TURN-LONG battle-K.O. replacement for this seat —

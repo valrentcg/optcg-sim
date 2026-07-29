@@ -65,6 +65,7 @@ namespace OnePieceTcg.Sim
             ("onceperturn",           OncePerTurnTest.Run),
             ("optionalonce",          OptionalOnceSkipTest.Run),
             ("opponentdecides",       OpponentDecidesTest.Run),
+            ("opponentbranch",        OpponentBranchTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

@@ -213,6 +213,13 @@ namespace OnePieceTcg.Engine
         // must NOT consume the once-per-turn, so it re-prompts on the next attack until used. Null =
         // no once-per-turn tracking.
         public string OnceKey;
+        // "Your opponent may <X>. If they do not, <Y>." (OP05-099, OP15-059). This effect is the
+        // OPPONENT's optional half (X), queued on THEIR seat; DeclineContinuation is Y, which fires
+        // for DeclineSeat (the controller) only if they decline or cannot do it. The mirror of
+        // PendingContinuation, which fires on success — declining must cost something here, but
+        // paying must not ALSO cost it. Null = no decline branch.
+        public string DeclineContinuation;
+        public string DeclineSeat;
         // This is the body of an activated Life [Trigger]. When its final clause
         // finishes, resume any remaining damage from the same hit.
         public bool FinalizesActivatedTrigger;

@@ -34,6 +34,7 @@ namespace OnePieceTcg.Sim
             BotAnswersProtectionDiscard();
             BotAnswersRevealCost();
             BotAnswersCounterCost();
+            BotAnswersAnOpponentImposedDecision();
             BotAnswersLifeFaceUpCost();
             BotAnswersTheTriggerStep();
             BotStillValuesACostPrefixedCounter();
@@ -110,6 +111,28 @@ namespace OnePieceTcg.Sim
                 "You may reveal 1 {FILM} type card from your hand: Draw 1 card.");
             Check("bot answers the reveal-from-hand cost prompt",
                   BotClearsItsDecision(b.St, "north", out string why), why);
+        }
+
+        /// <summary>The newest prompt is the first one the bot does not OWN by controlling the source:
+        /// "Your opponent may &lt;X&gt;. If they do not, &lt;Y&gt;." queues X on the OPPONENT's seat. In a
+        /// solo game that seat is the AI, and it is asked in the middle of its own attack — so a bot
+        /// that cannot answer here hangs the game at the worst possible moment. Both wordings are
+        /// driven, since they resolve through different handlers (Life card vs DON!!).</summary>
+        private static void BotAnswersAnOpponentImposedDecision()
+        {
+            foreach (var clause in new[]
+            {
+                "Trash 1 card from the top of your Life cards.",
+                "Return 1 of your active DON!! cards to your DON!! deck.",
+            })
+            {
+                var b = new Board("north");
+                GameEngine.QueueClauseForTest(b.St, "north", b.Character("north", "ST29-010"), "main", clause);
+                var pe = b.St.PendingEffects.LastOrDefault(e => e != null && e.Seat == "north");
+                if (pe != null) { pe.DeclineContinuation = "Give up to 1 of your opponent's Leader or Character cards -2000 power during this turn."; pe.DeclineSeat = "south"; }
+                Check($"bot answers an opponent-imposed decision ({clause.Split(' ')[0].ToLowerInvariant()})",
+                      BotClearsItsDecision(b.St, "north", out string why), why);
+            }
         }
 
         private static void BotAnswersCounterCost()

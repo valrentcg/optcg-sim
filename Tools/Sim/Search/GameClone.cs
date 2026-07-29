@@ -136,6 +136,7 @@ namespace OnePieceTcg.Sim.Search
             // searching on a copy without it can spend the same ability twice. The other three
             // are the progress ledger the pending-effect panel reads.
             OriginalText = e.OriginalText, OnceKey = e.OnceKey,
+            DeclineContinuation = e.DeclineContinuation, DeclineSeat = e.DeclineSeat,
             DoneParts = e.DoneParts == null ? null : new List<string>(e.DoneParts),
             SkippedParts = e.SkippedParts == null ? null : new List<string>(e.SkippedParts),
         };

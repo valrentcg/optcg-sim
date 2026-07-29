@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**45 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**46 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -31,6 +31,8 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 8 | **PvP: the opponent could resolve or skip YOUR pending effect** by omitting the effect id — `FindPendingEffect`'s no-id fallback ended in `PendingEffects[0]`, whoever queued first | every optional effect |
 | 9 | `GameClone` silently dropped **20 fields** across two hand-written copies, incl. `DeferredRemovals` and `OnceKey`. Measured: turn-state was non-empty in **12.9%** of search clones | bot search, Sandbox undo, puzzle solver |
 | 10 | Protection discards took `Hand[Count-1]` — the engine chose which card you paid with | 6 cards |
+| 11 | **"Your opponent may X. If they do not, Y" never asked the opponent** — the clause fell through to whichever generic handler matched Y, so the penalty fired unconditionally and the "may" was inert, always in the controller's favour | OP05-099, OP15-059 |
+| 12 | "Return N of your **active** DON!! cards to your DON!! deck" existed only as a *cost*; as an effect body it resolved to nothing | same 2 cards + any future body use |
 
 Also: `"You may"` protections now prompt unconditionally (a decision, not a setting — the
 per-seat flag and its UI toggle were deleted), and the Use button **names the cost** rather
@@ -57,6 +59,11 @@ than saying "Use Effect".
   controller must not be able to answer it — and the options still resolve in the CONTROLLER's
   frame, because the texts are written from their side. Resolving in the chooser's frame inverts
   the card (ST07-010's option A eats the controller's own Life) and logs plausibly either way.
+- **Nested opt-ins** — `opponentbranch`: south opts in, then NORTH gets their own optional
+  decision, and declining costs them. The two branches must be mutually exclusive — paying AND
+  taking the penalty is the card doing double duty; taking neither means the controller rested a
+  Character for nothing. Also pins the active/rested qualifier on the DON!! return, which the
+  shared DON!!-paying helper gets backwards by design (it prefers rested).
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -87,7 +94,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 45 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 46 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

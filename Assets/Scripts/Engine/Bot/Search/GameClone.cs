@@ -116,6 +116,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             DoneParts = e.DoneParts != null ? new System.Collections.Generic.List<string>(e.DoneParts) : new System.Collections.Generic.List<string>(),
             SkippedParts = e.SkippedParts != null ? new System.Collections.Generic.List<string>(e.SkippedParts) : new System.Collections.Generic.List<string>(),
             OnceKey = e.OnceKey, FinalizesActivatedTrigger = e.FinalizesActivatedTrigger,
+            DeclineContinuation = e.DeclineContinuation, DeclineSeat = e.DeclineSeat,
         };
 
         private static CardModifier CloneCM(CardModifier m) => new CardModifier
