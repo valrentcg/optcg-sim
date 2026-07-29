@@ -55,10 +55,14 @@ Every "You may \<cost\>:" card should label its button with the **cost**, not "U
 
 - `OP01-031` — reads "You **can** trash 1 …" (not "may"). This one had **no** Use button at all
   before; it is the single best card to check the label on.
+  **Set-up matters:** its cost is a `{Land of Wano}` type card *in hand*. Without one the button is
+  correctly unavailable, and you would be looking at correct behaviour and calling it a bug.
 - Any `[Activate: Main]` DON!!-cost card: the button reads "Use Effect (rest N DON!!)" and is
   **greyed out** when you have fewer than N active DON!!.
-- `OP06-080`, `OP09-042`, `EB03-018` — compound costs ("rest N DON!! **and** trash 1 card"). These
-  lost the greying and the clickable-DON!! affordance; both should be back.
+- `OP09-042`, `EB03-018`, `OP10-028` — compound costs ("rest N DON!! **and** trash 1 card" /
+  "**and** trash this Character"). These lost the greying and the clickable-DON!! affordance; both
+  should be back. *(Not `OP06-080` — it uses the circled ➁ cost, which is a different path and was
+  never affected.)*
 
 ### 2.3 Prompt wording points at the right zone
 Five prompts named the wrong zone. Check the instruction matches where the highlight actually is.
@@ -80,6 +84,8 @@ Five prompts named the wrong zone. Check the instruction matches where the highl
 - A `[Once Per Turn]` ability works once, refuses a second use, and works again next turn.
 - Declining a `[Once Per Turn]` "you may" does **not** burn the turn's use.
 - `OP12-038`: "K.O. up to 2" with only **one** legal victim still K.O.s that one.
+  **Set-up matters:** the victims must be **rested** and **base cost 4 or less**, so give the
+  opponent exactly one such Character — an active or expensive one is legitimately untargetable.
 
 ---
 
