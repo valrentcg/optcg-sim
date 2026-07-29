@@ -82,7 +82,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 41 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 44 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
