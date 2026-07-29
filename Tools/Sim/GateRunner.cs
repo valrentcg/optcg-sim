@@ -80,6 +80,9 @@ namespace OnePieceTcg.Sim
             // the opponent is a state it cannot construct. Three of those are mandatory, where
             // nothing clickable is a frozen game rather than an annoyance.
             ("crossglow",             CrossSeatGlowTest.Run),
+            // The cards the brief names, driven individually. Class fixes are proven by the cards
+            // they touched; the ones they did NOT touch are where the next bug lives.
+            ("namedcards",            NamedCardsTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

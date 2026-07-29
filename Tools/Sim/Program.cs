@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "namedcards":
+        return OnePieceTcg.Sim.NamedCardsTest.Run();
     case "crossglow":
         return OnePieceTcg.Sim.CrossSeatGlowTest.Run();
     case "lifeend":

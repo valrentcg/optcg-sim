@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**51 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**52 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -99,6 +99,13 @@ than saying "Use Effect".
   Asserts not just that something lights up but that it belongs to the right player, since half of
   them deliberately point at the other player's hand. Restricting glow to the acting seat's own
   cards reddens exactly the cross-seat case.
+- **The cards actually named** — `namedcards`: six of the nine distinct "you may" Nami cards plus
+  Kalgara, driven one at a time through a real play. Everything else here is shape-driven, which
+  has a known blind spot: a class fix is proven by the cards it touched, and only two Namis had
+  ever been looked at individually. Picked for being awkward in different ways — a SELF-HARM cost
+  (give your own Leader -5000), a VARIABLE cost ("1 or more DON!!"), a keyword-filtered cost
+  (trash a card *with a [Trigger]*, asserted in BOTH directions), a compound rest cost, and
+  Kalgara's deck-look. All six pass.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -129,7 +136,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 51 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 52 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
@@ -142,6 +149,10 @@ four rounds I got three of them wrong:
    absence.
 3. Inferred an engine defect from a counter reading zero; two tests written against that exact
    scenario both pass, and the defect does not exist. The counter remains unexplained.
+4. Read `[Trigger]` off the `effect` string and concluded three fixture cards lacked one. It is a
+   SEPARATE data field: ST29-004 and ST29-009 both print a [Trigger] their effect text never
+   mentions. That made a "the cost is unpayable" fixture full of legal payers and produced a
+   confident, wrong defect report for about ten minutes. Check the field the engine reads.
 
 The engine was right in all three. The instrument was wrong in all three. Where a number here
 matters to a decision, re-derive it — and prefer writing a test, which in this workstream has
