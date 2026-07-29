@@ -20,7 +20,7 @@ what breaks worst if the UI half is wrong.
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**67 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**68 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -248,6 +248,11 @@ than saying "Use Effect".
   abilities with different circled DON!! costs. Using either must leave the other available, and
   each must still be once per turn on its own. Restoring the documented shared-key bug (the bare
   instance id for both timings) reddens the first case.
+  `multisweep` then asks the same question of all 22 cards — **43 ordered clause pairs, 0
+  interference** — but is NARROWER, not broader: it queues clauses directly, so it never runs the
+  dispatch that assigns once-per-turn keys, and the shared-key control leaves it reporting 0 while
+  `multiclause` goes red. Established by running the control rather than by reading the code, and
+  written into the suite header so its zero is not misread as covering the key bug.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -300,7 +305,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 67 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 68 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
@@ -330,7 +335,7 @@ unreachable, the second grammatically justified (filters say "including", condit
 "includes"). Neither was "fixed". Both now have the assumption they rest on asserted, so the day a
 set breaks it, the gate says so instead of a card quietly going dead.
 
-**How many of the 67 suites actually detect a broken engine?** Asked once, properly, by making
+**How many of the 68 suites actually detect a broken engine?** Asked once, properly, by making
 every effect body a no-op and running the gate: **42 go red**. Of the 24 that stay green, 23 are
 legitimately insensitive — pure-text checks (`costlabel`, `promptzone`, `wordingvariant`), command
 validation (`wrongseat`, `illegaltarget`), dispatch rather than resolution (`timingsweep`,

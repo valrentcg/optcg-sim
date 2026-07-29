@@ -86,6 +86,10 @@ namespace OnePieceTcg.Sim
             // 22 cards carry two or more "you may" clauses; every sweep drives clauses in
             // ISOLATION, so interference between two abilities on one card was never exercised.
             ("multiclause",           MultiClauseCardTest.Run),
+            // The same invariant across all 22 multi-clause cards. NARROWER than multiclause: it
+            // queues clauses directly, so it cannot see a once-per-turn KEY collision — verified by
+            // control, and stated in the suite header.
+            ("multisweep",            MultiClauseSweep.Run),
             // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.
