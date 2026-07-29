@@ -99,6 +99,23 @@ not reach it".
 
 Instrumentation was reverted; these numbers are a snapshot, not a standing check.
 
+## Did any other fix break a consumer?
+
+The counter regression had a shape worth generalising: a rules fix changed what a function
+RETURNS, and broke a caller that meant something different by it. So the same question was
+asked of every function this session touched.
+
+Consumers of the changed internals (`TryAutoPayCost`, `ClauseHasNoLegalCharacterTarget`,
+`FindPendingEffect`, `CostCardMatches`, `CounterPowerCore`) all live inside GameEngine and are
+the paths already covered above.
+
+The bots reach the engine through 19 public members. Diffing the whole session against the last
+pushed commit (235 insertions, 31 deletions in GameEngine.cs) and grepping that diff for each:
+
+**`GetCounterPower` is the only one whose lines changed** — the regression above, now fixed.
+The rest of the bot-facing surface is untouched, so no other consumer can have silently
+changed meaning.
+
 ## Method notes that earned their place
 
 **Negative-control everything.** Every "0 failures" in this document was checked by breaking
