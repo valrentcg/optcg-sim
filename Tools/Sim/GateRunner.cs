@@ -87,6 +87,9 @@ namespace OnePieceTcg.Sim
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.
             ("triggercost",           TriggerCostTest.Run),
+            // Same oracle as autopick, over the population autopick structurally cannot reach.
+            // Restoring the Hand[0] trigger auto-pick reports 14 and breaks the ratchet.
+            ("triggerfield",          TriggerFieldSweep.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

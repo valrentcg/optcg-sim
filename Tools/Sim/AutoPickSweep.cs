@@ -34,6 +34,11 @@ namespace OnePieceTcg.Sim
     /// are legitimate (a skip fallback, a blind pick from a hidden zone) and the number should be
     /// read, not asserted to be nothing. What it must never do is grow.
     ///
+    /// SCOPE: this reads `def.Effect` only. [Trigger] text lives in a separate data field and fires
+    /// only through battle damage, so it is NOT covered here — `triggerfield` is the companion that
+    /// drives those 42 clauses through a real hit. Feeding them into this sweep instead would queue
+    /// a reactive ability as a main-timing clause and invent a question that never existed.
+    ///
     /// Run: dotnet run --project Tools/Sim/Sim.csproj -c Release -- autopick
     /// </summary>
     public static class AutoPickSweep

@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**53 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**54 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -107,6 +107,13 @@ than saying "Use Effect".
   (give your own Leader -5000), a VARIABLE cost ("1 or more DON!!"), a keyword-filtered cost
   (trash a card *with a [Trigger]*, asserted in BOTH directions), a compound rest cost, and
   Kalgara's deck-look. All six pass.
+- **Every `[Trigger]` "you may", swept** — `triggerfield`: the `autopick` oracle applied to the
+  population `autopick` structurally cannot reach. All **42** cards are put on top of a real Life
+  stack, actually damaged, and their Trigger actually pressed — 42 fired, 34 raised a decision,
+  **0** took hand cards without asking. The 8 silent ones are DON!!-cost triggers, where the cards
+  are fungible. Restoring the `Hand[0]` auto-pick reports **14** and breaks the ratchet.
+  The shortcut of feeding `def.Trigger` into the existing sweeps was rejected: they queue clauses
+  as main-timing, and that invents a question that never existed (their own comment says so).
 - **`[Trigger]` costs** — `triggercost`: 42 "you may" clauses live in the `trigger` DATA FIELD,
   which **no sweep here reads** — all five enumerate `def.Effect` (checked, not assumed). This is
   where the brief's two halves meet: a [Trigger] fires only when a Life card is dealt as damage, so
@@ -143,7 +150,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 53 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 54 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

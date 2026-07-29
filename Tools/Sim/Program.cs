@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "triggerfield":
+        return OnePieceTcg.Sim.TriggerFieldSweep.Run();
     case "triggercost":
         return OnePieceTcg.Sim.TriggerCostTest.Run();
     case "namedcards":
