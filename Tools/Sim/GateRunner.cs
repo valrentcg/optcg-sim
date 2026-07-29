@@ -107,6 +107,9 @@ namespace OnePieceTcg.Sim
             // colours. Both sides of the comparison come from the same resolution, so a miss is two
             // pieces of the engine disagreeing.
             ("ledgerparts",           LedgerPartsTest.Run),
+            // The only fixture here that builds a Character at 0 POWER — a state reachable only
+            // after a -power effect lands, and the one the reduce-then-remove archetype is about.
+            ("zeropowerko",           ZeroPowerKoTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

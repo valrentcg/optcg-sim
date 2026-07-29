@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**59 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**60 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -218,9 +218,17 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 59 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 60 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
+
+**A divergence in the source is not a defect until it is shown to be reachable.** The engine
+spells the power cap two ways, `(\d{1,5})` and `(\d{3,5}) power or less`, and three digits cannot
+express "0" — which looked certain to break the reduce-then-remove archetype (OP04-008, OP11-002,
+OP13-013, OP15-114 Wyper). It does not: those clauses reach the glow filter through earlier
+branches that never consult the strict spelling, and both the capped and exact wordings match
+correctly. `zeropowerko` is the test that refuted it. Six call sites were left alone rather than
+"fixed" on the strength of a plausible reading of the source.
 
 **A passing test is not evidence until it has been seen to fail.** The `uptonrider` suite is the
 cleanest example: three cases about an empty board all passed, and all three passed *identically*
