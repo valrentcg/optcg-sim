@@ -116,7 +116,14 @@ namespace OnePieceTcg.Sim
             // and a check that cannot fail is worse than no check, because it looks like coverage.
             // notargettest and replacementchoice cover that regression and do fail. Always exits 0;
             // read the numbers.
-            return 0;
+                        // The FROZEN assertion alone could never fail - it reads 0 even with
+            // RetireUnresolvablePendingEffects disabled - which is why this is not gated on zero.
+            // Ratcheting the Skip-only count gives it teeth it can use: fixture-dependent and
+            // non-zero, but it must not grow.
+            SweepRatchet.Reset();
+            SweepRatchet.AtMost("mandatory prompt with nothing clickable", deadMandatory.Count, 0);
+            SweepRatchet.AtMost("optional prompt with nothing clickable", deadOptional.Count, 192);
+            return SweepRatchet.Result();
         }
 
         private static string Trim(string s, int n) =>

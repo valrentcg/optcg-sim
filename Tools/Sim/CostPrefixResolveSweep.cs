@@ -164,7 +164,14 @@ if (choiceShaped) autoPicked.Add((def.Id, def.Name ?? "", clause));
 
             // Reporting tool: the board fixture cannot satisfy every card's preconditions, so a
             // silent result is a lead to investigate rather than a proven defect. Always exits 0.
-            return 0;
+                        // Was a pure report, so a change that made these numbers WORSE passed silently.
+            // Ratcheted instead: the fixture cannot satisfy every precondition, so these are not
+            // zero, but they must never grow. See SweepRatchet for the re-baselining rule.
+            SweepRatchet.Reset();
+            SweepRatchet.AtMost("silent (Use did nothing)", silent, 10);
+            SweepRatchet.AtMost("choice resolved without asking", autoPicked.Count, 0);
+            SweepRatchet.AtMost("Skip changed something", skipDirty.Count, 0);
+            return SweepRatchet.Result();
         }
 
         private static string Trim(string s, int n) =>

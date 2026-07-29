@@ -69,6 +69,10 @@ namespace OnePieceTcg.Sim
             // effects, so a false positive costs the player their card silently. Reverting the
             // conjunction fix turns this red.
             ("retiresweep",           RetireFalsePositiveSweep.Run),
+            // Ratcheted reports. These measure things that legitimately are not zero, so they
+            // cannot be gated on zero - but they must never grow. See SweepRatchet.
+            ("costresolvesweep",      CostPrefixResolveSweep.Run),
+            ("glowsweep",             GlowDeadlockSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt
             // --- Life: flip, heal, re-arrange, and battle damage --------------------
             ("lifefaceup",            LifeFaceUpTest.Run),
