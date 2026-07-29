@@ -98,10 +98,14 @@ than saying "Use Effect".
 
 ## What is now asserted, pool-wide
 
-- **Prompted** — `optionalfires`: 704 optional clauses, **0** fire without asking. Deleting the
-  opt-in guard turns it red with 127.
+- **Prompted** — `optionalfires`: 704 optional clauses, **694 raise a prompt**, **0** fire without
+  asking. Deleting the opt-in guard turns it red with 127. It also now fails if fewer than 500
+  actually ask: without that, breaking `QueueEffect` so no prompt is ever raised left it reporting
+  "0 fired without asking" having verified nothing — this suite carries the brief's central claim
+  and could not distinguish 694 correct clauses from an empty run.
 - **Resolves** — `paidfornothing`: if the engine takes payment it must give an effect or a
-  prompt. **0** across 451 unconditional-body clauses.
+  prompt. **0** across 451 unconditional-body clauses, of which **136 actually pay** a cost — and it
+  now fails below 90, because "paid and got nothing = 0" means nothing if nothing was ever paid.
 - **DON!! gates** — `donthreshold`: [DON!! xN] is a gate, not a trigger — 42 you-may clauses
   sit behind one. Shut on N-1, open on N, both directions.
 - **Once-per-turn gates** — `onceperturn`: the other gate hiding behind a timing tag, 27 you-may

@@ -103,6 +103,24 @@ namespace OnePieceTcg.Sim
                 if (paidForNothing.Count > 25) Console.WriteLine($"    ... and {paidForNothing.Count - 25} more");
             }
 
+            // Floor: "paid and got nothing = 0" is meaningless if nothing was ever PAID.
+
+            // 136 clauses pay and then either act or wait for a pick.
+
+            int verified = paidAndActed + paidAndWaiting;
+
+            if (verified < 90)
+
+            {
+
+                Console.WriteLine($"  !! only {verified} clauses actually paid a cost (expected ~136) — "
+
+                                  + "the zero above is not evidence");
+
+                return 1;
+
+            }
+
             return paidForNothing.Count == 0 ? 0 : 1;
         }
 

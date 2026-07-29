@@ -103,6 +103,16 @@ namespace OnePieceTcg.Sim
 
             // Unambiguous: the card says "you may", and the engine did it anyway without a prompt.
             // No board makes that correct, so this one is a gate rather than a report.
+            // Floor. This suite carries the brief's central claim — a card that says "you may" must
+            // never just do it — and without a floor it cannot tell "694 clauses all correctly
+            // asked" from "nothing happened at all". Breaking QueueEffect so no prompt is ever
+            // raised leaves it reporting 0 auto-fires having verified nothing. 694 of 704 ask.
+            if (asked < 500)
+            {
+                Console.WriteLine($"  !! only {asked} clauses actually raised a prompt (expected ~694) — "
+                                  + "the zero above is not evidence");
+                return 1;
+            }
             return autoFired.Count == 0 ? 0 : 1;
         }
 
