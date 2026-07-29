@@ -85,6 +85,7 @@ namespace OnePieceTcg.Sim
             // In PvP both clients send commands and the engine is the only referee, so a missing
             // seat check is an action one player can take on the other's behalf.
             ("wrongseat",             WrongSeatSweep.Run),
+            ("illegaltarget",         IllegalTargetSweep.Run),
             ("drawoutcome",           DrawOutcomeSweep.Run),
 
             // --- tooling hygiene ----------------------------------------------------

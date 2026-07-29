@@ -161,6 +161,8 @@ switch (mode)
         return OnePieceTcg.Sim.GlowDeadlockSweep.Run();
     case "gate":
         return OnePieceTcg.Sim.GateRunner.Run();
+    case "illegaltarget":
+        return OnePieceTcg.Sim.IllegalTargetSweep.Run();
     case "wrongseat":
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
