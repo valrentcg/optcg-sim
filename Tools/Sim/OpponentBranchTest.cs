@@ -40,6 +40,8 @@ namespace OnePieceTcg.Sim
             NorthDeclinesAndTakesThePenalty();
             TheDonVersionBehavesTheSameWay();
             TheActiveQualifierIsHonoured();
+            CannotPayIsTreatedAsWillNotPay();
+            CannotPayTheDonVersionEither();
             Console.WriteLine($"opponentbranch: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -155,6 +157,57 @@ namespace OnePieceTcg.Sim
             Check("\"1 of their ACTIVE DON!!\" takes the active one, not a rested one",
                   restedNow == rested0 && !anyActiveLeft,
                   $"rested {rested0}->{restedNow} (must not change), activeLeft={anyActiveLeft}");
+        }
+
+        /// <summary>The claim I made when I chose NOT to write a capability table for this fix:
+        ///
+        ///   "If they physically cannot do it, the clause is unresolvable and the existing retire
+        ///    path removes it — and that path fires the decline branch too, so CANNOT and WILL NOT
+        ///    converge without a second rule to keep in sync."
+        ///
+        /// That was reasoning, not a result. If the retire path does not actually route through
+        /// PassEffect, the penalty never fires and the controller loses the -2000 they paid a rested
+        /// Character for — the card doing nothing at all, in the one case the fix was supposed to
+        /// handle for free.</summary>
+        private static void CannotPayIsTreatedAsWillNotPay()
+        {
+            var b = new Board(Nested);
+            b.N.Life.Clear();                 // nothing to pay the "trash 1 from the top of their Life" with
+            int leaderPow0 = GameEngine.GetPower(b.St, b.N.Leader);
+            int bodyPow0 = GameEngine.GetPower(b.St, b.NorthBody);
+
+            b.NorthAttacks();
+            b.Use("south");
+            b.SouthAnswersThePenalty();
+
+            int leaderNow = GameEngine.GetPower(b.St, b.N.Leader);
+            int bodyNow = GameEngine.GetPower(b.St, b.NorthBody);
+            bool dropped = (leaderPow0 - leaderNow) == 2000 || (bodyPow0 - bodyNow) == 2000;
+            Check("an opponent who CANNOT pay takes the -2000 just like one who declines",
+                  dropped,
+                  $"leader {leaderPow0}->{leaderNow}, body {bodyPow0}->{bodyNow} — the penalty never "
+                  + "fired, so south rested a Character for nothing");
+        }
+
+        /// <summary>The capability check must be text-driven, not Life-shaped. The DON!! wording is
+        /// the sibling that proves it generalises — a check that only understood "Life card" would
+        /// leave this card exactly as broken as before.</summary>
+        private static void CannotPayTheDonVersionEither()
+        {
+            var b = new Board(NestedDon);
+            foreach (var d in b.N.CostArea) d.Rested = true;   // no ACTIVE DON!! to return
+            int bodyPow0 = GameEngine.GetPower(b.St, b.NorthBody);
+            int leaderPow0 = GameEngine.GetPower(b.St, b.N.Leader);
+
+            b.NorthAttacks();
+            b.Use("south");
+            b.SouthAnswersThePenalty();
+
+            int leaderNow = GameEngine.GetPower(b.St, b.N.Leader);
+            int bodyNow = GameEngine.GetPower(b.St, b.NorthBody);
+            Check("the DON!! version also penalises an opponent with no ACTIVE DON!!",
+                  (leaderPow0 - leaderNow) == 2000 || (bodyPow0 - bodyNow) == 2000,
+                  $"leader {leaderPow0}->{leaderNow}, body {bodyPow0}->{bodyNow}");
         }
 
         private sealed class Board

@@ -1905,6 +1905,39 @@ namespace OnePieceTcg.Engine
 
         // Strip a leading "Then," connective and re-capitalize a following "if" so downstream
         // clause handlers (which anchor on "If ") recognize queued second clauses.
+        /// <summary>Can `seat` actually carry out this clause right now?
+        ///
+        /// Written for the opponent's half of "Your opponent may X. If they do not, Y", where the
+        /// answer decides whether they are offered a decision at all. I first argued this check was
+        /// unnecessary — that an opponent who CANNOT do X would be caught by the retire sweep, which
+        /// routes through PassEffect and fires the decline branch. That was reasoning, not a result,
+        /// and it was wrong: the retire sweep only detects missing CHARACTER targets, so a clause
+        /// wanting a Life card or a DON!! is never unresolvable to it. The opponent was left holding
+        /// a prompt they could only skip, and a controller who had already rested a Character got
+        /// nothing unless the opponent bothered to press Skip.
+        ///
+        /// Deliberately a POSITIVE check on the zone the clause names, defaulting to payable: a
+        /// wrong "yes" costs a prompt the player can decline, a wrong "no" silently denies them the
+        /// choice. Text-driven, so it holds for any future card using these wordings.</summary>
+        private static bool CanSeatPayClause(GameState state, string seat, string clause)
+        {
+            var p = Player(state, seat);
+            if (p == null || string.IsNullOrWhiteSpace(clause)) return false;
+            var m = System.Text.RegularExpressions.Regex.Match(clause, @"(\d+)");
+            int need = m.Success ? int.Parse(m.Groups[1].Value) : 1;
+
+            if (clause.IndexOf("Life card", StringComparison.OrdinalIgnoreCase) >= 0)
+                return p.Life.Count >= need;
+            if (clause.IndexOf("DON!!", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                bool wantsActive = clause.IndexOf("active", StringComparison.OrdinalIgnoreCase) >= 0;
+                return p.CostArea.Count(d => !wantsActive || !d.Rested) >= need;
+            }
+            if (clause.IndexOf("from your hand", StringComparison.OrdinalIgnoreCase) >= 0)
+                return p.Hand.Count >= need;
+            return true;
+        }
+
         /// <summary>Rewrite a clause written about the opponent into one addressed TO them.
         ///
         /// "Your opponent may trash 1 card from the top of THEIR Life cards" is phrased from the
@@ -10017,10 +10050,18 @@ namespace OnePieceTcg.Engine
                 var src = FindCardInstance(state, effect.SourceInstanceId);
                 if (src == null) return EffectResolution.Resolved;
 
-                // No hand-written "can they afford it" table here on purpose. If the opponent has
-                // no Life card / no active DON!! to give, the clause is unresolvable and the
-                // existing retire path removes it — and that path fires the decline branch too, so
-                // "cannot" and "will not" converge without a second rule to keep in sync.
+                // An opponent who CANNOT do X has already answered "no": resolve the branch now
+                // rather than handing them a prompt whose only legal move is Skip. See
+                // CanSeatPayClause for why the retire sweep does not cover this.
+                if (!CanSeatPayClause(state, oppSeat, oppClause))
+                {
+                    Log(state, effect.Seat,
+                        $"{sourceName}: {Player(state, oppSeat).Name} cannot — the alternative is carried out instead.");
+                    QueueAndAutoResolve(state, effect.Seat, src, effect.Timing, penalty,
+                        IsOptionalEffectText(penalty), effect.Scope, InferTargetZone(penalty));
+                    return EffectResolution.Resolved;
+                }
+
                 QueueEffect(state, oppSeat, src, effect.Timing, oppClause, true,
                             EffectScope.Instant, InferTargetZone(oppClause));
                 var queued = state.PendingEffects[state.PendingEffects.Count - 1];
