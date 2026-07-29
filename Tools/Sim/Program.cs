@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "triggerorder":
+        return OnePieceTcg.Sim.TriggerCostOrderTest.Run();
     case "triggerfield":
         return OnePieceTcg.Sim.TriggerFieldSweep.Run();
     case "triggercost":

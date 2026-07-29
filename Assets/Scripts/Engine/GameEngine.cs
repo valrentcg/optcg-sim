@@ -6597,6 +6597,13 @@ namespace OnePieceTcg.Engine
             if (state.DeckLook != null || state.ActiveChoice != null) return;
             var effect = FindPendingEffect(state, seat, effectId);
             if (effect == null) return;
+            // A pick frozen to what was legal at queue time (PendingEffect.EligibleInstanceIds).
+            // Enforced HERE and not only in the glow filter: the two disagreeing is this engine's
+            // signature failure, and in PvP the engine is the only referee — a client that sends the
+            // command anyway must be refused, not merely un-lit.
+            if (effect.EligibleInstanceIds != null && effect.EligibleInstanceIds.Count > 0
+                && !string.IsNullOrEmpty(targetId)
+                && !effect.EligibleInstanceIds.Contains(targetId)) return;
 
             // A postponed removal being answered YES: pay the protection now (re-entering with the
             // question suppressed so it is not asked again) and drop the postponement. If the payment
@@ -6824,7 +6831,18 @@ namespace OnePieceTcg.Engine
                 {
                     int htGuard = 0;
                     while (state.PendingEffects.Contains(effect) && htp.Hand.Count > 0 && htGuard++ < 12)
-                        ResolveEffect(state, seat, effect.EffectId, htp.Hand[htp.Hand.Count - 1].InstanceId);
+                    {
+                        // Pick from the ELIGIBLE set when the effect has one. The plain
+                        // "last card in hand" fallback silently no-ops against an eligibility
+                        // guard — the [Trigger] discard freezes its pick to the pre-play hand, so
+                        // the last card can be one the resolver will refuse, and the mandatory
+                        // payment then never happens at all.
+                        var htPick = htp.Hand.LastOrDefault(h =>
+                            effect.EligibleInstanceIds == null || effect.EligibleInstanceIds.Count == 0
+                            || effect.EligibleInstanceIds.Contains(h.InstanceId));
+                        if (htPick == null) break;
+                        ResolveEffect(state, seat, effect.EffectId, htPick.InstanceId);
+                    }
                     if (!state.PendingEffects.Contains(effect)) return;   // fully paid → done
                 }
             }
@@ -9269,6 +9287,9 @@ namespace OnePieceTcg.Engine
             if (def == null) return false;
             // A card already chosen this multi-pick resolution is no longer a valid target (distinct picks).
             if (effect.PickedInstanceIds != null && effect.PickedInstanceIds.Contains(card.InstanceId)) return false;
+            // A pick frozen to what was legal at queue time (see PendingEffect.EligibleInstanceIds).
+            if (effect.EligibleInstanceIds != null && effect.EligibleInstanceIds.Count > 0
+                && !effect.EligibleInstanceIds.Contains(card.InstanceId)) return false;
             string text = effect.Text ?? "";
             // Strip leading (possibly '/'-combined) timing tags and "Then," connectives so the
             // phrase checks below see the same text the resolver matches against.
@@ -17714,9 +17735,18 @@ namespace OnePieceTcg.Engine
                             Log(state, defenderSeat, $"{defender.Name} trashes {trigLifeN} Life card(s) (Trigger cost).");
                         }
                         if (trigTrashDeferred)
+                        {
+                            // Snapshot the hand BEFORE the card is played, so a body that draws
+                            // ("Play this card. Then, draw 1 card." — OP08-104) cannot hand the
+                            // player a fresh card to pay this cost with. Costs are paid before the
+                            // effect activates (8-4-1-3); the pick is answered later only because
+                            // the battle must not park on it.
+                            var trigEligible = defender.Hand.Select(h => h.InstanceId).ToList();
                             QueueEffect(state, defenderSeat, cardFromLife, "trigger",
                                         $"Trash {trigTrashN} card{(trigTrashN == 1 ? "" : "s")} from your hand.",
                                         false, EffectScope.Instant, EffectTargetZone.Hand);
+                            state.PendingEffects[state.PendingEffects.Count - 1].EligibleInstanceIds = trigEligible;
+                        }
                         cardFromLife.Zone = "character";
                         ResetOncePerTurnIdentity(state, cardFromLife);
                         cardFromLife.PlayedOnTurn = state.TurnNumber;

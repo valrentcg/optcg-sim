@@ -117,6 +117,13 @@ namespace OnePieceTcg.Engine.Bot.Search
             SkippedParts = e.SkippedParts != null ? new System.Collections.Generic.List<string>(e.SkippedParts) : new System.Collections.Generic.List<string>(),
             OnceKey = e.OnceKey, FinalizesActivatedTrigger = e.FinalizesActivatedTrigger,
             DeclineContinuation = e.DeclineContinuation, DeclineSeat = e.DeclineSeat,
+            // Mid-pick bookkeeping. A clone that drops these restarts the pick with a clean slate,
+            // so a search rollout can re-choose a card the real game already spent or reach one the
+            // real game froze out. PickedInstanceIds and CostPaidRefs were ALREADY missing before
+            // EligibleInstanceIds existed — same class as the 20 fields dropped earlier here.
+            PickedInstanceIds = e.PickedInstanceIds == null ? null : new List<string>(e.PickedInstanceIds),
+            CostPaidRefs = e.CostPaidRefs == null ? null : new List<string>(e.CostPaidRefs),
+            EligibleInstanceIds = e.EligibleInstanceIds == null ? null : new List<string>(e.EligibleInstanceIds),
         };
 
         private static CardModifier CloneCM(CardModifier m) => new CardModifier

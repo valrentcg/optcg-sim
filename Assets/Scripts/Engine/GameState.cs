@@ -220,6 +220,13 @@ namespace OnePieceTcg.Engine
         // paying must not ALSO cost it. Null = no decline branch.
         public string DeclineContinuation;
         public string DeclineSeat;
+        // Restricts a pick to a snapshot of what was legal when the effect was QUEUED. Needed where
+        // a cost is answered after its own body has already run: the [Trigger] discard is queued
+        // after the card is played (so the battle never waits on a pick to decide whether the card
+        // arrives), and a body like "Then, draw 1 card" would otherwise put a fresh card in hand
+        // that the player could pay with — rule 8-4-1-3 pays costs BEFORE the effect activates.
+        // Null/empty = no restriction, which is every other effect.
+        public List<string> EligibleInstanceIds;
         // This is the body of an activated Life [Trigger]. When its final clause
         // finishes, resume any remaining damage from the same hit.
         public bool FinalizesActivatedTrigger;

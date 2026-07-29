@@ -90,6 +90,10 @@ namespace OnePieceTcg.Sim
             // Same oracle as autopick, over the population autopick structurally cannot reach.
             // Restoring the Hand[0] trigger auto-pick reports 14 and breaks the ratchet.
             ("triggerfield",          TriggerFieldSweep.Run),
+            // Audits MY OWN trigger-cost fix: it pays the cost after the body runs, which rule
+            // 8-4-1-3 inverts. Without the eligibility snapshot a body that draws hands the player
+            // a fresh card to pay with.
+            ("triggerorder",          TriggerCostOrderTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

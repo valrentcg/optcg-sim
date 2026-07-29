@@ -137,6 +137,13 @@ namespace OnePieceTcg.Sim.Search
             // are the progress ledger the pending-effect panel reads.
             OriginalText = e.OriginalText, OnceKey = e.OnceKey,
             DeclineContinuation = e.DeclineContinuation, DeclineSeat = e.DeclineSeat,
+            // Mid-pick bookkeeping. A clone that drops these restarts the pick with a clean slate,
+            // so a search rollout can re-choose a card the real game already spent or reach one the
+            // real game froze out. PickedInstanceIds and CostPaidRefs were ALREADY missing before
+            // EligibleInstanceIds existed — same class as the 20 fields dropped earlier here.
+            PickedInstanceIds = e.PickedInstanceIds == null ? null : new List<string>(e.PickedInstanceIds),
+            CostPaidRefs = e.CostPaidRefs == null ? null : new List<string>(e.CostPaidRefs),
+            EligibleInstanceIds = e.EligibleInstanceIds == null ? null : new List<string>(e.EligibleInstanceIds),
             DoneParts = e.DoneParts == null ? null : new List<string>(e.DoneParts),
             SkippedParts = e.SkippedParts == null ? null : new List<string>(e.SkippedParts),
         };
