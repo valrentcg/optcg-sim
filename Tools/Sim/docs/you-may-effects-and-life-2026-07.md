@@ -35,6 +35,7 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 12 | "Return N of your **active** DON!! cards to your DON!! deck" existed only as a *cost*; as an effect body it resolved to nothing | same 2 cards + any future body use |
 | 13 | **"Your opponent chooses 1 card from your hand" auto-picked** `Hand[Count-1]` and logged "opponent chose …" — the engine deciding on a player's behalf, same shape as #10 | OP01-038 |
 | 14 | **The opponent's own discards were auto-picked too** — "your opponent trashes 1 card from their hand" / "… places 1 card from their hand at the bottom of their deck" took `Hand[Count-1]` at 5 sites. The controller cannot legally choose (3-4-3: you cannot view the other player's hand), so the owner must — and a discard is only ever as bad as the card you give up | **25 cards** |
+| 26 | **Cards returned from hand to Life landed FACE-UP** — the hand→Life site defaulted to face-up unless the text said "face-down". Rule 3-10-2 is the opposite: Life cards are face-down *unless otherwise specified*. All 12 such clauses in the pool say neither, so every one showed the opponent a card they may not see and pre-revealed its `[Trigger]`. The sibling site for the same move already defaulted face-down — one rule, two implementations, inverted | 12 clauses |
 | 25 | **6 of the engine's 28 tag-strippers could not handle slash-combined tags** — `[On Play]/[When Attacking]` (39 cards, 68 clause lines, incl. OP02-036 Nami). Those 6 stop after the first tag and leave `/[When Attacking]…`, so the anchored match each one runs next fails and that path silently skips the card | 39 cards |
 | 24 | **13 compound DON!!-rest costs lost their payment affordance** — the UI parser required the colon straight after "cards", so "rest 1 of your DON!! cards **and trash 1 card from your hand**:" scored 0. Those cards kept a Use button that stayed ENABLED with too few DON!! and did nothing when pressed, and lost the click-a-glowing-DON!! affordance the other 46 have | 13 cards |
 | 23 | **The progress ledger showed DON!! boilerplate verbatim** — the cleaner stripped only the *return*-to-deck reminder; the pool also prints a *rest*-in-cost-area one (92) and a period-less variant (2), so ~94 clause instances displayed "(You may rest the specified number of DON!! cards in your cost area.)" in the text the player watches fill in | 44 distinct clauses |
@@ -174,10 +175,11 @@ than saying "Use Effect".
   enumerated. **63 distinct shapes**; each is driven against three fixtures (few Life / many Life /
   full trash, since the gates pull in opposite directions) and the resulting Life card inspected for
   SOURCE zone, TOP-of-Life position, and FACING. 0 wrong on all three.
-  Scope stated honestly: **20 of 63** shapes actually heal in these fixtures; the other 43 are gated
-  on Leader identity or type conditions the sweep cannot synthesise. And all 20 want face-DOWN, so
-  the facing check is one-sided by itself — two explicit probes carry it: a "face-up" clause must
-  land face-UP, and the SAME clause without those words must land face-DOWN.
+  Scope: **39 of 63** shapes heal in these fixtures (up from 20 — the sweep learned to build the
+  Leader each gate names, and to detect a heal by card IDENTITY rather than by Life COUNT, since a
+  cost-prefixed heal pays from Life and nets zero). The other 24 need DON!! payments, reactive
+  timings or hand/trash totals it does not construct. Two explicit probes keep the facing check
+  two-sided: a "face-up" clause must land face-UP, and the SAME clause without those words face-DOWN.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.

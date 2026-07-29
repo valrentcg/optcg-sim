@@ -53,17 +53,23 @@ namespace OnePieceTcg.Sim
                 foreach (var variant in new[] { 1, 4, 30 })
                 {
                     Board t;
-                    try { t = new Board(lifeCards: variant == 1 ? 1 : 4, trashCards: variant == 30 ? 34 : 0); }
+                    try { t = new Board(lifeCards: variant == 1 ? 1 : 4, trashCards: variant == 30 ? 34 : 0,
+                                        leaderId: LeaderFor(clause)); }
                     catch (Exception) { continue; }
                     // BOTH seats. The face-up heals say "to the top of the OWNER's Life cards", so
                     // targeting an opponent Character grows NORTH's Life — measuring only south
                     // made every face-up shape look ungated, and left the facing check one-sided
                     // (20 face-down, 0 face-up), which would pass against an engine that hardcodes
                     // face-down.
-                    int l0 = t.S.Life.Count, n0 = t.N.Life.Count;
+                    // Detect by IDENTITY, not by count. A cost-prefixed heal often pays FROM Life
+                    // ("You may add 1 card from the top or bottom of your Life cards to your hand:
+                    // Add up to 1 ...") so Life goes -1 then +1 and a count check reads no heal at
+                    // all — which is why 36 shapes looked ungated when they had in fact worked.
+                    var sBefore = t.S.Life.Select(x => x.InstanceId).ToHashSet();
+                    var nBefore = t.N.Life.Select(x => x.InstanceId).ToHashSet();
                     try { t.Drive(clause); } catch (Exception) { continue; }
-                    if (t.S.Life.Count > l0) { b = t; grewSeat = "south"; any = true; break; }
-                    if (t.N.Life.Count > n0) { b = t; grewSeat = "north"; any = true; break; }
+                    if (t.S.Life.Any(x => !sBefore.Contains(x.InstanceId))) { b = t; grewSeat = "south"; any = true; break; }
+                    if (t.N.Life.Any(x => !nBefore.Contains(x.InstanceId))) { b = t; grewSeat = "north"; any = true; break; }
                 }
                 if (!any)
                 {
@@ -78,7 +84,8 @@ namespace OnePieceTcg.Sim
                 string topBefore = b.StartTopLifeId;
 
                 var grewLife = grewSeat == "south" ? b.S.Life : b.N.Life;
-                var added = grewLife[grewLife.Count - 1];
+                var startIds = grewSeat == "south" ? b.StartLifeIds : b.StartNorthLifeIds;
+                var added = grewLife.LastOrDefault(x => !startIds.Contains(x.InstanceId)) ?? grewLife[grewLife.Count - 1];
                 bool wantsFaceUp = clause.IndexOf("face-up", StringComparison.OrdinalIgnoreCase) >= 0;
                 if (wantsFaceUp) faceUpWanted++;
                 if (added.FaceUp != wantsFaceUp)
@@ -101,7 +108,8 @@ namespace OnePieceTcg.Sim
             // sweep cannot synthesise — stated rather than implied, since "63 shapes" in a summary
             // would read as 63 verified.
             Console.WriteLine($"    of those: {faceUpWanted} want face-UP, {healed - faceUpWanted} want face-DOWN");
-            Console.WriteLine($"    {shapes.Count - healed} never healed here (Leader-identity or type gates the fixture cannot meet)");
+            Console.WriteLine($"    {shapes.Count - healed} never healed here (DON!! payments, reactive timings, "
+                              + "and hand/trash totals this sweep does not construct)");
             Report("wrong FACING (face-up leaks a card the opponent may not see)", wrongFacing);
             Report("added below the existing TOP of Life", wrongPosition);
             Report("card came from the wrong ZONE", wrongSource);
@@ -169,6 +177,30 @@ namespace OnePieceTcg.Sim
             return ok && downOk ? 1 : 0;
         }
 
+        /// <summary>A Leader card that satisfies whatever Leader gate the clause carries, or null.
+        ///
+        /// 43 of the 63 heal shapes never fired because they are gated on Leader identity or type
+        /// ("If your Leader is [Shirahoshi]", "If your Leader has the {Egghead} type"). Reporting
+        /// that as a stated limitation was honest but it left two thirds of the population
+        /// unchecked; the gates are only 7 distinct values and every one resolves to a real card, so
+        /// the fixture can simply BE the deck the card was designed for.</summary>
+        private static string LeaderFor(string clause)
+        {
+            var name = System.Text.RegularExpressions.Regex.Match(clause, @"Leader is \[([^\]]+)\]");
+            var type = System.Text.RegularExpressions.Regex.Match(clause, @"Leader has the \{([^}]+)\} type");
+            var incl = System.Text.RegularExpressions.Regex.Match(clause, "Leader's type includes \"([^\"]+)\"");
+
+            foreach (var def in CardData.Library.Values)
+            {
+                if (def == null || !string.Equals(def.Type, "leader", StringComparison.OrdinalIgnoreCase)) continue;
+                if (name.Success && string.Equals(def.Name, name.Groups[1].Value, StringComparison.OrdinalIgnoreCase))
+                    return def.Id;
+                if (type.Success && def.HasFeature(type.Groups[1].Value)) return def.Id;
+                if (incl.Success && def.HasFeature(incl.Groups[1].Value)) return def.Id;
+            }
+            return null;
+        }
+
         private static void Report(string label, List<string> rows)
         {
             Console.WriteLine($"  {label}: {rows.Count}");
@@ -219,8 +251,10 @@ namespace OnePieceTcg.Sim
             public readonly HashSet<string> StartDeckIds = new HashSet<string>();
             public readonly HashSet<string> StartHandIds = new HashSet<string>();
             public string StartTopLifeId;
+            public readonly HashSet<string> StartLifeIds = new HashSet<string>();
+            public readonly HashSet<string> StartNorthLifeIds = new HashSet<string>();
 
-            public Board(int lifeCards = 1, int trashCards = 0)
+            public Board(int lifeCards = 1, int trashCards = 0, string leaderId = null)
             {
                 St = GameEngine.CreateMatch(new MatchConfig
                 { SouthDeck = "st01", NorthDeck = "st01", Seed = "heal-sweep" });
@@ -242,10 +276,13 @@ namespace OnePieceTcg.Sim
                 }
                 S.CharacterArea[0] = Make("ST29-010", "south", "character");
                 N.CharacterArea[0] = Make("OP15-040", "north", "character");
+                if (!string.IsNullOrEmpty(leaderId)) S.Leader = Make(leaderId, "south", "leader");
                 St.PendingEffects.Clear();
                 foreach (var x in S.Deck) StartDeckIds.Add(x.InstanceId);
                 foreach (var x in S.Hand) StartHandIds.Add(x.InstanceId);
                 StartTopLifeId = S.Life.Count > 0 ? S.Life[S.Life.Count - 1].InstanceId : null;
+                foreach (var x in S.Life) StartLifeIds.Add(x.InstanceId);
+                foreach (var x in N.Life) StartNorthLifeIds.Add(x.InstanceId);
             }
 
             public void Drive(string clause)

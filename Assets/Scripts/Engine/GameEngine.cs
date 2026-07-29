@@ -13541,8 +13541,18 @@ namespace OnePieceTcg.Engine
                         var hlCard = owner.Hand[hi];
                         owner.Hand.RemoveAt(hi);
                         hlCard.Zone = "life";
-                        // Most add-to-Life-top bodies are face-up; OP10-119 Law adds face-DOWN.
-                        bool hlFaceUp = !ContainsAll(text, "face-down");
+                        // Face-DOWN unless the effect says otherwise — rule 3-10-2: "Cards in this
+                        // area are, unless otherwise specified, placed face-down", and 3-10-2-1
+                        // makes face-up something an effect MAY specify. The default here was
+                        // inverted, and the comment justifying it ("most add-to-Life-top bodies are
+                        // face-up") is empirically false: of the 12 "add N cards from your hand to
+                        // the top of your Life" clauses in the pool, ZERO say face-up. Every one was
+                        // landing face-up, showing the opponent a card they may not see and
+                        // pre-revealing its [Trigger].
+                        //
+                        // The sibling site for the same move already defaulted face-down, so this
+                        // was one rule with two implementations disagreeing.
+                        bool hlFaceUp = ContainsAll(text, "face-up");
                         hlCard.FaceUp = hlFaceUp;
                         owner.Life.Add(hlCard);   // end of the list = TOP of Life
                         Log(state, effect.Seat, $"{sourceName}: {NameId(GetCard(hlCard))} placed {(hlFaceUp ? "face-up" : "face-down")} on top of Life.");
