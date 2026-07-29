@@ -127,6 +127,13 @@ than saying "Use Effect".
   each is a "you may" decision taken *during* the life mechanics. Six cases covering both answers
   to the Trigger itself and both answers to the cost pick, incl. that the card the player NAMES is
   the one trashed.
+- **A latent trap, guarded** — `countercost` also asserts that every cost-prefixed `[Counter] +N`
+  card is an **Event**. The counter-cost split made `AutomatedCounterPower` return 0 for those
+  clauses, and GameEngine gates counter LEGALITY on `AutomatedCounterPower <= 0 && !counterEvent`.
+  All 19 such cards are Events today, so nothing breaks; the day a **Character** prints this shape
+  it becomes unplayable outright — not weakened, unusable. The check is self-verifying: it first
+  asserts the detector still finds the known cards, because a shape-detector that matches nothing
+  passes the real assertion perfectly.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.

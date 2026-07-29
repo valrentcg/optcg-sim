@@ -33,6 +33,7 @@ namespace OnePieceTcg.Sim
             DecliningLeavesHandAndPowerAlone();
             PayingGrantsTheBoost();
             PlainCounterStillAppliesItsFlatBoost();
+            EveryCostPrefixedCounterIsAnEvent();
             Console.WriteLine($"countercost: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -143,6 +144,54 @@ namespace OnePieceTcg.Sim
             Check("a plain [Counter] with no cost still applies its boost immediately",
                   TotalBoost(b) > 0,
                   $"boost={TotalBoost(b)} (want > 0)");
+        }
+
+        /// <summary>A latent trap left by the counter-cost split, found by auditing its call sites
+        /// rather than by any failure.
+        ///
+        /// Making AutomatedCounterPower return 0 for a cost-prefixed clause was right — the boost
+        /// must be bought, not free. But GameEngine gates counter LEGALITY on
+        /// "AutomatedCounterPower(c) &lt;= 0 &amp;&amp; !counterEvent -&gt; not playable". Every card carrying
+        /// this shape today is an EVENT, so counterEvent carries them and nothing breaks. The day a
+        /// CHARACTER prints "[Counter] You may &lt;cost&gt;: ... gains +N", it becomes unplayable
+        /// outright — not weakened, unusable — and nothing else in this suite would notice.
+        ///
+        /// So this asserts the property the gate silently depends on. It is a data-shape check on
+        /// purpose: it goes red the moment a set makes the assumption false, which is precisely when
+        /// somebody needs to look at that gate.</summary>
+        private static void EveryCostPrefixedCounterIsAnEvent()
+        {
+            var offenders = new System.Collections.Generic.List<string>();
+            int matched = 0;
+            foreach (var def in CardData.Library.Values)
+            {
+                if (def == null || string.IsNullOrEmpty(def.Effect)) continue;
+                foreach (var line in def.Effect.Split((char)10))
+                {
+                    var s = line.Trim();
+                    if (!s.StartsWith("[Counter]")) continue;
+                    if (!System.Text.RegularExpressions.Regex.IsMatch(s, "you may .{3,80}:",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
+                    int gp = s.IndexOf("gains +", StringComparison.OrdinalIgnoreCase);
+                    if (gp < 0 || gp + 7 >= s.Length || !char.IsDigit(s[gp + 7])) continue;
+                    matched++;
+                    if (!string.Equals(def.Type, "event", StringComparison.OrdinalIgnoreCase))
+                        offenders.Add($"{def.Id} [{def.Type}]");
+                }
+            }
+            // A shape-detector that silently matches NOTHING passes this check perfectly, which is
+            // how a guard becomes decoration. 19 cards carry the shape today; require the detector
+            // to still be finding them before believing the zero.
+            Check("the cost-prefixed [Counter] detector still finds the known cards",
+                  matched >= 15,
+                  $"matched only {matched} — the detector has gone blind (card text or data shape "
+                  + "changed), so the Event assertion below proves nothing");
+            Check("every cost-prefixed [Counter] +N card is an Event (the legality gate assumes it)",
+                  offenders.Count == 0,
+                  offenders.Count == 0 ? "" :
+                  $"{offenders.Count} non-Event card(s) carry this shape and are now UNPLAYABLE as "
+                  + $"counters: {string.Join(", ", offenders.Take(6))} — see the "
+                  + "AutomatedCounterPower<=0 && !counterEvent gate");
         }
 
         private sealed class Board
