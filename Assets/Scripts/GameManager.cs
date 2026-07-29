@@ -9375,7 +9375,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 effect.Optional);
             return;
         }
-        if (EffectHasValidTarget(effect) || donGive)
+        // An UNPAID "You may <cost>: <body>" prefix means the first interaction is paying the
+        // cost, not picking a target. Routing it by EffectHasValidTarget instead offered Skip
+        // alone whenever the BODY happened to have legal targets, leaving the player nothing to
+        // click — OP15-114 Wyper ("You may turn 1 card from the top of your Life cards face-up:
+        // Give all of your opponent's Characters -2000") showed only Skip because the opponent
+        // had Characters for the give-all half. The body does its own targeting on the next step.
+        bool unpaidCostPrefix = System.Text.RegularExpressions.Regex.IsMatch(
+            effect.Text ?? "", @"^You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            && effect.SelectionsRemaining <= 0;
+        if (!unpaidCostPrefix && (EffectHasValidTarget(effect) || donGive))
         {
             AddInfo(body, donGive ? "Click a rested DON!! to give to your Leader." : EffectTargetPrompt(effect));
             if (effect.Optional)

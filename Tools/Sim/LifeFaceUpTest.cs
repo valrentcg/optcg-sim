@@ -36,6 +36,7 @@ namespace OnePieceTcg.Sim
             CostFlipsTheTopCardSpecifically();
             ReplacementUnavailableWhenTopIsFaceUp();
             ReplacementFiresWhenTopIsFaceDown();
+            WyperQueuesWithItsCostPrefixIntact();
             Console.WriteLine($"lifefaceup: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -99,6 +100,24 @@ namespace OnePieceTcg.Sim
             Check("Nami DOES protect when the top Life card is face-down",
                   alive && Top(b.S).FaceUp,
                   alive ? "protected but no Life card was turned face-up" : "the Character was K.O.'d anyway");
+        }
+
+        /// <summary>The UI decides between "Use Effect" and a board pick by looking for an unpaid
+        /// "You may &lt;cost&gt;:" prefix on the pending effect's text. If the prefix is not preserved
+        /// when the effect is queued, that check silently never fires and Wyper shows Skip alone.</summary>
+        private static void WyperQueuesWithItsCostPrefixIntact()
+        {
+            var b = new Board(); b.Life("south", 6);
+            var wyper = b.Character("south", "OP15-114");
+            b.Character("north", "OP15-040");
+            GameEngine.QueueClauseForTest(b.St, "south", wyper, "onPlay",
+                "You may turn 1 card from the top of your Life cards face-up: " +
+                "Give all of your opponent's Characters -2000 power during this turn.");
+            var pe = b.St.PendingEffects.FirstOrDefault();
+            bool prefixed = pe != null && System.Text.RegularExpressions.Regex.IsMatch(
+                pe.Text ?? "", @"^You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            Check("Wyper's queued effect keeps its 'You may <cost>:' prefix", prefixed,
+                  pe == null ? "nothing was queued at all" : "text was: " + pe.Text);
         }
 
         private sealed class Board
