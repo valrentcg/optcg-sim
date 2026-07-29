@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "lifeshapes":
+        return OnePieceTcg.Sim.LifeShapeGapTest.Run();
     case "lifeboundary":
         return OnePieceTcg.Sim.LifeBoundaryTest.Run();
     case "drawoutcome":

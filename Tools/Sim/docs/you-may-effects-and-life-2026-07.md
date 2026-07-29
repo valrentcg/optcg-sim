@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**37 suites, ~5s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**38 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -46,9 +46,15 @@ than saying "Use Effect".
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
 - **Targets** — `illegaltarget`: 6,790 illegal-target attempts, none touched the card.
-- **Life** — flip (both directions), heal, take, trash, reveal, top-or-bottom, re-arranging,
-  battle damage, `[Trigger]` both answers, `[Double Attack]`, `[Banish]`, and the boundaries
+- **Life** — flip (both directions, and *all* at once), heal, take, trash, reveal,
+  top-or-bottom, re-arranging, battle damage, `[Trigger]` both answers, `[Double Attack]`,
+  `[Banish]`, the **opponent's** Life (trash from it; a card taken goes to *their* hand),
+  "trash until you have N", life-count conditions in both directions, and the boundaries
   (empty deck, empty Life, single card).
+
+  This line originally claimed less carefully. Enumerating every Life-bearing sentence in the
+  pool — 236 distinct shapes — showed four the suites had never touched, which `lifeshapes`
+  now covers. Auditing a coverage claim is not the same as making one.
 - **Bot** — every prompt added here is answerable by the AI; a hung solo game is the failure.
 
 ## Method notes that earned their place
