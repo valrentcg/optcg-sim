@@ -8,6 +8,12 @@ Worked from one brief, repeated over many iterations:
 > double/triple check that flip life mechanics are working properly, heal, and life
 > re-arranging mechanics as well
 
+## If you are here to PLAY-TEST
+
+Read `PLAYTEST-CHECKLIST.md` in this folder instead. Everything in this document is engine-verified
+and UI-unverified; the checklist turns that into a prioritised list of cards to press, ordered by
+what breaks worst if the UI half is wrong.
+
 ## Start here
 
 ```
