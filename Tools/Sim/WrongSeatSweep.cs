@@ -38,9 +38,9 @@ namespace OnePieceTcg.Sim
                     var cmd = probe.Build(b);
                     if (cmd == null) { tested--; continue; }
                     cmd.Seat = "north";                    // the seat that must NOT own this
-                    string before = b.Fingerprint();
+                    string before = probe.SouthOnly ? b.FingerprintSouth() : b.Fingerprint();
                     b.Apply(cmd);
-                    string after = b.Fingerprint();
+                    string after = probe.SouthOnly ? b.FingerprintSouth() : b.Fingerprint();
                     if (before == after) refused++;
                     else accepted.Add((probe.Name, before, after));
                 }
@@ -73,6 +73,9 @@ namespace OnePieceTcg.Sim
         {
             public string Name;
             public Func<Board, GameCommand> Build;
+            /// <summary>Compare only the victim seat, for commands that legitimately act on
+            /// the sender.</summary>
+            public bool SouthOnly;
         }
 
         /// <summary>Each probe sets up a state where SOUTH owns the action and returns the command
@@ -153,6 +156,70 @@ namespace OnePieceTcg.Sim
                 atk.Rested = false; atk.PlayedOnTurn = 0;
                 return new GameCommand { Type = "declareAttack", Attacker = atk.InstanceId, Target = b.N.Leader?.InstanceId };
             } };
+
+            // ---- battle-step commands -------------------------------------------------------
+            // These belong to the DEFENDER, so here the wrong seat is the ATTACKER. If the attacker can
+            // send passBlock or passCounter, they skip their opponent's chance to respond; if they can
+            // send passTrigger, they discard a [Trigger] the defender was entitled to use.
+            yield return new Probe { Name = "passBlock (attacker sending the defender's pass)", Build = b =>
+                b.NorthAttacksSouth("block") ? new GameCommand { Type = "passBlock" } : null };
+
+            yield return new Probe { Name = "blockAttack (attacker interposing the defender's Blocker)", Build = b =>
+            {
+                if (!b.NorthAttacksSouth("block")) return null;
+                var guard = b.S.CharacterArea.FirstOrDefault(x => x != null);
+                return guard == null ? null : new GameCommand { Type = "blockAttack", Blocker = guard.InstanceId };
+            } };
+
+            yield return new Probe { Name = "passCounter (attacker skipping the defender's counter step)", Build = b =>
+                b.NorthAttacksSouth("counter") ? new GameCommand { Type = "passCounter" } : null };
+
+            yield return new Probe { Name = "counterWithCard (attacker spending the defender's counter)", Build = b =>
+            {
+                if (!b.NorthAttacksSouth("counter")) return null;
+                var card = b.Hand("south", "EB01-019");
+                return new GameCommand { Type = "counterWithCard", InstanceId = card.InstanceId, Target = b.S.Leader?.InstanceId };
+            } };
+
+            yield return new Probe { Name = "resolveAttack (attacker resolving for the defender)", Build = b =>
+                b.NorthAttacksSouth("damage") ? new GameCommand { Type = "resolveAttack" } : null };
+
+            yield return new Probe { Name = "passTrigger (attacker discarding the defender's [Trigger])", Build = b =>
+                b.NorthAttacksSouth("trigger") ? new GameCommand { Type = "passTrigger" } : null };
+
+            yield return new Probe { Name = "useTrigger (attacker firing the defender's [Trigger])", Build = b =>
+                b.NorthAttacksSouth("trigger") ? new GameCommand { Type = "useTrigger" } : null };
+
+            // ---- misc seat-owned commands ---------------------------------------------------
+            yield return new Probe { Name = "reorderTrash in south's trash", Build = b =>
+            {
+                var t1 = b.Card2("ST29-009", "south", "trash"); b.S.Trash.Add(t1);
+                b.S.Trash.Add(b.Card2("ST29-004", "south", "trash"));
+                return new GameCommand { Type = "reorderTrash", InstanceId = t1.InstanceId, SlotIndex = 1 };
+            } };
+
+            yield return new Probe { Name = "sortTrash on south's trash", Build = b =>
+            {
+                b.S.Trash.Add(b.Card2("ST29-009", "south", "trash"));
+                b.S.Trash.Add(b.Card2("ST29-004", "south", "trash"));
+                return new GameCommand { Type = "sortTrash", Amount = 1 };
+            } };
+
+            // takeLife acts on the ACTOR, so north sending it moves NORTH's Life - correctly
+            // seat-scoped, and my first version of this probe mistook that for a cross-seat hole. What
+            // matters is that north cannot reach SOUTH's Life, which is asserted by fingerprinting
+            // south alone.
+            //
+            // Separately worth recording, and deliberately NOT called a bug: takeLife has no battle or
+            // phase guard, so a hand-crafted command converts a Life card into a hand card at will. The
+            // shipped UI never sends it in normal play (it appears only in the Blitz clock's action list
+            // and the replay index), and this engine is client-authoritative by design - both clients
+            // run it - so a modified client is outside what any engine check can prevent. That is a
+            // different class from the FindPendingEffect hole, which an HONEST client reached by simply
+            // omitting an optional field.
+            yield return new Probe { Name = "takeLife cannot reach the OTHER seat's Life", SouthOnly = true,
+                Build = b => new GameCommand { Type = "takeLife" } };
+
         }
 
         private sealed class Board
@@ -193,6 +260,31 @@ namespace OnePieceTcg.Sim
                 return Z(S) + "|" + Z(N) + $"|turn{St.TurnNumber}/{St.ActiveSeat}/{St.Phase}/{St.Status}"
                      + $"/pe{St.PendingEffects.Count}/battle{(St.Battle == null ? "-" : St.Battle.Step)}";
             }
+
+            /// <summary>North attacks south's Leader and the battle is advanced to <paramref
+            /// name="step"/> using SOUTH's own (legitimate) commands, so the probe can then try the step
+            /// as north. Returns false if the step was not reached.</summary>
+            public bool NorthAttacksSouth(string step)
+            {
+                var atk = Character("north", "EB03-002");
+                atk.Rested = false; atk.PlayedOnTurn = 0;
+                var guard = Character("south", "ST29-009");   // something to block with
+                St.ActiveSeat = "north";
+                Apply(new GameCommand
+                { Type = "declareAttack", Seat = "north", Attacker = atk.InstanceId, Target = S.Leader?.InstanceId });
+                if (step == "block") return St.Battle?.Step == "block";
+                if (St.Battle?.Step == "block") Apply(new GameCommand { Type = "passBlock", Seat = "south" });
+                if (step == "counter") return St.Battle?.Step == "counter";
+                if (St.Battle?.Step == "counter") Apply(new GameCommand { Type = "passCounter", Seat = "south" });
+                if (step == "damage") return St.Battle?.Step == "damage";
+                if (St.Battle?.Step == "damage") Apply(new GameCommand { Type = "resolveAttack", Seat = "south" });
+                return St.Battle?.Step == step;
+            }
+
+            public CardInstance Card2(string id, string owner, string zone) => Card(id, owner, zone);
+
+            /// <summary>South's zones only.</summary>
+            public string FingerprintSouth() => Fingerprint().Split('|')[0];
 
             public CardInstance Hand(string seat, string id)
             { var c = Card(id, seat, "hand"); St.Players[seat].Hand.Add(c); return c; }
