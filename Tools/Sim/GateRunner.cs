@@ -90,6 +90,11 @@ namespace OnePieceTcg.Sim
             // queues clauses directly, so it cannot see a once-per-turn KEY collision — verified by
             // control, and stated in the suite header.
             ("multisweep",            MultiClauseSweep.Run),
+
+            // The Life-removal reactive has two producers (the battle path and the command-boundary
+            // watcher). OP12-099 Kalgara has no [Once Per Turn] key to hide a double-fire, so it is
+            // the instrument that can actually see one.
+            ("lifewatcher",           LifeWatcherTest.Run),
             // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.

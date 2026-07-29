@@ -185,6 +185,8 @@ namespace OnePieceTcg.Engine
             ApplyStartOfTurn(state);
         }
 
+        [ThreadStatic] private static int _applyDepth;
+
         public static GameState ApplyCommand(GameState state, GameCommand command)
         {
             var actor = command.Seat;
@@ -199,8 +201,6 @@ namespace OnePieceTcg.Engine
             //
             // Watched at the command boundary rather than at the 18 separate removal sites: one
             // place, catches every path, and cannot drift out of step with a new removal site.
-            int lifeBeforeS = state.Players.TryGetValue("south", out var _ls) ? _ls.Life.Count : 0;
-            int lifeBeforeN = state.Players.TryGetValue("north", out var _ln) ? _ln.Life.Count : 0;
             if (command.Type == "chooseTurnOrder")
             {
                 ChooseTurnOrder(state, actor, command.GoingFirst ?? true);
@@ -234,6 +234,17 @@ namespace OnePieceTcg.Engine
                     || command.Type == "deckLookConfirmOrder" || command.Type == "deckLookScryConfirm")))
                 return state;
 
+            // ApplyCommand is RE-ENTRANT — resolution paths issue further commands — so the Life
+            // snapshot must belong to the OUTERMOST call only. Without the depth guard, every nested
+            // command that spans the removal fires the watcher again: measured at FOUR draws off a
+            // single Life card on OP12-099 Kalgara, which has no [Once Per Turn] to hide it.
+            // Taken here rather than at the top of the method so the guard-clause returns above —
+            // which reject the command without touching Life — cannot leak the counter.
+            int lifeBeforeS = state.Players.TryGetValue("south", out var _ls) ? _ls.Life.Count : 0;
+            int lifeBeforeN = state.Players.TryGetValue("north", out var _ln) ? _ln.Life.Count : 0;
+            _applyDepth++;
+            try
+            {
             switch (command.Type)
             {
                 case "draw": ManualDrawCard(state, actor); break;
@@ -267,9 +278,11 @@ namespace OnePieceTcg.Engine
                 case "deckLookScryConfirm": ResolveDeckLookScryConfirm(state, actor, command.OrderedInstanceIds); break;
                 default: Log(state, "system", $"Unknown command: {command.Type}"); break;
             }
+            }
+            finally { _applyDepth--; }
             // Before rule processing, so a draw the player is entitled to happens while the game is
             // still live rather than after a loss check.
-            FireLifeRemovedWatchers(state, lifeBeforeS, lifeBeforeN);
+            if (_applyDepth <= 0) FireLifeRemovedWatchers(state, lifeBeforeS, lifeBeforeN);
             CheckRuleProcessing(state);
             RetireUnresolvablePendingEffects(state);
             Record(state, command);
@@ -4800,13 +4813,21 @@ namespace OnePieceTcg.Engine
         private static void FireLifeRemovedWatchers(GameState state, int beforeSouth, int beforeNorth)
         {
             if (state?.Players == null) return;
-            bool shrank = (state.Players.TryGetValue("south", out var s) && s.Life.Count < beforeSouth)
-                       || (state.Players.TryGetValue("north", out var n) && n.Life.Count < beforeNorth);
-            if (!shrank) return;
-            foreach (var seat in new[] { "south", "north" }) FireOnOpponentLifeRemoved(state, seat);
+            bool southLost = state.Players.TryGetValue("south", out var s) && s.Life.Count < beforeSouth;
+            bool northLost = state.Players.TryGetValue("north", out var n) && n.Life.Count < beforeNorth;
+            if (!southLost && !northLost) return;
+            // WHOSE Life left decides who may react. The old single call site passed the ATTACKING
+            // seat, which made "the opponent's Life shrank" true by construction; firing for both
+            // seats unconditionally loses that guarantee and pays out an "opponent's Life" watcher
+            // (OP08-105 Bonney) when its own controller takes the damage.
+            foreach (var seat in new[] { "south", "north" })
+                FireOnOpponentLifeRemoved(state, seat,
+                    ownLifeLeft: seat == "south" ? southLost : northLost,
+                    opponentLifeLeft: seat == "south" ? northLost : southLost);
         }
 
-        private static void FireOnOpponentLifeRemoved(GameState state, string seat)
+        private static void FireOnOpponentLifeRemoved(GameState state, string seat,
+                                                      bool ownLifeLeft = false, bool opponentLifeLeft = true)
         {
             var p = Player(state, seat);
             if (p == null) return;
@@ -4828,6 +4849,11 @@ namespace OnePieceTcg.Engine
                         @"(?:When|activated when) a card is removed from (?:your or )?your opponent's Life cards[,.]\s*(.+)$",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (!m.Success) continue;
+                    // "your OR your opponent's" reacts to either side; plain "your opponent's" only
+                    // to theirs. Reading the wording is what keeps the widened trigger honest.
+                    bool eitherSide = line.IndexOf("your or your opponent's Life",
+                                                   StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (!(eitherSide ? (ownLifeLeft || opponentLifeLeft) : opponentLifeLeft)) continue;
                     if (HasTiming(line, "Your Turn") && !HasTiming(line, "Opponent's Turn") && !myTurn) continue;
                     if (HasTiming(line, "Opponent's Turn") && myTurn) continue;
                     int donReq = ParseDonThreshold(line);
@@ -5638,7 +5664,9 @@ namespace OnePieceTcg.Engine
                     FireOnLifeDamageDealt(state, atkCard);
                     // "When a card is removed from your opponent's Life cards, …" board reactions (OP08-105
                     // Jewelry Bonney) — fired for the attacking player, scanning their WHOLE board.
-                    if (atkCard != null && atkCard.Owner != null) FireOnOpponentLifeRemoved(state, atkCard.Owner);
+                    // (The "a card left the opponent's Life" reactive is NOT fired here any more —
+                    // the command-boundary watcher covers this path along with every other removal
+                    // route. Firing in both places double-paid cards without a [Once Per Turn].)
                 }
                 else
                 {
@@ -8548,6 +8576,19 @@ namespace OnePieceTcg.Engine
             }
         }
 
+
+        /// <summary>True when the clause's MAIN verb is negated — "you cannot draw cards …",
+        /// "your opponent cannot activate …". Deliberately anchored to a subject at the start of the
+        /// clause, so a "cannot" buried in a relative clause that MODIFIES a target ("K.O. 1
+        /// Character that cannot be K.O.'d …") is still executed as the instruction it is.</summary>
+        public static bool IsProhibitionClause(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(
+                text,
+                @"^\s*(?:\[[^\]]+\]\s*)*(?:you|your opponent|they|this [A-Za-z]+|that [A-Za-z]+|all [A-Za-z]+|players?)\s+(?:cannot|can't|may not)\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
         private static void QueueEffect(GameState state, string seat, CardInstance source, string timing, string text, bool optional,
             EffectScope scope = EffectScope.Instant, EffectTargetZone targetZone = EffectTargetZone.Play,
             string originalText = null, List<string> doneParts = null, List<string> skippedParts = null,
@@ -8555,6 +8596,19 @@ namespace OnePieceTcg.Engine
         {
             if (source == null || string.IsNullOrWhiteSpace(text)) return;
             text = NormalizeQueuedClause(timing, text);   // strip any leading clause merged in front of the timing tag
+            // A RESTRICTION IS NOT AN INSTRUCTION. The interpreter matches on substrings, so a
+            // sentence that FORBIDS an action gets executed as that action: OP12-099 Kalgara's
+            // "Then, you cannot draw cards using your own effects during this turn" drew a card,
+            // doubling every payout the card ever made. 51 cards carry a prohibition clause and 11
+            // of them name an action the interpreter can run.
+            // Queued here rather than filtered per-site because all 19 queue paths funnel through
+            // this method; the executor is the wrong layer, since a prohibition that reaches a
+            // PendingEffect also shows the player a decision that does nothing.
+            if (IsProhibitionClause(text))
+            {
+                Log(state, seat, $"{NameId(GetCard(source))} restriction noted: {CleanClauseText(text)}");
+                return;
+            }
             state.EffectSequence += 1;
             state.PendingEffects.Add(new PendingEffect
             {
@@ -8615,6 +8669,14 @@ namespace OnePieceTcg.Engine
             bool finalizesActivatedTrigger = false)
         {
             text = NormalizeQueuedClause(timing, text);   // clean clause drives BOTH the queue and the auto-resolve decision below
+            // Bail BEFORE the auto-resolve below, not just inside QueueEffect. Letting the wrapper
+            // continue after the queue declined the clause sent it to ResolveEffect with nothing
+            // queued, which re-entered this method and blew the stack.
+            if (IsProhibitionClause(text))
+            {
+                Log(state, seat, $"{NameId(GetCard(source))} restriction noted: {CleanClauseText(text)}");
+                return;
+            }
             QueueEffect(state, seat, source, timing, text, optional, scope, targetZone, originalText, doneParts,
                 skippedParts, finalizesActivatedTrigger);
 

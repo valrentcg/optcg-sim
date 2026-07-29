@@ -199,6 +199,8 @@ switch (mode)
         return OnePieceTcg.Sim.MultiClauseSweep.Run();
     case "multiclause":
         return OnePieceTcg.Sim.MultiClauseCardTest.Run();
+    case "lifewatcher":
+        return OnePieceTcg.Sim.LifeWatcherTest.Run();
     case "namedcards":
         return OnePieceTcg.Sim.NamedCardsTest.Run();
     case "crossglow":
