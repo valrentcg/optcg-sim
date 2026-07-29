@@ -56,39 +56,13 @@ namespace OnePieceTcg.Engine
         public bool Rested;
     }
 
-    /// <summary>How the postponed removal must be carried out if the player declines. Only kinds that a
-    /// deferred record can replay FAITHFULLY appear here; a call site whose removal is a Life-place or a
-    /// deck-place carries card-specific detail (face-up or face-down, top or bottom) that this record
-    /// does not hold, so those keep applying protections immediately.</summary>
-    public enum DeferredRemovalKind
-    {
-        Ko,          // MoveToTrash as a K.O. — [On K.O.] fires, "when K.O.'d" reactions run
-        TrashNonKo,  // MoveToTrash WITHOUT the K.O. flag (rule 10-2-1-3: trashed ≠ K.O.'d)
-    }
 
-    /// <summary>A removal postponed while its owner answers a "you may … instead" protection.
-    /// Everything the replay needs is recorded, so answering Skip performs exactly the removal that
-    /// would have happened had the protection never existed.</summary>
-    public sealed class DeferredRemoval
-    {
-        public string EffectId;          // the decision offered to the victim's controller
-        public string VictimSeat;
-        public string VictimInstanceId;
-        public string GuardInstanceId;   // the card offering the protection
-        public DeferredRemovalKind Kind;
-        public bool ByBattleKo;
-    }
 
     /// <summary>One player's board and resources.</summary>
     public sealed class PlayerState
     {
         public string Seat;
         public string Name;
-        /// <summary>Opt in to being ASKED before a "you may … instead" protection spends this player's
-        /// resources (a Life card turned face-up, a hand card trashed, DON!! rested). Off by default,
-        /// which is the long-standing behaviour: the first payable protection applies automatically.
-        /// The bot never sets it — it has no way to answer a question it was not built to be asked.</summary>
-        public bool PromptForReplacements;
         public string DeckName;
         public CardInstance Leader;
         public List<CardInstance> Deck = new List<CardInstance>();
@@ -272,12 +246,6 @@ namespace OnePieceTcg.Engine
         public BattleState Battle;
         public List<PendingEffect> PendingEffects = new List<PendingEffect>();
 
-        /// <summary>Removals held back while their owner decides whether to pay a "you may … instead"
-        /// protection. Keyed by the EffectId of the decision offered to that player: answering Use pays
-        /// the cost and the card stays, answering Skip (or the decision being retired) performs the
-        /// removal that was postponed. Empty unless a seat opted into being asked — see
-        /// PlayerState.PromptForReplacements.</summary>
-        public List<DeferredRemoval> DeferredRemovals = new List<DeferredRemoval>();
         public int EffectSequence;
         public List<GameCommand> CommandHistory = new List<GameCommand>();
         public List<LogEntry> EventLog = new List<LogEntry>();

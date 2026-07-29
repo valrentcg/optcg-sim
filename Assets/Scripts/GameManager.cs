@@ -803,7 +803,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             : aiDifficulty == "intermediate" ? "Intermediate Bot"
             : "Beginner Bot";
         state = GameEngine.CreateMatch(config);
-        ApplyReplacementPromptPreference();
         selectedId = null;
         selectedSeat = null;
         previewLockCard = null;
@@ -1195,7 +1194,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (northDef != null) config.NorthDeckDef = northDef;
         currentMatchConfig = config;
         state = GameEngine.CreateMatch(config);
-        ApplyReplacementPromptPreference();
         selectedId = null;
         selectedSeat = null;
         previewLockCard = null;
@@ -8518,7 +8516,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         suppressMoveAnim.Clear();
 
         state = GameEngine.CreateMatch(config);
-        ApplyReplacementPromptPreference();
         selectedId = null;
         selectedSeat = null;
         previewLockCard = null;
@@ -9326,49 +9323,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // ---- Default -------------------------------------------------------------
         AddInfo(body, "Click one of your board cards to select it, or play cards from your hand. Click a trash pile to browse it.");
-        DrawReplacementPromptToggle(body);
     }
 
-    /// <summary>Opt in to being ASKED before a "you may … instead" protection spends your own resources
-    /// — a Life card turned face-up, a card out of hand, DON!! rested. Off by default, which is the
-    /// long-standing behaviour (the first payable protection applies by itself), so this only ever adds a
-    /// decision for a player who went looking for it. Lives on the idle action panel rather than a
-    /// settings screen because it is a per-match, per-seat choice and that panel is where the player's
-    /// other choices already are.</summary>
-    private void DrawReplacementPromptToggle(RectTransform body)
-    {
-        if (state?.Players == null || isReplayMode) return;
-        string seat = !string.IsNullOrEmpty(localSeat) ? localSeat : "south";
-        if (!state.Players.TryGetValue(seat, out var me) || me == null) return;
-        // Never offer it for a seat the player is not actually piloting.
-        if (aiSeat != null && seat == aiSeat) return;
 
-        bool on = me.PromptForReplacements;
-        AddButton(body, on ? "Protection prompts: ON" : "Protection prompts: OFF", () =>
-        {
-            bool next = !me.PromptForReplacements;
-            me.PromptForReplacements = next;
-            PlayerPrefs.SetInt(ReplacementPromptPref, next ? 1 : 0);
-            PlayerPrefs.Save();
-            Render();
-        });
-        AddInfo(body, on
-            ? "You will be asked before a card's \"you may … instead\" protection spends your Life, hand or DON!!."
-            : "Protections pay themselves automatically.");
-    }
-
-    private const string ReplacementPromptPref = "optcg.prompt.replacements";
-
-    /// <summary>Apply the stored protection-prompt preference to the seat this client pilots. Called
-    /// once a match's state exists; the opposing seat and any bot seat are left alone.</summary>
-    private void ApplyReplacementPromptPreference()
-    {
-        if (state?.Players == null) return;
-        string seat = !string.IsNullOrEmpty(localSeat) ? localSeat : "south";
-        if (aiSeat != null && seat == aiSeat) return;
-        if (state.Players.TryGetValue(seat, out var me) && me != null)
-            me.PromptForReplacements = PlayerPrefs.GetInt(ReplacementPromptPref, 0) != 0;
-    }
 
     private void DrawPendingEffectActions(RectTransform body)
     {

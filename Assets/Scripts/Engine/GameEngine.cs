@@ -5270,7 +5270,7 @@ namespace OnePieceTcg.Engine
                         state.Phase = "main";
                         CleanupBattleModifiers(state, koedBattleId);
                     }
-                    else if (TryRemovalReplacement(state, targetSeat, target, isBattleKo: true, promptAs: DeferredRemovalKind.Ko))
+                    else if (TryRemovalReplacement(state, targetSeat, target, isBattleKo: true))
                     {
                         // Removal-REPLACEMENT on a battle K.O.: "If this Character would be K.O.'d, you may
                         // <pay X> instead" (OP16-033 Morley "rest 2 of your cards"). The effect-K.O. paths each
@@ -5339,7 +5339,7 @@ namespace OnePieceTcg.Engine
             if (FindInPlay(Player(state, OtherSeat(attackerSeat)), defender.InstanceId) == null) return;
             if (ContainsAll(line, "K.O. the opponent"))
             {
-                if (!CannotBeKoedByEffect(state, defender) && !TryRemovalReplacement(state, OtherSeat(attackerSeat), defender, isBattleKo: true, promptAs: DeferredRemovalKind.Ko))
+                if (!CannotBeKoedByEffect(state, defender) && !TryRemovalReplacement(state, OtherSeat(attackerSeat), defender, isBattleKo: true))
                 {
                     MoveToTrash(state, OtherSeat(attackerSeat), defender.InstanceId);
                     Log(state, attackerSeat, $"{NameId(GetCard(attacker))}: K.O.s {NameId(GetCard(defender))} at the end of the battle.");
@@ -5352,7 +5352,7 @@ namespace OnePieceTcg.Engine
             {
                 var pDef = Player(state, OtherSeat(attackerSeat));
                 int di = pDef.CharacterArea.FindIndex(c => c != null && c.InstanceId == defender.InstanceId);
-                if (di >= 0 && !TryRemovalReplacement(state, OtherSeat(attackerSeat), defender, isBattleKo: true, promptAs: DeferredRemovalKind.Ko))
+                if (di >= 0 && !TryRemovalReplacement(state, OtherSeat(attackerSeat), defender, isBattleKo: true))
                 {
                     ReturnAttachedDon(pDef, defender);
                     pDef.CharacterArea[di] = null;
@@ -5709,16 +5709,7 @@ namespace OnePieceTcg.Engine
         // (the victim card itself plus any aura card whose text protects the victim's type)
         // and auto-applies the first payable replacement. Returns true when the removal was
         // replaced (the victim stays on the field).
-        /// <param name="promptAs">Non-null only where the removal being replaced is one a postponed
-        /// record can faithfully REPLAY: a K.O., or a plain trash that is not a K.O. The remaining callers
-        /// replace a bounce, a deck-place or a Life-place, which carry card-specific detail this record
-        /// does not hold (face-up or down, top or bottom), so they keep applying protections immediately
-        /// regardless of the opt-in. Passing the kind rather than a bool is what lets Skip carry out the
-        /// SAME removal that was postponed instead of turning every one of them into a K.O.</param>
-        /// <param name="suppressPrompt">Set when re-entering to PAY a protection the player has just
-        /// agreed to, so the question is not asked a second time.</param>
-        private static bool TryRemovalReplacement(GameState state, string victimSeat, CardInstance victim, bool isBattleKo = false,
-            DeferredRemovalKind? promptAs = null, bool suppressPrompt = false)
+        private static bool TryRemovalReplacement(GameState state, string victimSeat, CardInstance victim, bool isBattleKo = false)
         {
             // Rosinante (OP05-030) "save all": once its "trash this instead" was paid for a rested
             // Character this resolution, every OTHER rested Character K.O.'d by the SAME effect is also
@@ -5875,34 +5866,6 @@ namespace OnePieceTcg.Engine
                     // ---- OPT-IN: ask before spending this player's own resources -----------------------
                     // Every branch below pays the protection immediately. That is a reasonable default —
                     // saving a Character usually is worth it — but the card says "YOU MAY", and the price
-                    // can be a Life card turned face-up, a card out of hand, DON!! rested, or the guard
-                    // itself. A seat that has opted in is asked instead: the removal is POSTPONED and the
-                    // question is queued for that seat as an ordinary optional PendingEffect, so it renders
-                    // as Use/Skip and LegalActions already offers a bot both answers. Answering Use pays
-                    // (below, via suppressPrompt); Skip performs the removal that was postponed.
-                    //
-                    // Off unless the seat opts in, so nothing changes for anyone who has not — the bot
-                    // included, which is never asked a question it was not built to answer.
-                    if (promptAs != null && !suppressPrompt && p.PromptForReplacements && victim != null
-                        && line.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0
-                        && !state.DeferredRemovals.Any(dr => dr.VictimInstanceId == victim.InstanceId))
-                    {
-                        QueueEffect(state, victimSeat, guard, "removalChoice", line, true,
-                            EffectScope.Instant, EffectTargetZone.Play);
-                        var choice = state.PendingEffects[state.PendingEffects.Count - 1];
-                        state.DeferredRemovals.Add(new DeferredRemoval
-                        {
-                            EffectId = choice.EffectId,
-                            VictimSeat = victimSeat,
-                            VictimInstanceId = victim.InstanceId,
-                            GuardInstanceId = guard.InstanceId,
-                            Kind = promptAs.Value,
-                            ByBattleKo = isBattleKo,
-                        });
-                        Log(state, victimSeat,
-                            $"{NameId(GetCard(guard))} may save {NameId(GetCard(victim))} — Use to pay, Skip to let it be K.O.'d.");
-                        return true;   // postponed: the victim stays on the field until the answer arrives
-                    }
 
                     // Apply the replacement action.
                     if (ContainsAll(line, "rest this Character instead"))
@@ -6495,21 +6458,6 @@ namespace OnePieceTcg.Engine
             // question suppressed so it is not asked again) and drop the postponement. If the payment
             // turns out not to be possible after all, the removal that was held back happens instead —
             // agreeing to a price you cannot pay must not save the card for free.
-            if (effect.Timing == "removalChoice")
-            {
-                var dr = state.DeferredRemovals.FirstOrDefault(x => x.EffectId == effect.EffectId);
-                state.PendingEffects.Remove(effect);
-                if (dr != null)
-                {
-                    state.DeferredRemovals.Remove(dr);
-                    var victim = FindAnyInPlay(state, dr.VictimInstanceId, out _);
-                    if (victim != null && !TryRemovalReplacement(state, dr.VictimSeat, victim, dr.ByBattleKo,
-                            promptAs: dr.Kind, suppressPrompt: true))
-                        MoveToTrash(state, dr.VictimSeat, dr.VictimInstanceId,
-                        isKo: dr.Kind == DeferredRemovalKind.Ko, byBattleKo: dr.ByBattleKo);
-                }
-                return;
-            }
 
             // Circled-digit costs exist at several timings: [On Play], [When Attacking],
             // [On Your Opponent's Attack], and [End of Your Turn]. The first resolve interaction
@@ -6664,20 +6612,6 @@ namespace OnePieceTcg.Engine
             if (state.DeckLook != null || state.ActiveChoice != null) return;
             var effect = FindPendingEffect(state, seat, effectId);
             if (effect == null) return;
-            // A postponed removal being answered NO: carry out the removal that was held back, exactly as
-            // it would have happened had the protection never been offered.
-            if (effect.Timing == "removalChoice")
-            {
-                var drSkip = state.DeferredRemovals.FirstOrDefault(x => x.EffectId == effect.EffectId);
-                state.PendingEffects.Remove(effect);
-                if (drSkip != null)
-                {
-                    state.DeferredRemovals.Remove(drSkip);
-                    MoveToTrash(state, drSkip.VictimSeat, drSkip.VictimInstanceId,
-                        isKo: drSkip.Kind == DeferredRemovalKind.Ko, byBattleKo: drSkip.ByBattleKo);
-                }
-                return;
-            }
             // A MANDATORY "trash N cards from your hand" (bare N — NOT "up to"/"you may") is a cost/downside
             // that must be PAID while the player still holds enough cards: skipping it was free card advantage
             // (OP04-060 "DON!! −1: Draw 1 card AND trash 1 card from your hand" — the draw ran, then the
@@ -8005,22 +7939,6 @@ namespace OnePieceTcg.Engine
         private static void RetireUnresolvablePendingEffects(GameState state)
         {
             if (state?.PendingEffects == null) return;
-            // A postponed removal whose question has vanished — retired here, cleared with the battle,
-            // or lost to any other path — must still be carried out. Otherwise "ask me first" would be
-            // strictly better than the old behaviour: the card would survive for free because nobody
-            // answered. The postponement is a delay, never an escape.
-            if (state.DeferredRemovals != null && state.DeferredRemovals.Count > 0)
-            {
-                var orphaned = state.DeferredRemovals
-                    .Where(dr => !state.PendingEffects.Any(e => e != null && e.EffectId == dr.EffectId))
-                    .ToList();
-                foreach (var dr in orphaned)
-                {
-                    state.DeferredRemovals.Remove(dr);
-                    MoveToTrash(state, dr.VictimSeat, dr.VictimInstanceId,
-                        isKo: dr.Kind == DeferredRemovalKind.Ko, byBattleKo: dr.ByBattleKo);
-                }
-            }
             for (int pass = 0; pass < 8; pass++)
             {
                 PendingEffect stuck = null;
@@ -11331,7 +11249,7 @@ namespace OnePieceTcg.Engine
                 }
                 // Removal-replacement: field→trash is a removal from the field (rule 4-11-2), so the victim's
                 // "would be removed from the field by your opponent's effect … instead" protection may replace it.
-                if (!TryRemovalReplacement(state, trSeat, trTarget, promptAs: DeferredRemovalKind.TrashNonKo))
+                if (!TryRemovalReplacement(state, trSeat, trTarget))
                 {
                     var trDef = GetCard(trTarget);
                     MoveToTrash(state, trSeat, trTarget.InstanceId, isKo: false);   // trash ≠ K.O. (rule 10-2-1-3): no [On K.O.]
@@ -12394,7 +12312,7 @@ namespace OnePieceTcg.Engine
                         var ck2 = oppKa.CharacterArea[i];
                         if (ck2 == null || GetPower(state, ck2) > kap) continue;
                         if (CannotBeKoedByEffect(state, ck2)) continue;
-                        if (TryRemovalReplacement(state, OtherSeat(effect.Seat), ck2, promptAs: DeferredRemovalKind.Ko)) continue;
+                        if (TryRemovalReplacement(state, OtherSeat(effect.Seat), ck2)) continue;
                         MoveToTrash(state, OtherSeat(effect.Seat), ck2.InstanceId);
                         kaC2++;
                     }
@@ -12424,7 +12342,7 @@ namespace OnePieceTcg.Engine
                         int ckcCost = kacBase ? GetCard(ckc).Cost : GetCost(state, ckc);
                         if (ckcCost > kacCap) continue;
                         if (CannotBeKoedByEffect(state, ckc)) continue;
-                        if (TryRemovalReplacement(state, OtherSeat(effect.Seat), ckc, promptAs: DeferredRemovalKind.Ko)) continue;
+                        if (TryRemovalReplacement(state, OtherSeat(effect.Seat), ckc)) continue;
                         MoveToTrash(state, OtherSeat(effect.Seat), ckc.InstanceId);
                         kacN++;
                     }
@@ -14434,7 +14352,7 @@ namespace OnePieceTcg.Engine
                         Log(state, effect.Seat, $"{NameId(koDef)} cannot be K.O.'d by effects.");
                         return EffectResolution.WaitingForTarget;
                     }
-                    if (TryRemovalReplacement(state, koSeat, koTarget, promptAs: DeferredRemovalKind.Ko))
+                    if (TryRemovalReplacement(state, koSeat, koTarget))
                     {
                         // Removal replaced by the defender's effect — the pick is consumed.
                     }
@@ -18168,7 +18086,7 @@ namespace OnePieceTcg.Engine
                         .OrderByDescending(x => GetCost(state, x)).Take(eotN).ToList();
                     foreach (var t in eotTargets)
                     {
-                        if (TryRemovalReplacement(state, OtherSeat(seat), t, promptAs: DeferredRemovalKind.Ko)) continue;
+                        if (TryRemovalReplacement(state, OtherSeat(seat), t)) continue;
                         MoveToTrash(state, OtherSeat(seat), t.InstanceId);
                         Log(state, seat, $"{NameId(def)} [End of Your Turn] K.O.s {NameId(GetCard(t))}.");
                     }
