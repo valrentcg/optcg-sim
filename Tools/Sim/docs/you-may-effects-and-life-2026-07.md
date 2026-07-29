@@ -320,6 +320,18 @@ unreachable, the second grammatically justified (filters say "including", condit
 "includes"). Neither was "fixed". Both now have the assumption they rest on asserted, so the day a
 set breaks it, the gate says so instead of a card quietly going dead.
 
+**How many of the 66 suites actually detect a broken engine?** Asked once, properly, by making
+every effect body a no-op and running the gate: **42 go red**. Of the 24 that stay green, 23 are
+legitimately insensitive — pure-text checks (`costlabel`, `promptzone`, `wordingvariant`), command
+validation (`wrongseat`, `illegaltarget`), dispatch rather than resolution (`timingsweep`,
+`donthreshold`), and the finding-count sweeps whose correct answer really is 0 when nothing resolves
+(`autopick`, `lifefacing`, `optionalfires`).
+
+The 24th, `drawoutcome`, was a genuine hole. It skips clauses whose cost was not paid — correct —
+but with payment broken across the board it verified NOTHING and still reported "0 drew the wrong
+number". It now fails unless it actually reached ~13 clauses, so a clean zero cannot come from an
+empty run.
+
 **A passing test is not evidence until it has been seen to fail.** The `uptonrider` suite is the
 cleanest example: three cases about an empty board all passed, and all three passed *identically*
 with the fix reverted — because at ZERO candidates the clause retires either way. They asserted

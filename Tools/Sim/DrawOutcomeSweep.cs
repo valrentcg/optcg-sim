@@ -107,6 +107,15 @@ namespace OnePieceTcg.Sim
             Console.WriteLine($"  cost unpayable here, drew nothing : {neverPaid}");
             Console.WriteLine($"  drew EXACTLY the stated number    : {exact}");
             Console.WriteLine($"  DREW THE WRONG NUMBER             : {wrong.Count}");
+            // Floor check, added after a gate-wide falsifiability audit. A clause whose cost cannot
+            // be paid is counted as neverPaid and SKIPPED — correct, but it means that if payment
+            // stopped working across the board this sweep would verify NOTHING and still report a
+            // clean zero. It survived every effect body being disabled for exactly that reason.
+            // 13 clauses draw exactly the stated number today; require most of them to still be
+            // reached, so "0 wrong" cannot come from "0 checked".
+            if (exact < 10)
+                Console.WriteLine($"  !! only {exact} clauses were actually verified (expected ~13) — "
+                                  + "the zero above is not evidence");
             if (threw > 0) Console.WriteLine($"  threw                             : {threw}");
 
             foreach (var w in wrong.Take(20))
@@ -115,7 +124,8 @@ namespace OnePieceTcg.Sim
 
             // The card states a number and the cost was paid. There is no board on which drawing a
             // different number is correct.
-            return wrong.Count == 0 ? 0 : 1;
+            // The floor is part of the verdict: 0 wrong from 0 checked is not a pass.
+            return (wrong.Count == 0 && exact >= 10) ? 0 : 1;
         }
 
         private static string Trim(string s, int n) =>
