@@ -39,6 +39,7 @@ namespace OnePieceTcg.Sim
             CleanedTextIsReadable();
             CircledDonCostsParse();
             DonRestCostsParseIncludingCompound();
+            SlashCombinedTagsAreStripped();
             Console.WriteLine($"costlabel: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -304,6 +305,34 @@ namespace OnePieceTcg.Sim
                   compound >= 5 && compoundZero == 0,
                   $"found={compound} wrong={compoundZero} — these lose the DON!! click affordance and "
                   + "keep a Use button that cannot be paid");
+        }
+
+        /// <summary>39 cards print slash-combined timing tags — "[On Play]/[When Attacking]",
+        /// OP02-036 Nami among them. The engine spelled the tag-stripping rule 28 times; 6 of those
+        /// spellings could not consume the "/", so they stopped after the first tag and left
+        /// "/[When Attacking] ..." behind. Every one of those sites then runs an ANCHORED match
+        /// ("^If ...", "^You may ..."), which fails, and the code path silently skips the card.
+        ///
+        /// Asserted through the shared helper and through two public consumers, so this covers the
+        /// rule rather than one call site.</summary>
+        private static void SlashCombinedTagsAreStripped()
+        {
+            const string slashed = "[On Play]/[When Attacking] You may trash 1 card from your hand: Draw 2 cards.";
+            const string plain   = "[On Play] You may trash 1 card from your hand: Draw 2 cards.";
+
+            string strippedSlash = GameEngine.StripLeadingTimingTags(slashed);
+            string strippedPlain = GameEngine.StripLeadingTimingTags(plain);
+            Check("slash-combined tags are fully stripped",
+                  strippedSlash == strippedPlain && !strippedSlash.StartsWith("/", StringComparison.Ordinal),
+                  $"got \"{Trim(strippedSlash, 60)}\" — a leading \"/\" breaks every anchored match after it");
+
+            // Two public consumers of the same rule, so a future divergence shows up here too.
+            Check("a slash-tagged clause still yields its cost label",
+                  GameEngine.DescribeCostPrefix(slashed, 58) == GameEngine.DescribeCostPrefix(plain, 58),
+                  "the slash printing produced a different label from the plain one");
+            Check("a slash-tagged clause still routes to the Use button",
+                  GameEngine.IsUnpaidCostPrefix(new PendingEffect { Text = slashed, SelectionsRemaining = 0 }),
+                  "the slash printing would show a board prompt with nothing clickable");
         }
 
         private static string Trim(string s, int n) =>

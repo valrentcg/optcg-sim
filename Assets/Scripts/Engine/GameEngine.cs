@@ -362,7 +362,7 @@ namespace OnePieceTcg.Engine
                         if (!gm.Success) continue;
                         if (gm.Groups[1].Success && !string.IsNullOrEmpty(gm.Groups[1].Value)
                             && (owner.Leader == null || !GetCard(owner.Leader).HasFeature(gm.Groups[1].Value))) continue;
-                        string bclNoTag = System.Text.RegularExpressions.Regex.Replace(bcl, @"^\s*(\[[^\]]+\]\s*)+", "").TrimStart();
+                        string bclNoTag = System.Text.RegularExpressions.Regex.Replace(bcl, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "").TrimStart();
                         var bclCond = System.Text.RegularExpressions.Regex.Match(bclNoTag, @"^If ([^,]+),",
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                         if (bclCond.Success && !EvaluateCondition(state, instance.Owner, bclCond.Groups[1].Value.Trim(), bc.InstanceId)) continue;
@@ -384,7 +384,7 @@ namespace OnePieceTcg.Engine
                     if (!ContainsAll(bpl, "base power becomes the same as your Leader") || ContainsAll(bpl, "opponent's Leader")) continue;
                     if (HasTiming(bpl, "Opponent's Turn") && state.ActiveSeat == instance.Owner) continue;
                     if (HasTiming(bpl, "Your Turn") && state.ActiveSeat != instance.Owner) continue;
-                    string bplNoTag = System.Text.RegularExpressions.Regex.Replace(bpl, @"^\s*(\[[^\]]+\]\s*)+", "").TrimStart();
+                    string bplNoTag = System.Text.RegularExpressions.Regex.Replace(bpl, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "").TrimStart();
                     var bplCond = System.Text.RegularExpressions.Regex.Match(bplNoTag, @"^If ([^,]+),",
                         System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (bplCond.Success && !EvaluateCondition(state, instance.Owner, bplCond.Groups[1].Value.Trim(), instance.InstanceId)) continue;
@@ -416,7 +416,7 @@ namespace OnePieceTcg.Engine
                         if (HasTiming(scl, "Opponent's Turn") && state.ActiveSeat == instance.Owner) continue;
                         if (HasTiming(scl, "Your Turn") && state.ActiveSeat != instance.Owner) continue;
                         if (!GetCard(instance).HasFeature(sm.Groups[1].Value.Trim())) continue;   // this card must be that {type}
-                        string sclNoTag = System.Text.RegularExpressions.Regex.Replace(scl, @"^\s*(\[[^\]]+\]\s*)+", "").TrimStart();
+                        string sclNoTag = System.Text.RegularExpressions.Regex.Replace(scl, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "").TrimStart();
                         var sclCond = System.Text.RegularExpressions.Regex.Match(sclNoTag, @"^If ([^,]+),",
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                         if (sclCond.Success && !EvaluateCondition(state, bc.Owner, sclCond.Groups[1].Value.Trim(), bc.InstanceId)) continue;
@@ -1715,6 +1715,20 @@ namespace OnePieceTcg.Engine
                 || HasStandaloneKeyword(instance, "Unblockable")
                 || HasPrintedKeywordGrant(state, instance, "Unblockable")
                 || HasKeywordModifier(state, instance, "Unblockable"));
+
+        /// <summary>Strip the leading timing tags from a clause, INCLUDING slash-combined ones.
+        ///
+        /// The engine spells this rule 28 times. 22 use the slash-tolerant pattern; 6 used
+        /// `^\s*(\[[^\]]+\]\s*)+`, which cannot consume the "/" in "[On Play]/[When Attacking]" —
+        /// it stops after the first tag and leaves "/[When Attacking] ..." behind, so the anchored
+        /// match that follows ("^If ...", "^You may ...") fails and that code path silently skips
+        /// the card. 39 cards across 68 clause lines print slash-combined tags, OP02-036 Nami among
+        /// them.
+        ///
+        /// The 6 now call this. One rule, one spelling, and a slash-combined case that can be
+        /// tested directly.</summary>
+        public static string StripLeadingTimingTags(string text) =>
+            System.Text.RegularExpressions.Regex.Replace(text ?? "", @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
 
         /// <summary>How many DON!! this clause asks the player to REST as its cost, or 0.
         ///
@@ -3157,7 +3171,7 @@ namespace OnePieceTcg.Engine
                     // rest the specified number of DON!!" is not the cost prefix), and queue the circle-stripped text
                     // (the circled DON was already paid above) so the resolver's ^"You may" anchor matches.
                     string mcNoCircle = System.Text.RegularExpressions.Regex.Replace(mainClause,
-                        @"^\s*(\[[^\]]+\]\s*)+", "");   // strip leading [Activate: Main]/[Once Per Turn] tags
+                        @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");   // strip leading [Activate: Main]/[Once Per Turn] tags
                     mcNoCircle = System.Text.RegularExpressions.Regex.Replace(mcNoCircle,
                         @"[①-⑩➀-➉]\s*\([^)]*\)\s*", "").Trim();   // strip circled-DON reminder parenthetical
                     bool mcHasCostPrefix = System.Text.RegularExpressions.Regex.IsMatch(mcNoCircle,
@@ -4993,7 +5007,7 @@ namespace OnePieceTcg.Engine
                         @"[Ww]hen your opponent activates an Event,\s*(.+)$");
                     if (afterM.Success) body = afterM.Groups[1].Value.Trim();
                     else body = System.Text.RegularExpressions.Regex.Replace(
-                        line.Substring(0, wIdx), @"^\s*(\[[^\]]+\]\s*)+", "").Trim();
+                        line.Substring(0, wIdx), @"^\s*(\[[^\]]+\]\s*/?\s*)+", "").Trim();
                     if (string.IsNullOrWhiteSpace(body)) continue;
                     if (once) p.AbilityUsedThisTurn.Add(optKey);
                     // Gion's opponent-forced disposal is not a standard resolver body — apply inline.
@@ -5837,7 +5851,7 @@ namespace OnePieceTcg.Engine
             // binning the Counter.
             string eff = eventDef.Effect ?? "";
             if (HasTiming(eff, "Main")) eff = ExtractTimedClause(eff, "Main");
-            eff = System.Text.RegularExpressions.Regex.Replace(eff, @"^\s*(\[[^\]]+\]\s*)+", "");
+            eff = System.Text.RegularExpressions.Regex.Replace(eff, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
             if (eff.IndexOf(". Then", StringComparison.OrdinalIgnoreCase) >= 0) return true;   // multi-clause rider → not pure removal
             // A cost prefix ("You may rest 1 of your DON!! cards:") and a leading condition ("If your
             // Leader is [Imu],") sit in FRONT of the removal verb, so the anchored verb test below could
