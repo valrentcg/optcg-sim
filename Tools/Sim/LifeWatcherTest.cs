@@ -40,6 +40,8 @@ namespace OnePieceTcg.Sim
             PayingYourOwnLifeFiresItOnACardWithoutTheOnceKey();
             AnOpponentOnlyWatcherIgnoresYourOwnLifeLoss();
             AProhibitionClauseIsNotExecutedAsAnInstruction();
+            ARearrangeDoesNotPayTheWatcher();
+            AddingLifeToHandDoesFireIt();
             Console.WriteLine($"lifewatcher: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -123,6 +125,46 @@ namespace OnePieceTcg.Sim
                   $"hand +{drew} — the sentence FORBIDDING a draw was executed as one");
         }
 
+        /// <summary>The member the fix did NOT touch. A rearrange LIFTS Life cards out to show them
+        /// and puts them back; if the command ends with the look still open, the Life count is
+        /// momentarily lower and the boundary watcher would read that as a REMOVAL — paying Kalgara
+        /// a free card every time anyone reorders their own Life. Nothing was removed, so nothing
+        /// may fire.</summary>
+        private static void ARearrangeDoesNotPayTheWatcher()
+        {
+            var b = new Board("OP12-099");
+            int hand0 = b.S.Hand.Count, life0 = b.S.Life.Count;
+
+            b.DriveClause("Look at all of your Life cards and place them back in your Life area in any order.");
+
+            int drew = b.S.Hand.Count - hand0;
+            Check("a Life REARRANGE does not fire the removal watcher",
+                  drew == 0 && b.S.Life.Count == life0,
+                  $"hand +{drew} (want 0), life {life0} -> {b.S.Life.Count} — a reorder removes "
+                  + "nothing, so a card that reacts to removal must not be paid");
+        }
+
+        /// <summary>The opposite direction, so the case above cannot pass by the watcher being dead.
+        /// "Add 1 card from the top of your Life cards to your hand" genuinely REMOVES a Life card,
+        /// and is a different removal route from both battle damage and a paid cost.</summary>
+        private static void AddingLifeToHandDoesFireIt()
+        {
+            var b = new Board("OP12-099");
+            int life0 = b.S.Life.Count, hand0 = b.S.Hand.Count;
+
+            // Behind a "You may" cost, so the ADD resolves inside a resolveEffect COMMAND. A bare
+            // mandatory clause is auto-resolved by QueueClauseForTest outside ApplyCommand, where no
+            // boundary exists to observe it — in real play the queue always happens inside a command,
+            // so testing the bare form measures the harness rather than the engine.
+            b.DriveClause("You may rest this Character: Add 1 card from the top of your Life cards to your hand.");
+
+            int lost = life0 - b.S.Life.Count, gained = b.S.Hand.Count - hand0;
+            // +1 for the Life card itself, +1 for Kalgara's draw.
+            Check("adding a Life card to hand DOES fire the removal watcher",
+                  lost == 1 && gained == 2,
+                  $"life -{lost} (want 1), hand +{gained} (want 2: the Life card AND Kalgara's draw)");
+        }
+
         private sealed class Board
         {
             public GameState St;
@@ -201,6 +243,34 @@ namespace OnePieceTcg.Sim
             }
 
             public void DrainAll() => DrainPending();
+
+            /// <summary>Queue a clause and answer it, including any look it opens.</summary>
+            public void DriveClause(string clause)
+            {
+                GameEngine.QueueClauseForTest(St, "south", S.CharacterArea[0], "main", clause);
+                for (int i = 0; i < 10; i++)
+                {
+                    if (St.DeckLook != null)
+                    {
+                        var order = St.DeckLook.Cards.Select(x => x.InstanceId).ToList();
+                        int b0 = St.EventLog.Count;
+                        Apply(new GameCommand
+                        { Type = "deckLookConfirmOrder", Seat = "south", OrderedInstanceIds = order });
+                        if (St.EventLog.Count == b0) break;
+                        continue;
+                    }
+                    var pe = St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+                    if (pe == null) break;
+                    string target = Everything()
+                        .FirstOrDefault(x => GameEngine.IsValidEffectTarget(St, pe, x))?.InstanceId;
+                    int before = St.EventLog.Count;
+                    Apply(new GameCommand
+                    { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = target });
+                    if (St.EventLog.Count == before) break;
+                }
+                if (Environment.GetEnvironmentVariable("OPT_DIAG") == "1")
+                    foreach (var e in St.EventLog.TakeLast(8)) Console.WriteLine("      [drive] " + e.Message);
+            }
 
             private void DrainPending()
             {
