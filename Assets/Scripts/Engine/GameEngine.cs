@@ -7903,10 +7903,13 @@ namespace OnePieceTcg.Engine
                         options[oi] = options[oi].TrimEnd() + " Then, " + riderTail;
                 }
             }
-            // "Your opponent chooses one:" — the OPPONENT makes this choice (its options still
-            // resolve for the effect's controller via ResolveChoice, which uses ChoiceState.Seat
-            // as the resolver seat — so flip the option texts' perspective is NOT needed: these
-            // cards phrase options from the opponent's viewpoint already).
+            // "Your opponent chooses one:" — the OPPONENT makes this choice, so Seat is flipped
+            // while ControllerSeat stays with the effect's controller. Both halves matter, and the
+            // reason is the option TEXT: these cards phrase their options from the CONTROLLER's
+            // viewpoint, so ST07-010's "trash 1 card from the top of your opponent's Life cards"
+            // must eat the Life of the player who is clicking. ResolveChoice therefore resolves
+            // against ControllerSeat, not the seat that answered — resolving in the chooser's frame
+            // silently inverts the card and still logs plausibly. Pinned by `opponentdecides`.
             bool opponentChooses = text.IndexOf("Your opponent chooses one", StringComparison.OrdinalIgnoreCase) >= 0
                                 || text.IndexOf("opponent chooses one", StringComparison.OrdinalIgnoreCase) >= 0;
             state.ActiveChoice = new ChoiceState

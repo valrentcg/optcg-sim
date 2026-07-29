@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**44 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**45 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -52,6 +52,11 @@ than saying "Use Effect".
   turn's use, and using it must. This is a *second* implementation of once-per-turn (a deferred
   `OnceKey` committed only on resolution) alongside ActivateMain's immediate one — two
   implementations of one rule is the recurring bug class here, so both are now pinned.
+- **Who is asked** — `opponentdecides`: seven cards hand the decision to the OTHER player
+  ("Your opponent chooses one:", "Your opponent may ..."). The prompt must route to them, the
+  controller must not be able to answer it — and the options still resolve in the CONTROLLER's
+  frame, because the texts are written from their side. Resolving in the chooser's frame inverts
+  the card (ST07-010's option A eats the controller's own Life) and logs plausibly either way.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -82,7 +87,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 44 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 45 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
