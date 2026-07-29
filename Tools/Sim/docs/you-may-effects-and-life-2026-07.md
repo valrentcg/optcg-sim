@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**55 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**56 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -164,9 +164,16 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 55 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 56 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
+
+**A passing test is not evidence until it has been seen to fail.** The `uptonrider` suite is the
+cleanest example: three cases about an empty board all passed, and all three passed *identically*
+with the fix reverted — because at ZERO candidates the clause retires either way. They asserted
+something true and audited nothing. Only "up to 2 with exactly ONE candidate" discriminates the
+ceiling. Control every case against the specific change it claims to cover, not against the
+feature area.
 
 **Reasoned claims** are the most dangerous category and did not originally have a heading here.
 Twice now a fix shipped with a justification in place of a test — "the outcome is identical", "the
