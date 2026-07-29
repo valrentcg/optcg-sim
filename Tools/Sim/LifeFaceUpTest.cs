@@ -1,0 +1,147 @@
+using System;
+using System.Linq;
+using OnePieceTcg.Engine;
+
+namespace OnePieceTcg.Sim
+{
+    /// <summary>
+    /// Reported from playtest as three symptoms of what turned out to be one rule:
+    ///   - OP15-114 Wyper "isn't letting me flip the top card up"
+    ///   - ST29-008 Nami's protection never fires
+    ///   - "if a card is already face-up on top of my Life these effects can't be used again;
+    ///      it'd have to have a face-down card on top"
+    ///
+    /// The third is the rule, and it is stricter than the engine was. "Turn 1 card from the TOP of
+    /// your Life cards face-up" names the top card specifically: a face-up top card makes the effect
+    /// unavailable, even with face-down cards beneath it. The engine counted flippable cards anywhere
+    /// in the stack and then scanned PAST the top to find one, so these effects could pay themselves
+    /// from positions the rules do not allow.
+    ///
+    /// Both shapes are covered because they live in separate code paths that made the same mistake:
+    /// the COST form ("you may [cost]: [effect]", Wyper) and the REPLACEMENT form
+    /// ("...you may turn 1 card ... face-up instead", Nami).
+    ///
+    /// Run: dotnet run --project Tools/Sim/Sim.csproj -c Release -- lifefaceup
+    /// </summary>
+    public static class LifeFaceUpTest
+    {
+        private static int passed, failed;
+        private const string COST = "turn 1 card from the top of your Life cards face-up";
+
+        public static int Run()
+        {
+            Console.WriteLine("=== Life face-up: top-of-stack semantics ===");
+            CostPayableWhenTopIsFaceDown();
+            CostNotPayableWhenTopIsFaceUp();
+            CostFlipsTheTopCardSpecifically();
+            ReplacementUnavailableWhenTopIsFaceUp();
+            ReplacementFiresWhenTopIsFaceDown();
+            Console.WriteLine($"lifefaceup: {passed}/{passed + failed} passed ({failed} failed)");
+            return failed == 0 ? 0 : 1;
+        }
+
+        private static void Check(string label, bool ok, string detail = "")
+        {
+            if (ok) { passed++; Console.WriteLine("  PASS  " + label); }
+            else { failed++; Console.WriteLine("  FAIL  " + label + (detail.Length > 0 ? "  -- " + detail : "")); }
+        }
+
+        /// <summary>Life is stored bottom-first, so the TOP card is the last element.</summary>
+        private static CardInstance Top(PlayerState p) => p.Life[p.Life.Count - 1];
+
+        private static void CostPayableWhenTopIsFaceDown()
+        {
+            var b = new Board(); b.Life("south", 3);
+            Check("all Life face-down: the cost is payable",
+                  GameEngine.AuditTryAutoPayCost(b.St, "south", null, COST) > 0,
+                  "Wyper could not pay even with every Life card face-down");
+        }
+
+        private static void CostNotPayableWhenTopIsFaceUp()
+        {
+            var b = new Board(); b.Life("south", 3);
+            Top(b.S).FaceUp = true;                     // face-up top, two face-down beneath it
+            Check("top already face-up: the cost is NOT payable despite face-down cards below",
+                  GameEngine.AuditTryAutoPayCost(b.St, "south", null, COST) == 0,
+                  "it reached past the top card and spent one lower in the stack");
+        }
+
+        private static void CostFlipsTheTopCardSpecifically()
+        {
+            var b = new Board(); b.Life("south", 3);
+            var top = Top(b.S);
+            var below = b.S.Life[b.S.Life.Count - 2];
+            GameEngine.AuditTryAutoPayCost(b.St, "south", null, COST);
+            Check("the card turned face-up is the TOP one",
+                  top.FaceUp && !below.FaceUp,
+                  $"top={top.FaceUp} below={below.FaceUp}");
+        }
+
+        private static void ReplacementUnavailableWhenTopIsFaceUp()
+        {
+            var b = new Board(); b.Life("south", 1);
+            Top(b.S).FaceUp = true;                     // the only Life card is already face-up
+            b.Character("south", "ST29-008");           // Nami, offering the protection
+            var victim = b.Character("south", "ST29-009");
+            GameEngine.AuditKoByEffect(b.St, "south", victim.InstanceId);
+            bool gone = !b.S.CharacterArea.Any(c => c != null && c.InstanceId == victim.InstanceId);
+            Check("Nami cannot protect when the top Life card is already face-up", gone,
+                  "the Character survived, so the protection paid itself from an illegal position");
+        }
+
+        private static void ReplacementFiresWhenTopIsFaceDown()
+        {
+            var b = new Board(); b.Life("south", 2);    // both face-down
+            b.Character("south", "ST29-008");
+            var victim = b.Character("south", "ST29-009");
+            GameEngine.AuditKoByEffect(b.St, "south", victim.InstanceId);
+            bool alive = b.S.CharacterArea.Any(c => c != null && c.InstanceId == victim.InstanceId);
+            Check("Nami DOES protect when the top Life card is face-down",
+                  alive && Top(b.S).FaceUp,
+                  alive ? "protected but no Life card was turned face-up" : "the Character was K.O.'d anyway");
+        }
+
+        private sealed class Board
+        {
+            public GameState St;
+            public PlayerState S => St.Players["south"];
+            public PlayerState N => St.Players["north"];
+            private int southSlot, northSlot, serial;
+
+            public Board()
+            {
+                St = GameEngine.CreateMatch(new MatchConfig
+                { SouthDeck = "st01", NorthDeck = "st01", Seed = "life-faceup" });
+                St.Status = "active"; St.Phase = "main"; St.ActiveSeat = "south"; St.TurnNumber = 8;
+                S.TurnsStarted = 4; N.TurnsStarted = 4;
+                for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+                S.Hand.Clear(); N.Hand.Clear();
+                S.Life.Clear(); N.Life.Clear();
+                S.CostArea.Clear(); N.CostArea.Clear();
+                S.DonDeck = 10; N.DonDeck = 10;
+                St.PendingEffects.Clear();
+            }
+
+            public void Life(string seat, int n)
+            {
+                var p = seat == "south" ? S : N;
+                p.Life.Clear();
+                for (int i = 0; i < n; i++) p.Life.Add(Card("ST01-005", seat, "life"));
+            }
+
+            public CardInstance Character(string seat, string id)
+            {
+                var p = seat == "south" ? S : N;
+                var c = Card(id, seat, "character");
+                p.CharacterArea[seat == "south" ? southSlot++ : northSlot++] = c;
+                return c;
+            }
+
+            private CardInstance Card(string id, string owner, string zone) => new CardInstance
+            {
+                InstanceId = $"{owner}-{id}-lf-{serial++}",
+                CardId = id, Owner = owner, Zone = zone, Rested = false, PlayedOnTurn = 0,
+            };
+        }
+    }
+}

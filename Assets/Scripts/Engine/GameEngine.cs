@@ -6062,9 +6062,15 @@ namespace OnePieceTcg.Engine
                     {
                         var tuM = System.Text.RegularExpressions.Regex.Match(line, @"turn (\d+) cards? from the top of your Life");
                         int tuN = tuM.Success ? int.Parse(tuM.Groups[1].Value) : 1;
-                        int done = 0;
-                        for (int i = p.Life.Count - 1; i >= 0 && done < tuN; i--) { if (!p.Life[i].FaceUp) { p.Life[i].FaceUp = true; done++; } }
-                        if (done < tuN) continue;
+                        // Same rule as the cost form: it is the TOP cards or nothing. A face-up
+                        // top card means this protection simply is not available, rather than it
+                        // reaching down the stack for a face-down card to spend.
+                        if (p.Life.Count < tuN) continue;
+                        bool topAllDown = true;
+                        for (int k = 0; k < tuN; k++)
+                            if (p.Life[p.Life.Count - 1 - k].FaceUp) { topAllDown = false; break; }
+                        if (!topAllDown) continue;
+                        for (int k = 0; k < tuN; k++) p.Life[p.Life.Count - 1 - k].FaceUp = true;
                         Log(state, victimSeat, $"{NameId(GetCard(guard))}: turns {tuN} Life card(s) face-up instead of {NameId(GetCard(victim))} being removed.");
                     }
                     else if (ContainsAll(line, "return this Character to the owner's hand instead"))
@@ -8312,17 +8318,20 @@ namespace OnePieceTcg.Engine
                     // face-DOWN variant (OP08-063 Katakuri etc.) was previously unhandled, so the cost was
                     // skipped and the body fired for free.
                     bool toFaceUp = faceUpM.Groups[2].Value.Equals("up", StringComparison.OrdinalIgnoreCase);
-                    // Payability: you can only FLIP cards currently in the OPPOSITE state — need N such cards.
-                    // (Was `Life.Count < n`, so "turn 1 face-up" paid for FREE when all Life was already face-up,
-                    // firing the payoff without paying — EB03-056/EB01-040 etc.) Flip the top N wrong-state cards.
-                    int flippable = toFaceUp ? p.Life.Count(l => !l.FaceUp) : p.Life.Count(l => l.FaceUp);
-                    if (flippable < n) return 0;
+                    // The text names the TOP cards specifically, so this is not "find N cards
+                    // somewhere in Life that happen to be flippable". If the top card is already
+                    // face-up you cannot pay "turn 1 card from the top of your Life face-up" at
+                    // all, even with face-down cards beneath it — the only way back is a card that
+                    // turns Life face-DOWN again. Counting the whole stack and then scanning past
+                    // the top let these costs pay themselves from deeper down, so the effect fired
+                    // in positions where the rules do not allow it.
+                    if (p.Life.Count < n) return 0;
+                    for (int k = 0; k < n; k++)
+                        if (p.Life[p.Life.Count - 1 - k].FaceUp == toFaceUp) return 0;
                     actions.Add(() =>
                     {
-                        int flipped = 0;
-                        for (int i = p.Life.Count - 1; i >= 0 && flipped < n; i--)   // from the top of Life
-                            if (p.Life[i].FaceUp != toFaceUp) { p.Life[i].FaceUp = toFaceUp; flipped++; }
-                        Log(state, seat, $"Turned {flipped} Life card(s) face-{(toFaceUp ? "up" : "down")} (cost).");
+                        for (int k = 0; k < n; k++) p.Life[p.Life.Count - 1 - k].FaceUp = toFaceUp;
+                        Log(state, seat, $"Turned {n} Life card(s) face-{(toFaceUp ? "up" : "down")} (cost).");
                     });
                     continue;
                 }
@@ -8653,6 +8662,21 @@ namespace OnePieceTcg.Engine
         }
 
         /// <summary>Test seam: does this printed card satisfy a cost description?</summary>
+        /// <summary>Test seam: run the real cost parser and report whether the cost was payable
+        /// (non-zero) and apply it if so. Exercises the shipping code rather than a copy of it.</summary>
+        public static int AuditTryAutoPayCost(GameState state, string seat, CardInstance source, string costText)
+            => TryAutoPayCost(state, seat, source, costText);
+
+        /// <summary>Test seam: remove a Character by EFFECT (not battle), so K.O.-replacement
+        /// protections get their real chance to fire.</summary>
+        public static void AuditKoByEffect(GameState state, string victimSeat, string instanceId)
+        {
+            var victim = FindAnyInPlay(state, instanceId, out _);
+            if (victim == null) return;
+            if (!TryRemovalReplacement(state, victimSeat, victim, isBattleKo: false))
+                MoveToTrash(state, victimSeat, instanceId, isKo: true, byBattleKo: false);
+        }
+
         public static bool AuditCostCardMatches(string costText, string cardId)
             => CostCardMatches(costText, CardData.GetCard(cardId));
 
