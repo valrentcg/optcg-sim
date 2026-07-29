@@ -207,6 +207,8 @@ switch (mode)
         return OnePieceTcg.Sim.LifeFlipTest.Run();
     case "altcost":
         return OnePieceTcg.Sim.AlternativeCostTest.Run();
+    case "seatauthority":
+        return OnePieceTcg.Sim.SeatAuthorityTest.Run();
     case "namedcards":
         return OnePieceTcg.Sim.NamedCardsTest.Run();
     case "crossglow":

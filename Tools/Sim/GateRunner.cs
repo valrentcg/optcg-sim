@@ -108,6 +108,10 @@ namespace OnePieceTcg.Sim
             // OP10-088 Nami: the only brief-named card inside usevsskip's inert residual. Compound
             // + alternative + type-filtered cost, driven from a board that CAN pay it.
             ("altcost",               AlternativeCostTest.Run),
+
+            // opponentdecides guards ActiveChoice against the wrong seat. These are the other three
+            // decision surfaces — the Use half, the Skip half, and the Life look.
+            ("seatauthority",         SeatAuthorityTest.Run),
             // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.
