@@ -141,6 +141,8 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "countercost":
+        return OnePieceTcg.Sim.CounterCostTest.Run();
     case "donrest":
         return OnePieceTcg.Sim.DonRestCostTest.Run();
     case "hygiene":

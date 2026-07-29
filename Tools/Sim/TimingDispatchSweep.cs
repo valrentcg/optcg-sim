@@ -41,6 +41,10 @@ namespace OnePieceTcg.Sim
             var whenAtk = new List<CardDefLite>();
             var oppAtk = new List<CardDefLite>();
             var endTurn = new List<CardDefLite>();
+            var mainTag = new List<CardDefLite>();
+            var blocker = new List<CardDefLite>();
+            var counter = new List<CardDefLite>();
+            var oppTurn = new List<CardDefLite>();
 
             foreach (var def in CardData.Library.Values
                         .Where(c => c != null && !string.IsNullOrEmpty(c.Effect))
@@ -65,6 +69,10 @@ namespace OnePieceTcg.Sim
                     else if (tag.Equals("When Attacking", StringComparison.OrdinalIgnoreCase)) whenAtk.Add(lite);
                     else if (tag.Equals("On Your Opponent's Attack", StringComparison.OrdinalIgnoreCase)) oppAtk.Add(lite);
                     else if (tag.Equals("End of Your Turn", StringComparison.OrdinalIgnoreCase)) endTurn.Add(lite);
+                    else if (tag.Equals("Main", StringComparison.OrdinalIgnoreCase)) mainTag.Add(lite);
+                    else if (tag.Equals("Blocker", StringComparison.OrdinalIgnoreCase)) blocker.Add(lite);
+                    else if (tag.Equals("Counter", StringComparison.OrdinalIgnoreCase)) counter.Add(lite);
+                    else if (tag.Equals("Opponent's Turn", StringComparison.OrdinalIgnoreCase)) oppTurn.Add(lite);
                 }
             }
 
@@ -75,6 +83,10 @@ namespace OnePieceTcg.Sim
             bad += Drive("[When Attacking]", whenAtk, AttackWithIt);
             bad += Drive("[On Your Opponent's Attack]", oppAtk, BeAttacked);
             bad += Drive("[End of Your Turn]", endTurn, EndTheTurn);
+            bad += Drive("[Main]", mainTag, PlayFromHand);
+            bad += Drive("[Blocker]", blocker, BlockAnAttack);
+            bad += Drive("[Counter]", counter, CounterAnAttack);
+            bad += Drive("[Opponent's Turn]", oppTurn, BeAttacked);
 
             Console.WriteLine();
             Console.WriteLine(bad == 0
@@ -87,6 +99,14 @@ namespace OnePieceTcg.Sim
 
         private static int Drive(string label, List<CardDefLite> cards, Func<CardDefLite, bool> drive)
         {
+            if (cards.Count == 0)
+            {
+                // [Blocker] lands here: all 199 of its "you may" hits are the parenthesised rules
+                // gloss on the keyword, not a decision, so nothing survives the reminder-text filter.
+                Console.WriteLine();
+                Console.WriteLine($"  {label}  no real clauses (all reminder text)");
+                return 0;
+            }
             int offered = 0, notOffered = 0, threw = 0;
             var misses = new List<CardDefLite>();
             foreach (var c in cards)
@@ -140,10 +160,13 @@ namespace OnePieceTcg.Sim
             Segment("circled-DON cost", CircledDon);
             Segment("no circled DON", m => !CircledDon(m));
 
+            if (Environment.GetEnvironmentVariable("OPTCG_DUMP") == label)
+                foreach (var m in misses)
+                    Console.WriteLine($"      MISS {m.Id,-10} {Trim(m.Name, 16),-16} {Trim(m.Line, 120)}");
             var unexplained = misses.Where(m => !Explained(m)).ToList();
             Console.WriteLine($"    of the misses, explained by an unmet precondition : {misses.Count - unexplained.Count}");
             Console.WriteLine($"    of the misses, UNEXPLAINED                        : {unexplained.Count}");
-            foreach (var m in unexplained.Take(10))
+            foreach (var m in unexplained.Take(12))
                 Console.WriteLine($"      ?? {m.Id,-10} {Trim(m.Name, 16),-16} {Trim(m.Line, 96)}");
             if (unexplained.Count > 10) Console.WriteLine($"      ... and {unexplained.Count - 10} more unexplained");
             return (usable > 0 && offered == 0) ? 1 : 0;
@@ -255,6 +278,47 @@ namespace OnePieceTcg.Sim
             return b.Live(logBefore);
         }
 
+        /// <summary>[Blocker]: north declares an attack on our Leader and we interpose the card.</summary>
+        private static bool BlockAnAttack(CardDefLite c)
+        {
+            if (!c.Type.Equals("character", StringComparison.OrdinalIgnoreCase)) return true;
+            var b = new Board();
+            var guard = b.Character("south", c.Id);
+            if (guard == null) return true;
+            guard.Rested = false; guard.PlayedOnTurn = 0;
+            var attacker = b.Character("north", "OP15-040");
+            if (attacker == null) return true;
+            attacker.Rested = false; attacker.PlayedOnTurn = 0;
+            b.St.ActiveSeat = "north";
+            b.Apply(new GameCommand
+            { Type = "declareAttack", Seat = "north", Attacker = attacker.InstanceId, Target = b.S.Leader?.InstanceId });
+            int logBefore = b.St.EventLog.Count;
+            b.Apply(new GameCommand { Type = "blockAttack", Seat = "south", Blocker = guard.InstanceId });
+            return b.Live(logBefore);
+        }
+
+        /// <summary>[Counter]: the card is in HAND during north's attack, played at the counter step.</summary>
+        private static bool CounterAnAttack(CardDefLite c)
+        {
+            var b = new Board();
+            var card = b.Hand("south", c.Id);
+            var attacker = b.Character("north", "OP15-040");
+            if (attacker == null) return true;
+            attacker.Rested = false; attacker.PlayedOnTurn = 0;
+            b.St.ActiveSeat = "north";
+            b.Apply(new GameCommand
+            { Type = "declareAttack", Seat = "north", Attacker = attacker.InstanceId, Target = b.S.Leader?.InstanceId });
+            int logBefore = b.St.EventLog.Count;
+            b.Apply(new GameCommand
+            { Type = "counterWithCard", Seat = "south", InstanceId = card.InstanceId, Target = b.S.Leader?.InstanceId });
+            if (Environment.GetEnvironmentVariable("OPTCG_PROBE") == c.Id)
+            {
+                Console.WriteLine($"      [probe {c.Id}] live={b.Live(logBefore)} pending={b.St.PendingEffects.Count} hand={b.S.Hand.Count} trash={b.S.Trash.Count}");
+                foreach (var l in b.St.EventLog.Skip(logBefore)) Console.WriteLine("      [probe log] " + l.Message);
+            }
+            return b.Live(logBefore);
+        }
+
         private static string Trim(string s, int n) =>
             string.IsNullOrEmpty(s) ? "" : (s.Length <= n ? s : s.Substring(0, n - 1) + "…");
 
@@ -322,7 +386,12 @@ namespace OnePieceTcg.Sim
                     if (m.IndexOf("is pending", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     if (m.IndexOf("not carried out", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     if (m.IndexOf("effect skipped", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                    if (m.IndexOf(" plays ", StringComparison.OrdinalIgnoreCase) >= 0) continue;   // NOT a regex: an earlier "\b...\b" was written with literal backspace bytes and never matched
+                    if (m.IndexOf(" plays ", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    // Command echoes, same reasoning as "plays": the engine narrates that the
+                    // counter/block was declared whether or not the card's EFFECT ever queued.
+                    // Counting them would make [Counter] read 100% for free.
+                    if (m.IndexOf(" counters with ", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    if (m.IndexOf(" blocks ", StringComparison.OrdinalIgnoreCase) >= 0) continue;   // NOT a regex: an earlier "\b...\b" was written with literal backspace bytes and never matched
                     if (m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     return true;
                 }

@@ -4889,9 +4889,17 @@ namespace OnePieceTcg.Engine
                 // actually DO something (EB01-010 counter-K.O., OP01-028 counter −power) — previously only the
                 // "Then," secondary was ever queued, so those effects were silently dropped.
                 string primaryC = NormalizeClause((thenIdx >= 0 ? effectText.Substring(0, thenIdx) : effectText).Trim());
+                // The power-buff exclusion exists to avoid double-applying what counterPower already
+                // granted. When the clause is COST-PREFIXED, counterPower deliberately grants nothing
+                // (see AutomatedCounterPower), so the exclusion would leave the boost unreachable
+                // rather than merely unduplicated. Queue those: the two paths stay mutually exclusive.
+                bool costPrefixedC = System.Text.RegularExpressions.Regex.IsMatch(primaryC,
+                    @"^\s*(?:\[[^\]]+\]\s*/?\s*)*You (?:may|can) [^:]+:",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                 if (!string.IsNullOrWhiteSpace(primaryC)
-                    && !System.Text.RegularExpressions.Regex.IsMatch(primaryC, @"gains? \+\d",
-                            System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    && (costPrefixedC
+                        || !System.Text.RegularExpressions.Regex.IsMatch(primaryC, @"gains? \+\d",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
                 {
                     QueueEffect(state, defenderSeat, counterCard, "counter", primaryC,
                         IsOptionalEffectText(primaryC), EffectScope.Instant, InferTargetZone(primaryC));
@@ -4922,6 +4930,16 @@ namespace OnePieceTcg.Engine
             // gains +2000" was giving +2000 flat AND +2000 via the secondary = +4000). Cut at "Then,".
             int thenCut = counterClause.IndexOf("Then,", StringComparison.OrdinalIgnoreCase);
             if (thenCut >= 0) counterClause = counterClause.Substring(0, thenCut);
+            // An UNPAID "You may <cost>:" prefix means the boost has to be BOUGHT. Grepping the "+N"
+            // out of it handed the boost over for free: OP02-068 Gum-Gum Rain ("You may trash 1 card
+            // from your hand: … gains +3000 power") gave +3000 with nothing trashed and no prompt,
+            // and the clause was then blocked from queueing precisely because it contains "gains +N",
+            // so the player was never asked at all. 13 counter Events share the shape.
+            // Returning 0 here hands the clause to the queue path below, which asks and then applies.
+            if (System.Text.RegularExpressions.Regex.IsMatch(counterClause,
+                    @"^\s*(?:\[[^\]]+\]\s*/?\s*)*You (?:may|can) [^:]+:",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                return 0;
             var m = System.Text.RegularExpressions.Regex.Match(
                 counterClause, @"\+(\d{3,5})\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (m.Success && int.TryParse(m.Groups[1].Value, out int parsed)) return parsed;
