@@ -34,6 +34,8 @@ namespace OnePieceTcg.Sim
             DiscardChoiceIsNotSilentlyTheLastCard();
             CostFormTrashFromHandWaitsForAPick();
             CostFormTrashTakesThePickedCard();
+            ProtectionDiscardIsThePlayersPick();
+            ProtectionDiscardIsForcedWhenOnlyOneCardQualifies();
             Console.WriteLine($"playerchoice: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -162,6 +164,53 @@ namespace OnePieceTcg.Sim
                   $"pickedWasTrashed={b.S.Trash.Any(c => c.InstanceId == want.InstanceId)}");
         }
 
+        /// <summary>EB03-001 Nefeltari Vivi (Leader): "If your Character with a base cost of 4 or more
+        /// would be K.O.'d, you may trash 1 card from your hand instead." Paying that protection used
+        /// to take Hand[Count-1] - the engine picking your discard at the moment the choice matters
+        /// most. The victim must survive AND the discard must still be the player's to choose.</summary>
+        private static void ProtectionDiscardIsThePlayersPick()
+        {
+            var b = new Board(); b.Leader("EB03-001");
+            var want = b.Hand("ST29-004");          // index 0 - deliberately not the last
+            b.Hand("ST29-009"); b.Hand("ST29-010");
+            var victim = b.Character("ST29-009");   // base cost 4, so the protection applies
+            int hand0 = b.S.Hand.Count;
+
+            GameEngine.AuditKoByEffect(b.St, "south", victim.InstanceId);
+            // The protection is offered as an optional pending effect; take it.
+            foreach (var e in b.St.PendingEffects.Where(x => x != null && x.Seat == "south").ToList())
+                b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = e.EffectId });
+
+            bool alive = b.S.CharacterArea.Any(ch => ch != null && ch.InstanceId == victim.InstanceId);
+            bool handUntouched = b.S.Hand.Count == hand0;
+            bool asking = b.St.PendingEffects.Any(x => x != null && x.Seat == "south");
+            Check("protection: the guard survives and the discard is still being ASKED",
+                  alive && handUntouched && asking,
+                  $"alive={alive} handUntouched={handUntouched} (hand {hand0}->{b.S.Hand.Count}) asking={asking}");
+
+            if (asking) Pick(b, want.InstanceId);
+            Check("protection: the card trashed is the one the player picked",
+                  b.S.Trash.Any(x => x.InstanceId == want.InstanceId)
+                  && b.S.Hand.All(x => x.InstanceId != want.InstanceId),
+                  $"pickedWasTrashed={b.S.Trash.Any(x => x.InstanceId == want.InstanceId)} hand={b.S.Hand.Count}");
+        }
+
+        private static void ProtectionDiscardIsForcedWhenOnlyOneCardQualifies()
+        {
+            // Negative control for the same branch: a single card in hand is the only legal payment,
+            // so queueing a pick would be an empty question. It must just pay and protect.
+            var b = new Board(); b.Leader("EB03-001");
+            var only = b.Hand("ST29-004");
+            var victim = b.Character("ST29-009");
+            GameEngine.AuditKoByEffect(b.St, "south", victim.InstanceId);
+            foreach (var e in b.St.PendingEffects.Where(x => x != null && x.Seat == "south").ToList())
+                b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = e.EffectId });
+            bool alive = b.S.CharacterArea.Any(ch => ch != null && ch.InstanceId == victim.InstanceId);
+            Check("protection with exactly 1 legal discard pays it outright, no empty question",
+                  alive && b.S.Hand.Count == 0 && b.S.Trash.Any(x => x.InstanceId == only.InstanceId),
+                  $"alive={alive} hand={b.S.Hand.Count} trashed={b.S.Trash.Any(x => x.InstanceId == only.InstanceId)}");
+        }
+
         private sealed class Board
         {
             public GameState St;
@@ -177,6 +226,9 @@ namespace OnePieceTcg.Sim
                 for (int i = 0; i < 5; i++) S.CharacterArea[i] = null;
                 S.Hand.Clear(); S.Life.Clear(); St.PendingEffects.Clear();
             }
+
+            public void Leader(string id)
+            { var c = Card(id, "leader"); S.Leader = c; }
 
             public void Life(int n)
             { S.Life.Clear(); for (int i = 0; i < n; i++) S.Life.Add(Card("ST01-005", "life")); }

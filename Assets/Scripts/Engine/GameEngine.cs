@@ -6006,19 +6006,34 @@ namespace OnePieceTcg.Engine
                             if (thPwCap >= 0 && (thPwMore ? d.Power < thPwCap : d.Power > thPwCap)) return false;
                             return true;
                         };
-                        if (!string.IsNullOrEmpty(thTag) || thCharOnly || thEventOrStage || thEventOnly || thStageOnly || thPwCap >= 0)
+                        // WHICH card you pitch is the decision, not bookkeeping — this branch used to
+                        // take Hand[Count-1], i.e. the engine chose the discard for you. Payability is
+                        // settled here (too few candidates → `continue` → the K.O. proceeds), so once
+                        // it IS payable the protection can stand while the selection is queued as an
+                        // ordinary mandatory pick. Only a forced hand — exactly as many candidates as
+                        // the cost needs — trashes directly, because then there is nothing to ask.
+                        bool thFiltered = !string.IsNullOrEmpty(thTag) || thCharOnly || thEventOrStage
+                                       || thEventOnly || thStageOnly || thPwCap >= 0;
+                        var thCands = thFiltered ? p.Hand.Where(thMatch).ToList() : new List<CardInstance>(p.Hand);
+                        if (thCands.Count < thN) continue;   // can't pay → not replaced (K.O. proceeds)
+                        if (thCands.Count > thN)
                         {
-                            var thCands = p.Hand.Where(thMatch).ToList();
-                            if (thCands.Count < thN) continue;   // not enough matching cards → can't pay → K.O. proceeds
-                            for (int i = 0; i < thN; i++) { var hc = thCands[i]; p.Hand.Remove(hc); hc.Zone = "trash"; p.Trash.Add(hc); }
+                            // Reuse the card's own wording so the filter survives into the pick ("trash 1
+                            // Character card with a power of 6000 or less from your hand"); the resolver
+                            // for that clause already enforces it and fires the hand-trash reactive.
+                            var thSpan = System.Text.RegularExpressions.Regex.Match(line,
+                                @"(trash \d+ [^.]*?from your hand)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            string thPick = thSpan.Success ? thSpan.Groups[1].Value.Trim() : $"Trash {thN} cards from your hand";
+                            thPick = char.ToUpperInvariant(thPick[0]) + thPick.Substring(1) + ".";
+                            QueueEffect(state, victimSeat, guard, "main", thPick, optional: false,
+                                        targetZone: EffectTargetZone.Hand);
                         }
                         else
                         {
-                            if (p.Hand.Count < thN) continue;   // can't pay → not replaced (K.O. proceeds)
                             for (int i = 0; i < thN; i++)
-                            { var hc = p.Hand[p.Hand.Count - 1]; p.Hand.RemoveAt(p.Hand.Count - 1); hc.Zone = "trash"; p.Trash.Add(hc); }
+                            { var hc = thCands[i]; p.Hand.Remove(hc); hc.Zone = "trash"; p.Trash.Add(hc); }
+                            NotifyHandTrashedByEffect(state, victimSeat);
                         }
-                        NotifyHandTrashedByEffect(state, victimSeat);
                         if (alsoRestSelf) guard.Rested = true;
                         Log(state, victimSeat, $"{NameId(GetCard(guard))}: {(alsoRestSelf ? "rests and " : "")}trashes {thN} card(s) from hand instead of {NameId(GetCard(victim))} being removed.");
                     }
