@@ -161,6 +161,8 @@ switch (mode)
         return OnePieceTcg.Sim.GlowDeadlockSweep.Run();
     case "gate":
         return OnePieceTcg.Sim.GateRunner.Run();
+    case "drawoutcome":
+        return OnePieceTcg.Sim.DrawOutcomeSweep.Run();
     case "lifedamageedge":
         return OnePieceTcg.Sim.LifeDamageEdgeTest.Run();
     case "lifedamage":
