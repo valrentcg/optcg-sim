@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**61 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**62 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -35,6 +35,7 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 12 | "Return N of your **active** DON!! cards to your DON!! deck" existed only as a *cost*; as an effect body it resolved to nothing | same 2 cards + any future body use |
 | 13 | **"Your opponent chooses 1 card from your hand" auto-picked** `Hand[Count-1]` and logged "opponent chose …" — the engine deciding on a player's behalf, same shape as #10 | OP01-038 |
 | 14 | **The opponent's own discards were auto-picked too** — "your opponent trashes 1 card from their hand" / "… places 1 card from their hand at the bottom of their deck" took `Hand[Count-1]` at 5 sites. The controller cannot legally choose (3-4-3: you cannot view the other player's hand), so the owner must — and a discard is only ever as bad as the card you give up | **25 cards** |
+| 27 | **"Place 1 at the top of your deck and place the rest back" dropped its first half** — ST13-016 and ST13-004 look at all your Life, send one card to the deck top and reorder the rest. The engine did the reorder and silently skipped the deck placement: its only matching handler wanted "place **them** at the top of your deck", which never matches "place **1**". The clause also uses "Look at all **your** Life cards" (no "of"), which the rearrange handler itself did not accept | ST13-016, ST13-004 |
 | 26 | **Cards returned from hand to Life landed FACE-UP** — the hand→Life site defaulted to face-up unless the text said "face-down". Rule 3-10-2 is the opposite: Life cards are face-down *unless otherwise specified*. All 12 such clauses in the pool say neither, so every one showed the opponent a card they may not see and pre-revealed its `[Trigger]`. The sibling site for the same move already defaulted face-down — one rule, two implementations, inverted | 12 clauses |
 | 25 | **6 of the engine's 28 tag-strippers could not handle slash-combined tags** — `[On Play]/[When Attacking]` (39 cards, 68 clause lines, incl. OP02-036 Nami). Those 6 stop after the first tag and leave `/[When Attacking]…`, so the anchored match each one runs next fails and that path silently skips the card | 39 cards |
 | 24 | **13 compound DON!!-rest costs lost their payment affordance** — the UI parser required the colon straight after "cards", so "rest 1 of your DON!! cards **and trash 1 card from your hand**:" scored 0. Those cards kept a Use button that stayed ENABLED with too few DON!! and did nothing when pressed, and lost the click-a-glowing-DON!! affordance the other 46 have | 13 cards |
@@ -183,6 +184,11 @@ than saying "Use Effect".
   path — DON!! payments, `[DON!! xN]` gates, reactive timings — which is a boundary, not a gap:
   those populations belong to `triggerfield` and `timingsweep`. Two explicit probes keep the facing check
   two-sided: a "face-up" clause must land face-UP, and the SAME clause without those words face-DOWN.
+- **Re-arranging** — `liferearrange`: the brief's third Life keyword, enumerated like heal (10
+  distinct wordings). A reorder is a LOOK, so three things must hold: the COUNT is unchanged (it is
+  neither a heal nor a loss), the FACING is unchanged (looking at your own Life must not make the
+  stack public — the sharper version of the heal facing defect), and the opponent-facing wording
+  moves THEIR stack, not yours. All hold. The fourth case found the missing deck-placement half.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -231,7 +237,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 61 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 62 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

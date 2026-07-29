@@ -449,6 +449,12 @@ namespace OnePieceTcg.Engine
         // "Then, trash the rest" variant (e.g. OP03-089 Brannew): after the select step the
         // remaining cards go to the trash instead of the bottom of the deck (no rearrange step).
         public bool TrashRest;
+        // LifeMode only: how many of the confirmed order go to the TOP OF THE DECK instead of back
+        // to Life. ST13-016 / ST13-004 read "look at all your Life cards; place 1 at the top of your
+        // deck AND place the rest back in your Life area in any order" — the engine performed the
+        // rearrange and silently dropped the deck-placement half, because its only matching handler
+        // wanted "place THEM at the top of your deck". 0 = a plain rearrange.
+        public int LifeToDeckTop;
 
         // Play mode: the selected card is PLAYED to the character area instead of added to
         // hand ("Play up to 1 … from your deck" / "Look at N … play up to 1 …" effects).

@@ -3794,13 +3794,28 @@ namespace OnePieceTcg.Engine
             var p = Player(state, seat);
             if (dl.LifeMode)
             {
+                // The player orders left→right = top→bottom. When the clause also sends cards to the
+                // deck, the LEFTMOST go — so ordering IS the choice of which card leaves, and no
+                // extra selection step is needed on top of the rearrange the player already does.
+                var toDeck = dl.LifeToDeckTop > 0
+                    ? dl.Ordered.Take(Math.Min(dl.LifeToDeckTop, dl.Ordered.Count)).ToList()
+                    : new List<CardInstance>();
+                var backToLife = dl.Ordered.Skip(toDeck.Count).ToList();
                 // Arranged left→right = top→bottom of Life; the Life list stores TOP at the END.
-                for (int i = dl.Ordered.Count - 1; i >= 0; i--)
+                for (int i = backToLife.Count - 1; i >= 0; i--)
                 {
-                    dl.Ordered[i].Zone = "life";
-                    p.Life.Add(dl.Ordered[i]);
+                    backToLife[i].Zone = "life";
+                    p.Life.Add(backToLife[i]);
                 }
-                Log(state, seat, $"{p.Name} rearranges their Life cards.");
+                for (int i = toDeck.Count - 1; i >= 0; i--)
+                {
+                    toDeck[i].Zone = "deck";
+                    toDeck[i].FaceUp = false;   // leaving Life for the deck, it is face-down again
+                    p.Deck.Insert(0, toDeck[i]);
+                }
+                Log(state, seat, toDeck.Count > 0
+                    ? $"{p.Name} places {toDeck.Count} Life card(s) at the top of their deck and rearranges the rest."
+                    : $"{p.Name} rearranges their Life cards.");
                 CompleteDeckLook(state);
                 return;
             }
@@ -13605,7 +13620,9 @@ namespace OnePieceTcg.Engine
                 // "Look at all of your Life cards and place them back in any order." — real
                 // rearrange (ST13-012 Makino): Life opens in the deck-look rearrange UI
                 // (LifeMode); the confirmed order is written back to Life.
-                if (ContainsAll(text, "Look at all of your Life cards")
+                // "Look at all YOUR Life cards" (no "of") is the other printing — ST13-016 and
+                // ST13-004 use it, and requiring "of" meant neither reached this handler.
+                if ((ContainsAll(text, "Look at all of your Life cards") || ContainsAll(text, "Look at all your Life cards"))
                     && (ContainsAll(text, "any order") || ContainsAll(text, "place them back")))
                 {
                     if (owner.Life.Count <= 1)
@@ -13613,8 +13630,16 @@ namespace OnePieceTcg.Engine
                         Log(state, effect.Seat, $"{sourceName}: not enough Life cards to rearrange.");
                         return EffectResolution.Resolved;
                     }
+                    // "... place N (card) at the top of your deck and place the rest back ..."
+                    // (ST13-016, ST13-004). The engine performed the rearrange and silently dropped
+                    // this half: its only matching handler wanted "place THEM at the top of your
+                    // deck", which never matches "place 1".
+                    var toDeckM = System.Text.RegularExpressions.Regex.Match(text,
+                        @"place (\d+) (?:cards? )?at the top of your deck",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     var dlLife = new DeckLookState
                     {
+                        LifeToDeckTop = toDeckM.Success ? int.Parse(toDeckM.Groups[1].Value) : 0,
                         Seat = effect.Seat,
                         SourceInstanceId = effect.SourceInstanceId,
                         SourceName = sourceName,
