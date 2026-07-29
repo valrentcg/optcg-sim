@@ -7979,6 +7979,20 @@ namespace OnePieceTcg.Engine
             if (!counted.Success) return false;
             if (!int.TryParse(counted.Groups[1].Value, out int required) || required < 1) return false;
 
+            // The counted phrase has to BE the Character selection. "You may rest 2 of your DON!!
+            // cards: <body that mentions a Character>" matches above on the COST — the text contains
+            // "Character" only because of the body — and the count was then validated against the
+            // Character area. With fewer than 2 Characters on the board the whole effect was retired
+            // under rule 1-3-2 before the player was ever asked, which is how OP14-049 Jinbe was
+            // played, queued, and silently skipped in the same breath.
+            //
+            // Look only at the noun phrase that immediately follows, stopping at a colon (the cost/body
+            // divider) or a sentence break, so a Character mentioned later in the clause cannot vouch
+            // for a count that was never about Characters.
+            string afterCount = text.Substring(counted.Index + counted.Length);
+            var nounPhrase = System.Text.RegularExpressions.Regex.Match(afterCount, @"^[^:.;]{0,60}");
+            if (nounPhrase.Value.IndexOf("Character", StringComparison.OrdinalIgnoreCase) < 0) return false;
+
             string whose = counted.Groups["whose"].Value.ToLowerInvariant();
             bool opponentSide = whose.Contains("opponent") || whose == "their";
 

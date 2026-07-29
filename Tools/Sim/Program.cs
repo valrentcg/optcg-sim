@@ -141,6 +141,10 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "donrest":
+        return OnePieceTcg.Sim.DonRestCostTest.Run();
+    case "timingsweep":
+        return OnePieceTcg.Sim.TimingDispatchSweep.Run();
     case "lifeadvanced":
         return OnePieceTcg.Sim.LifeAdvancedTest.Run();
     case "endtoend":
