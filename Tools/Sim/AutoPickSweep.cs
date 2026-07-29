@@ -24,8 +24,13 @@ namespace OnePieceTcg.Sim
     ///   DON!! and deck           DON!! cards carry no identity (choosing among them is not a
     ///                            decision), and the deck is a secret ordered area.
     ///
-    /// Trash and hand are the zones where a pick is both meaningful and possible, so they are what
-    /// this reports. It is a REPORTING sweep, ratcheted rather than gated on zero: some auto-picks
+    /// Hand, trash and the BOARD are the zones where a pick is both meaningful and possible, so they
+    /// are what this reports. The board was added second and matters most: which of your own
+    /// Characters dies is never arbitrary, and the controller choosing an opponent's victim is the
+    /// single most common targeted decision in the game. Widening to it took the sweep from 523
+    /// clauses to 1031 — and the widened zone was CONTROLLED before its zero was believed (making
+    /// the K.O. resolver auto-pick a victim reports 16 and breaks the ratchet), because a new check
+    /// that silently matches nothing reads exactly like a clean result. It is a REPORTING sweep, ratcheted rather than gated on zero: some auto-picks
     /// are legitimate (a skip fallback, a blind pick from a hidden zone) and the number should be
     /// read, not asserted to be nothing. What it must never do is grow.
     ///
@@ -66,6 +71,7 @@ namespace OnePieceTcg.Sim
                     var b = new Board();
                     int hand0 = b.S.Hand.Count, trash0 = b.S.Trash.Count;
                     int oppHand0 = b.N.Hand.Count, oppTrash0 = b.N.Trash.Count;
+                    int chars0 = Bodies(b.S), oppChars0 = Bodies(b.N);
 
                     try { b.Queue(clause); }
                     catch (Exception) { continue; }
@@ -78,6 +84,11 @@ namespace OnePieceTcg.Sim
                     Consider(findings, def.Id, clause, "your trash", trash0 - b.S.Trash.Count, trash0);
                     Consider(findings, def.Id, clause, "opponent hand", oppHand0 - b.N.Hand.Count, oppHand0);
                     Consider(findings, def.Id, clause, "opponent trash", oppTrash0 - b.N.Trash.Count, oppTrash0);
+                    // The board is the zone with the MOST information attached to a choice: which of
+                    // your own Characters dies is never arbitrary. Both seats, since "K.O. 1 of your
+                    // opponent's Characters" is equally a choice the controller should be making.
+                    Consider(findings, def.Id, clause, "your board", chars0 - Bodies(b.S), chars0);
+                    Consider(findings, def.Id, clause, "opponent board", oppChars0 - Bodies(b.N), oppChars0);
                 }
             }
 
@@ -98,6 +109,8 @@ namespace OnePieceTcg.Sim
             return SweepRatchet.Result();
         }
 
+        private static int Bodies(PlayerState p) => p.CharacterArea.Count(x => x != null);
+
         private static void Consider(List<Finding> into, string id, string clause, string zone, int took, int had)
         {
             // Took nothing → nothing was chosen. Took everything → there was no choice to make.
@@ -113,10 +126,10 @@ namespace OnePieceTcg.Sim
             if (c.IndexOf("top of", StringComparison.Ordinal) >= 0) return false;
             if (c.IndexOf("bottom of", StringComparison.Ordinal) >= 0) return false;
             if (c.IndexOf(" all ", StringComparison.Ordinal) >= 0) return false;
-            bool zone = c.Contains("hand") || c.Contains("trash");
+            bool zone = c.Contains("hand") || c.Contains("trash") || c.Contains("character");
             bool verb = c.Contains("trash") || c.Contains("play") || c.Contains("add")
                      || c.Contains("return") || c.Contains("place") || c.Contains("reveal")
-                     || c.Contains("discard");
+                     || c.Contains("discard") || c.Contains("k.o.") || c.Contains("rest");
             return zone && verb && System.Text.RegularExpressions.Regex.IsMatch(clause, "[0-9]");
         }
 

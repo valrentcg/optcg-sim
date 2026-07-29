@@ -78,11 +78,14 @@ than saying "Use Effect".
   still costs them. One shared helper feeds both call sites — two implementations of "the
   opponent disposes of their own card" is the drift this engine keeps producing.
 - **Nobody chose that** — `autopick`: the class-level instrument for the five auto-pick defects
-  above, which were all found one at a time by reading. Drives 523 distinct selective clauses and
+  above, which were all found one at a time by reading. Drives 1031 distinct selective clauses and
   asks whether any took cards from a zone holding MORE candidates than it took, without raising a
   prompt. **0.** Restoring any one of the fixed auto-picks turns it red (4), which is the only
   reason the zero means anything — a sweep that cannot fail reads as coverage and is worse than
   none. Ratcheted, not gated on zero: some auto-picks are legitimate.
+  Covers hand, trash and the **board** for both seats. The board zone was added after the first
+  clean run and controlled separately (forcing the K.O. resolver to auto-pick a victim reports 16)
+  — a widened check that matches nothing looks identical to a widened check that found nothing.
 - **Which end of Life** — `lifeend`: 46 cards read "from the top **or bottom** of your Life
   cards", and this is the one selective wording `autopick` cannot see — it filters "top of"/
   "bottom of" as positional, which is right for the ~200 clauses naming ONE end and wrong for
