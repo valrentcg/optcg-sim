@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**58 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**59 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -157,6 +157,12 @@ than saying "Use Effect".
   it becomes unplayable outright — not weakened, unusable. The check is self-verifying: it first
   asserts the detector still finds the known cards, because a shape-detector that matches nothing
   passes the real assertion perfectly.
+- **The progress ledger lines up** — `ledgerparts`: the green/done, red/skipped text drops any
+  part it cannot locate in the clause SILENTLY — no error, the text just never colours. 510
+  compound clauses driven through real resolution, 529 parts recorded, **0** unlocatable. A
+  regression guard rather than a discovery, and labelled as such: parts are not always verbatim
+  (the self-disposal clamp rewrites "trash 2" to "trash 1"; the opponent-decision fix rewrites
+  "their" to "your"), so a future rewrite reaching the ledger breaks colouring invisibly.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -205,7 +211,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 58 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 59 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

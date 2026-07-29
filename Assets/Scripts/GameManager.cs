@@ -12262,10 +12262,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void AddLocatedPart(string full, string rawPart, int code, List<(int idx, int len, int code)> into)
     {
-        string part = CleanEffectText(rawPart);
-        if (string.IsNullOrEmpty(part)) return;
-        int idx = full.IndexOf(part, System.StringComparison.OrdinalIgnoreCase);
-        if (idx >= 0) into.Add((idx, part.Length, code));
+        // Locating lives in the engine (GameEngine.LocateClausePart) so the invariant it depends on
+        // — every recorded part is findable in the text the engine produced — can be tested.
+        int idx = GameEngine.LocateClausePart(full, rawPart);
+        if (idx >= 0) into.Add((idx, CleanEffectText(rawPart).Length, code));
     }
 
     // Strip leading timing tags (already in the panel header) and the boilerplate DON!!-return

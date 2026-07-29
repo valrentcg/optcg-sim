@@ -103,6 +103,10 @@ namespace OnePieceTcg.Sim
             // The other half of the prompt: WHERE to click. No engine suite can see a misdirecting
             // prompt, because the engine resolves clicks and never words them.
             ("promptzone",            PromptZoneTest.Run),
+            // The progress ledger drops a part it cannot locate SILENTLY — the text just never
+            // colours. Both sides of the comparison come from the same resolution, so a miss is two
+            // pieces of the engine disagreeing.
+            ("ledgerparts",           LedgerPartsTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

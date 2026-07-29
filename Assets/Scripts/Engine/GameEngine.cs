@@ -1938,6 +1938,22 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
+        /// <summary>Where a resolved sub-clause sits inside the cleaned full text, or -1.
+        ///
+        /// The progress ledger colours characters green (done) or red (skipped) by locating each
+        /// recorded part inside the whole clause. A part that cannot be found is silently dropped —
+        /// no error, no log, the text simply never colours — so the failure looks like "the
+        /// animation is a bit broken" rather than "the splitter and the cleaner disagree".
+        ///
+        /// Here so the invariant can be tested: every part the engine records must be findable in
+        /// the text the engine also produces.</summary>
+        public static int LocateClausePart(string cleanedFull, string rawPart)
+        {
+            string part = CleanClauseText(rawPart);
+            if (string.IsNullOrEmpty(part) || string.IsNullOrEmpty(cleanedFull)) return -1;
+            return cleanedFull.IndexOf(part, StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>Clause text with the leading timing tags and the boilerplate DON!!-return
         /// reminder removed and whitespace collapsed — what the player actually reads.
         ///
