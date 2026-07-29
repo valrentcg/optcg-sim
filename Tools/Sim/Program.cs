@@ -141,6 +141,8 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "lifedamage":
+        return OnePieceTcg.Sim.LifeDamageTest.Run();
     case "sacrifice":
         return OnePieceTcg.Sim.SacrificeProtectionTest.Run();
     case "countercost":
