@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**47 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**48 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -34,6 +34,8 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 11 | **"Your opponent may X. If they do not, Y" never asked the opponent** — the clause fell through to whichever generic handler matched Y, so the penalty fired unconditionally and the "may" was inert, always in the controller's favour | OP05-099, OP15-059 |
 | 12 | "Return N of your **active** DON!! cards to your DON!! deck" existed only as a *cost*; as an effect body it resolved to nothing | same 2 cards + any future body use |
 | 13 | **"Your opponent chooses 1 card from your hand" auto-picked** `Hand[Count-1]` and logged "opponent chose …" — the engine deciding on a player's behalf, same shape as #10 | OP01-038 |
+| 14 | **The opponent's own discards were auto-picked too** — "your opponent trashes 1 card from their hand" / "… places 1 card from their hand at the bottom of their deck" took `Hand[Count-1]` at 5 sites. The controller cannot legally choose (3-4-3: you cannot view the other player's hand), so the owner must — and a discard is only ever as bad as the card you give up | **25 cards** |
+| 15 | The place-at-deck-bottom half had **no skip enforcement** — once it became a prompt, declining it was a free escape (found by testing the fix, not the code) | 8 of those 25 |
 
 Also: `"You may"` protections now prompt unconditionally (a decision, not a setting — the
 per-seat flag and its UI toggle were deleted), and the Use button **names the cost** rather
@@ -71,6 +73,10 @@ than saying "Use Effect".
   rule (3-4-2 hand is a secret area; 8-4-4-2 no guaranteed information), which costs nothing to
   honour since the UI already renders the opponent's hand as face-down holders by index.
   Mandatory: skipping still costs the controller a card.
+- **Your own discard is your choice** — `selfdisposal`: the 25-card mirror of `opponentpicks`.
+  The player who owns the cards is asked which one goes, for both wordings; mandatory, so a skip
+  still costs them. One shared helper feeds both call sites — two implementations of "the
+  opponent disposes of their own card" is the drift this engine keeps producing.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -101,7 +107,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 47 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 48 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

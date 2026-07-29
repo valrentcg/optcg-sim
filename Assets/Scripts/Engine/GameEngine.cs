@@ -1921,6 +1921,37 @@ namespace OnePieceTcg.Engine
             return s;
         }
 
+        /// <summary>Give a mandatory self-disposal back to the player who owns the cards.
+        ///
+        /// "Your opponent trashes 1 card from their hand" / "… places 1 card from their hand at the
+        /// bottom of their deck" (25 cards). Who chooses is not printed, but it cannot be the
+        /// controller: rule 3-4-3 says a player cannot view the other player's hand, so the only
+        /// player able to carry this out is the one holding the cards. The engine was picking
+        /// Hand[Count-1] at five separate sites — the same defect as OP01-038's auto-pick, in the
+        /// class where it costs most, since a discard is only ever as bad as the card you give up.
+        ///
+        /// `clause` is phrased in the SECOND person because it is queued on the opponent's own seat,
+        /// where every handler resolves relative to that seat. Mandatory, not optional: they choose
+        /// which, never whether — PassEffect enforces the fallback so a skip still costs them.</summary>
+        private static EffectResolution QueueOpponentSelfDisposal(
+            GameState state, PendingEffect effect, string clause, string what)
+        {
+            string oppSeat = OtherSeat(effect.Seat);
+            var opp = Player(state, oppSeat);
+            var srcName = NameId(CardData.GetCard(effect.SourceCardId));
+            if (opp == null || opp.Hand.Count == 0)
+            {
+                Log(state, effect.Seat, $"{srcName}: the opponent has no cards in hand.");
+                return EffectResolution.Resolved;
+            }
+            var src = FindCardInstance(state, effect.SourceInstanceId);
+            if (src == null) return EffectResolution.Resolved;
+            QueueEffect(state, oppSeat, src, effect.Timing, clause, false,
+                        EffectScope.Instant, EffectTargetZone.Hand);
+            Log(state, effect.Seat, $"{srcName}: {opp.Name} chooses which card to {what}.");
+            return EffectResolution.Resolved;
+        }
+
         /// <summary>Lower-case the first character, for splicing a clause into a sentence.</summary>
         private static string LowerFirst(string s) =>
             string.IsNullOrEmpty(s) ? s : char.ToLowerInvariant(s[0]) + s.Substring(1);
@@ -6782,7 +6813,8 @@ namespace OnePieceTcg.Engine
             // skippable. (The Optional FLAG is unreliable here: a split sub-clause inherits the parent
             // reactive's you-may-activate optionality, so the TEXT is the source of truth.)
             if (System.Text.RegularExpressions.Regex.IsMatch(effect.Text ?? "",
-                    @"^\s*[Tt]rash \d+ cards? from your hand\.?\s*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    @"^\s*(?:[Tt]rash \d+ cards? from your hand|[Pp]lace \d+ cards? from your hand at the (?:top|bottom) of your deck)\.?\s*$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
             {
                 var htp = Player(state, seat);
                 var htN = System.Text.RegularExpressions.Regex.Match(effect.Text, @"trash (\d+) cards? from your hand",
@@ -13255,6 +13287,12 @@ namespace OnePieceTcg.Engine
                     int obN = int.Parse(oppBotM.Groups[1].Value);
                     bool eventsOnly = oppBotM.Groups[2].Value.StartsWith("Event", StringComparison.OrdinalIgnoreCase);
                     bool fromHand = oppBotM.Groups[3].Value.Equals("hand", StringComparison.OrdinalIgnoreCase);
+                    // From their HAND: theirs to choose (the trash is an open area and the
+                    // Events-only variant filters, so both stay on the deterministic path).
+                    if (fromHand && !eventsOnly)
+                        return QueueOpponentSelfDisposal(state, effect,
+                            $"Place {obN} card{(obN == 1 ? "" : "s")} from your hand at the bottom of your deck.",
+                            "place at the bottom of their deck");
                     var oppOb = Player(state, OtherSeat(effect.Seat));
                     var zoneOb = fromHand ? oppOb.Hand : oppOb.Trash;
                     int moved = 0;
@@ -15061,18 +15099,9 @@ namespace OnePieceTcg.Engine
                 if (otM.Success)
                 {
                     int otN = int.Parse(otM.Groups[1].Value);
-                    var oppOt = Player(state, OtherSeat(effect.Seat));
-                    int otDone = 0;
-                    for (int i = 0; i < otN && oppOt.Hand.Count > 0; i++)
-                    {
-                        var oc = oppOt.Hand[oppOt.Hand.Count - 1];
-                        oppOt.Hand.RemoveAt(oppOt.Hand.Count - 1);
-                        oc.Zone = "trash";
-                        oppOt.Trash.Add(oc);
-                        otDone++;
-                    }
-                    Log(state, effect.Seat, $"{sourceName}: opponent trashes {otDone} card(s) from hand.");
-                    return EffectResolution.Resolved;
+                    // Their hand, their choice — see QueueOpponentSelfDisposal.
+                    return QueueOpponentSelfDisposal(state, effect,
+                        $"Trash {otN} card{(otN == 1 ? "" : "s")} from your hand.", "trash");
                 }
             }
 

@@ -36,6 +36,7 @@ namespace OnePieceTcg.Sim
             BotAnswersCounterCost();
             BotAnswersAnOpponentImposedDecision();
             BotChoosesFromTheOpponentsHand();
+            BotChoosesItsOwnDiscard();
             BotAnswersLifeFaceUpCost();
             BotAnswersTheTriggerStep();
             BotStillValuesACostPrefixedCounter();
@@ -148,6 +149,25 @@ namespace OnePieceTcg.Sim
                 "Trash 1 card from your opponent's hand.");
             Check("bot chooses a card from the opponent's (face-down) hand",
                   BotClearsItsDecision(b.St, "north", out string why), why);
+        }
+
+        /// <summary>The 25-card self-disposal class: the bot is now asked WHICH of its own cards to
+        /// give up, where the engine used to decide. Both wordings, since they resolve through
+        /// different handlers and only one had skip enforcement to begin with.</summary>
+        private static void BotChoosesItsOwnDiscard()
+        {
+            foreach (var clause in new[]
+            {
+                "Trash 1 card from your hand.",
+                "Place 1 card from your hand at the bottom of your deck.",
+            })
+            {
+                var b = new Board("north");
+                foreach (var id in new[] { "ST29-004", "ST29-009", "ST01-005" }) b.Hand("north", id);
+                GameEngine.QueueClauseForTest(b.St, "north", b.Character("north", "ST29-010"), "main", clause);
+                Check($"bot chooses its own {clause.Split(' ')[0].ToLowerInvariant()} card",
+                      BotClearsItsDecision(b.St, "north", out string why), why);
+            }
         }
 
         private static void BotAnswersCounterCost()
