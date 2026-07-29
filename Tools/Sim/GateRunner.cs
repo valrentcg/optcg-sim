@@ -63,6 +63,7 @@ namespace OnePieceTcg.Sim
             // it, so a shut gate is indistinguishable there from a card with no effect.
             ("donthreshold",          DonThresholdTest.Run),
             ("onceperturn",           OncePerTurnTest.Run),
+            ("optionalonce",          OptionalOnceSkipTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

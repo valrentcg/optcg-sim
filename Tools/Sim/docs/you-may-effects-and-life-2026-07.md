@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**43 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**44 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -48,6 +48,10 @@ than saying "Use Effect".
   clauses. Runs the first time, refuses a second use in the same turn, reopens next turn. The
   third case matters on its own: without it, a gate that closed *permanently* would still pass,
   quietly turning the card once-per-game.
+- **Saying no** — `optionalonce`: declining a `[Once Per Turn] You may ...` must NOT burn the
+  turn's use, and using it must. This is a *second* implementation of once-per-turn (a deferred
+  `OnceKey` committed only on resolution) alongside ActivateMain's immediate one — two
+  implementations of one rule is the recurring bug class here, so both are now pinned.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
