@@ -38,6 +38,7 @@ namespace OnePieceTcg.Sim
             APaidOrTargetingStepDoesNotRouteToUse();
             CleanedTextIsReadable();
             CircledDonCostsParse();
+            DonRestCostsParseIncludingCompound();
             Console.WriteLine($"costlabel: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -266,6 +267,43 @@ namespace OnePieceTcg.Sim
             Check("a clause with no glyph costs nothing",
                   GameEngine.ParseCircledDonCost("[On Play] Draw 1 card.") == 0,
                   "a DON!! cost was invented for a clause that has none");
+        }
+
+        /// <summary>The DON!!-rest cost drives a dedicated affordance: a glowing active DON!! to
+        /// click, and a Use button GREYED OUT when the player cannot afford it. The UI's own parser
+        /// required the colon to follow immediately, so the compound printings scored 0 — those
+        /// cards kept a live Use button with too few DON!! to pay it.
+        ///
+        /// Both shapes are driven, because the simple one alone passes against exactly the parser
+        /// that was wrong.</summary>
+        private static void DonRestCostsParseIncludingCompound()
+        {
+            int simple = 0, compound = 0, simpleZero = 0, compoundZero = 0;
+            foreach (var def in CardData.Library.Values.Where(d => d != null && !string.IsNullOrEmpty(d.Effect))
+                                                       .GroupBy(d => d.Id).Select(g => g.First()))
+            {
+                foreach (var line in def.Effect.Split((char)10))
+                {
+                    var bare = System.Text.RegularExpressions.Regex.Replace(
+                        line.Trim(), @"^\s*(?:\[[^\]]+\]\s*/?\s*)+", "");
+                    var m = System.Text.RegularExpressions.Regex.Match(
+                        bare, @"^You (?:may|can) rest (\d+) of your DON!! cards?(.*?):",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (!m.Success) continue;
+                    bool isCompound = m.Groups[2].Value.Trim().Length > 0;
+                    int want = int.Parse(m.Groups[1].Value);
+                    int got = GameEngine.ParseDonRestCost(line);
+                    if (isCompound) { compound++; if (got != want) compoundZero++; }
+                    else            { simple++;   if (got != want) simpleZero++; }
+                }
+            }
+            Check($"simple DON!!-rest costs parse ({simple} clauses)",
+                  simple >= 20 && simpleZero == 0,
+                  $"found={simple} wrong={simpleZero}");
+            Check($"COMPOUND DON!!-rest costs parse too ({compound} clauses)",
+                  compound >= 5 && compoundZero == 0,
+                  $"found={compound} wrong={compoundZero} — these lose the DON!! click affordance and "
+                  + "keep a Use button that cannot be paid");
         }
 
         private static string Trim(string s, int n) =>

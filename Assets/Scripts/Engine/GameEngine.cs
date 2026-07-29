@@ -1716,6 +1716,39 @@ namespace OnePieceTcg.Engine
                 || HasPrintedKeywordGrant(state, instance, "Unblockable")
                 || HasKeywordModifier(state, instance, "Unblockable"));
 
+        /// <summary>How many DON!! this clause asks the player to REST as its cost, or 0.
+        ///
+        /// Drives the panel's dedicated DON!! affordance: a glowing active DON!! the player can
+        /// click to pay, and a Use button greyed out when they cannot afford it. The UI's own
+        /// version required the colon to follow immediately — "You may rest 1 of your DON!! cards:"
+        /// — so the 15 COMPOUND printings ("...and trash 1 card from your hand:", "...and this
+        /// Character:") read as 0. Those cards still worked, but fell back to the generic branch:
+        /// no click affordance, and a Use button that stayed enabled with too few DON!! and did
+        /// nothing when pressed. A live control that does nothing is the complaint this whole
+        /// workstream started from.
+        ///
+        /// Matches the rest-DON!! conjunct anywhere inside the cost prefix, so both printings and
+        /// any future ordering of the conjuncts are covered.</summary>
+        public static int ParseDonRestCost(string effectText)
+        {
+            string bare = System.Text.RegularExpressions.Regex.Replace(
+                effectText ?? "", @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
+            var gate = System.Text.RegularExpressions.Regex.Match(
+                bare, @"^You (?:may|can) ([^:]{2,120}):",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            string cost = gate.Success
+                ? gate.Groups[1].Value
+                // The other printing has no "You may": "Rest N of your DON!! cards and you may rest
+                // this Character: <body>".
+                : System.Text.RegularExpressions.Regex.Match(bare, @"^([^:]{2,120}):").Groups[1].Value;
+            if (string.IsNullOrEmpty(cost)) return 0;
+
+            var m = System.Text.RegularExpressions.Regex.Match(
+                cost, @"\brest (\d+) of your DON!! cards?\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return m.Success && int.TryParse(m.Groups[1].Value, out int n) ? n : 0;
+        }
+
         /// <summary>The DON!! cost encoded as circled Unicode digits in an effect text, or 0.
         /// Two series: U+2460-U+2469 (①-⑩) and U+2780-U+2789 (➀-➉). BOTH are load-bearing — the
         /// pool uses the dingbat series for 32 of its 46 circled-cost clauses, so a parser handling

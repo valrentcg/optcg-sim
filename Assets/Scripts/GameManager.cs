@@ -1492,18 +1492,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         int circled = CircledDonCost(pe.Text);
         if (circled > 0) return circled;
 
-        // Some official reprints spell the exact same cost out instead of using a circled glyph
-        // (OP07-019: "You may rest 1 of your DON!! cards:"). Treat both printings identically.
-        string bare = System.Text.RegularExpressions.Regex.Replace(pe.Text ?? "",
-            @"^\s*(\[[^\]]+\]\s*/?\s*)+", "");
-        var explicitCost = System.Text.RegularExpressions.Regex.Match(bare,
-            @"^You (?:may|can) rest (\d+) of your DON!! cards?\s*:",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (!explicitCost.Success)
-            explicitCost = System.Text.RegularExpressions.Regex.Match(bare,
-                @"^Rest (\d+) of your DON!! cards? and you may rest this Character\s*:",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        return explicitCost.Success && int.TryParse(explicitCost.Groups[1].Value, out int n) ? n : 0;
+        // Both printings, simple and compound, via the engine (GameEngine.ParseDonRestCost). This
+        // used to require the colon immediately after "cards", so the 15 compound printings
+        // ("...and trash 1 card from your hand:") read as 0 and lost the DON!! click affordance —
+        // and their Use button stayed enabled with too few DON!! to pay.
+        return GameEngine.ParseDonRestCost(pe.Text);
     }
 
     private bool CanPayPendingDonRestCost(string seat)
