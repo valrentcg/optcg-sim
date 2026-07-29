@@ -32,6 +32,10 @@ namespace OnePieceTcg.Sim
             // A cost that names a COUNT of cards in a zone holding several of them is a choice the
             // player owns. If such a clause resolves straight through, the engine picked for them.
             var autoPicked = new List<(string Id, string Name, string Clause)>();
+            // Declining has to mean something. A "you may" whose Skip still pays the cost or still
+            // runs the body is a prompt in name only, and that is invisible from the Use side.
+            int skipClean = 0;
+            var skipDirty = new List<(string Id, string Name, string Clause)>();
 
             foreach (var def in CardData.Library.Values
                         .Where(c => c != null && !string.IsNullOrEmpty(c.Effect))
@@ -81,6 +85,21 @@ namespace OnePieceTcg.Sim
                             if (choiceShaped) autoPicked.Add((def.Id, def.Name ?? "", clause));
                         }
                         else { silent++; silentCards.Add((def.Id, def.Name ?? "", clause)); }
+
+                        // ---- second pass: the same clause, answered with Skip ----
+                        var sb = new Board();
+                        sb.Populate();
+                        var ssrc = sb.Character("south", def.Id);
+                        string before = sb.Fingerprint();
+                        GameEngine.QueueClauseForTest(sb.St, "south", ssrc, "main", clause);
+                        var spe = sb.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+                        if (spe != null)
+                        {
+                            sb.Apply(new GameCommand
+                            { Type = "passEffect", Seat = "south", EffectId = spe.EffectId });
+                            if (sb.Fingerprint() == before) skipClean++;
+                            else skipDirty.Add((def.Id, def.Name ?? "", clause));
+                        }
                     }
                     catch (Exception) { threw++; }
                 }
@@ -93,6 +112,16 @@ namespace OnePieceTcg.Sim
             if (threw > 0) Console.WriteLine($"  threw                             : {threw}");
 
             Console.WriteLine($"  ...of those, resolved a CHOICE without asking : {autoPicked.Count}");
+            Console.WriteLine($"  Skip left the board untouched     : {skipClean}");
+            Console.WriteLine($"  Skip changed something anyway     : {skipDirty.Count}");
+            if (skipDirty.Count > 0)
+            {
+                Console.WriteLine();
+                Console.WriteLine("  Skip was not honoured:");
+                foreach (var s in skipDirty.Take(25))
+                    Console.WriteLine($"    {s.Id,-10} {Trim(s.Name, 18),-18} {Trim(s.Clause, 110)}");
+                if (skipDirty.Count > 25) Console.WriteLine($"    ... and {skipDirty.Count - 25} more");
+            }
             if (autoPicked.Count > 0)
             {
                 Console.WriteLine();
@@ -162,6 +191,19 @@ namespace OnePieceTcg.Sim
                     S.CostArea.Add(new DonInstance
                     { InstanceId = $"south-cr-don-{serial++}", Rested = i >= 8 });   // 8 active, 2 rested
                 S.DonDeck = 2;
+            }
+
+            /// <summary>Every zone that a cost or a body could plausibly move a card between, plus
+            /// rest state and Life face-up flags. Compared as a whole so the check does not have to
+            /// guess which zone a given clause would have touched.</summary>
+            public string Fingerprint()
+            {
+                string Z(PlayerState p) =>
+                    $"h{p.Hand.Count}/d{p.Deck.Count}/t{p.Trash.Count}/l{p.Life.Count}" +
+                    $"/f{p.Life.Count(x => x.FaceUp)}/c{p.CharacterArea.Count(x => x != null)}" +
+                    $"/r{p.CharacterArea.Count(x => x != null && x.Rested)}" +
+                    $"/don{p.CostArea.Count}/dr{p.CostArea.Count(x => x.Rested)}";
+                return Z(S) + "|" + Z(N);
             }
 
             public CardInstance Character(string seat, string id)

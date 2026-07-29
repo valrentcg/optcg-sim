@@ -141,6 +141,8 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "endtoend":
+        return OnePieceTcg.Sim.EffectEndToEndTest.Run();
     case "playerchoice":
         return OnePieceTcg.Sim.PlayerChoiceTest.Run();
     case "lifemechanics":
