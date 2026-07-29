@@ -68,6 +68,29 @@ than saying "Use Effect".
   exactly N, and a cost ceiling spares a cost-5 body while still taking a cost-1 one.
 - **Bot** — every prompt added here is answerable by the AI; a hung solo game is the failure.
 
+## Do the fixes matter in real games?
+
+Measured, not assumed. Temporary counters on the fixed paths, over 2,160 bot-vs-bot games
+using six META decks (starter decks contain none of the affected cards and report zero):
+
+| path | firings | per game |
+|---|---|---|
+| optional effect queued for a decision | 45,688 | ~21 |
+| **"up to N" rescued from retirement** | **17,330** | **~8** |
+| counter cost-prefix queued | 0 | — |
+| reveal cost handed to the player | 0 | — |
+
+The second row is the one that matters. Before that fix, each of those 17,330 clauses was
+being **retired** — the card did nothing, with a rule citation in the log to make it look
+deliberate. Roughly eight times a game, in decks people actually play.
+
+The two zeros are honest gaps rather than good news: the bots in this harness never played a
+cost-prefixed [Counter] or a reveal cost in 2,160 games, so those fixes are correct by test
+but unmeasured in play. Do not read 0 as "does not happen" — read it as "this harness did
+not reach it".
+
+Instrumentation was reverted; these numbers are a snapshot, not a standing check.
+
 ## Method notes that earned their place
 
 **Negative-control everything.** Every "0 failures" in this document was checked by breaking
