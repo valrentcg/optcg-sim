@@ -131,6 +131,11 @@ namespace OnePieceTcg.Sim
             int faceUpProbe = FaceUpProbe();
 
             SweepRatchet.Reset();
+            // The 21 undriven shapes are deferred elsewhere; this converts that deferral from a
+            // claim into a measurement for its largest population.
+            int donHeal = DonCostHealProbe();
+            SweepRatchet.AtMost("DON!!-cost heal verified (0 = the 21 deferred shapes are unevidenced)",
+                                donHeal == 1 ? 0 : 1, 0);
             SweepRatchet.AtMost("face-up heal verified (0 = the facing check is one-sided)",
                                 faceUpProbe == 1 ? 0 : 1, 0);
             // Guard the guard: no heals driven means no failures, which is not a result.
@@ -148,6 +153,53 @@ namespace OnePieceTcg.Sim
         /// would score a clean zero. OP03-123's wording is the counter-case.
         ///
         /// Returns 1 on success so the ratchet can gate on it.</summary>
+        /// <summary>The 21 shapes the sweep cannot drive are written off as "covered by triggerfield
+        /// / timingsweep" — a BOUNDARY rather than a gap. That is an assumption, and the largest
+        /// population behind it is the DON!!-cost heal:
+        ///
+        ///     EB03-034   "DON!! −1: Add up to 1 card from the top of your deck to the top of your
+        ///                 Life cards."
+        ///
+        /// A cost the fixture cannot pay and a heal that is silently broken produce the SAME
+        /// reading — "did not heal" — so the deferral cannot be trusted until one is driven from a
+        /// board that can pay. Returns 1 when the DON!!-paid heal lands correctly.</summary>
+        private static int DonCostHealProbe()
+        {
+            var b = new Board(lifeCards: 2, trashCards: 0);
+            int life0 = b.S.Life.Count, deck0 = b.S.Deck.Count, don0 = b.S.CostArea.Count;
+
+            // A DON!!-minus cost does NOT auto-pay: the engine prompts "Click 1 of your DON!! to
+            // return" and waits, which is the decision the brief asks for. The probe has to answer
+            // it by naming a DON!! card, exactly as a click would. Not answering it reads as "the
+            // heal is broken" when the engine is behaving correctly — the same false negative that
+            // makes the 21 deferred shapes look undriveable in the first place.
+            b.Drive("DON!! −1: Add up to 1 card from the top of your deck to the top of your Life cards.");
+            b.AnswerDonCost();
+
+            int gained = b.S.Life.Count - life0, fromDeck = deck0 - b.S.Deck.Count;
+            if (Environment.GetEnvironmentVariable("OPT_DIAG") == "1")
+            {
+                Console.WriteLine($"      [don-heal] life {life0}->{b.S.Life.Count} deck {deck0}->{b.S.Deck.Count}");
+                foreach (var e in b.St.EventLog.Skip(Math.Max(0, b.St.EventLog.Count - 8)))
+                    Console.WriteLine("      log: " + e.Message);
+            }
+            int donPaid = don0 - b.S.CostArea.Count;
+            // The cost must actually be PAID. Checking only that the heal happened would pass an
+            // engine that grants the effect for free — the mirror of the paidfornothing failure,
+            // and just as invisible in a Life count.
+            if (gained != 1 || fromDeck != 1 || donPaid != 1)
+            {
+                Console.WriteLine($"  DON!!-cost heal probe: life +{gained} (want 1), deck -{fromDeck} (want 1), "
+                                  + $"DON!! returned {donPaid} (want 1) "
+                                  + "— the deferral of the 21 undriven shapes is NOT yet evidence");
+                return 0;
+            }
+            // Face-down, like every other heal: this path must not be a facing exception.
+            bool down = !b.S.Life[b.S.Life.Count - 1].FaceUp;
+            if (!down) Console.WriteLine("  DON!!-cost heal probe: landed FACE-UP — leaks a card via a different code path");
+            return down ? 1 : 0;
+        }
+
         private static int FaceUpProbe()
         {
             var b = new Board(lifeCards: 2, trashCards: 0);
@@ -316,6 +368,22 @@ namespace OnePieceTcg.Sim
                 StartTopLifeId = S.Life.Count > 0 ? S.Life[S.Life.Count - 1].InstanceId : null;
                 foreach (var x in S.Life) StartLifeIds.Add(x.InstanceId);
                 foreach (var x in N.Life) StartNorthLifeIds.Add(x.InstanceId);
+            }
+
+            /// <summary>Answer an outstanding "click a DON!! to return" cost by naming one, then
+            /// drain whatever the paid effect queues next.</summary>
+            public void AnswerDonCost()
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    var pe = St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+                    if (pe == null) break;
+                    var don = S.CostArea.FirstOrDefault(d => d != null);
+                    int before = St.EventLog.Count;
+                    St = GameEngine.ApplyCommand(St, new GameCommand
+                    { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = don?.InstanceId });
+                    if (St.EventLog.Count == before) break;
+                }
             }
 
             public void Drive(string clause)
