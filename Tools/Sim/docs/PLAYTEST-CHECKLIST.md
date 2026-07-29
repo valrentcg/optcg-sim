@@ -101,6 +101,7 @@ of suspects:
 | The five engine fields added this workstream (`LifeToDeckTop`, `LifeOwnerSeat`, `EligibleInstanceIds`, `DeclineContinuation`, `DeclineSeat`) | **Engine-internal by design.** No client file references any of them, and none needs to: the engine consumes them itself at confirm time (`GameEngine.cs:3825`) |
 | Glow vs resolver on frozen picks | **Consistent.** The client derives glow from `IsValidEffectTarget`, which itself honours `EligibleInstanceIds` — so the two cannot disagree on this axis |
 | Life re-arrange confirm command | **Correctly routed.** `GameManager.cs:10055` sends `deckLookConfirmOrder` for a rearrange and `deckLookScryConfirm` only for a scry |
+| §1.1 ownership gating, all four new opponent-facing prompts | **Correct.** Both the pending-effect panel (`GameManager.cs:9351`) and the deck-look panel (`9111`, `4236`) test `(aiSeat != null && seat == aiSeat) \|\| (isNetworked && seat != localSeat)` — the both-branch form, so solo-vs-AI is covered and not just PvP. This is the exact bug class recorded in my notes, in its fixed state |
 | Life re-arrange panel affordance | **Present.** The `rearrange` step is drag-to-reorder plus an explicit Confirm button, not a confirm-only dialog |
 
 So for §1.2, the useful question is not "does confirming work" but "does the panel appear, over the
