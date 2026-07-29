@@ -80,6 +80,7 @@ namespace OnePieceTcg.Sim
             ("lifeadvanced",          LifeAdvancedTest.Run),
             ("lifedamage",            LifeDamageTest.Run),
             ("lifedamageedge",        LifeDamageEdgeTest.Run),
+            ("lifeboundary",          LifeBoundaryTest.Run),
             ("drawoutcome",           DrawOutcomeSweep.Run),
 
             // --- tooling hygiene ----------------------------------------------------
