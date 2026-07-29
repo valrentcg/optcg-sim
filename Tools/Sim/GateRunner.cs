@@ -110,6 +110,9 @@ namespace OnePieceTcg.Sim
             // The only fixture here that builds a Character at 0 POWER — a state reachable only
             // after a -power effect lands, and the one the reduce-then-remove archetype is about.
             ("zeropowerko",           ZeroPowerKoTest.Run),
+            // "heal" is named in the brief every time; its 63 distinct wordings had never been
+            // enumerated. Checks source zone, top-of-Life position, and FACING both ways.
+            ("healsweep",             HealSweep.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

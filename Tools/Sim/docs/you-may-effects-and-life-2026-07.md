@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**60 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**61 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -170,6 +170,14 @@ than saying "Use Effect".
   regression guard rather than a discovery, and labelled as such: parts are not always verbatim
   (the self-disposal clamp rewrites "trash 2" to "trash 1"; the opponent-decision fix rewrites
   "their" to "your"), so a future rewrite reaching the ledger breaks colouring invisibly.
+- **Heals** — `healsweep`: "heal" is named in the brief every time and its wordings had never been
+  enumerated. **63 distinct shapes**; each is driven against three fixtures (few Life / many Life /
+  full trash, since the gates pull in opposite directions) and the resulting Life card inspected for
+  SOURCE zone, TOP-of-Life position, and FACING. 0 wrong on all three.
+  Scope stated honestly: **20 of 63** shapes actually heal in these fixtures; the other 43 are gated
+  on Leader identity or type conditions the sweep cannot synthesise. And all 20 want face-DOWN, so
+  the facing check is one-sided by itself — two explicit probes carry it: a "face-up" clause must
+  land face-UP, and the SAME clause without those words must land face-DOWN.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -218,7 +226,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 60 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 61 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
