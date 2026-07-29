@@ -1533,15 +1533,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return cost > 0 && player.CostArea.Count(d => !d.Rested) >= cost ? cost : 0;
     }
 
-    private static int CircledDonCost(string text)
-    {
-        foreach (char c in text ?? "")
-        {
-            if (c >= '\u2460' && c <= '\u2469') return (c - '\u2460') + 1;
-            if (c >= '\u2780' && c <= '\u2789') return (c - '\u2780') + 1;
-        }
-        return 0;
-    }
+    // Was a character-for-character duplicate of the engine's parser. One rule, one copy: if a new
+    // set introduces another circled-digit series, there is now a single place to teach it.
+    private static int CircledDonCost(string text) => GameEngine.ParseCircledDonCost(text);
 
     // Return a specific ATTACHED DON!! to the deck as one step of a DON!! −N payment (the engine
     // detaches it — attached DON!! on your field are valid targets for the return).

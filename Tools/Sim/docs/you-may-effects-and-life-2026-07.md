@@ -60,6 +60,11 @@ panel shows a target prompt only when the effect is NOT an unpaid cost prefix, a
 wordings computed for a branch the UI never takes. Filtering to the actual display condition left
 5 genuine ones.
 
+`costlabel` also covers the circled DON!! cost glyph (`GameEngine.ParseCircledDonCost`), which the
+UI held a character-for-character duplicate of. **Both** Unicode series are load-bearing: the pool
+uses the dingbat run (➀-➉) for 32 of its 46 circled-cost clauses, so a parser handling only ①-⑩
+reads those costs as free. Deleting one series reddens the check with 32.
+
 `costlabel` also drives the panel's ROUTING predicate (`GameEngine.IsUnpaidCostPrefix`), moved out
 of GameManager for the same reason: an unpaid cost prefix must route to the Use button, not to a
 board prompt. That is the predicate behind defect #1, and inline in the UI its anchored `^You may`

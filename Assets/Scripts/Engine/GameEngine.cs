@@ -1716,11 +1716,18 @@ namespace OnePieceTcg.Engine
                 || HasPrintedKeywordGrant(state, instance, "Unblockable")
                 || HasKeywordModifier(state, instance, "Unblockable"));
 
-        // Extract the DON!! cost encoded as circled Unicode digits in any effect text.
-        // Two series: U+2460-U+2469 (①-⑩) and U+2780-U+2789 (➀-➉).
-        private static int ParseCircledDonCost(string text)
+        /// <summary>The DON!! cost encoded as circled Unicode digits in an effect text, or 0.
+        /// Two series: U+2460-U+2469 (①-⑩) and U+2780-U+2789 (➀-➉). BOTH are load-bearing — the
+        /// pool uses the dingbat series for 32 of its 46 circled-cost clauses, so a parser handling
+        /// only one reads those costs as free.
+        ///
+        /// Public because the UI had a character-for-character IDENTICAL copy. They agreed, but two
+        /// copies of one rule is how this codebase produces defects: the same duplication between
+        /// the button label and the routing predicate left OP01-031 unusable, because one copy
+        /// learned "You can" and the other did not.</summary>
+        public static int ParseCircledDonCost(string text)
         {
-            foreach (char c in text)
+            foreach (char c in text ?? "")
             {
                 if (c >= '①' && c <= '⑩') return (c - '①') + 1;
                 if (c >= '➀' && c <= '➉') return (c - '➀') + 1;

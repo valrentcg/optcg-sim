@@ -37,6 +37,7 @@ namespace OnePieceTcg.Sim
             EveryCostPrefixRoutesToTheUseButton();
             APaidOrTargetingStepDoesNotRouteToUse();
             CleanedTextIsReadable();
+            CircledDonCostsParse();
             Console.WriteLine($"costlabel: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -227,6 +228,44 @@ namespace OnePieceTcg.Sim
             Check($"cleaned clause text stays readable across {total} clauses",
                   emptied == 0 && taggy == 0 && reminder == 0 && doubled == 0,
                   $"emptied={emptied} leadingTag={taggy} reminderLeft={reminder} doubleSpace={doubled}");
+        }
+
+        /// <summary>The circled DON!! cost glyph — the cost the player is being asked to pay before
+        /// an [Activate: Main] ability will fire. The UI held a character-for-character duplicate of
+        /// the engine's parser; they agreed, but the same duplication between the button label and
+        /// the routing predicate is what left OP01-031 unusable, so there is now one copy.
+        ///
+        /// Both Unicode series are asserted, since a parser that understood only one would still
+        /// look correct against whichever series the pool happens to use today.</summary>
+        private static void CircledDonCostsParse()
+        {
+            // Both series, spelled by codepoint so the file itself carries no exotic glyph.
+            int seriesA = GameEngine.ParseCircledDonCost("cost " + (char)0x2461 + " here");   // circled 2
+            int seriesB = GameEngine.ParseCircledDonCost("cost " + (char)0x2782 + " here");   // dingbat 3
+            Check("both circled-digit series parse to the right number",
+                  seriesA == 2 && seriesB == 3,
+                  $"U+2461 -> {seriesA} (want 2), U+2782 -> {seriesB} (want 3)");
+
+            int parsed = 0, zero = 0;
+            foreach (var def in CardData.Library.Values.Where(d => d != null && !string.IsNullOrEmpty(d.Effect))
+                                                       .GroupBy(d => d.Id).Select(g => g.First()))
+            {
+                foreach (var line in def.Effect.Split((char)10))
+                {
+                    bool hasGlyph = line.Any(ch => (ch >= (char)0x2460 && ch <= (char)0x2469)
+                                                || (ch >= (char)0x2780 && ch <= (char)0x2789));
+                    if (!hasGlyph) continue;
+                    parsed++;
+                    if (GameEngine.ParseCircledDonCost(line) <= 0) zero++;
+                }
+            }
+            Check($"every clause carrying a circled glyph yields a cost ({parsed} clauses)",
+                  parsed >= 20 && zero == 0,
+                  $"found={parsed} parsedToZero={zero} — a clause showing a DON!! cost the gate reads "
+                  + "as free, or a detector that has gone blind");
+            Check("a clause with no glyph costs nothing",
+                  GameEngine.ParseCircledDonCost("[On Play] Draw 1 card.") == 0,
+                  "a DON!! cost was invented for a clause that has none");
         }
 
         private static string Trim(string s, int n) =>
