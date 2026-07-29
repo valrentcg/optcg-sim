@@ -34,7 +34,7 @@ namespace OnePieceTcg.Sim
         /// <summary>Held line for the softer signal. 5 options are inert in THIS fixture because it
         /// cannot supply their targets or preconditions; that is not 5 broken cards. Lower it when
         /// one is genuinely fixed; never raise it to make a run pass.</summary>
-        private const int OneInertBaseline = 5;
+        private const int OneInertBaseline = 4;
 
         public static int Run()
         {
@@ -141,7 +141,11 @@ namespace OnePieceTcg.Sim
                   .Append(string.Join(",", p.Trash.Select(x => x.CardId))).Append('|')
                   .Append(p.CostArea.Count).Append(',').Append(p.CostArea.Count(d => d.Rested)).Append('|');
                 foreach (var c in p.CharacterArea)
-                    sb.Append(c == null ? "-" : c.CardId + ":" + (c.Rested ? "R" : "A") + ":" + GameEngine.GetPower(st, c)).Append(';');
+                    // COST too, not just power. EB02-051's second option is "give up to 1 of your
+                    // opponent's Characters -4 cost", which a power-only fingerprint cannot see —
+                    // it reported a working option as inert.
+                    sb.Append(c == null ? "-" : c.CardId + ":" + (c.Rested ? "R" : "A")
+                              + ":" + GameEngine.GetPower(st, c) + ":" + GameEngine.GetCost(st, c)).Append(';');
                 sb.Append("||");
             }
             return sb.ToString();

@@ -32,18 +32,18 @@ namespace OnePieceTcg.Sim
     {
         /// <summary>A HELD LINE, not a defect count — and now MEASURED to be so rather than argued.
         /// The companion check reports how many of these moved the board anyway: **0**. Every one of
-        /// the 76 leaves both branches identical to an untouched board, which is exactly what an
+        /// the 75 leaves both branches identical to an untouched board, which is exactly what an
         /// unpayable cost should do. The previous version of this comment asserted that from
-        /// sampling; the sweep now proves it for all 76.
+        /// sampling; the sweep now proves it for all 75.
         ///
-        /// These 76 are dominated by the fixture not being
+        /// These 75 are dominated by the fixture not being
         /// the deck the card was designed for — a cost naming a specific card ([Silvers Rayleigh]),
         /// a trash of 7+, a board state this sweep does not synthesise. Four passes of fixture work
         /// took it 111 -> 108 -> 90 -> 76 and each pass removed noise, not defects. The value is the
         /// RATCHET: 421 clauses demonstrably change the board when used, and if a future change
         /// makes any of them inert, this grows and the gate fails. Lower it when a real one is
         /// fixed; never raise it to make a run pass.</summary>
-        private const int Baseline = 76;
+        private const int Baseline = 75;
 
         public static int Run()
         {
@@ -138,8 +138,11 @@ namespace OnePieceTcg.Sim
                   .Append(p.CostArea.Count).Append(',').Append(p.DonDeck).Append(',')
                   .Append(p.CostArea.Count(d => d.Rested)).Append('|');
                 foreach (var c in p.CharacterArea)
+                    // COST as well as power: a "-N cost" effect is invisible to a power-only
+                    // fingerprint and reads as "using the effect did nothing".
                     sb.Append(c == null ? "-" : c.CardId + ":" + (c.Rested ? "R" : "A")
-                              + ":" + GameEngine.GetPower(st, c) + ":" + c.AttachedDonIds.Count).Append(';');
+                              + ":" + GameEngine.GetPower(st, c) + ":" + GameEngine.GetCost(st, c)
+                              + ":" + c.AttachedDonIds.Count).Append(';');
                 sb.Append('|').Append(p.Leader == null ? "-" : GameEngine.GetPower(st, p.Leader).ToString());
                 foreach (var c in p.Life) sb.Append(c.FaceUp ? 'U' : 'd');
                 sb.Append("||");

@@ -200,19 +200,21 @@ than saying "Use Effect".
 - **Use actually does something** — `usevsskip`: the brief's second half as a DIFFERENTIAL.
   `paidfornothing` asks whether the engine gave something back, which a log line satisfies; this
   runs each cost-prefixed clause **twice from an identical board**, once pressing Use and once Skip,
-  and requires the two states to differ. **497 clauses driven, 421 demonstrably change the board.**
-  Baseline is **76, not 0** — that residual is fixture mismatch, not broken cards: a cost wanting a
+  and requires the two states to differ. **497 clauses driven, 422 demonstrably change the board.**
+  Baseline is **75, not 0** — that residual is fixture mismatch, not broken cards: a cost wanting a
   `{Navy}` card in hand is correctly inert when the hand has none, and "Use == Skip" is then the
-  right answer. Four passes of fixture synthesis took it 111 → 108 → 90 → 76 **without changing a
+  right answer. Four passes of fixture synthesis took it 111 → 108 → 90 → 76 → 75 **without changing a
   line of engine code**, which is what shows the residual is measurement. Its value is the ratchet.
-  A second check settles the interpretation instead of arguing it: of those 76, how many moved the
-  board *anyway*? **0** — all 76 leave both branches identical to an untouched board, i.e. the cost
+  A second check settles the interpretation instead of arguing it: of those 75, how many moved the
+  board *anyway*? **0** — all 75 leave both branches identical to an untouched board, i.e. the cost
   was simply unpayable. Making Skip resolve the effect reports 155, so the check can fail.
 - **Choices are real choices** — `choicediff`: the second decision type, checked the way
   `usevsskip` checks the first. Resolves option A and option B from identical boards and requires
   them to differ; **0** produce the same board. Separates three failures because they need different
   fixes — neither option acts, exactly one acts, both act identically. It found the EB01-052 defect
-  above on its first run.
+  above on its first run. Triaging the "one option inert" rows then found a defect in the
+  INSTRUMENT: the fingerprint recorded power but not COST, so EB02-051's "give −4 cost" option read
+  as doing nothing. Both differentials now record cost.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
