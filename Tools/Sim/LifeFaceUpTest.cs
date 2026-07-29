@@ -37,6 +37,8 @@ namespace OnePieceTcg.Sim
             ReplacementUnavailableWhenTopIsFaceUp();
             ReplacementFiresWhenTopIsFaceDown();
             WyperQueuesWithItsCostPrefixIntact();
+            RealPlayKeepsTheCostPrefix("OP15-114", "Wyper");
+            RealPlayKeepsTheCostPrefix("OP15-101", "Kalgara");
             Console.WriteLine($"lifefaceup: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -115,9 +117,30 @@ namespace OnePieceTcg.Sim
                 "Give all of your opponent's Characters -2000 power during this turn.");
             var pe = b.St.PendingEffects.FirstOrDefault();
             bool prefixed = pe != null && System.Text.RegularExpressions.Regex.IsMatch(
-                pe.Text ?? "", @"^You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                pe.Text ?? "", @"^(?:\[[^\]]+\]\s*/?\s*)*You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             Check("Wyper's queued effect keeps its 'You may <cost>:' prefix", prefixed,
                   pe == null ? "nothing was queued at all" : "text was: " + pe.Text);
+        }
+
+        /// <summary>The previous check hand-fed the clause text and then asserted the text survived,
+        /// which tests nothing. This plays the card for real and reads whatever the engine actually
+        /// queued - the only thing that tells us the UI check will fire in game.</summary>
+        private static void RealPlayKeepsTheCostPrefix(string cardId, string label)
+        {
+            var b = new Board(); b.Life("south", 6);
+            var hand = b.Hand("south", cardId);
+            b.Don("south", 10);
+            b.Character("north", "OP15-040");
+            // playCard reads InstanceId, not Target. Passing Target silently played nothing and
+            // the test read that as "the engine queues no effect" - a fixture fault, not a finding.
+            b.Apply(new GameCommand { Type = "playCard", Seat = "south", InstanceId = hand.InstanceId, SlotIndex = 0 });
+            if (b.S.CharacterArea.All(x => x == null || x.CardId != cardId))
+            { Check($"{label} ({cardId}) real play", false, "fixture: the card never reached the board"); return; }
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+            bool prefixed = pe != null && System.Text.RegularExpressions.Regex.IsMatch(
+                pe.Text ?? "", @"^(?:\[[^\]]+\]\s*/?\s*)*You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            Check($"{label} ({cardId}) queues with its cost prefix on a REAL play", prefixed,
+                  pe == null ? "no pending effect was queued at all" : "queued text: " + pe.Text);
         }
 
         private sealed class Board
@@ -147,6 +170,24 @@ namespace OnePieceTcg.Sim
                 p.Life.Clear();
                 for (int i = 0; i < n; i++) p.Life.Add(Card("ST01-005", seat, "life"));
             }
+
+            public CardInstance Hand(string seat, string id)
+            {
+                var p = seat == "south" ? S : N;
+                var c = Card(id, seat, "hand");
+                p.Hand.Add(c);
+                return c;
+            }
+
+            public void Don(string seat, int count)
+            {
+                var p = seat == "south" ? S : N;
+                for (int i = 0; i < count; i++)
+                    p.CostArea.Add(new DonInstance { InstanceId = $"{seat}-lf-don-{serial++}", Rested = false });
+                p.DonDeck = Math.Max(0, p.DonDeck - count);
+            }
+
+            public void Apply(GameCommand c) => St = GameEngine.ApplyCommand(St, c);
 
             public CardInstance Character(string seat, string id)
             {

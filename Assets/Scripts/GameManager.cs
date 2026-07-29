@@ -2150,6 +2150,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // dragged GameObject as already-destroyed and silently skips calling OnEndDrag at all -
         // so isDraggingHandCard would otherwise get stuck true forever, suppressing every card's
         // hover preview. A full Render() means no drag can still legitimately be in progress.
+        if (isDraggingHandCard) HideDragBeams();
         isDraggingHandCard = false;
         if (state == null) return;
 
@@ -2899,7 +2900,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     // deliberately replaced by this diff so opponent and effect-driven plays burn too).
                     var evOwner = state.Players.TryGetValue(kv.Value.owner, out var evP) ? evP : null;
                     var evInst = evOwner?.Trash.FirstOrDefault(c => c != null && c.InstanceId == kv.Key);
-                    if (evInst != null)
+                    // ...and it has to actually BE an Event. ActivatedEventIds only says the card was
+                    // played rather than discarded to pay a cost, which is also true of a Character
+                    // spent from hand as a Counter — those were burning too. The burn is the Event/
+                    // Counter-card flourish; a Character paying Counter power is not one.
+                    var evDef = evInst != null ? CardData.GetCard(evInst.CardId) : null;
+                    bool isEventCard = evDef != null
+                        && string.Equals(evDef.Type, "event", System.StringComparison.OrdinalIgnoreCase);
+                    if (evInst != null && isEventCard)
                     {
                         burnedThisRender.Add(kv.Key);
                         BeginBurnToTrash(evInst, kv.Value.owner,
@@ -7709,6 +7717,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     /// from OnDrag, which only fires while the pointer MOVES, so any "not drawn recently" rule
     /// retires a perfectly live arrow the moment the player holds still — which is exactly what a
     /// frame-stamped sweep did here.</summary>
+    /// <summary>End every beam a DRAG owns. The lost-OnEndDrag path described in Render() strands
+    /// these: HideBeam is called from OnEndDrag, so playing a Character - which destroys the dragged
+    /// object mid-drop - skipped it and left the green "valid target" arrow on screen indefinitely.
+    /// Only ever called from that self-heal, where no drag can legitimately still be running, so the
+    /// board arrows (battle, hover) are deliberately left alone.</summary>
+    private void HideDragBeams()
+    {
+        HideBeam("Drag Arrow");
+        HideBeam("Attack Drag Arrow");
+    }
+
     private void HideBeam(string key)
     {
         if (beams.TryGetValue(key, out var beam) && beam != null && beam.IsShowing) beam.End();
@@ -9382,7 +9401,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Give all of your opponent's Characters -2000") showed only Skip because the opponent
         // had Characters for the give-all half. The body does its own targeting on the next step.
         bool unpaidCostPrefix = System.Text.RegularExpressions.Regex.IsMatch(
-            effect.Text ?? "", @"^You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
+            effect.Text ?? "",
+            // Queued text keeps its timing tags - "[On Play] You may turn 1 card..." - so an
+            // anchored ^You may never matched and this check was dead code. Skip any leading tags.
+            @"^(?:\[[^\]]+\]\s*/?\s*)*You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
             && effect.SelectionsRemaining <= 0;
         if (!unpaidCostPrefix && (EffectHasValidTarget(effect) || donGive))
         {
