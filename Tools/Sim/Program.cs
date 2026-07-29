@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "opponentpicks":
+        return OnePieceTcg.Sim.OpponentPicksTest.Run();
     case "opponentbranch":
         return OnePieceTcg.Sim.OpponentBranchTest.Run();
     case "opponentdecides":

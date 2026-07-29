@@ -35,6 +35,7 @@ namespace OnePieceTcg.Sim
             BotAnswersRevealCost();
             BotAnswersCounterCost();
             BotAnswersAnOpponentImposedDecision();
+            BotChoosesFromTheOpponentsHand();
             BotAnswersLifeFaceUpCost();
             BotAnswersTheTriggerStep();
             BotStillValuesACostPrefixedCounter();
@@ -133,6 +134,20 @@ namespace OnePieceTcg.Sim
                 Check($"bot answers an opponent-imposed decision ({clause.Split(' ')[0].ToLowerInvariant()})",
                       BotClearsItsDecision(b.St, "north", out string why), why);
             }
+        }
+
+        /// <summary>OP01-038's choosing half: the bot is asked to pick a card out of the OTHER
+        /// player's hand. Blind by the rules (3-4-2, 8-4-4-2), which makes it the one prompt where a
+        /// bot cannot evaluate the options at all — so it must have an answer that does not depend
+        /// on knowing them.</summary>
+        private static void BotChoosesFromTheOpponentsHand()
+        {
+            var b = new Board("north");
+            foreach (var id in new[] { "ST29-004", "ST29-009", "ST01-005" }) b.Hand("south", id);
+            GameEngine.QueueClauseForTest(b.St, "north", b.Character("north", "ST29-010"), "main",
+                "Trash 1 card from your opponent's hand.");
+            Check("bot chooses a card from the opponent's (face-down) hand",
+                  BotClearsItsDecision(b.St, "north", out string why), why);
         }
 
         private static void BotAnswersCounterCost()

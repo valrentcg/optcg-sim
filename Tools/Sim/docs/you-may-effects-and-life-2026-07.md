@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**46 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**47 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -33,6 +33,7 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 10 | Protection discards took `Hand[Count-1]` — the engine chose which card you paid with | 6 cards |
 | 11 | **"Your opponent may X. If they do not, Y" never asked the opponent** — the clause fell through to whichever generic handler matched Y, so the penalty fired unconditionally and the "may" was inert, always in the controller's favour | OP05-099, OP15-059 |
 | 12 | "Return N of your **active** DON!! cards to your DON!! deck" existed only as a *cost*; as an effect body it resolved to nothing | same 2 cards + any future body use |
+| 13 | **"Your opponent chooses 1 card from your hand" auto-picked** `Hand[Count-1]` and logged "opponent chose …" — the engine deciding on a player's behalf, same shape as #10 | OP01-038 |
 
 Also: `"You may"` protections now prompt unconditionally (a decision, not a setting — the
 per-seat flag and its UI toggle were deleted), and the Use button **names the cost** rather
@@ -64,6 +65,12 @@ than saying "Use Effect".
   taking the penalty is the card doing double duty; taking neither means the controller rested a
   Character for nothing. Also pins the active/rested qualifier on the DON!! return, which the
   shared DON!!-paying helper gets backwards by design (it prefers rested).
+- **They pick, you pay** — `opponentpicks`: OP01-038's opponent chooses, but the card leaves the
+  CONTROLLER's hand. Now a real pick on the chooser's seat, routed into the existing
+  click-a-card-in-the-opponent's-hand path rather than a second implementation of it. Blind by
+  rule (3-4-2 hand is a secret area; 8-4-4-2 no guaranteed information), which costs nothing to
+  honour since the UI already renders the opponent's hand as face-down holders by index.
+  Mandatory: skipping still costs the controller a card.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -94,7 +101,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 46 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 47 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

@@ -6796,6 +6796,22 @@ namespace OnePieceTcg.Engine
                     if (!state.PendingEffects.Contains(effect)) return;   // fully paid → done
                 }
             }
+            // The choosing half of "Your opponent chooses N card from your hand" (OP01-038), now a
+            // real pick on the chooser's seat. It is MANDATORY — they choose WHICH card, never
+            // WHETHER — so declining must not hand the controller their card back. Falling through
+            // to the deterministic last-card pick keeps the outcome the card promises while leaving
+            // the choice genuinely available to anyone who wants it.
+            else if (System.Text.RegularExpressions.Regex.IsMatch(effect.Text ?? "",
+                        @"^\s*Trash \d+ cards? from your opponent's hand\.?\s*$",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                var ohVictim = Player(state, OtherSeat(seat));
+                int ohGuard = 0;
+                while (state.PendingEffects.Contains(effect) && ohVictim.Hand.Count > 0 && ohGuard++ < 12)
+                    ResolveEffect(state, seat, effect.EffectId,
+                                  ohVictim.Hand[ohVictim.Hand.Count - 1].InstanceId);
+                if (!state.PendingEffects.Contains(effect)) return;
+            }
             // Same class for a MANDATORY self-CHARACTER-removal rider: "K.O./trash/return N of your [filter]
             // Character(s)[…]." (OP04-079 Orlumbus "Then, K.O. 1 of your {Dressrosa} type Characters." — the
             // self-sacrifice DOWNSIDE of a strong benefit). PassEffect would drop it unpaid → the player keeps
@@ -13348,18 +13364,37 @@ namespace OnePieceTcg.Engine
                     return EffectResolution.WaitingForTarget;
                 }
 
-                // "Your opponent chooses N card from your hand; trash that card." — auto (last).
+                // "Your opponent chooses N card from your hand; trash that card." (OP01-038)
+                // The OPPONENT makes this choice; the card leaves the CONTROLLER's hand. It used to
+                // take Hand[Count-1] and log "opponent chose …" — the engine deciding on a player's
+                // behalf, the same shape as the protection-discard defect fixed earlier here.
+                //
+                // Hand it over as a real pick by queuing it on THEIR seat, phrased from their side,
+                // where the clause above already knows how to wait for clicks on the other player's
+                // hand. Reusing that path rather than adding a second one is deliberate: two
+                // implementations of "click a card in the opponent's hand" is exactly the drift this
+                // engine keeps producing.
+                //
+                // The choice is BLIND and must stay so — rule 3-4-2 makes the hand a secret area and
+                // 8-4-4-2 says a chooser gets no guaranteed information from one. That falls out for
+                // free: the UI already renders the opponent's hand as face-down holders by index, so
+                // the pick is positional and reveals nothing.
                 if (ContainsAll(text, "opponent chooses") && ContainsAll(text, "from your hand")
                     && (ContainsAll(text, "trash that card") || ContainsAll(text, "trashes it")))
                 {
-                    if (owner.Hand.Count > 0)
-                    {
-                        var hc2 = owner.Hand[owner.Hand.Count - 1];
-                        owner.Hand.RemoveAt(owner.Hand.Count - 1);
-                        hc2.Zone = "trash";
-                        owner.Trash.Add(hc2);
-                        Log(state, effect.Seat, $"{sourceName}: opponent chose {NameId(GetCard(hc2))} — trashed from your hand.");
-                    }
+                    if (owner.Hand.Count == 0) return EffectResolution.Resolved;
+                    var ocSrc = FindCardInstance(state, effect.SourceInstanceId);
+                    if (ocSrc == null) return EffectResolution.Resolved;
+                    var ocNm = System.Text.RegularExpressions.Regex.Match(text,
+                        @"opponent chooses (\d+) cards? from your hand",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    int ocWant = ocNm.Success ? int.Parse(ocNm.Groups[1].Value) : 1;
+                    string ocChooser = OtherSeat(effect.Seat);
+                    QueueEffect(state, ocChooser, ocSrc, effect.Timing,
+                                $"Trash {ocWant} card from your opponent's hand.", false,
+                                EffectScope.Instant, EffectTargetZone.Hand);
+                    Log(state, effect.Seat,
+                        $"{sourceName}: {Player(state, ocChooser).Name} chooses {ocWant} card from {owner.Name}'s hand.");
                     return EffectResolution.Resolved;
                 }
 
