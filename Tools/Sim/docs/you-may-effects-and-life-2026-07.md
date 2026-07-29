@@ -246,6 +246,10 @@ than saying "Use Effect".
   the victim and checks that card: the targeted one leaves, the bystander stays, the drop is
   exactly N, and a cost ceiling spares a cost-5 body while still taking a cost-1 one.
 - **Bot** — every prompt added here is answerable by the AI; a hung solo game is the failure.
+  That now includes the two LOOK states added by this workstream (the opponent-Life reorder and the
+  rearrange that sends a card to the deck top). Looks reach the bot through a different branch from
+  pending effects, so the existing helper could not see them — a look the AI never closes is not a
+  bad play, it is a game that sits there. Making a Life look unconfirmable reddens both.
 
 ## Audit of the fixes themselves
 

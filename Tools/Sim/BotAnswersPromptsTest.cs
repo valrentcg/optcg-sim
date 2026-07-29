@@ -37,6 +37,7 @@ namespace OnePieceTcg.Sim
             BotAnswersAnOpponentImposedDecision();
             BotChoosesFromTheOpponentsHand();
             BotChoosesItsOwnDiscard();
+            BotClosesTheNewLifeLooks();
             BotAnswersLifeFaceUpCost();
             BotAnswersTheTriggerStep();
             BotStillValuesACostPrefixedCounter();
@@ -167,6 +168,49 @@ namespace OnePieceTcg.Sim
                 GameEngine.QueueClauseForTest(b.St, "north", b.Character("north", "ST29-010"), "main", clause);
                 Check($"bot chooses its own {clause.Split(' ')[0].ToLowerInvariant()} card",
                       BotClearsItsDecision(b.St, "north", out string why), why);
+            }
+        }
+
+        /// <summary>The two LOOK states added in this workstream: the opponent-Life reorder
+        /// (EB01-052) and the rearrange that also sends a card to the deck top (ST13-016).
+        ///
+        /// A look the bot cannot close is the worst failure available here — not a wrong play, a
+        /// HUNG solo game, with the panel waiting on an answer that never comes. Both are new
+        /// engine states, so nothing previously exercised them with an AI in the seat.
+        ///
+        /// The bot drives looks through a different branch from pending effects
+        /// (DecideDeckLook, gated on DeckLook.Seat == seat), so BotClearsItsDecision — which watches
+        /// PendingEffects — cannot see them. This waits on the LOOK instead.</summary>
+        private static void BotClosesTheNewLifeLooks()
+        {
+            foreach (var (label, clause) in new[]
+            {
+                ("opponent-Life reorder",
+                 "Look at all of your opponent's Life cards and place them back in their Life area in any order."),
+                ("rearrange with a card to the deck top",
+                 "Look at all your Life cards; place 1 at the top of your deck and place the rest back in your Life area in any order."),
+            })
+            {
+                var b = new Board("south");
+                GameEngine.QueueClauseForTest(b.St, "south", b.Character("south", "ST29-010"), "main", clause);
+                if (b.St.DeckLook == null) { Check($"bot closes the {label} look", false, "the look never opened"); continue; }
+
+                bool closed = false;
+                for (int step = 0; step < 8 && b.St.DeckLook != null; step++)
+                {
+                    var cmd = IntermediateBot.DecideOneCommand(b.St, "south", new HashSet<string>());
+                    if (cmd == null) break;
+                    var before = b.St.DeckLook;
+                    b.St = GameEngine.ApplyCommand(b.St, cmd);
+                    // A rejected confirm leaves the SAME look object — the bot would re-issue it
+                    // forever, which is a hang rather than a slow answer.
+                    if (ReferenceEquals(b.St.DeckLook, before)) break;
+                }
+                closed = b.St.DeckLook == null;
+                Check($"bot closes the {label} look",
+                      closed,
+                      "the look is still open — a solo game would sit here waiting for an answer "
+                      + "the AI never gives");
             }
         }
 
