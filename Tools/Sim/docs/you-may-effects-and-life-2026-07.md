@@ -153,6 +153,41 @@ tested my simulation of `[Double Attack]`, not the keyword. Use a card that has 
 becomes `0x08`, renders as nothing, and the regex silently never matches. 15 of them made an
 auto-pick detector inert, and I reported its vacuous zero as a result. Gate: `-- hygiene`.
 
+## OPEN LEAD — a cost-prefixed effect resolved WITH a target skips its cost
+
+Not fixed. Evidenced precisely enough to hand over, and deliberately left rather than patched
+at the end of a long session, because it sits in `ResolveEffect`'s main flow.
+
+Measured over 2,880 games on the six meta decks containing a top-of-Life flip card:
+
+```
+effects queued whose text is "... from the top of your Life cards face-..."   2,919
+of those, RESOLVED (Use pressed)                                                 72
+   ... arriving WITH a target                                                    72   (all of them)
+   ... whose source had left the field                                            0
+cost-prefix block in ResolveEffect reached                                        0
+TryAutoPayCost called                                                             0
+Life-flip cost branch reached                                                     0
+```
+
+The counter is not the problem: running the SAME counter against `endtoend`'s Wyper case — which
+passes, and asserts the top Life card is flipped — reads 1. So the instrument is on the right
+line, and the zero is real.
+
+The one difference between the two is the TARGET. `endtoend` resolves with null, the way the Use
+button does after the cost-prefix fix. The bot always supplies a target, and a target-driven
+branch consumes the effect before the cost-prefix block is reached — so the cost is never paid.
+
+**Why it probably does not affect a human player:** the UI sends no target for a cost-prefixed
+effect (that was fix #1 — the first interaction pays the cost, it is not a pick). So this is
+most likely bot-only, which is also why 41 green suites missed it: every suite resolves these
+with null, exactly as the UI does.
+
+**Next step:** make the unpaid-cost check run before any target-driven branch in `ResolveEffect`
+— i.e. while a `"You may <cost>:"` prefix is unpaid, ignore a supplied target, which is already
+the rule the UI follows. Then re-run this measurement and expect the last three rows to be
+non-zero.
+
 ## NOT verified — needs a Play-test
 
 Everything above is headless. Two changes are Unity UI and only type-checked:
