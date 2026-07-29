@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**49 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**50 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -83,6 +83,12 @@ than saying "Use Effect".
   prompt. **0.** Restoring any one of the fixed auto-picks turns it red (4), which is the only
   reason the zero means anything — a sweep that cannot fail reads as coverage and is worse than
   none. Ratcheted, not gated on zero: some auto-picks are legitimate.
+- **Which end of Life** — `lifeend`: 46 cards read "from the top **or bottom** of your Life
+  cards", and this is the one selective wording `autopick` cannot see — it filters "top of"/
+  "bottom of" as positional, which is right for the ~200 clauses naming ONE end and wrong for
+  these. A real decision: Life damage comes off the top, so the end chosen decides whether the
+  player keeps their next `[Trigger]`. Both the cost form and the body form are driven, because
+  they are separate handlers, and each one's cases go red independently under control.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -113,7 +119,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 49 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 50 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

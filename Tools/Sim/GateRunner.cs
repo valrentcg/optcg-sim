@@ -72,6 +72,10 @@ namespace OnePieceTcg.Sim
             // one at a time by reading. Falsifiable: restoring any one of those auto-picks turns it
             // red, which is what earns it a place here.
             ("autopick",              AutoPickSweep.Run),
+            // The one selective wording autopick deliberately cannot see: it filters "top of"/
+            // "bottom of" as positional, which is right for the ~200 clauses naming ONE end and
+            // wrong for the 46 offering a choice BETWEEN them.
+            ("lifeend",               LifeEndChoiceTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),
