@@ -35,7 +35,7 @@ namespace OnePieceTcg.Sim
 
             var seen = new HashSet<string>();
             var misdirected = new List<string>();
-            int driven = 0, prompted = 0, noTargets = 0;
+            int driven = 0, prompted = 0, noTargets = 0, inspected = 0;
 
             foreach (var def in CardData.Library.Values
                         .Where(d => d != null && !string.IsNullOrEmpty(d.Effect))
@@ -67,6 +67,7 @@ namespace OnePieceTcg.Sim
                         .Where(x => GameEngine.IsValidEffectTarget(b.St, pe, x))
                         .ToList();
                     if (legal.Count == 0) { noTargets++; continue; }   // glowsweep's problem, not this one
+                    inspected++;
 
                     string prompt = GameEngine.DescribeTargetPrompt(b.St, pe);
                     if (!PromptCoversZones(prompt, legal, b))
@@ -80,6 +81,14 @@ namespace OnePieceTcg.Sim
             foreach (var s in misdirected.Take(10)) Console.WriteLine("    " + s);
 
             SweepRatchet.Reset();
+            // Floor check. A clause with no legal target is skipped — correct — but that means a
+            // broken glow filter sends EVERY clause down the skip path and this sweep reports a
+            // clean zero having inspected nothing. Found by breaking IsValidEffectTarget on purpose:
+            // "no legal target" went 161 -> 792 and the suite still passed. ~630 are inspected
+            // normally; require most of them.
+            Console.WriteLine($"  prompts actually inspected: {inspected}");
+            SweepRatchet.AtMost("prompts inspected (floor check — 0 wrong from 0 inspected is not a pass)",
+                                Math.Max(0, 400 - inspected), 0);
             SweepRatchet.AtMost("prompts naming a zone with no legal target", misdirected.Count, Baseline);
             return SweepRatchet.Result();
         }

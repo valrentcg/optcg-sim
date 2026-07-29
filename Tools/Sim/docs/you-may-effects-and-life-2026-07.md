@@ -332,6 +332,13 @@ but with payment broken across the board it verified NOTHING and still reported 
 number". It now fails unless it actually reached ~13 clauses, so a clean zero cannot come from an
 empty run.
 
+A **second** break — `IsValidEffectTarget` refusing every card — reddens 18 suites and found the
+same hole in `promptzone`: its "no legal target" count went **161 → 792 (all of them)** and it still
+reported 0 misdirecting prompts, having inspected nothing. It now requires ~400 prompts actually
+inspected (631 normally). **Two break types, two vacuous-pass holes, both in the skip path**: the
+shape to look for is a sweep that *correctly* skips an unverifiable case, because when everything
+becomes unverifiable it skips everything and reports a clean zero.
+
 **A passing test is not evidence until it has been seen to fail.** The `uptonrider` suite is the
 cleanest example: three cases about an empty board all passed, and all three passed *identically*
 with the fix reverted — because at ZERO candidates the clause retires either way. They asserted
