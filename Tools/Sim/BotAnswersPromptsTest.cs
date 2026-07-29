@@ -34,6 +34,8 @@ namespace OnePieceTcg.Sim
             BotAnswersProtectionDiscard();
             BotAnswersRevealCost();
             BotAnswersCounterCost();
+            BotAnswersLifeFaceUpCost();
+            BotAnswersTheTriggerStep();
             BotAlwaysHasAFallbackAnswer();
             Console.WriteLine($"botprompts: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -120,6 +122,50 @@ namespace OnePieceTcg.Sim
                 "You may trash 1 card from your hand: Up to 1 of your Leader or Character cards gains +3000 power during this battle.");
             Check("bot answers the counter cost prompt",
                   BotClearsItsDecision(b.St, "north", out string why), why);
+        }
+
+        /// <summary>The Life half of the brief, from the bot side. OP15-114 Wyper's "You may turn 1
+        /// card from the top of your Life cards face-up: ..." is the shape the whole session started
+        /// from, and in a solo game the AI has to answer it too.</summary>
+        private static void BotAnswersLifeFaceUpCost()
+        {
+            var b = new Board("north");
+            b.Character("north", "OP15-040");
+            GameEngine.QueueClauseForTest(b.St, "north", b.Character("north", "OP15-114"), "onPlay",
+                "You may turn 1 card from the top of your Life cards face-up: "
+                + "Give all of your opponent's Characters -2000 power during this turn.");
+            Check("bot answers the Life face-up cost prompt",
+                  BotClearsItsDecision(b.St, "north", out string why), why);
+        }
+
+        /// <summary>Every point of Life damage puts a [Trigger] decision in front of whoever took
+        /// it, so the bot meets this constantly - far more often than any card-specific prompt. A
+        /// bot that cannot answer it hangs the game on the first hit that reveals a Trigger.</summary>
+        private static void BotAnswersTheTriggerStep()
+        {
+            var b = new Board("south");                     // south attacks, north defends
+            var n = b.St.Players["north"];
+            n.Life.Clear();
+            n.Life.Add(new CardInstance
+            { InstanceId = "north-trig-life", CardId = "OP01-009", Owner = "north", Zone = "life" });
+            var atk = b.Character("south", "EB03-002");      // vanilla 6000, beats a 5000 Leader
+            atk.Rested = false; atk.PlayedOnTurn = 0;
+            b.St.ActiveSeat = "south";
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand
+            { Type = "declareAttack", Seat = "south", Attacker = atk.InstanceId, Target = n.Leader?.InstanceId });
+            if (b.St.Battle?.Step == "block") b.St = GameEngine.ApplyCommand(b.St, new GameCommand { Type = "passBlock", Seat = "north" });
+            if (b.St.Battle?.Step == "counter") b.St = GameEngine.ApplyCommand(b.St, new GameCommand { Type = "passCounter", Seat = "north" });
+            if (b.St.Battle?.Step == "damage") b.St = GameEngine.ApplyCommand(b.St, new GameCommand { Type = "resolveAttack", Seat = "north" });
+
+            if (b.St.Battle?.Step != "trigger")
+            { Check("bot answers the [Trigger] step", false, $"fixture: never reached it (step={b.St.Battle?.Step ?? "no battle"})"); return; }
+
+            var cmd = IntermediateBot.DecideOneCommand(b.St, "north", new HashSet<string>());
+            if (cmd == null) { Check("bot answers the [Trigger] step", false, "the bot returned no command at the trigger step"); return; }
+            var after = GameEngine.ApplyCommand(b.St, cmd);
+            Check("bot answers the [Trigger] step and the battle moves on",
+                  after.Battle == null || after.Battle.Step != "trigger",
+                  $"issued {cmd.Type} but the battle is still parked on the trigger step");
         }
 
         /// <summary>What actually guarantees the bot cannot hang on these prompts.

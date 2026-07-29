@@ -130,6 +130,14 @@ namespace OnePieceTcg.Sim.Search
             PlayedPickIds = e.PlayedPickIds == null ? null : new List<string>(e.PlayedPickIds),
             RemainingBudget = e.RemainingBudget, FirstPickId = e.FirstPickId, PendingContinuation = e.PendingContinuation,
             FinalizesActivatedTrigger = e.FinalizesActivatedTrigger,
+        
+            // Four the shipped cloner already carried and this one did not. OnceKey is the one
+            // with teeth: it records that a once-per-turn ability has been spent, so a planner
+            // searching on a copy without it can spend the same ability twice. The other three
+            // are the progress ledger the pending-effect panel reads.
+            OriginalText = e.OriginalText, OnceKey = e.OnceKey,
+            DoneParts = e.DoneParts == null ? null : new List<string>(e.DoneParts),
+            SkippedParts = e.SkippedParts == null ? null : new List<string>(e.SkippedParts),
         };
 
         private static CardModifier CloneCM(CardModifier m) => new CardModifier

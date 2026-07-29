@@ -4,7 +4,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using OnePieceTcg.Engine;
-using OnePieceTcg.Engine.Bot.Search;
+using ShippedClone = OnePieceTcg.Engine.Bot.Search.GameClone;
+using ResearchClone = OnePieceTcg.Sim.Search.GameClone;
 
 namespace OnePieceTcg.Sim
 {
@@ -12,13 +13,20 @@ namespace OnePieceTcg.Sim
     /// GameClone.Clone is a HAND-WRITTEN deep copy, so every field added to GameState has to be
     /// remembered there too. That is the same drift shape as the reveal-cost bug - a second
     /// implementation of a rule falling behind the first - except the consequence is worse: the bot
-    /// searches on clones and rewind resimulates from them, so a dropped field means the AI is
-    /// planning against a board that differs from the real one, silently.
+    /// searches on clones, Sandbox undo/redo restores from them, and the puzzle LethalSolver plans on
+    /// them. A dropped field means all three work from a board that is not the one being played.
     ///
-    /// Checking by eye does not scale and does not survive the next field. This walks GameState's
-    /// public fields by REFLECTION, gives each a value distinguishable from its default, clones, and
-    /// asserts the value survived. Fields it cannot populate generically are reported as unchecked
-    /// rather than silently skipped - an unchecked field is not a passing field.
+    /// It found 16 missing fields on the first run. Measured after the fix: turn-state was non-empty in
+    /// 12.9% of search clones and a postponed removal in 2.3%, so this was not a theoretical gap.
+    ///
+    /// Checking by eye does not scale and does not survive the next field, so this walks the types by
+    /// REFLECTION. Fields it cannot populate generically are REPORTED as unchecked rather than skipped
+    /// quietly - LastPowerBuffTargetId was hiding in that bucket, and an unchecked field is not a
+    /// passing field.
+    ///
+    /// Both cloners are checked. Engine.Bot.Search is what ships; Sim.Search is a second hand-written
+    /// copy the research planners use. Two implementations of one type drift apart - that is the whole
+    /// bug class - so checking only the shipped one leaves the other free to rot.
     ///
     /// Run: dotnet run --project Tools/Sim/Sim.csproj -c Release -- clonefidelity
     /// </summary>
@@ -29,9 +37,18 @@ namespace OnePieceTcg.Sim
         public static int Run()
         {
             Console.WriteLine("=== GameClone: does every GameState field survive a clone? ===");
-            DeferredRemovalsSurvive();
-            EveryPopulatableFieldSurvives();
-            NestedObjectsSurviveToo();
+            var cloners = new (string Name, Func<GameState, GameState> Clone)[]
+            {
+                ("shipped",  ShippedClone.Clone),
+                ("research", s => ResearchClone.Clone(s)),
+            };
+            foreach (var c in cloners)
+            {
+                Console.WriteLine($"  -- {c.Name} clone --");
+                DeferredRemovalsSurvive(c.Name, c.Clone);
+                EveryPopulatableFieldSurvives(c.Name, c.Clone);
+                NestedObjectsSurviveToo(c.Name, c.Clone);
+            }
             Console.WriteLine($"clonefidelity: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -42,86 +59,76 @@ namespace OnePieceTcg.Sim
             else { failed++; Console.WriteLine("  FAIL  " + label + (detail.Length > 0 ? "  -- " + detail : "")); }
         }
 
+        private static GameState Fresh(string seed) => GameEngine.CreateMatch(new MatchConfig
+        { SouthDeck = "st01", NorthDeck = "st01", Seed = seed });
+
         /// <summary>The concrete case that prompted this. A postponed removal is the engine's record
-        /// that a Character is only still alive because a protection question has not been answered.
-        /// Lose it in the clone and the searching bot sees a board where the victim survives for free.
-        /// </summary>
-        private static void DeferredRemovalsSurvive()
+        /// that a Character is only still alive because a protection question has not been answered -
+        /// exactly the machinery this session added prompts to. Lose it and the search sees the victim
+        /// alive with nothing owed for it.</summary>
+        private static void DeferredRemovalsSurvive(string who, Func<GameState, GameState> cloner)
         {
-            var st = GameEngine.CreateMatch(new MatchConfig
-            { SouthDeck = "st01", NorthDeck = "st01", Seed = "clone-fidelity" });
+            var st = Fresh("clone-fidelity");
             st.DeferredRemovals.Add(new DeferredRemoval
             {
-                EffectId = "effect-99",
-                VictimSeat = "south",
-                VictimInstanceId = "south-victim-1",
-                GuardInstanceId = "south-guard-1",
-                Kind = DeferredRemovalKind.Ko,
-                ByBattleKo = true,
+                EffectId = "effect-99", VictimSeat = "south", VictimInstanceId = "south-victim-1",
+                GuardInstanceId = "south-guard-1", Kind = DeferredRemovalKind.Ko, ByBattleKo = true,
             });
 
-            var clone = GameClone.Clone(st);
-            int n = clone.DeferredRemovals?.Count ?? 0;
-            Check("a postponed removal survives the clone", n == 1,
-                  $"clone has {n} deferred removal(s), original has 1 — the bot would search a board "
-                  + "where the victim is alive with nothing owed");
+            int n = cloner(st).DeferredRemovals?.Count ?? 0;
+            Check($"[{who}] a postponed removal survives the clone", n == 1,
+                  $"clone has {n}, original has 1 — the search would see the victim alive with nothing owed");
         }
 
-        /// <summary>Every public field of GameState, by reflection, so the next field added is covered
-        /// without anyone remembering to extend this test.</summary>
-        private static void EveryPopulatableFieldSurvives()
+        /// <summary>Every public field of GameState, so the next field added is covered without anyone
+        /// remembering to extend this.</summary>
+        private static void EveryPopulatableFieldSurvives(string who, Func<GameState, GameState> cloner)
         {
-            var st = GameEngine.CreateMatch(new MatchConfig
-            { SouthDeck = "st01", NorthDeck = "st01", Seed = "clone-fields" });
-
+            var st = Fresh("clone-fields");
             var dropped = new List<string>();
-            var unchecked_ = new List<string>();
+            var skipped = new List<string>();
 
             foreach (var f in typeof(GameState).GetFields(BindingFlags.Public | BindingFlags.Instance))
             {
-                // Populated and compared per-kind. Scalars get a distinctive value; collections get an
-                // element, since an empty list survives a clone that drops the field entirely.
                 object before;
                 try { before = Populate(f, st); }
-                catch (Exception) { unchecked_.Add(f.Name); continue; }
-                if (before == null) { unchecked_.Add(f.Name); continue; }
+                catch (Exception) { skipped.Add(f.Name); continue; }
+                if (before == null) { skipped.Add(f.Name); continue; }
 
-                GameState clone;
-                try { clone = GameClone.Clone(st); }
+                GameState copy;
+                try { copy = cloner(st); }
                 catch (Exception ex) { dropped.Add($"{f.Name} (clone threw {ex.GetType().Name})"); continue; }
 
-                var after = f.GetValue(clone);
-                if (!Survived(before, after)) dropped.Add(f.Name);
+                if (!Survived(before, f.GetValue(copy))) dropped.Add(f.Name);
             }
 
-            Console.WriteLine($"    fields checked   : {typeof(GameState).GetFields(BindingFlags.Public | BindingFlags.Instance).Length - unchecked_.Count}");
-            Console.WriteLine($"    fields unchecked : {unchecked_.Count}"
-                              + (unchecked_.Count > 0 ? "  (" + string.Join(", ", unchecked_.Take(8)) + ")" : ""));
+            int total = typeof(GameState).GetFields(BindingFlags.Public | BindingFlags.Instance).Length;
+            Console.WriteLine($"    fields checked   : {total - skipped.Count}");
+            Console.WriteLine($"    fields unchecked : {skipped.Count}"
+                              + (skipped.Count > 0 ? "  (" + string.Join(", ", skipped.Take(8)) + ")" : ""));
             foreach (var d in dropped) Console.WriteLine($"      DROPPED BY CLONE: {d}");
 
-            Check("no populatable GameState field is dropped by the clone", dropped.Count == 0,
+            Check($"[{who}] no populatable GameState field is dropped", dropped.Count == 0,
                   dropped.Count == 0 ? "" : string.Join(", ", dropped));
         }
 
-        /// <summary>The top-level walk misses the hand-written helpers - CloneBattle, ClonePE and
-        /// friends - which fall behind their own types the same way. Three fields were absent
-        /// there: BattleState.BlockerPowerBanMax and .BlockerCostBanMax (a searching bot believed
-        /// it could Blocker with cards the battle had excluded) and PendingEffect.PlayedPickIds.
-        /// Reflection again, so the next one is caught without anybody remembering.</summary>
-        private static void NestedObjectsSurviveToo()
+        /// <summary>The top-level walk cannot see the hand-written helpers - CloneBattle, ClonePE - which
+        /// fall behind their own types the same way. Three were absent there:
+        /// BattleState.BlockerPowerBanMax and .BlockerCostBanMax (the search believed it could Blocker
+        /// with cards the battle had excluded) and PendingEffect.PlayedPickIds.</summary>
+        private static void NestedObjectsSurviveToo(string who, Func<GameState, GameState> cloner)
         {
-            var st = GameEngine.CreateMatch(new MatchConfig
-            { SouthDeck = "st01", NorthDeck = "st01", Seed = "clone-nested" });
+            var st = Fresh("clone-nested");
             st.Battle = new BattleState { Id = "b1", Step = "counter", AttackerSeat = "south", TargetSeat = "north" };
             st.PendingEffects.Add(new PendingEffect { EffectId = "e1", Seat = "south", Text = "probe" });
 
             var dropped = new List<string>();
-            Probe(typeof(BattleState), st.Battle, () => GameClone.Clone(st).Battle, dropped, "Battle");
+            Probe(typeof(BattleState), st.Battle, () => cloner(st).Battle, dropped, "Battle");
             Probe(typeof(PendingEffect), st.PendingEffects[0],
-                  () => GameClone.Clone(st).PendingEffects.FirstOrDefault(), dropped, "PendingEffect");
+                  () => cloner(st).PendingEffects.FirstOrDefault(), dropped, "PendingEffect");
 
             foreach (var d in dropped) Console.WriteLine($"      DROPPED BY CLONE: {d}");
-            Check("no nested field is dropped by its cloner", dropped.Count == 0,
+            Check($"[{who}] no nested field is dropped by its cloner", dropped.Count == 0,
                   dropped.Count == 0 ? "" : string.Join(", ", dropped));
         }
 
@@ -133,8 +140,7 @@ namespace OnePieceTcg.Sim
                 var ft = f.FieldType;
                 try
                 {
-                    if (ft == typeof(int)) { f.SetValue(live, 4242); expect = 4242; }
-                    else if (ft == typeof(int?)) { f.SetValue(live, 4242); expect = 4242; }
+                    if (ft == typeof(int) || ft == typeof(int?)) { f.SetValue(live, 4242); expect = 4242; }
                     else if (ft == typeof(bool)) { f.SetValue(live, true); expect = true; }
                     else if (ft == typeof(string)) { f.SetValue(live, "probe"); expect = "probe"; }
                     else if (f.GetValue(live) is IList l && ft.IsGenericType
@@ -154,8 +160,9 @@ namespace OnePieceTcg.Sim
             }
         }
 
-        /// <summary>Give the field a value the clone cannot reproduce by accident, and hand back a
-        /// token describing what to look for afterwards.</summary>
+        /// <summary>Give the field a value the clone cannot reproduce by accident, and return a token
+        /// describing what to look for afterwards. Collections get an ELEMENT, because an empty list
+        /// survives a clone that drops the field entirely.</summary>
         private static object Populate(FieldInfo f, GameState st)
         {
             var t = f.FieldType;
@@ -173,7 +180,7 @@ namespace OnePieceTcg.Sim
                 catch (Exception) { return null; }
                 int n0 = list.Count;
                 list.Add(item);
-                return n0 + 1;                      // expect this many afterwards
+                return n0 + 1;
             }
             if (cur is IDictionary dict)
             {
@@ -186,7 +193,6 @@ namespace OnePieceTcg.Sim
                 dict["clone-probe"] = val;
                 return n0 + 1;
             }
-            // HashSet<string> and similar: no non-generic interface, so reach it by name.
             if (t.IsGenericType && t.GetGenericTypeDefinition() == typeof(HashSet<>)
                 && t.GetGenericArguments()[0] == typeof(string))
             {
@@ -196,19 +202,18 @@ namespace OnePieceTcg.Sim
                 add.Invoke(cur, new object[] { "clone-probe" });
                 return n0 + 1;
             }
-            return null;   // unchecked
+            return null;
         }
 
         private static bool Survived(object before, object after)
         {
-            if (before is int expectedCountOrValue)
+            if (before is int expected)
             {
-                if (after is int i) return i == expectedCountOrValue;
+                if (after is int i) return i == expected;
                 if (after == null) return false;
-                if (after is ICollection c) return c.Count == expectedCountOrValue;
+                if (after is ICollection c) return c.Count == expected;
                 var cp = after.GetType().GetProperty("Count");
-                if (cp != null) return (int)cp.GetValue(after) == expectedCountOrValue;
-                return false;
+                return cp != null && (int)cp.GetValue(after) == expected;
             }
             if (before is bool b) return after is bool ab && ab == b;
             if (before is string s) return (after as string) == s;
