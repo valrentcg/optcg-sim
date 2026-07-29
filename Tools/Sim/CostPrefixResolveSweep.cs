@@ -52,7 +52,7 @@ namespace OnePieceTcg.Sim
                     try
                     {
                         var b = new Board();
-                        b.Populate();
+                        b.Populate(clause);
                         var src = b.Character("south", def.Id);
                         int logBefore = b.St.EventLog.Count;
 
@@ -102,7 +102,7 @@ if (choiceShaped) autoPicked.Add((def.Id, def.Name ?? "", clause));
 
                         // ---- second pass: the same clause, answered with Skip ----
                         var sb = new Board();
-                        sb.Populate();
+                        sb.Populate(clause);
                         var ssrc = sb.Character("south", def.Id);
                         string before = sb.Fingerprint();
                         GameEngine.QueueClauseForTest(sb.St, "south", ssrc, "main", clause);
@@ -185,27 +185,117 @@ if (choiceShaped) autoPicked.Add((def.Id, def.Name ?? "", clause));
 
             /// <summary>Something of everything, so a clause is not reported silent merely because
             /// the fixture gave it nothing to act on.</summary>
-            public void Populate()
+            /// <summary>Build the board FROM the clause. A fixed board can never satisfy
+            /// "{Fish-Man} type Characters" or "[Kaido] cards", so 175 cost-prefix clauses naming a
+            /// {Type} and 113 naming a [Card] were reported as precondition-gated when they had simply
+            /// never been given anything to act on. Read the tags out of the text and stock the board
+            /// with real cards that match them.</summary>
+            public void Populate(string clause = null)
             {
-                // Costs and payoffs in this pool routinely demand RESTED bodies on either side, or
-                // more than one of your own Characters. A board of one active Character each way
-                // makes dozens of cards look silently broken when they are simply unpayable.
+                // Baseline: bodies on both sides, one rested each way, DON!! active and rested, and
+                // something in hand, trash and Life.
                 var nRested = Character("north", "ST29-009"); if (nRested != null) nRested.Rested = true;
                 Character("north", "OP15-040");
-                var nDon = new DonInstance { InstanceId = $"north-cr-don-{serial++}", Rested = false };
-                N.CostArea.Add(nDon);
+                N.CostArea.Add(new DonInstance { InstanceId = $"north-cr-don-{serial++}", Rested = false });
                 N.CostArea.Add(new DonInstance { InstanceId = $"north-cr-don-{serial++}", Rested = true });
-
                 var own = Character("south", "ST29-009"); if (own != null) own.Rested = true;
                 Character("south", "OP15-040");
-
                 Hand("south", "ST29-004"); Hand("south", "OP15-020"); Hand("south", "ST29-009");
                 for (int i = 0; i < 4; i++) { S.Life.Add(Card("ST01-005", "south", "life")); N.Life.Add(Card("ST01-005", "north", "life")); }
                 for (int i = 0; i < 3; i++) S.Trash.Add(Card("ST01-005", "south", "trash"));
                 for (int i = 0; i < 10; i++)
-                    S.CostArea.Add(new DonInstance
-                    { InstanceId = $"south-cr-don-{serial++}", Rested = i >= 8 });   // 8 active, 2 rested
+                    S.CostArea.Add(new DonInstance { InstanceId = $"south-cr-don-{serial++}", Rested = false });
                 S.DonDeck = 2;
+                if (string.IsNullOrEmpty(clause)) return;
+
+                // Every {Type} the clause names: a copy on each side (ours active, theirs rested, so
+                // both "your ..." and "your opponent's rested ..." filters have a subject), plus one
+                // in hand and one in trash for the play-from / return-from wordings.
+                foreach (System.Text.RegularExpressions.Match m in
+                         Regex.Matches(clause, @"\{([^}]+)\}"))
+                {
+                    var id = FindCharacterWithFeature(m.Groups[1].Value);
+                    if (id == null) continue;
+                    Character("south", id);
+                    var t = Character("north", id); if (t != null) t.Rested = true;
+                    Hand("south", id);
+                    S.Trash.Add(Card(id, "south", "trash"));
+                }
+                // "If your Leader is [X]" / "If your Leader has the {Y} type" gates a third of the
+                // remaining leads. Set the LEADER to match so the condition can actually hold -
+                // otherwise those clauses are reported silent for a reason that is purely fixture.
+                var leadName = Regex.Match(clause, @"your Leader is \[([^\]]+)\]");
+                if (leadName.Success)
+                {
+                    var lid = FindCharacterNamed(leadName.Groups[1].Value) ?? FindLeaderNamed(leadName.Groups[1].Value);
+                    if (lid != null) S.Leader = Card(lid, "south", "leader");
+                }
+                else
+                {
+                    var leadType = Regex.Match(clause, @"your Leader(?:'s type)? (?:has the |includes )\{?""?([^}""]+)""?\}? ?type");
+                    if (leadType.Success)
+                    {
+                        var lid = FindLeaderWithFeature(leadType.Groups[1].Value);
+                        if (lid != null) S.Leader = Card(lid, "south", "leader");
+                    }
+                }
+
+                // Every [Named Card] the clause names, same idea.
+                foreach (System.Text.RegularExpressions.Match m in
+                         Regex.Matches(clause, @"\[([A-Z][^\]]*)\]"))
+                {
+                    var id = FindCharacterNamed(m.Groups[1].Value);
+                    if (id == null) continue;
+                    Character("south", id);
+                    Hand("south", id);
+                    S.Trash.Add(Card(id, "south", "trash"));
+                }
+            }
+
+            private static string FindCharacterWithFeature(string tag)
+            {
+                foreach (var d in CardData.Library.Values)
+                {
+                    if (d == null || !string.Equals(d.Type, "character", StringComparison.OrdinalIgnoreCase)) continue;
+                    var fs = d.Features;
+                    if (fs == null) continue;
+                    foreach (var f in fs)
+                        if ((f ?? "").IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) return d.Id;
+                }
+                return null;
+            }
+
+            private static string FindLeaderNamed(string name)
+            {
+                foreach (var d in CardData.Library.Values)
+                {
+                    if (d == null || !string.Equals(d.Type, "leader", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)) return d.Id;
+                }
+                return null;
+            }
+
+            private static string FindLeaderWithFeature(string tag)
+            {
+                foreach (var d in CardData.Library.Values)
+                {
+                    if (d == null || !string.Equals(d.Type, "leader", StringComparison.OrdinalIgnoreCase)) continue;
+                    var fs = d.Features;
+                    if (fs == null) continue;
+                    foreach (var f in fs)
+                        if ((f ?? "").IndexOf(tag, StringComparison.OrdinalIgnoreCase) >= 0) return d.Id;
+                }
+                return null;
+            }
+
+            private static string FindCharacterNamed(string name)
+            {
+                foreach (var d in CardData.Library.Values)
+                {
+                    if (d == null || !string.Equals(d.Type, "character", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(d.Name, name, StringComparison.OrdinalIgnoreCase)) return d.Id;
+                }
+                return null;
             }
 
             /// <summary>Every zone that a cost or a body could plausibly move a card between, plus
