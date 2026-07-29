@@ -38,6 +38,10 @@ namespace OnePieceTcg.Sim
     {
         /// <summary>Held line, not a target. Lower it when a real one is fixed; never raise it.</summary>
         private const int Baseline = 0;
+        /// <summary>Use-vs-pass held line, set from the first measured run — see the printout for
+        /// how many are driven. A Trigger whose payoff needs a board state this fixture cannot build
+        /// is legitimately indistinguishable here.</summary>
+        private const int UseVsPassBaseline = 0;
 
         public static int Run()
         {
@@ -111,13 +115,70 @@ namespace OnePieceTcg.Sim
                               + $"{asked} raised a decision, {skipped} unreachable in this fixture");
             Console.WriteLine($"  took hand cards WITHOUT asking: {silentTakes.Count}");
             foreach (var s in silentTakes.Take(10)) Console.WriteLine("    " + s);
+            // Third oracle, the differential: does USING the Trigger differ from PASSING it? The
+            // two checks above can both pass while the Trigger is inert — nothing taken, nothing
+            // owed. This is the one that says the decision mattered at all.
+            int diffDriven = 0, sameAsPass = 0;
+            var inertTriggers = new List<string>();
+            foreach (var def in cards)
+            {
+                string useFp, passFp;
+                try
+                {
+                    useFp = FingerprintAfter(def.Id, use: true);
+                    passFp = FingerprintAfter(def.Id, use: false);
+                }
+                catch (Exception) { continue; }
+                if (useFp == null || passFp == null) continue;
+                diffDriven++;
+                if (useFp == passFp) { sameAsPass++; inertTriggers.Add(def.Id + "  :: " + Trim(def.Trigger, 76)); }
+            }
+            Console.WriteLine($"  use-vs-pass driven: {diffDriven}; indistinguishable: {sameAsPass}");
+            foreach (var s in inertTriggers.Take(8)) Console.WriteLine("    " + s);
+
             Console.WriteLine($"  paid a cost and the payoff never landed: {paidForNothing.Count}");
             foreach (var s in paidForNothing.Take(10)) Console.WriteLine("    " + s);
 
             SweepRatchet.Reset();
             SweepRatchet.AtMost("[Trigger] costs taken without asking", silentTakes.Count, Baseline);
             SweepRatchet.AtMost("[Trigger] costs paid for nothing", paidForNothing.Count, Baseline);
+            SweepRatchet.AtMost("[Trigger]s where using and passing are indistinguishable",
+                                sameAsPass, UseVsPassBaseline);
             return SweepRatchet.Result();
+        }
+
+        /// <summary>Damage the same card into Life, then either take the Trigger or pass it, and
+        /// flatten what the player would see.</summary>
+        private static string FingerprintAfter(string cardId, bool use)
+        {
+            var b = new Board(cardId);
+            if (!b.DealDamage() || !b.AtTriggerStep) return null;
+            b.Apply(new GameCommand { Type = use ? "useTrigger" : "passTrigger", Seat = "south" });
+            for (int i = 0; i < 6; i++)
+            {
+                var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+                if (pe == null) break;
+                string t = b.S.Hand.Concat(b.S.CharacterArea.Where(x => x != null))
+                    .FirstOrDefault(x => GameEngine.IsValidEffectTarget(b.St, pe, x))?.InstanceId;
+                int before = b.St.EventLog.Count;
+                b.Apply(new GameCommand
+                { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = t });
+                if (b.St.EventLog.Count == before) break;
+            }
+            var sb = new System.Text.StringBuilder();
+            foreach (var seat in new[] { "south", "north" })
+            {
+                var p = b.St.Players[seat];
+                sb.Append(string.Join(",", p.Hand.Select(x => x.CardId))).Append('|')
+                  .Append(string.Join(",", p.Life.Select(x => x.CardId + (x.FaceUp ? "U" : "d")))).Append('|')
+                  .Append(string.Join(",", p.Trash.Select(x => x.CardId))).Append('|')
+                  .Append(p.Deck.Count).Append('|');
+                foreach (var c in p.CharacterArea)
+                    sb.Append(c == null ? "-" : c.CardId + ":" + (c.Rested ? "R" : "A")
+                              + ":" + GameEngine.GetPower(b.St, c)).Append(';');
+                sb.Append("||");
+            }
+            return sb.ToString();
         }
 
         private static string Trim(string s, int n) =>
