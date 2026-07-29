@@ -161,6 +161,8 @@ switch (mode)
         return OnePieceTcg.Sim.GlowDeadlockSweep.Run();
     case "gate":
         return OnePieceTcg.Sim.GateRunner.Run();
+    case "wrongseat":
+        return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
     case "lifeboundary":
