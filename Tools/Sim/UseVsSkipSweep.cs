@@ -30,7 +30,13 @@ namespace OnePieceTcg.Sim
     /// </summary>
     public static class UseVsSkipSweep
     {
-        /// <summary>A HELD LINE, not a defect count. These 76 are dominated by the fixture not being
+        /// <summary>A HELD LINE, not a defect count — and now MEASURED to be so rather than argued.
+        /// The companion check reports how many of these moved the board anyway: **0**. Every one of
+        /// the 76 leaves both branches identical to an untouched board, which is exactly what an
+        /// unpayable cost should do. The previous version of this comment asserted that from
+        /// sampling; the sweep now proves it for all 76.
+        ///
+        /// These 76 are dominated by the fixture not being
         /// the deck the card was designed for — a cost naming a specific card ([Silvers Rayleigh]),
         /// a trash of 7+, a board state this sweep does not synthesise. Four passes of fixture work
         /// took it 111 -> 108 -> 90 -> 76 and each pass removed noise, not defects. The value is the
@@ -45,6 +51,7 @@ namespace OnePieceTcg.Sim
 
             var seen = new HashSet<string>();
             var identical = new List<string>();
+            var firedRegardless = new List<string>();
             int driven = 0, differed = 0;
 
             foreach (var def in CardData.Library.Values
@@ -63,34 +70,50 @@ namespace OnePieceTcg.Sim
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase)) continue;
                     if (!seen.Add(Normalize(clause))) continue;
 
-                    string used, skipped;
+                    string used, skipped, need = null, boardType = null, leader = null;
                     try
                     {
                         // Build the deck the card was designed for. Without this the sweep mostly
                         // measures its own fixture: a cost that wants a {Navy} card in hand is
                         // unpayable against an arbitrary hand, so Use correctly does nothing and
                         // "Use == Skip" is the RIGHT answer rather than a defect.
-                        string need = TypeNeededInHand(clause);
-                        string boardType = TypeNeededOnBoard(clause);
-                        string leader = LeaderFor(clause);
+                        need = TypeNeededInHand(clause);
+                        boardType = TypeNeededOnBoard(clause);
+                        leader = LeaderFor(clause);
                         used = Fingerprint(Run(clause, true, need, boardType, leader));
                         skipped = Fingerprint(Run(clause, false, need, boardType, leader));
                     }
                     catch (Exception) { continue; }
                     driven++;
 
-                    if (used == skipped) identical.Add($"{def.Id}  :: {Trim(clause, 80)}");
+                    if (used == skipped)
+                    {
+                        identical.Add($"{def.Id}  :: {Trim(clause, 80)}");
+                        // Sharper question inside the residual: did anything happen AT ALL? If the
+                        // two branches match AND both match an untouched board, the cost was simply
+                        // unpayable and inertness is correct. If they match but the board MOVED,
+                        // the change did not come from the decision — the effect fired whichever
+                        // button was pressed, which is the shape optionalfires exists to forbid.
+                        string untouched;
+                        try { untouched = Fingerprint(new Board(need, boardType, leader).St); }
+                        catch (Exception) { untouched = null; }
+                        if (untouched != null && used != untouched)
+                            firedRegardless.Add($"{def.Id}  :: {Trim(clause, 74)}");
+                    }
                     else differed++;
                 }
             }
 
             Console.WriteLine($"  drove {driven} cost-prefixed clauses; {differed} changed the board when USED");
             Console.WriteLine($"  Use and Skip indistinguishable: {identical.Count}");
-            foreach (var s in identical.Take(12)) Console.WriteLine("    " + s);
+            foreach (var s in identical.Take(6)) Console.WriteLine("    " + s);
+            Console.WriteLine($"  ...of those, board MOVED anyway (effect fired regardless of the answer): {firedRegardless.Count}");
+            foreach (var s in firedRegardless.Take(10)) Console.WriteLine("    " + s);
 
             SweepRatchet.Reset();
             SweepRatchet.AtMost("cost-prefixed clauses driven (floor check)", Math.Max(0, 150 - driven), 0);
             SweepRatchet.AtMost("clauses where Use and Skip are indistinguishable", identical.Count, Baseline);
+            SweepRatchet.AtMost("clauses that fired regardless of the answer", firedRegardless.Count, 0);
             return SweepRatchet.Result();
         }
 

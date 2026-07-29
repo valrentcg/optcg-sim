@@ -204,6 +204,9 @@ than saying "Use Effect".
   `{Navy}` card in hand is correctly inert when the hand has none, and "Use == Skip" is then the
   right answer. Four passes of fixture synthesis took it 111 → 108 → 90 → 76 **without changing a
   line of engine code**, which is what shows the residual is measurement. Its value is the ratchet.
+  A second check settles the interpretation instead of arguing it: of those 76, how many moved the
+  board *anyway*? **0** — all 76 leave both branches identical to an untouched board, i.e. the cost
+  was simply unpayable. Making Skip resolve the effect reports 155, so the check can fail.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
