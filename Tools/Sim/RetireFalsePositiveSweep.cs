@@ -85,6 +85,22 @@ namespace OnePieceTcg.Sim
                 if (falsePositives.Count > 25) Console.WriteLine($"    ... and {falsePositives.Count - 25} more");
             }
 
+            // Floor, added by the gate-wide falsifiability audit. 709 clauses are classified as
+            // retired and compared; if that collapsed, the false-positive count would be a clean,
+            // empty zero.
+            //
+            // Scope note, because the obvious control does NOT exercise this: disabling the engine's
+            // retire pass entirely leaves the count at 727, because this suite calls the retire
+            // PREDICATE directly rather than observing the pass. So the floor guards the predicate
+            // going silent (or the clause enumeration collapsing), not the pass being switched off —
+            // which is a narrower guarantee than the other five floors and is written down rather
+            // than left to be rediscovered.
+            if (retiredBoth < 400)
+            {
+                Console.WriteLine($"  !! only {retiredBoth} clauses were actually retired (expected ~709) — "
+                                  + "the zero above is not evidence");
+                return 1;
+            }
             return falsePositives.Count == 0 ? 0 : 1;
         }
 

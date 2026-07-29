@@ -343,11 +343,24 @@ inspected (631 normally). **Two break types, two vacuous-pass holes, both in the
 shape to look for is a sweep that *correctly* skips an unverifiable case, because when everything
 becomes unverifiable it skips everything and reports a clean zero.
 
-That shape was then swept for directly rather than waiting for a third break to expose it. Four
-suites have a skip path; `promptzone` was fixed above and the other three now carry floors too —
-`autopick` (295 clauses actually compared), `triggerfield` (42 Triggers actually fired), and
-`glowsweep` (1,193 clauses actually stopped for a pick). Every suite that can skip its way to an
-empty run now fails instead of passing quietly.
+That shape was then swept for directly rather than waiting for a third break to expose it, and a
+**third break** (`QueueEffect` returning early, so no prompt is ever raised — 52 of 66 go red)
+caught the two that mattered most. **Seven suites now carry floors**:
+
+| suite | what it verifies | floor |
+|---|---|---|
+| `optionalfires` | 694 of 704 optional clauses raise a prompt | fails below 500 |
+| `paidfornothing` | 136 clauses actually pay a cost | fails below 90 |
+| `glowsweep` | 1,193 clauses stop for a board pick | fails below 200 |
+| `promptzone` | 631 prompts actually inspected | fails below 400 |
+| `autopick` | 295 clauses actually compared | fails below 150 |
+| `triggerfield` | 42 Triggers actually fire | fails below 30 |
+| `drawoutcome` | 13 draw clauses actually verified | fails below 10 |
+
+`retiresweep` has one too (709 clauses classified as retired), with a narrower guarantee that is
+noted in the file: it calls the retire predicate directly, so disabling the engine's retire pass
+does not move its count. Every suite that can skip its way to an empty run now fails instead of
+passing quietly.
 
 **A passing test is not evidence until it has been seen to fail.** The `uptonrider` suite is the
 cleanest example: three cases about an empty board all passed, and all three passed *identically*
