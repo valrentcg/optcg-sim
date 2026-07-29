@@ -18,10 +18,16 @@ namespace OnePieceTcg.Sim
     /// in exactly one situation: a Life card dealt as damage. So each card here is put on top of a
     /// real Life stack, actually damaged, and its Trigger actually pressed.
     ///
-    /// The question asked is the one that caught the other five auto-pick defects:
+    /// TWO questions, the two this workstream keeps finding defects with:
     ///
-    ///     did pressing the Trigger take cards out of a zone the player could have chosen from,
-    ///     without asking?
+    ///   1. did pressing the Trigger take cards out of a zone the player could have chosen from,
+    ///      without asking?                                     (the `autopick` oracle)
+    ///   2. having taken payment, did the payoff actually land?  (the `paidfornothing` oracle)
+    ///
+    /// The second needs its measurement window stated, because I got it wrong first time: the card
+    /// is played DURING useTrigger and the cost pick is queued after it, so board growth has to be
+    /// measured from before the Trigger press. Measuring around the payment reports all 14 as "paid
+    /// for nothing" — an artefact of the fix's own ordering, not an engine defect.
     ///
     /// Ratcheted rather than gated on zero, like autopick: a trigger whose cost is DON!! or the top
     /// Life card is positional and legitimately silent.
@@ -46,6 +52,7 @@ namespace OnePieceTcg.Sim
 
             int driven = 0, fired = 0, asked = 0, skipped = 0;
             var silentTakes = new List<string>();
+            var paidForNothing = new List<string>();
 
             foreach (var def in cards)
             {
@@ -58,6 +65,12 @@ namespace OnePieceTcg.Sim
 
                 driven++;
                 int hand0 = b.S.Hand.Count;
+                // Captured BEFORE the Trigger is pressed. The play happens during useTrigger (the
+                // cost pick is queued after it, deliberately, so the battle never waits on a pick to
+                // decide whether the card arrives) — so measuring board growth around the PAYMENT
+                // reports every card as "paid for nothing". That was my first version, and its 14
+                // findings were an artefact of my own ordering, not an engine defect.
+                int boardBefore = b.S.CharacterArea.Count(x => x != null);
 
                 try { b.UseTrigger(); }
                 catch (Exception) { skipped++; continue; }
@@ -65,7 +78,26 @@ namespace OnePieceTcg.Sim
 
                 bool prompted = b.St.PendingEffects.Any(e => e != null && e.Seat == "south")
                              || b.St.ActiveChoice != null || b.St.DeckLook != null;
-                if (prompted) { asked++; continue; }
+                if (prompted)
+                {
+                    asked++;
+                    // Second oracle, the one paidfornothing applies to `effect` clauses: ANSWER the
+                    // prompt and check the payoff actually lands. A cost that is taken while the
+                    // body quietly does nothing is the worst outcome of the three — the player
+                    // spends a card and the log still reads as if the card worked.
+                    int handBeforePay = b.S.Hand.Count;
+                    b.AnswerEverything();
+                    int spent = handBeforePay - b.S.Hand.Count;
+                    bool boardGrew = b.S.CharacterArea.Count(x => x != null) > boardBefore;
+                    bool conditional = def.Trigger.IndexOf("If ", StringComparison.OrdinalIgnoreCase) >= 0;
+                    // "Play this card" is the body for 33 of the 42; a conditional body may
+                    // legitimately decline, so those are not counted.
+                    bool playsThisCard = def.Trigger.IndexOf("play this card", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (spent > 0 && playsThisCard && !conditional && !boardGrew)
+                        paidForNothing.Add($"{def.Id}  spent {spent} card(s), board unchanged  :: "
+                                           + Trim(def.Trigger, 84));
+                    continue;
+                }
 
                 // Nothing to answer. That is only a defect if the engine helped itself to cards the
                 // player held — the Life card itself moving is the Trigger working, not a choice.
@@ -79,9 +111,12 @@ namespace OnePieceTcg.Sim
                               + $"{asked} raised a decision, {skipped} unreachable in this fixture");
             Console.WriteLine($"  took hand cards WITHOUT asking: {silentTakes.Count}");
             foreach (var s in silentTakes.Take(10)) Console.WriteLine("    " + s);
+            Console.WriteLine($"  paid a cost and the payoff never landed: {paidForNothing.Count}");
+            foreach (var s in paidForNothing.Take(10)) Console.WriteLine("    " + s);
 
             SweepRatchet.Reset();
             SweepRatchet.AtMost("[Trigger] costs taken without asking", silentTakes.Count, Baseline);
+            SweepRatchet.AtMost("[Trigger] costs paid for nothing", paidForNothing.Count, Baseline);
             return SweepRatchet.Result();
         }
 
@@ -139,6 +174,23 @@ namespace OnePieceTcg.Sim
             }
 
             public void UseTrigger() => Apply(new GameCommand { Type = "useTrigger", Seat = "south" });
+
+            /// <summary>Answer whatever the Trigger raised, the way the UI would: let the ENGINE say
+            /// which cards it accepts rather than guessing a zone.</summary>
+            public void AnswerEverything()
+            {
+                for (int i = 0; i < 8; i++)
+                {
+                    var pe = St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+                    if (pe == null) break;
+                    string target = S.Hand.Concat(S.CharacterArea.Where(x => x != null))
+                        .FirstOrDefault(x => GameEngine.IsValidEffectTarget(St, pe, x))?.InstanceId;
+                    int peBefore = St.PendingEffects.Count, logBefore = St.EventLog.Count;
+                    Apply(new GameCommand
+                    { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = target });
+                    if (St.PendingEffects.Count == peBefore && St.EventLog.Count == logBefore) break;
+                }
+            }
 
             public void Apply(GameCommand c) => St = GameEngine.ApplyCommand(St, c);
 

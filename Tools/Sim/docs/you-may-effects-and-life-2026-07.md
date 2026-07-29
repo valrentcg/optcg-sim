@@ -114,6 +114,9 @@ than saying "Use Effect".
   are fungible. Restoring the `Hand[0]` auto-pick reports **14** and breaks the ratchet.
   The shortcut of feeding `def.Trigger` into the existing sweeps was rejected: they queue clauses
   as main-timing, and that invents a question that never existed (their own comment says so).
+  Now runs BOTH oracles: took-without-asking **0**, and paid-a-cost-for-no-payoff **0**. Each is
+  separately controlled — restoring the auto-pick reports 14 on the first, suppressing the card
+  placement reports 14 on the second.
 - **`[Trigger]` costs** — `triggercost`: 42 "you may" clauses live in the `trigger` DATA FIELD,
   which **no sweep here reads** — all five enumerate `def.Effect` (checked, not assumed). This is
   where the brief's two halves meet: a [Trigger] fires only when a Life card is dealt as damage, so
