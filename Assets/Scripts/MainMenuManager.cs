@@ -1118,6 +1118,30 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.28", "Stages, Life cards, and a Blocker lock that finally locks", "Jul 29, 2026", new (string, string[])[]
+        {
+            ("Stages", new[]
+            {
+                "You can play a Stage from your hand again. Dropping one onto an empty Stage zone did nothing at all — and since that is the only way to put your first Stage down, no Stage could ever be played by hand.",
+                "The Stage zone now lights up as a valid drop target while you drag one, the same as a character slot.",
+            }),
+            ("Life cards", new[]
+            {
+                "A Life card an effect turns face up now actually shows its face. With six or more Life the flipped card was never drawn, so the combat log said it had been turned up while the board still showed a card back — Wyper and Kalgara both looked broken because of it.",
+                "Your opponent's Life stack now reads the right way round: their top Life card sits nearest the middle of the board, matching your own.",
+                "Effects that let you choose the top or bottom of your Life now highlight the right card. Above five Life they offered the wrong one.",
+            }),
+            ("Effects that offer a choice of card", new[]
+            {
+                "Abilities worded \"play a {Type} Character card or [Name]\" now offer both. Shirahoshi's ability lit nothing in your hand and her Use button did nothing, because the two halves were being required together instead of either one.",
+                "An effect can no longer strand you. A mandatory ability with nothing legal to pick used to show a button that did nothing beside a greyed-out Skip, with no way to continue the game.",
+            }),
+            ("Blocker locks", new[]
+            {
+                "\"Your opponent cannot activate a [Blocker]…\" now does something. On Shanks, Adio and the starter-deck cards that share the wording, the restriction was being read as a note and thrown away, so weak Blockers could still block.",
+                "Attacking with Shanks no longer crashes the game.",
+            }),
+        }),
         ("v1.0.27", "Events burn away, and your DON!! are your own", "Jul 26, 2026", new (string, string[])[]
         {
             ("Playing an Event or Counter", new[]

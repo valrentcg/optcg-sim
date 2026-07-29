@@ -277,6 +277,8 @@ static class EffectCoverage
         {
             r.Verdict = Verdict.Crash;
             r.Detail = $"{ex.GetType().Name}: {ex.Message}";
+            if (Environment.GetEnvironmentVariable("HARNESS_CRASH_TRACE") == "1")
+                Console.WriteLine($"[CRASH TRACE] {def.Id} {timing}\n{ex}");
             return r;
         }
     }

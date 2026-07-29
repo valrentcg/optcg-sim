@@ -6973,6 +6973,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // On the mount, not the panel: a dropped card raycasts against the card layer.
         var stageDrop = stageContent.gameObject.AddComponent<StageDrop>();
         stageDrop.Init(this, seat);
+        // ZoneContent is a bare RectTransform with NO Graphic, so it is not a raycast target. With the
+        // stage zone EMPTY there was nothing here to hit: the drop raycast fell through to the mat panel
+        // behind (not a child of this mount), so ExecuteHierarchy walking up from the hit object never
+        // found StageDrop and OnDrop never fired. Dragging a Stage out of hand silently did nothing —
+        // and since the drag IS the only way to place a FIRST Stage, no Stage could ever be played from
+        // hand at all. It would only have worked with one already in the zone, because the existing Stage
+        // card supplies a raycastable child. Character slots never had this bug: CharacterSlotDrop hangs
+        // off a PanelObject, which has an Image. Reported twice ("Can't play this stage for some reason",
+        // "Still cnant play stage from hand") — and confirmed by the reports' CommandHistory, which
+        // contains no playCard for the Stage even though ApplyCommand records REJECTED commands too.
+        // Added before the Stage card so the catcher stays behind it and never steals the card's clicks.
+        var stageCatcher = PanelObject("Stage Drop Catcher", stageContent, new Color(0, 0, 0, 0));
+        Stretch(stageCatcher, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var stageCatcherImage = stageCatcher.GetComponent<Image>();
+        if (stageCatcherImage != null) stageCatcherImage.raycastTarget = true;
         if (p.Stage != null) AddCardToZone(stageContent, p.Stage, seat, true, top);
         var stageSz = FittedCardSize(stageContent);
         SnugZonePair(stage, stageContent, stageMin, stageMax, stageSz.x * 1.06f, stageSz.y * 1.06f);
@@ -8036,17 +8051,33 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void AddLifeStackToZone(RectTransform zone, int count, bool top, string seat = null,
         IList<CardInstance> lifeCards = null, bool revealAll = false)
     {
-        int visible = Mathf.Min(count, 5);
+        // The engine's Life list is BOTTOM-first: Life[Count-1] is the TOP of the pile (GameEngine
+        // states "top of Life = END of the list" at every Life mutation). Drawing it as Life[0..4]
+        // laid out bottom-up, identically for both seats, caused two reported bugs:
+        //   • At 6+ Life the window [0,5) EXCLUDED the top card, so "turn 1 card from the top of your
+        //     Life cards face-up" (OP15-114 Wyper, Kalgara) flipped a card that was never drawn — the
+        //     combat log said face-up and the board still showed a back. At exactly 5 Life the top card
+        //     IS index 4, so it rendered fine; that 5-vs-6 boundary is why this hid for so long.
+        //   • The top of the pile sat at the same screen end for both seats, so the OPPONENT's top Life
+        //     card rendered at the far edge instead of nearest the board centre.
+        // Anchor the window on the TOP of the pile, and let each seat's pile run toward the centre.
+        int visible = Mathf.Min(count, 10);
+        int lo = Mathf.Max(0, count - visible);          // first LIFE index drawn (top-anchored window)
+        float dir = top ? -1f : 1f;                      // +y is toward the board centre only for the bottom seat
         // Sideways cards stacked vertically. No per-card border or divider - hovering a card shows the
         // highlight, which is separation enough.
         float gap = boardCardSize.x * 0.32f;
 
-        for (int i = 0; i < visible; i++)
+        for (int s = 0; s < visible; s++)
         {
+            // i is the LIFE index (engine order) — every consumer below keys off it, preserving the
+            // "lifeMoveRects[seat][i] == Life[i]" contract that MaybeAddLifeTargetPicker and the
+            // move-pose diff both rely on. s is only the visual slot.
+            int i = lo + s;
             var card = PanelObject("Life Card", zone, new Color(0, 0, 0, 0));
             FitCardAspect(zone, card);
             card.localRotation = Quaternion.Euler(0, 0, top ? 270f : 90f);
-            card.anchoredPosition += new Vector2(0f, (i - (visible - 1) * 0.5f) * gap);
+            card.anchoredPosition += new Vector2(0f, dir * (s - (visible - 1) * 0.5f) * gap);
             // Face-down normally. Show the FACE for a card an effect turned face-up (CardInstance
             // .FaceUp — e.g. Nami's [On K.O.] "turn 1 Life card face-up" cost) or when the whole Life
             // is revealed at end of match; fall back to the back sprite if the face isn't loaded yet.
@@ -9376,9 +9407,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             AddButton(body, $"Use Effect (rest {donRestCost} DON!!)",
                 () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }),
                 canPay);
+            // Same rule as below: a DON!!-rest cost you cannot afford must still be escapable, or an
+            // unaffordable mandatory cost freezes the board with both buttons dead.
             AddButton(body, "Skip",
                 () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }),
-                effect.Optional);
+                effect.Optional || GameEngine.IsEffectSkippable(effect) || !canPay);
             return;
         }
         // An UNPAID "You may <cost>: <body>" prefix means the first interaction is paying the
@@ -9400,7 +9433,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         else
         {
             AddButton(body, EffectUseLabel(effect), () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
-            AddButton(body, "Skip", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional);
+            // Skip must never be dead here. We are in this branch precisely because there is nothing on the
+            // board to click (or because an unpaid "You may <cost>:" is inherently optional), so gating on
+            // effect.Optional alone could present a no-op Use button beside a greyed-out Skip and freeze the
+            // match. PassEffect accepts the pass regardless — see GameEngine.IsEffectSkippable.
+            AddButton(body, "Skip", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }),
+                effect.Optional || GameEngine.IsEffectSkippable(effect) || !EffectHasValidTarget(effect));
         }
     }
 
@@ -10413,8 +10451,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (state.PendingEffects.Count > 0)
             {
                 var pe = state.PendingEffects[0];
-                if (pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand ||
-                    pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
+                // ...but only when the effect is THIS player's. The battle-step branch above already
+                // checks the seat; this one did not, so a pending effect owned by the OPPONENT turned a
+                // click on your own hand into a resolveEffect for THEIR effect — which the engine
+                // rejects, so nothing visibly happens and the card looks unplayable.
+                // NB: this deliberately does NOT fall through to the play flow. While ANY effect is
+                // unresolved the turn player must wait, and PlayCard does not check PendingEffects, so
+                // falling through would permit an out-of-sequence play. The click is simply no longer
+                // misattributed to the wrong seat's effect.
+                if ((pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand ||
+                     pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
+                    && pe.Seat == handSeat)
                 {
                     Dispatch(new GameCommand
                     {
@@ -11984,7 +12031,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // them in lifeMoveRects[seat], card index i == Life[i]), rather than splitting the zone in
         // half. So the rim glow hugs the real card, like any other targetable card.
         if (!lifeMoveRects.TryGetValue(seat, out var lifeRects) || lifeRects == null || lifeRects.Count == 0) return;
-        int visible = Mathf.Min(p.Life.Count, lifeRects.Count);
         string topId = p.Life[p.Life.Count - 1].InstanceId;   // engine top = end of the list
         string botId = p.Life[0].InstanceId;                  // engine bottom = index 0
 
@@ -12003,7 +12049,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 Dispatch(new GameCommand { Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId, Target = lifeId }));
         }
 
-        GlowCard(visible - 1, topId);                     // top-most visible card = top of Life
+        // Index by the LIFE index, not the visual slot count: with a truncated window "visible - 1"
+        // was the top of the WINDOW, which is only the top of the PILE when nothing was cut off. At
+        // 6+ Life it glowed (and clicked) the wrong card.
+        GlowCard(p.Life.Count - 1, topId);                // end of the list = top of Life
         if (p.Life.Count > 1) GlowCard(0, botId);         // index 0 = bottom of Life
     }
 

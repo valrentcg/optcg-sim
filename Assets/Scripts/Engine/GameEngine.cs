@@ -4318,20 +4318,34 @@ namespace OnePieceTcg.Engine
                     bool alreadyUsed = optFlag && Player(state, seat).AbilityUsedThisTurn.Contains(waKey);
                     if (donOk && !alreadyUsed)
                     {
+                        // QueueEffect does NOT always append, so the queued effect must be identified by a
+                        // COUNT DELTA rather than by indexing the tail. It drops blank text and — since the
+                        // prohibition-clause filter landed — any clause that merely FORBIDS something, e.g.
+                        // OP01-120 Shanks / OP03-002 Adio "Your opponent cannot activate a [Blocker] Character
+                        // that has 2000 or less power during this battle". Reading Count-1 unconditionally threw
+                        // ArgumentOutOfRangeException whenever the queue was empty (a hard crash on declaring an
+                        // attack with Shanks) and, when it was NOT empty, silently stamped this attacker's
+                        // once-per-turn OnceKey onto an UNRELATED player's pending effect.
+                        int beforeWa = state.PendingEffects.Count;
                         QueueEffect(state, seat, attacker, "whenAttacking", waClause, IsOptionalEffectText(waClause),
                             EffectScope.Instant, InferTargetZone(waClause));
-                        var queuedWa = state.PendingEffects[state.PendingEffects.Count - 1];
-                        // Mark the [Once Per Turn] as used only when it RESOLVES (via OnceKey), never
-                        // at queue time — declining a "you may" [When Attacking] must not consume it.
-                        if (optFlag) queuedWa.OnceKey = waKey;
-                        // Auto-resolve NON-interactive [When Attacking] effects immediately (matching
-                        // On-Play's QueueAndAutoResolve), so a self-buff like OP07-034 Zoro's "this
-                        // Character gains +2000" applies on swing instead of forcing the player to click
-                        // a Use button / select the attacker itself. "you may" opt-ins and target-needing
-                        // effects stay pending (ResolveEffect returns WaitingForTarget and re-queues).
-                        if (waClause.IndexOf("you may", StringComparison.OrdinalIgnoreCase) < 0
-                            && IsAutomatedEffectPattern(waClause))
-                            ResolveEffect(state, seat, queuedWa.EffectId, null);
+                        var queuedWa = state.PendingEffects.Count > beforeWa
+                            ? state.PendingEffects[state.PendingEffects.Count - 1]
+                            : null;
+                        if (queuedWa != null)
+                        {
+                            // Mark the [Once Per Turn] as used only when it RESOLVES (via OnceKey), never
+                            // at queue time — declining a "you may" [When Attacking] must not consume it.
+                            if (optFlag) queuedWa.OnceKey = waKey;
+                            // Auto-resolve NON-interactive [When Attacking] effects immediately (matching
+                            // On-Play's QueueAndAutoResolve), so a self-buff like OP07-034 Zoro's "this
+                            // Character gains +2000" applies on swing instead of forcing the player to click
+                            // a Use button / select the attacker itself. "you may" opt-ins and target-needing
+                            // effects stay pending (ResolveEffect returns WaitingForTarget and re-queues).
+                            if (waClause.IndexOf("you may", StringComparison.OrdinalIgnoreCase) < 0
+                                && IsAutomatedEffectPattern(waClause))
+                                ResolveEffect(state, seat, queuedWa.EffectId, null);
+                        }
                     }
                 }
             }
@@ -8372,6 +8386,18 @@ namespace OnePieceTcg.Engine
 
         // An effect is genuinely optional when its text says so ("You may …", "up to N", a
         // conditional). Mandatory effects ("Draw 2 cards.") must not offer a skip button.
+        /// <summary>Would PassEffect let this effect go? Mirrors the `skippable` rule inside PassEffect so
+        /// the UI's Skip button cannot be stricter than the engine it drives.
+        ///
+        /// The panel gated Skip on `effect.Optional` alone, which is narrower: "Up to N" and "You may"
+        /// clauses are inherently optional whatever they were queued as. A MANDATORY clause with no legal
+        /// target therefore rendered a Use button that no-opped next to a GREYED-OUT Skip — an unescapable
+        /// board. Reported as "Game stops working and I have no chance to not use this effect because
+        /// opponent doesnt have selectable characters".</summary>
+        public static bool IsEffectSkippable(PendingEffect effect) =>
+            effect != null
+            && (effect.Optional || IsOptionalEffectText(effect.Text) || effect.SelectionsRemaining > 0);
+
         private static bool IsOptionalEffectText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return true;
@@ -8584,6 +8610,15 @@ namespace OnePieceTcg.Engine
         public static bool IsProhibitionClause(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return false;
+            // EXEMPTION — a prohibition the resolver actually MODELS must still be queued, or the
+            // restriction is silently lost and the card does nothing at all. "Your opponent cannot
+            // activate a [Blocker] Character that has 2000 or less power during this battle" (OP01-120
+            // Shanks, OP03-002 Adio, the ST01 family) is implemented as Battle.NoBlocker /
+            // BlockerPowerBan / BlockerPowerBanMax / BlockerCostBanMax, and the during-this-turn form
+            // even picks targets. This filter exists to stop the SUBSTRING INTERPRETER from executing a
+            // forbidden action AS an instruction; a clause with a dedicated handler is not in that
+            // danger class, so excluding it here restores the effect without reopening that hole.
+            if (ContainsAll(text, "cannot activate") && ContainsAll(text, "Blocker")) return false;
             return System.Text.RegularExpressions.Regex.IsMatch(
                 text,
                 @"^\s*(?:\[[^\]]+\]\s*)*(?:you|your opponent|they|this [A-Za-z]+|that [A-Za-z]+|all [A-Za-z]+|players?)\s+(?:cannot|can't|may not)\b",
@@ -9480,6 +9515,59 @@ namespace OnePieceTcg.Engine
             return parts.Length >= 2 ? parts : null;
         }
 
+        /// <summary>A play/target description can offer a DESCRIPTIVE alternative and an explicitly NAMED
+        /// one in the same breath: "Play up to 1 {Neptunian} type Character card OR [Megalo] with a cost …"
+        /// (OP11-022 Shirahoshi). The two halves carry different filters, so testing the whole string ANDs
+        /// them and NOTHING is legal — every {Neptunian} in hand fails the [Megalo] name test, and Megalo
+        /// (feature "Animal/Fish-Man Island") fails the {Neptunian} tag test. Reported twice: the ability
+        /// lit nothing in hand and its Use button did nothing when clicked.
+        ///
+        /// Returns true when the card fully satisfies ANY ONE alternative. Deliberately claims ONLY the
+        /// mixed shape — the description must contain both a [Name] alternative and a {Tag} one — so the
+        /// ~40 name-only "Play up to N [Name]" cards and the {A}-or-{B} dual-tag cards keep their existing
+        /// whole-text behaviour untouched. An alternative carrying no filter of its own (the debris left by
+        /// splitting "cost equal to or less than …" on " or ") licenses nothing.</summary>
+        private static bool MixedNameOrTypeBranchAllows(GameState state, string description, CardInstance card, CardDef def)
+        {
+            if (string.IsNullOrEmpty(description) || def == null) return false;
+            var alts = System.Text.RegularExpressions.Regex.Split(description, @"\s+or\s+",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (alts.Length < 2) return false;
+            bool hasNamed = false, hasDescribed = false;
+            foreach (var a in alts)
+            {
+                bool anyName = System.Text.RegularExpressions.Regex.Matches(a, @"\[([^\]]+)\]")
+                    .Cast<System.Text.RegularExpressions.Match>()
+                    .Any(m => !IsKeywordTag(m.Groups[1].Value.Trim()));
+                if (anyName) hasNamed = true;
+                else if (a.IndexOf('{') >= 0) hasDescribed = true;
+            }
+            if (!hasNamed || !hasDescribed) return false;
+            foreach (var alt in alts)
+            {
+                var names = System.Text.RegularExpressions.Regex.Matches(alt, @"\[([^\]]+)\]")
+                    .Cast<System.Text.RegularExpressions.Match>()
+                    .Select(m => m.Groups[1].Value.Trim())
+                    .Where(n => !IsKeywordTag(n)).ToList();
+                if (names.Count > 0)
+                {
+                    if (names.Any(n => NameMatches(state, card, n))) return true;
+                    continue;   // a NAMED alternative this card is not — try the next one
+                }
+                // A descriptive alternative must bring its own {Tag} filter; without one it would license
+                // every card in the zone.
+                if (alt.IndexOf('{') < 0) continue;
+                if (System.Text.RegularExpressions.Regex.IsMatch(alt, @"\bCharacter card",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase) && def.Type != "character") continue;
+                if (System.Text.RegularExpressions.Regex.IsMatch(alt, @"\bEvent card",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase) && def.Type != "event") continue;
+                if (System.Text.RegularExpressions.Regex.IsMatch(alt, @"\bStage card",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase) && def.Type != "stage") continue;
+                if (CardPassesFeatureFilter(alt, def)) return true;
+            }
+            return false;
+        }
+
         /// <summary>Does this card fit the target description? Name and type are checked TOGETHER per
         /// alternative — a card must satisfy one alternative completely, not borrow the name from one
         /// and the type from another.</summary>
@@ -10032,7 +10120,12 @@ namespace OnePieceTcg.Engine
                                 .Cast<System.Text.RegularExpressions.Match>().Select(m => m.Groups[1].Value.Trim()).ToList();
                             var hOther = System.Text.RegularExpressions.Regex.Match(text, @"other than \[([^\]]+)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                             if (hOther.Success) hNames.Remove(hOther.Groups[1].Value.Trim());
-                            if (hNames.Count > 0 && !hNames.Any(n => NameMatches(state, card, n))) return false;
+                            // "{Neptunian} type Character card OR [Megalo]" (OP11-022 Shirahoshi) — the name
+                            // is one ALTERNATIVE, not a requirement, so a card satisfying the {Tag} half is
+                            // still legal. Without this every Neptunian in hand was rejected and the ability
+                            // offered nothing clickable.
+                            if (hNames.Count > 0 && !hNames.Any(n => NameMatches(state, card, n))
+                                && !MixedNameOrTypeBranchAllows(state, hPlaySeg.Groups[1].Value, card, def)) return false;
                         }
                     }
                     break;
@@ -10099,7 +10192,11 @@ namespace OnePieceTcg.Engine
                     return false;
             }
 
-            if (!CardPassesFeatureFilter(text, def)) return false;
+            // The mirror half of the mixed "{Tag} … or [Name]" disjunction: an explicitly NAMED card is legal
+            // even though it lacks the sibling alternative's {Tag} (Megalo's type is "Animal/Fish-Man Island",
+            // not {Neptunian}, so the tag filter rejected the very card the clause names).
+            if (!CardPassesFeatureFilter(text, def)
+                && !MixedNameOrTypeBranchAllows(state, text, card, def)) return false;
 
             // "other than [Name]" self-exclusion (e.g. Robin: "…other than [Nico Robin]").
             if (ExcludedByOtherThan(state, text, card)) return false;
@@ -16627,7 +16724,8 @@ namespace OnePieceTcg.Engine
                         return EffectResolution.WaitingForTarget;
                     }
                 }
-                if (!CardPassesFeatureFilter(text, playDef))
+                if (!CardPassesFeatureFilter(text, playDef)
+                    && !MixedNameOrTypeBranchAllows(state, text, playCard, playDef))
                 {
                     Log(state, effect.Seat, $"{NameId(playDef)} does not match the required type for {sourceName}.");
                     return EffectResolution.WaitingForTarget;
@@ -16660,7 +16758,8 @@ namespace OnePieceTcg.Engine
                             .Cast<System.Text.RegularExpressions.Match>().Select(m => m.Groups[1].Value.Trim()).ToList();
                         var playOtherN = System.Text.RegularExpressions.Regex.Match(text, @"other than \[([^\]]+)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                         if (playOtherN.Success) playInclNames.Remove(playOtherN.Groups[1].Value.Trim());
-                        if (playInclNames.Count > 0 && !playInclNames.Any(n => NameMatches(state, playCard, n)))
+                        if (playInclNames.Count > 0 && !playInclNames.Any(n => NameMatches(state, playCard, n))
+                            && !MixedNameOrTypeBranchAllows(state, playSeg.Groups[1].Value, playCard, playDef))
                         {
                             Log(state, effect.Seat, $"{NameId(playDef)} is not one of the named cards for {sourceName}.");
                             return EffectResolution.WaitingForTarget;

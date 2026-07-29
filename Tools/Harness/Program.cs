@@ -39,6 +39,8 @@ class Program
         // north's turn (to check [Opponent's Turn] / conditional passive auras). Optional bigChar
         // is a south board Character (e.g. a 7000-power body for ST30-001's −2000 self-debuff).
         if (args.Length > 0 && args[0] == "powtest") { PowTest(args[1], args.Length > 2 ? args[2] : null); return 0; }
+        if (args.Length > 0 && args[0] == "mixednameortype") { MixedNameOrTypeTest(); return 0; }
+        if (args.Length > 0 && args[0] == "openreportsweep") { OpenReportSweep(); return 0; }
         // atktest <cardId> [numFriends] — places the card as an ACTIVE south attacker with numFriends
         // extra friendly Characters, declares an attack on north's Leader, and reports the attacker's
         // power + any pending effect (verifies [When Attacking] self-buffs auto-apply, e.g. OP07-034).
@@ -13370,6 +13372,261 @@ class Program
             Console.WriteLine("  PENDING: '" + (e.Text ?? "").Replace("\n", " ") + "'");
         Console.WriteLine("\n--- log ---");
         foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 8))) Console.WriteLine("  " + l.Message);
+    }
+
+    /// <summary>mixednameortype — the "{Tag} type Character card OR [Name]" disjunction (OP11-022
+    /// Shirahoshi: "Play up to 1 {Neptunian} type Character card or [Megalo] …from your hand") plus the
+    /// OP01-120 Shanks [When Attacking] prohibition-clause crash. Both were reported from live play.
+    ///
+    /// Asserts, on the REAL glow predicate the UI calls and the REAL resolver:
+    ///   • a {Neptunian} hand card is a legal target (it satisfies the TAG alternative)
+    ///   • [Megalo] is a legal target (satisfies the NAME alternative even though its type is
+    ///     "Animal/Fish-Man Island", NOT {Neptunian})
+    ///   • an unrelated hand card is still REJECTED — the negative control that proves the split did not
+    ///     simply open the filter up (the "or" inside "cost equal to or less than" splits too)
+    ///   • declaring an attack with Shanks does not throw.</summary>
+    static void MixedNameOrTypeTest()
+    {
+        Console.WriteLine("=== MIXEDNAMEORTYPE — disjunctive play filter + prohibition-clause queue ===");
+        int fail = 0;
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "mixed:1" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 7;
+        var S = st.Players["south"];
+        S.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; st.Players["north"].CharacterArea[i] = null; }
+        S.Hand.Clear();
+        // 10 DON!! on the field so the clause's dynamic cap ("cost equal to or less than the number of
+        // DON!! cards on your field") admits every card under test.
+        S.CostArea.Clear();
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = "d" + i, Rested = false });
+
+        CardInstance Hand(string id)
+        {
+            var c = new CardInstance { InstanceId = "h-" + id, CardId = id, Owner = "south", Zone = "hand" };
+            S.Hand.Add(c); return c;
+        }
+        var neptunian = Hand("EB04-016");   // Bird Neptunian    — cost 5, feature "Neptunian"
+        var megalo    = Hand("EB04-018");   // Megalo            — cost 4, feature "Animal/Fish-Man Island"
+        var unrelated = Hand("OP11-115");   // "You're Just Not My Type!" — Event, neither tag nor name
+
+        const string body = "Play up to 1 {Neptunian} type Character card or [Megalo] with a cost equal to or "
+                          + "less than the number of DON!! cards on your field from your hand.";
+        // 5-arg seam: it derives the target zone with InferTargetZone(text) exactly as the shipping
+        // queue sites do, so "…from your hand" routes to the Hand zone through the real code path.
+        GameEngine.QueueClauseForTest(st, "south", S.Leader, "activateMain", body);
+        var pe = st.PendingEffects.LastOrDefault(e => e.Seat == "south");
+        if (pe == null) { Console.WriteLine("FAIL: clause did not queue"); return; }
+
+        void Expect(string label, CardInstance c, bool want)
+        {
+            bool got = GameEngine.IsValidEffectTarget(st, pe, c);
+            Console.WriteLine($"  {(got == want ? "PASS" : "FAIL")}  glow {label,-28} expected={want} got={got}");
+            if (got != want) fail++;
+        }
+        Expect("EB04-016 Bird Neptunian", neptunian, true);
+        Expect("EB04-018 Megalo", megalo, true);
+        Expect("OP11-115 (neither) [neg ctrl]", unrelated, false);
+
+        // The resolver must agree with the glow, or the card lights up and the click is refused.
+        GameEngine.ApplyCommand(st, new GameCommand
+        {
+            Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = neptunian.InstanceId,
+        });
+        bool played = S.CharacterArea.Any(c => c != null && c.CardId == "EB04-016");
+        Console.WriteLine($"  {(played ? "PASS" : "FAIL")}  resolver played the {{Neptunian}} from hand");
+        if (!played) fail++;
+
+        // OP01-120 Shanks: "[When Attacking] Your opponent cannot activate a [Blocker] Character that has
+        // 2000 or less power…" is a PROHIBITION, so QueueEffect intentionally queues nothing — the call
+        // site then read PendingEffects[Count-1] and threw on the empty queue.
+        var st2 = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "mixed:2" });
+        st2.Status = "active"; st2.Phase = "main"; st2.ActiveSeat = "south"; st2.TurnNumber = 7;
+        var S2 = st2.Players["south"]; var N2 = st2.Players["north"];
+        S2.TurnsStarted = 4; N2.TurnsStarted = 4;
+        for (int i = 0; i < 5; i++) { S2.CharacterArea[i] = null; N2.CharacterArea[i] = null; }
+        S2.CharacterArea[0] = new CardInstance
+        {
+            InstanceId = "SHANKS", CardId = "OP01-120", Owner = "south", Zone = "character",
+            Rested = false, PlayedOnTurn = 0,
+        };
+        st2.PendingEffects.Clear();
+        try
+        {
+            GameEngine.ApplyCommand(st2, new GameCommand
+            {
+                Type = "declareAttack", Seat = "south", Attacker = "SHANKS", Target = N2.Leader.InstanceId,
+            });
+            // Assert the ban VALUE, not merely the absence of a throw: the prohibition-clause filter
+            // silently swallowed this clause, which stopped the crash but left the card completely
+            // INERT. "Did not throw" alone would have called that a pass.
+            int ban = st2.Battle?.BlockerPowerBanMax ?? 0;
+            Console.WriteLine($"  {(ban == 2000 ? "PASS" : "FAIL")}  OP01-120 Shanks: no throw AND the"
+                            + $" blocker ban applied (BlockerPowerBanMax expected=2000 got={ban})");
+            if (ban != 2000) fail++;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  FAIL  OP01-120 Shanks declareAttack threw {ex.GetType().Name}: {ex.Message}");
+            fail++;
+        }
+
+        Console.WriteLine(fail == 0 ? "\nMIXEDNAMEORTYPE: ALL PASS" : $"\nMIXEDNAMEORTYPE: {fail} FAILURE(S)");
+    }
+
+    /// <summary>openreportsweep — verifies the still-open player bug reports that are engine-testable.
+    /// Every case is driven through the REAL entry point (playCard / declareAttack), never by force-queuing
+    /// a clause, so a pass means the shipping gate was actually crossed.</summary>
+    static void OpenReportSweep()
+    {
+        Console.WriteLine("=== OPENREPORTSWEEP — engine-testable open reports ===");
+        int fail = 0;
+        void Check(string label, bool ok, string detail = "")
+        {
+            Console.WriteLine($"  {(ok ? "PASS" : "FAIL")}  {label}{(detail == "" ? "" : "  — " + detail)}");
+            if (!ok) fail++;
+        }
+        GameState Fresh(string seed, string southLeader = null)
+        {
+            var s = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = seed });
+            s.Status = "active"; s.Phase = "main"; s.ActiveSeat = "south"; s.TurnNumber = 9;
+            var sp = s.Players["south"]; var np = s.Players["north"];
+            sp.TurnsStarted = 5; np.TurnsStarted = 5;
+            for (int i = 0; i < 5; i++) { sp.CharacterArea[i] = null; np.CharacterArea[i] = null; }
+            sp.Hand.Clear();
+            sp.CostArea.Clear();
+            for (int i = 0; i < 10; i++) sp.CostArea.Add(new DonInstance { InstanceId = "d" + i, Rested = false });
+            if (southLeader != null)
+                sp.Leader = new CardInstance { InstanceId = "south-LEADER", CardId = southLeader, Owner = "south", Zone = "leader" };
+            return s;
+        }
+        CardInstance Give(GameState s, string seat, string zone, string cardId, string tag)
+        {
+            var c = new CardInstance { InstanceId = $"{seat}-{tag}", CardId = cardId, Owner = seat, Zone = zone, PlayedOnTurn = 0 };
+            if (zone == "hand") s.Players[seat].Hand.Add(c);
+            else s.Players[seat].CharacterArea[s.Players[seat].CharacterArea.FindIndex(x => x == null)] = c;
+            return c;
+        }
+
+        // ---- OP15-002 Lucy: "You may trash ANY NUMBER of Event or Stage cards from your hand. This
+        // Leader gains +1000 power during this battle for every card trashed."  Reports: events/cards in
+        // hand were never flagged as trashable, on offence AND on defence.
+        {
+            var s = Fresh("lucy:atk", "OP15-002");
+            var ev = Give(s, "south", "hand", "OP15-020", "ev");    // Fire Fist        — Event
+            var stg = Give(s, "south", "hand", "OP15-057", "stg");  // Dressrosa Kingdom — Stage
+            var ch = Give(s, "south", "hand", "OP15-053", "ch");    // a Character       — must NOT glow
+            GameEngine.ApplyCommand(s, new GameCommand
+            {
+                Type = "declareAttack", Seat = "south",
+                Attacker = s.Players["south"].Leader.InstanceId,
+                Target = s.Players["north"].Leader.InstanceId,
+            });
+            var pe = s.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            Check("Lucy [When Attacking] queued a decision", pe != null);
+            if (pe != null)
+            {
+                Check("Lucy: hand EVENT is trashable", GameEngine.IsValidEffectTarget(s, pe, ev));
+                Check("Lucy: hand STAGE is trashable", GameEngine.IsValidEffectTarget(s, pe, stg));
+                Check("Lucy: hand CHARACTER rejected [neg ctrl]", !GameEngine.IsValidEffectTarget(s, pe, ch));
+            }
+        }
+
+        // ---- OP15-002 Lucy on DEFENCE: the same clause is "[When Attacking]/[On Your Opponent's Attack]",
+        // and the report was filed for the DEFENDING half ("not showing any of my events as actually being
+        // useable ... during opponent's attack"). Offence passing does not prove defence: it is a separate
+        // engine entry point (ApplyOnOpponentAttackEffects), so drive that one too. Also asserts a real
+        // [Counter] event is still playable once Lucy's own decision is out of the way.
+        {
+            var s = Fresh("lucy:def", "OP15-002");
+            s.ActiveSeat = "north";                     // the opponent is attacking us
+            var atk = Give(s, "north", "character", "OP15-053", "atk");
+            atk.Rested = false;
+            var ev = Give(s, "south", "hand", "OP15-020", "ev");     // Event  — trashable fuel
+            var ctr = Give(s, "south", "hand", "OP11-115", "ctr");   // a real [Counter] Event
+            GameEngine.ApplyCommand(s, new GameCommand
+            {
+                Type = "declareAttack", Seat = "north",
+                Attacker = atk.InstanceId,
+                Target = s.Players["south"].Leader.InstanceId,
+            });
+            var pe = s.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            Check("Lucy [On Your Opponent's Attack] queued for the DEFENDER", pe != null);
+            if (pe != null)
+            {
+                Check("Lucy (defence): hand EVENT is trashable", GameEngine.IsValidEffectTarget(s, pe, ev));
+                GameEngine.ApplyCommand(s, new GameCommand
+                {
+                    Type = "passEffect", Seat = "south", EffectId = pe.EffectId,
+                });
+            }
+            Check("Lucy (defence): a [Counter] Event is usable after her decision clears",
+                GameEngine.CanCounterFromHand(s, "south", ctr));
+        }
+
+        // ---- OP15-020 Fire Fist: "[Main] Your Leader gains +3000 power during this turn AND give up to 1
+        // of your OPPONENT's Characters -8000 power…"  Report: it flagged the player's own Leader too.
+        {
+            var s = Fresh("firefist");
+            var mine = Give(s, "south", "character", "OP15-053", "mine");
+            var theirs = Give(s, "north", "character", "OP15-053", "theirs");
+            var ff = Give(s, "south", "hand", "OP15-020", "ff");
+            GameEngine.ApplyCommand(s, new GameCommand { Type = "playCard", Seat = "south", InstanceId = ff.InstanceId });
+            var pe = s.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            Check("Fire Fist queued its [Main] decision", pe != null);
+            if (pe != null)
+            {
+                Check("Fire Fist: opponent Character is a target", GameEngine.IsValidEffectTarget(s, pe, theirs));
+                Check("Fire Fist: OWN Leader NOT a target",
+                    !GameEngine.IsValidEffectTarget(s, pe, s.Players["south"].Leader));
+                Check("Fire Fist: OWN Character NOT a target", !GameEngine.IsValidEffectTarget(s, pe, mine));
+            }
+        }
+
+        // ---- OP13-083 St. Jaygarcia Saturn: "[On Play] Look at 5 cards from the top of your deck…"
+        // Report: it asked for a click on a BOARD card instead of running the searcher.
+        {
+            var s = Fresh("saturn");
+            var sat = Give(s, "south", "hand", "OP13-083", "sat");
+            GameEngine.ApplyCommand(s, new GameCommand { Type = "playCard", Seat = "south", InstanceId = sat.InstanceId });
+            bool look = s.DeckLook != null;
+            var boardPick = s.PendingEffects.FirstOrDefault(e => e.Seat == "south"
+                && e.TargetZone == EffectTargetZone.Play);
+            Check("Saturn [On Play] opened the deck-look searcher", look,
+                look ? "" : "DeckLook is null");
+            Check("Saturn did NOT ask for a board pick", boardPick == null,
+                boardPick == null ? "" : "pending: " + (boardPick.Text ?? "").Replace("\n", " "));
+        }
+
+        // ---- OP09-096 My Era...Begins!! — an EVENT that the player saw land in the STAGE zone.
+        {
+            var s = Fresh("myera");
+            var era = Give(s, "south", "hand", "OP09-096", "era");
+            GameEngine.ApplyCommand(s, new GameCommand { Type = "playCard", Seat = "south", InstanceId = era.InstanceId });
+            var sp = s.Players["south"];
+            Check("My Era (Event) did NOT occupy the Stage zone", sp.Stage == null,
+                sp.Stage == null ? "" : "Stage = " + sp.Stage.CardId);
+            Check("My Era left hand", !sp.Hand.Any(c => c.InstanceId == era.InstanceId));
+            Check("My Era opened its deck-look", s.DeckLook != null);
+        }
+
+        // ---- OP06-118 Roronoa Zoro: circled-DON!! cost on a [When Attacking]. The player could not
+        // click their DON!!; this asserts the ENGINE side — the cost is parsed and payable.
+        {
+            var s = Fresh("zoro");
+            var z = Give(s, "south", "character", "OP06-118", "zoro");
+            z.Rested = true;   // the ability sets it active again
+            GameEngine.ApplyCommand(s, new GameCommand
+            {
+                Type = "declareAttack", Seat = "south",
+                Attacker = s.Players["south"].Leader.InstanceId,
+                Target = s.Players["north"].Leader.InstanceId,
+            });
+            int parsed = GameEngine.ParseCircledDonCost(
+                "➀ (You may rest the specified number of DON!! cards in your cost area.): Set this Character as active.");
+            Check("Zoro: circled DON!! cost parses as 1", parsed == 1, "got " + parsed);
+        }
+
+        Console.WriteLine(fail == 0 ? "\nOPENREPORTSWEEP: ALL PASS" : $"\nOPENREPORTSWEEP: {fail} FAILURE(S)");
     }
 
     static void PowTest(string leaderId, string bigCharId)
