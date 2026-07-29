@@ -110,6 +110,13 @@ namespace OnePieceTcg.Sim
             // Ratchet, not a zero gate: some of these are legitimate and the honest move is to hold
             // the line rather than pretend the right number is zero. See SweepRatchet.
             SweepRatchet.Reset();
+            // Floor. Every prompted clause is skipped — correct, a prompt is the opposite of an
+            // auto-pick — but that means a break which made EVERYTHING prompt would leave this
+            // comparing nothing and still reporting 0. ~295 clauses are actually compared.
+            int compared = driven - prompted;
+            Console.WriteLine($"  clauses actually compared (unprompted): {compared}");
+            SweepRatchet.AtMost("clauses compared (floor — 0 findings from 0 compared is not a pass)",
+                                Math.Max(0, 150 - compared), 0);
             SweepRatchet.AtMost("auto-picked with a real choice available", findings.Count, AutoPickBaseline);
             return SweepRatchet.Result();
         }

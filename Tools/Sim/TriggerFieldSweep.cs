@@ -140,6 +140,12 @@ namespace OnePieceTcg.Sim
             foreach (var s in paidForNothing.Take(10)) Console.WriteLine("    " + s);
 
             SweepRatchet.Reset();
+            // Floor. Four separate skip paths (unbuildable board, damage that never lands, no
+            // trigger step, a throw) each `continue` past the checks — correct individually, but a
+            // fixture or engine break that tripped them all would leave every count at 0 and the
+            // suite green. 42 fire normally.
+            SweepRatchet.AtMost("[Trigger]s that actually fired (floor check)",
+                                Math.Max(0, 30 - fired), 0);
             SweepRatchet.AtMost("[Trigger] costs taken without asking", silentTakes.Count, Baseline);
             SweepRatchet.AtMost("[Trigger] costs paid for nothing", paidForNothing.Count, Baseline);
             SweepRatchet.AtMost("[Trigger]s where using and passing are indistinguishable",

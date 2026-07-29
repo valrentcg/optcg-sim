@@ -339,6 +339,12 @@ inspected (631 normally). **Two break types, two vacuous-pass holes, both in the
 shape to look for is a sweep that *correctly* skips an unverifiable case, because when everything
 becomes unverifiable it skips everything and reports a clean zero.
 
+That shape was then swept for directly rather than waiting for a third break to expose it. Four
+suites have a skip path; `promptzone` was fixed above and the other three now carry floors too —
+`autopick` (295 clauses actually compared), `triggerfield` (42 Triggers actually fired), and
+`glowsweep` (1,193 clauses actually stopped for a pick). Every suite that can skip its way to an
+empty run now fails instead of passing quietly.
+
 **A passing test is not evidence until it has been seen to fail.** The `uptonrider` suite is the
 cleanest example: three cases about an empty board all passed, and all three passed *identically*
 with the fix reverted — because at ZERO candidates the clause retires either way. They asserted

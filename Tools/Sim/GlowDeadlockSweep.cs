@@ -121,6 +121,12 @@ namespace OnePieceTcg.Sim
             // Ratcheting the Skip-only count gives it teeth it can use: fixture-dependent and
             // non-zero, but it must not grow.
             SweepRatchet.Reset();
+            // Floor. `hadGlow` clauses are skipped as healthy — correct — so a break that made
+            // everything clickable, or that stopped clauses waiting for a pick at all, would empty
+            // both lists and leave this green having judged nothing. This suite has a history of
+            // exactly that: it was once removed from the gate for being unfalsifiable.
+            SweepRatchet.AtMost("clauses that stopped for a board pick (floor check)",
+                                Math.Max(0, 200 - waiting), 0);
             SweepRatchet.AtMost("mandatory prompt with nothing clickable", deadMandatory.Count, 0);
             SweepRatchet.AtMost("optional prompt with nothing clickable", deadOptional.Count, 192);
             return SweepRatchet.Result();
