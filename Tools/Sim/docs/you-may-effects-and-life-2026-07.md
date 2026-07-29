@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**64 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**65 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -196,6 +196,14 @@ than saying "Use Effect".
   the opponent seeing a card they may not, and knowing a `[Trigger]` before it is dealt — invisible
   twice over, since nothing logs facing and the Life COUNT is unchanged. Controlled against the real
   defect: reintroducing the heal facing bug makes it report 3.
+- **Use actually does something** — `usevsskip`: the brief's second half as a DIFFERENTIAL.
+  `paidfornothing` asks whether the engine gave something back, which a log line satisfies; this
+  runs each cost-prefixed clause **twice from an identical board**, once pressing Use and once Skip,
+  and requires the two states to differ. **497 clauses driven, 421 demonstrably change the board.**
+  Baseline is **76, not 0** — that residual is fixture mismatch, not broken cards: a cost wanting a
+  `{Navy}` card in hand is correctly inert when the hand has none, and "Use == Skip" is then the
+  right answer. Four passes of fixture synthesis took it 111 → 108 → 90 → 76 **without changing a
+  line of engine code**, which is what shows the residual is measurement. Its value is the ratchet.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -244,7 +252,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 64 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 65 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 

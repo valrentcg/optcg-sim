@@ -123,6 +123,10 @@ namespace OnePieceTcg.Sim
             // opponent seeing a card they may not, and knowing a [Trigger] before it is dealt.
             // Invisible twice over — nothing logs facing, and the Life COUNT is unchanged.
             ("lifefacing",            LifeFacingSweep.Run),
+            // Differential form of "does the effect resolve": run each cost-prefixed clause twice,
+            // Use and Skip, and require the two boards to DIFFER. Baseline is NOT zero — see the
+            // suite header; the residual is fixture mismatch, and the value is that it must not grow.
+            ("usevsskip",             UseVsSkipSweep.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),
