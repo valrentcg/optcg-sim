@@ -97,6 +97,25 @@ The order of the errors is the useful part: overstated, then over-corrected, and
 sample settled it. A zero from a narrow sample is not evidence of absence, and neither is a
 large number from a path counter evidence of impact.
 
+### Two more measurements, one of them a non-result
+
+**The bots do use optional effects.** Over the same 6,724 games: **85,823 used, 42,664 skipped**
+— a 67% use rate. Worth knowing, because every prompt this session added is one the AI must
+answer, and an AI that reflexively Skips would make solo play weaker while leaving every test
+green.
+
+**The top-of-Life fix (#2) is unmeasured in play, and I could not make it measurable.** Its
+cost path was never reached in 6,724 games — not once — even though six of the 41 decks contain
+a card that uses it, including OP15-114 Wyper (the original report) and EB03-053 Nami in five
+decks. The bot plays optional effects two thirds of the time, so blanket Skipping is not the
+explanation; the cards are simply never played-and-used in this sample, or the cost reaches
+resolution by a route the counter did not sit on.
+
+Recorded as a gap rather than resolved. That fix rests on `lifefaceup` (8/8) and `lifeadvanced`
+(9/9), which is unit evidence and not play evidence — the same distinction that made the up-to-N
+numbers wrong twice. It is also, notably, the fix closest to what was actually reported, so its
+real confirmation is the Play-test, not this harness.
+
 ## Did any other fix break a consumer?
 
 The counter regression had a shape worth generalising: a rules fix changed what a function
