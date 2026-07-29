@@ -1,0 +1,1117 @@
+<title>Mystical targeting arrows — 45 variations</title>
+<style>
+  :root{--ground:#06060A;--panel:#0D0C14;--panel2:#09090F;--line:#1E1B29;
+    --ink:#DFD8EE;--dim:#7C7392;--accent:#B78CE8;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}
+  @media (prefers-color-scheme:light){:root{--ground:#EDEAF3;--panel:#FFF;--panel2:#F5F3F9;
+    --line:#D6D0E2;--ink:#150F1F;--dim:#5F5673;--accent:#6E3FB0;}}
+  :root[data-theme="dark"]{--ground:#06060A;--panel:#0D0C14;--panel2:#09090F;--line:#1E1B29;
+    --ink:#DFD8EE;--dim:#7C7392;--accent:#B78CE8;}
+  :root[data-theme="light"]{--ground:#EDEAF3;--panel:#FFF;--panel2:#F5F3F9;--line:#D6D0E2;
+    --ink:#150F1F;--dim:#5F5673;--accent:#6E3FB0;}
+  *{box-sizing:border-box}html,body{height:100%}
+  body{margin:0;overflow:hidden;background:var(--ground);color:var(--ink);
+    font-family:var(--sans);font-size:13px;line-height:1.5}
+  .app{display:grid;grid-template-rows:minmax(0,1fr) auto;height:100dvh}
+  .top{display:grid;grid-template-columns:minmax(0,1fr) 270px;min-height:0}
+  .stage{position:relative;background:#040308;overflow:hidden}
+  #big{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+  .hud{position:absolute;top:12px;left:14px;display:flex;flex-direction:column;gap:5px;
+    align-items:flex-start;font-family:var(--mono);font-size:11px;pointer-events:none}
+  .tag{background:rgba(6,5,10,.82);border:1px solid var(--line);padding:4px 10px;border-radius:3px}
+  .tag b{color:var(--accent)}.tag.dim{color:var(--dim)}
+  .bar{position:absolute;bottom:12px;left:14px;display:flex;gap:6px;flex-wrap:wrap}
+  button{font-family:var(--mono);font-size:11px;color:var(--ink);background:rgba(11,9,18,.88);
+    border:1px solid var(--line);border-radius:3px;padding:5px 10px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);
+    color:#170A26;font-weight:600}
+  .rail{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:13px}
+  .rail h2{margin:0 0 1px;font-size:16px}
+  .fam{margin:0 0 8px;font-family:var(--mono);font-size:10px;letter-spacing:.11em;
+    text-transform:uppercase;color:var(--accent)}
+  .rail p{margin:0 0 11px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:8px}
+  .row label{font-family:var(--mono);font-size:11px}
+  .row output{font-family:var(--mono);font-size:11px;color:var(--accent);
+    font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--accent);height:15px;display:block;margin:2px 0 0}
+  input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .ctl{border-top:1px solid var(--line);padding-top:10px;margin-top:6px}
+  select{width:100%;margin-top:3px;background:var(--panel2);color:var(--ink);
+    border:1px solid var(--line);border-radius:3px;padding:5px 6px;
+    font-family:var(--mono);font-size:11px}
+  select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .tray{border-top:1px solid var(--line);background:var(--panel2);position:relative}
+  #grid{display:block;width:100%;height:306px;cursor:pointer}
+  .labels{position:absolute;inset:0;display:grid;grid-template-columns:repeat(9,1fr);
+    grid-template-rows:repeat(5,1fr);pointer-events:none}
+  .labels span{font-family:var(--mono);font-size:8.5px;letter-spacing:.04em;text-transform:uppercase;
+    color:var(--dim);align-self:end;justify-self:center;padding-bottom:3px;
+    text-shadow:0 0 6px #000,0 0 3px #000}
+  .labels span.on{color:var(--accent);font-weight:700}
+  @media (max-width:820px){.top{grid-template-columns:minmax(0,1fr)}.rail{display:none}}
+</style>
+
+<div class="app">
+  <div class="top">
+    <div class="stage">
+      <canvas id="big"></canvas>
+      <div class="hud">
+        <span class="tag"><b id="nameTag"></b> · <b id="famTag"></b></span>
+        <span class="tag dim">drag to aim · wheel to zoom · 45 variations below</span>
+      </div>
+      <div class="bar">
+        <button id="bCalm">calm</button>
+        <button id="bLive" aria-pressed="true">live</button>
+        <button id="bSil" aria-pressed="false">silhouette</button>
+        <button id="bClean">strip processing</button>
+        <button id="bRev" aria-pressed="false">reverse flow</button>
+        <button id="bStateOff" aria-pressed="true">family colour</button>
+        <button id="bAim">neutral</button>
+        <button id="bValid">valid</button>
+        <button id="bInvalid">invalid</button>
+        <button id="bExport">export settings</button>
+      </div>
+    </div>
+    <aside class="rail">
+      <p class="fam" id="fam"></p>
+      <h2 id="title"></h2>
+      <p id="desc"></p>
+      <div class="ctl">
+        <div class="row"><label for="progSel">progression</label></div>
+        <select id="progSel"></select>
+        <div class="row"><label for="surge">progression strength</label><output id="surgeV"></output></div>
+        <input type="range" id="surge" min="0" max="2" step="0.02" value="0.72">
+        <div class="row"><label for="width">width</label><output id="widthV"></output></div>
+        <input type="range" id="width" min="2" max="26" step="0.5" value="5.5">
+        <div class="row"><label for="headW">head half-width</label><output id="headWV"></output></div>
+        <input type="range" id="headW" min="6" max="60" step="0.5" value="26">
+        <div class="row"><label for="headL">head length</label><output id="headLV"></output></div>
+        <input type="range" id="headL" min="14" max="140" step="1" value="50">
+        <div class="row"><label for="barb">barb weight</label><output id="barbV"></output></div>
+        <input type="range" id="barb" min="0" max="1" step="0.01" value="0.55">
+        <div class="row"><label for="headCrv">barb sweep</label><output id="headCrvV"></output></div>
+        <input type="range" id="headCrv" min="-1" max="1.6" step="0.02" value="-1">
+        <div class="row"><label for="tipSharp">tip sharpness</label><output id="tipSharpV"></output></div>
+        <input type="range" id="tipSharp" min="0" max="0.5" step="0.005" value="0">
+        <div class="row"><label for="tipPinch">tip halo pinch</label><output id="tipPinchV"></output></div>
+        <input type="range" id="tipPinch" min="0" max="6" step="0.05" value="0">
+        <div class="row"><label for="wisp">edge erosion</label><output id="wispV"></output></div>
+        <input type="range" id="wisp" min="0" max="2.2" step="0.02" value="0.3">
+        <div class="row"><label for="motes">motes</label><output id="motesV"></output></div>
+        <input type="range" id="motes" min="0" max="2" step="0.02" value="0.3">
+        <div class="row"><label for="aura">aura reach</label><output id="auraV"></output></div>
+        <input type="range" id="aura" min="0" max="3" step="0.02" value="0.96">
+        <div class="row"><label for="detail">fine detail</label><output id="detailV"></output></div>
+        <input type="range" id="detail" min="0" max="2" step="0.02" value="0.14">
+        <div class="row"><label for="auto">aim curvature</label><output id="autoV"></output></div>
+        <input type="range" id="auto" min="0" max="2" step="0.02" value="0.02">
+        <div class="row"><label for="curve">fixed curvature <small>(auto=0)</small></label><output id="curveV"></output></div>
+        <input type="range" id="curve" min="0" max="1.2" step="0.02" value="0.36">
+        <div class="row"><label for="expo">exposure</label><output id="expoV"></output></div>
+        <input type="range" id="expo" min="0.3" max="2.2" step="0.02" value="1.14">
+      </div>
+    </aside>
+  </div>
+  <div class="tray">
+    <canvas id="grid"></canvas>
+    <div class="labels" id="labels"></div>
+  </div>
+</div>
+
+<script>
+const S=[
+ ['Haki Aura','Haki','Black shaft with crimson pressure bleeding out of it, air distorting along the length.'],
+ ['Conqueror','Haki','Black lightning branching off the spine in irregular forks — will made visible.'],
+ ['Tendril','Haki','Dark strands braiding around a core, writhing at different rates.'],
+ ['Blood Ink','Haki','Crimson ink with weight, edges bleeding and pooling toward the tip.'],
+ ['Shadow Fray','Haki','The shaft frays into smoke at its margins and never quite resolves.'],
+ ['Void Rift','Haki','A tear in the board with light escaping from behind it.'],
+ ['Sigil Chain','Arcane','Glyph marks strung along the path, each fading in as the surge passes.'],
+ ['Summon Ring','Arcane','Counter-rotating rune rings at the source, beam drawn from their centre.'],
+ ['Script Flow','Arcane','Running script travelling the shaft toward the target.'],
+ ['Hex Lattice','Arcane','A geometric lattice cage around a soft core — structured magic.'],
+ ['Seal Burst','Arcane','Concentric seal circles at both ends, breathing out of phase.'],
+ ['Ley Line','Arcane','A thin bright line with glyph nodes orbiting it slowly.'],
+ ['Spirit Wisp','Ethereal','Layered vapour with no hard edge anywhere, drifting at three rates.'],
+ ['Smoke Ribbon','Ethereal','A ribbon that dissolves into smoke behind itself.'],
+ ['Aurora','Ethereal','A soft undulating curtain, colour sliding along the fold.'],
+ ['Phantom','Ethereal','A double image, one lagging the other, never quite aligned.'],
+ ['Breath','Ethereal','A translucent bloom that expands and contracts like something sleeping.'],
+ ['Unwind','Ethereal','Continuously eroding along its length and reforming from the source.'],
+ ['Starfall','Celestial','Motes shedding off the shaft and falling away behind it.'],
+ ['Constellation','Celestial','Bright nodes joined by faint lines, the shape implied not drawn.'],
+ ['Nebula','Celestial','A soft coloured cloud with the path buried inside it.'],
+ ['Comet Veil','Celestial','A bright head trailing a long dissipating veil.'],
+ ['Prism','Celestial','Iridescence sliding along the length, hue shifting with the surge.'],
+ ['Eclipse','Celestial','A dark core ringed by corona light, brightest at its rim.'],
+ ['Full Arcane','Grand','Rings at the source, a glyph band inside them, and the beam drawn out of their centre — the three layers counter-rotate so the pattern never resyncs.'],
+ ['Grand Seal','Grand','Four independent layers: slow outer ring, fast counter ring, glyph band, and the beam. Built to read at a glance and reward looking closer.'],
+ ['Ember Veil','Grand','Three explicit scales — a coarse drifting cloud, a medium ribbon, and fine embers riding the surge.'],
+ ['Frost','Elemental','Crystalline facets forming along the shaft, pale and brittle, with a cold rim.'],
+ ['Molten','Elemental','A dark crust cracked open by the heat running underneath it.'],
+ ['Whisper','Elemental','Barely there — the faintest arrow that still reads. The restraint test.'],
+ ['Thorn','Elemental','Spines shed backward off the shaft, sharp and irregular.'],
+ ['Silk','Elemental','A smooth flowing band with a travelling sheen and no hard edge.'],
+ ['Fracture','Elemental','The line broken into shards with dark gaps between them.'],
+ ['Petal','Elemental','Blossom-shaped motes drifting off the shaft — the Wano armament tell.'],
+ ['Tide','Elemental','A crest that swells and rolls forward. Water rather than fire.'],
+ ['Emberfall','Elemental','Bright at the head, shedding embers that fall away behind it.'],
+ ['Sever','Structured','A cut in the board — a thin bright seam with darkness pushed out either side.'],
+ ['Weave','Structured','Several thin threads braiding over and under each other along the path.'],
+ ['Pulse Ring','Structured','Rings perpendicular to the path, travelling outward from the source.'],
+ ['Feather','Structured','Fletching — angled barbs shed backward along the whole length.'],
+ ['Vine','Structured','Organic growth with offshoots budding from the main line.'],
+ ['Circuit','Structured','Right-angle traces stepping toward the target with node junctions.'],
+ ['Ash','Structured','A dark body crumbling into drifting particles from the tail forward.'],
+ ['Halo Chain','Structured','Rings threaded onto the path like beads on a wire.'],
+ ['Mirror','Structured','Split into two offset copies that converge only at the head.'],
+];
+
+const big=document.getElementById('big'), grid=document.getElementById('grid');
+const gl=big.getContext('webgl2',{antialias:false});
+const gl2=grid.getContext('webgl2',{antialias:false});
+const V=id=>parseFloat(document.getElementById(id).value);
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const VS=`#version 300 es
+in vec2 a; out vec2 vUv;
+void main(){ vUv=a; gl_Position=vec4(a*2.0-1.0,0.0,1.0); }`;
+
+const FS=`#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 frag;
+uniform vec2 uRes,uA,uB;
+uniform float uZoom,uTime,uW,uWisp,uMotes,uAura,uCurve,uExpo,uStyle,uLive,uDetail;
+uniform float uHeadW,uHeadL,uBarb,uSil,uProg,uSurge,uHeadCrv,uTipSharp,uTipPinch,uRev;
+uniform float uAuto,uStateCol;
+
+float h11(float n){ float s=sin(n*127.1)*43758.5453; return s-floor(s); }
+float h21(vec2 p){ float s=sin(dot(p,vec2(127.1,311.7)))*43758.5453; return s-floor(s); }
+float vn(vec2 p){
+  vec2 i=floor(p), f=p-i; vec2 u=f*f*(3.0-2.0*f);
+  return mix(mix(h21(i),h21(i+vec2(1,0)),u.x),mix(h21(i+vec2(0,1)),h21(i+vec2(1,1)),u.x),u.y);
+}
+float fbm(vec2 p){ float a=0.0,m=0.5; for(int i=0;i<5;i++){a+=vn(p)*m;p*=2.03;m*=0.5;} return a; }
+
+vec2 A_,B_,C_; float LEN;
+vec2 bez(float t){ float u=1.0-t; return u*u*A_+2.0*u*t*C_+t*t*B_; }
+void setup(){
+  A_=uA; B_=uB; vec2 ab=B_-A_; LEN=max(length(ab),1e-3);
+  vec2 n=vec2(-ab.y,ab.x)/LEN;
+  vec2 dir=ab/LEN;
+  // Curvature derived from AIM rather than fixed. lateral is the signed cross product
+  // of board-forward (0,1) with the aim direction: 0 dead ahead, +/-1 at full left/right.
+  // So the arrow is a straight line when pointed forward and bows further, and to the
+  // matching side, as the target swings off centre.
+  float lateral=-dir.x;
+  float bow=(uAuto>0.001)?(uAuto*lateral):uCurve;
+  C_=A_+ab*0.5+n*bow*min(LEN*0.32,200.0);
+}
+// distance to the spine plus the parameter there
+float spine(vec2 p, out float tOut){
+  float best=1e9; tOut=0.0; vec2 prev=A_;
+  for(int i=1;i<=18;i++){
+    float t=float(i)/18.0; vec2 cur=bez(t);
+    vec2 ab=cur-prev; float L2=max(dot(ab,ab),1e-6);
+    float on=clamp(dot(p-prev,ab)/L2,0.0,1.0);
+    float d=length(p-(prev+ab*on));
+    if(d<best){ best=d; tOut=(float(i-1)+on)/18.0; }
+    prev=cur;
+  }
+  return best;
+}
+// The head must speak the same language as the body. Two straight strokes of CONSTANT
+// width meeting at a hard angle is rigid geometry bolted onto an organic taper — the
+// shapes contradict each other and the join reads as ugly no matter how it is placed.
+// So the barbs are swept curves that TAPER TO A POINT, exactly like the shaft: same
+// curvature, same convergence, no constant-width anything.
+float sdSeg(vec2 p,vec2 a,vec2 b){
+  vec2 ab=b-a, ap=p-a;
+  float t=clamp(dot(ap,ab)/max(dot(ab,ab),1e-6),0.0,1.0);
+  return length(ap-ab*t);
+}
+float taperSeg(vec2 p,vec2 a,vec2 b,float ra,float rb){
+  vec2 ab=b-a, ap=p-a;
+  float t=clamp(dot(ap,ab)/max(dot(ab,ab),1e-6),0.0,1.0);
+  return length(ap-ab*t)-mix(ra,rb,t);
+}
+// One source of truth for barb thickness. The loop below used to seed its running
+// radius with w0 (full thickness) while the in-loop formula said the radius at tt=0 is
+// w0*uTipSharp — so the first segment started fat and the head never came to a point,
+// no matter what the sharpness slider said.
+float barbW(float tt,float w0){
+  return w0*(uTipSharp+(1.0-uTipSharp)*pow(tt,0.50))*(1.0-tt*tt*0.95);
+}
+float headD(vec2 p, out float ht){
+  ht=0.0;
+  vec2 dir=normalize(B_-bez(0.86));
+  vec2 per=vec2(-dir.y,dir.x);
+  vec2 base=B_-dir*uHeadL;
+  float w0=uHeadW*(0.15+0.32*uBarb);       // thickness where the barbs leave the tip
+  float d=1e9;
+  for(int s=0;s<2;s++){
+    float side=(s==0)?1.0:-1.0;
+    vec2 end=base+per*side*uHeadW;
+    // control point bows the barb outward, echoing the shaft's own curvature
+    vec2 ctrl=mix(B_,end,0.42)+per*side*uHeadW*0.42*uHeadCrv - dir*uHeadL*0.10*uHeadCrv;
+    vec2 prev=B_; float rp=barbW(0.0,w0);
+    for(int i=1;i<=7;i++){
+      float tt=float(i)/7.0, u=1.0-tt;
+      vec2 cur=u*u*B_+2.0*u*tt*ctrl+tt*tt*end;
+      // Thin at the TIP, swelling through the middle, tapering at the free end. The
+      // previous profile started at full thickness where the barbs meet, so both of
+      // them piled up at B_ and the head ended in a blob instead of a point.
+      float r=barbW(tt,w0);
+      float cand=taperSeg(p,prev,cur,rp,r);
+      if(cand<d){ d=cand; ht=tt; }     // barb parameter at the nearest point
+      prev=cur; rp=r;
+    }
+  }
+  return d;
+}
+float taper(float t){
+  // Converge to ZERO across the head. A plane clip leaves a straight cut, and a chevron
+  // is open between its strokes, so that cut shows as a rectangle edge inside the V.
+  // Narrowing to a point instead means there is no end edge anywhere: the body runs up
+  // into the chevron and disappears at the tip, covered by the strokes.
+  float tB=clamp(1.0-uHeadL/max(LEN,1e-3),0.05,0.95);
+  float grow=uW*(0.20+1.35*pow(t,0.70));
+  return grow*(1.0-smoothstep(tB*0.86,1.0,t));
+}
+
+vec3 hsl(float hh,float s,float l){
+  hh=fract(hh/360.0); vec3 k=mod(vec3(0.0,8.0,4.0)+hh*12.0,12.0);
+  return l-s*min(l,1.0-l)*clamp(min(k-3.0,9.0-k),-1.0,1.0);
+}
+// drifting motes shed along the path — the cheapest thing that reads as "alive"
+vec3 motes(vec2 p,float T,vec3 c,float spread,float count){
+  vec3 acc=vec3(0.0);
+  for(int i=0;i<26;i++){
+    float f=float(i);
+    if(f>count) break;
+    float seed=h11(f*7.31);
+    float life=fract(T*(0.10+seed*0.16)+seed);
+    float t=clamp(life,0.0,1.0);
+    vec2 base=bez(t);
+    vec2 nrm=normalize(vec2(-(B_-A_).y,(B_-A_).x));
+    float sway=sin(T*(0.7+seed*1.9)+seed*20.0)*spread*(0.35+seed);
+    vec2 q=base+nrm*sway - normalize(B_-A_)*life*spread*0.8;
+    float r=length(p-q);
+    float tw=0.55+0.45*sin(T*(2.0+seed*5.0)+seed*11.0);
+    float fade=sin(life*3.14159);
+    acc+=c*(1.6+seed)*tw*fade/(1.0+r*r*(0.9/(uW*0.55+1.0)));
+  }
+  return acc*0.05;
+}
+// a small procedural glyph: ring plus radial ticks
+float glyph(vec2 q,float r,float seed){
+  float ring=abs(length(q)-r)-r*0.10;
+  float a=atan(q.y,q.x);
+  float ticks=abs(fract(a/6.2831*6.0+seed)-0.5)*2.0;
+  float spokes=max(ring, -(length(q)-r*1.5)) - ticks*r*0.16;
+  return min(ring,spokes);
+}
+// TWELVE PROGRESSIONS. One shared surge across every style reads as the same effect
+// recoloured. Each style gets its own motion signature; uProg < 0 uses the per-style
+// default, otherwise any progression can be forced onto any arrow.
+float easeOut(float x,float p){ return 1.0-pow(1.0-clamp(x,0.0,1.0),p); }
+float gauss(float d,float s){ float x=d/max(s,1e-4); return exp(-x*x); }
+
+const float EHUE[9]=float[9](188.0,24.0,210.0,320.0,275.0,200.0,340.0,196.0,18.0);
+const float NHUE[9]=float[9](  0.0,150.0,190.0, 45.0,110.0,170.0, 30.0, 50.0,230.0);
+const int PROGD[45]=int[45](
+  3,4,5,11,8,9,     // Haki:      breathe flicker crawl drain shimmer heartbeat
+  1,2,5,8,9,10,     // Arcane:    train charge crawl shimmer heartbeat chase
+  3,11,6,10,3,11,   // Ethereal:  breathe drain ripple chase breathe drain
+  0,8,3,0,5,12,     // Celestial: launch shimmer breathe launch crawl RUNOUT(eclipse)
+  2,2,6,            // Grand:     charge charge ripple
+  8,5,3,4,5,4,6,11,0, // Elemental
+  4,5,1,3,7,0,11,6,10);// Structured
+
+// Cycle helper. 'span' is the fraction of the period the motion occupies; the rest
+// is deliberate rest. 'env' fades in and out inside that window so amplitude is zero
+// at both ends of the loop and the wrap is invisible. Travel is LINEAR within the
+// window — ease-out decelerates into the target, which is what made the surge crawl
+// the last stretch and sit on the arrowhead.
+float cyc01(float T,float rate,float span,out float env){
+  float c=fract(T*rate);
+  env=smoothstep(0.0,0.05*span,c)*(1.0-smoothstep(span*0.86,span,c));
+  return clamp(c/span,0.0,1.0);
+}
+float prog(int m,float t,float T,out float flare,out float wake){
+  flare=0.0; wake=0.0; float v=0.0; float env;
+  if(m==0){                                   // LAUNCH — throw, land, rest
+    float u=cyc01(T,0.42,0.70,env);
+    float d=t-u; v=gauss(d,(d>0.0)?0.045:0.19)*env;
+    wake=exp(-max(0.0,u-t)/0.40)*step(t,u)*env;
+    flare=gauss(u-0.93,0.055)*env;
+  } else if(m==1){                            // PULSE TRAIN — three, staggered
+    for(int k=0;k<3;k++){
+      float f=float(k);
+      float e2; float u=cyc01(T+f*0.42,0.52,0.66,e2);
+      float d=t-u; v+=gauss(d,(d>0.0)?0.034:0.12)*e2*(1.0-f*0.22);
+      flare=max(flare,gauss(u-0.94,0.05)*e2*0.7);
+    }
+  } else if(m==2){                            // CHARGE — gather, release, rest
+    float c=fract(T*0.34);
+    float g=smoothstep(0.0,0.46,c)*(1.0-smoothstep(0.50,0.58,c));
+    v=gauss(t-0.06,0.11)*g*1.5;
+    float r=clamp((c-0.52)/0.34,0.0,1.0);
+    float re=smoothstep(0.0,0.06,r)*(1.0-smoothstep(0.86,1.0,r));
+    if(c>0.52){
+      float d=t-r; v+=gauss(d,(d>0.0)?0.032:0.20)*1.7*re;
+      wake=exp(-max(0.0,r-t)/0.30)*step(t,r)*re;
+      flare=gauss(r-0.93,0.05)*re;
+    }
+  } else if(m==3){                            // BREATHE — periodic, loops by nature
+    v=(0.42+0.58*(0.5+0.5*sin(T*0.90)))*(0.55+0.45*t);
+  } else if(m==4){                            // FLICKER — stepped, no wrap seam
+    float s=floor(T*11.0);
+    float on=step(0.42,h11(s*3.1));
+    v=on*(0.5+0.5*h11(s*7.7))*(0.4+0.6*h11(s*2.3+floor(t*5.0)));
+    flare=on*h11(s*5.5)*0.6;
+  } else if(m==5){                            // CRAWL — continuous, seamless
+    float f=t*3.0-T*0.35;
+    v=0.32+0.68*(0.5+0.5*sin(f*6.2831))*(0.6+0.4*fbm(vec2(t*8.0,T*0.4)));
+  } else if(m==6){                            // RIPPLE — rings, each enveloped
+    float u=cyc01(T,0.30,0.78,env);
+    for(int k=0;k<3;k++){ float f=float(k);
+      float r=fract(u+f*0.33)*0.46;
+      v+=gauss(abs(t-u)-r,0.042)*(1.0-r*1.7)*env;
+    }
+    flare=gauss(u-0.92,0.06)*env;
+  } else if(m==7){                            // BLOOM — floods back from the tip
+    float u=cyc01(T,0.36,0.72,env);
+    float sp=1.0-u;
+    float d=t-sp; v=gauss(d,(d<0.0)?0.05:0.22)*env;
+    flare=gauss(u-0.06,0.06)*env;
+  } else if(m==8){                            // SHIMMER — stationary twinkle
+    v=0.30+0.70*pow(0.5+0.5*sin(t*46.0+T*3.1+fbm(vec2(t*12.0,T*0.6))*6.0),3.0);
+  } else if(m==9){                            // HEARTBEAT — beats kept off the wrap
+    float c=fract(T*0.44);
+    float b=gauss(c-0.12,0.034)+gauss(c-0.26,0.044)*0.72;
+    v=b*(0.5+0.6*t); flare=b*0.8;
+  } else if(m==10){                           // CHASE — two pulses, one catching
+    float e1; float u1=cyc01(T,0.38,0.74,e1);
+    float e2; float u2=cyc01(T+0.30,0.38,0.74,e2);
+    float d1=t-u1, d2=t-u2;
+    v=gauss(d1,(d1>0.0)?0.034:0.15)*e1 + gauss(d2,(d2>0.0)?0.027:0.11)*e2*0.8;
+    flare=gauss(u1-0.94,0.05)*e1;
+  } else if(m==11){                           // DRAIN — fill, hold, empty, rest
+    float c=fract(T*0.32);
+    float lvl = c<0.40 ? smoothstep(0.0,0.40,c)
+              : (c<0.55 ? 1.0 : 1.0-smoothstep(0.55,0.90,c));
+    v=smoothstep(lvl+0.06,lvl-0.06,t)*(0.35+0.65*t);
+    flare=gauss(c-0.42,0.05);
+  } else {                                    // RUNOUT — shaft, tip, then down the barbs
+    // t here is the 0..2 path parameter, not the spine parameter: 0..1 is the shaft,
+    // 1..2 is outward along both barbs. One pulse covers the whole run, flares as it
+    // crosses the tip, then rests before restarting at the source.
+    float u=cyc01(T,0.26,0.82,env);
+    float sp=u*2.0;
+    float d=t-sp;
+    v=gauss(d,(d>0.0)?0.055:0.22)*env;
+    wake=exp(-max(0.0,sp-t)/0.50)*step(t,sp)*env;
+    flare=gauss(sp-1.0,0.075)*env;            // flash as it passes the point
+  }
+  return v;
+}
+float aa(float d){ return clamp(0.5-d/max(fwidth(d),1e-6),0.0,1.0); }
+
+void main(){
+  vec2 p=(vUv-0.5)*uRes/uZoom;
+  setup();
+  float T=uTime*uLive;
+  int St=int(uStyle+0.5);
+  float t; float ds=spine(p,t);
+  float wid=taper(t);
+  // Every style below works from (ds - wid). Folding the head in here means all 27
+  // inherit a real arrow silhouette instead of each being a bare tapered tube.
+  //
+  // The shaft must STOP at the head's base. taper() still returns ~0.7*width at t=1,
+  // so an unclipped tube runs all the way to the tip and its rounded cap protrudes
+  // past the head's apex — a stub sticking out of the point. Clipping the tube against
+  // the base plane (max of two fields = intersection) hands everything forward of the
+  // base to the head, so the silhouette ends on the head's vertex and nothing else.
+  // No clip plane: taper() already brings the body to a point at the tip, so the union
+  // with the chevron is seamless and nothing protrudes past it.
+  vec2 dirH=normalize(B_-bez(0.86));
+  float headT; float headDist=headD(p,headT);
+  float shaftTube=ds-wid;
+  // Path parameter spanning BOTH pieces: 0..1 along the shaft, 1..2 out along the barbs.
+  // Without this a surge can only ever travel the spine, because the barbs are separate
+  // geometry with their own parameterisation.
+  float phase=(headDist<shaftTube)?(1.0+headT):t;
+  ds=min(shaftTube, headDist)+wid;
+  // ANISOTROPY PAST THE TIP, applied to the FIELD rather than to one term. Near the tip
+  // the shape is effectively a point, and every style draws inflated terms for its inner
+  // core — aa(d + uW*0.55) and similar. Inflating a point by a constant produces a DISC,
+  // which is the ball that appeared on all 45. Pushing the field away forward of the tip
+  // makes every one of those terms taper along the axis while staying full at the sides.
+  ds+=max(dot(p-B_,dirH),0.0)*uTipPinch;
+  // eroded boundary — the single biggest departure from a clean SDF
+  float er=(fbm(p*0.017+vec2(T*0.20,-T*0.13))-0.5)*uWisp*uW*1.15;
+  float d=ds-wid+er;
+  vec3 col=vec3(0.0);
+  float au=max(uAura*uW*2.4,0.001);
+  // Anisotropic at the tip. A radially symmetric falloff turns into a full 360 disc
+  // where the shape converges, which reads as a bulb stuck on the point. Adding the
+  // forward distance past the tip into the falloff compresses the halo along the axis
+  // while leaving it untouched at the sides, so the glow tapers instead of balling up.
+  float halo=pow(clamp(1.0-max(ds-wid,0.0)/au,0.0,1.0),1.8);   // ds already carries the pinch
+
+  // ---- family palettes ----
+  vec3 deep,mid,hot;
+  if(uStateCol>-0.5){
+    // Explicit gameplay state overrides the family palette: neutral / valid / invalid.
+    float sh = uStateCol<0.5 ? 214.0 : (uStateCol<1.5 ? 145.0 : 2.0);
+    deep=hsl(sh-12.0,0.72,0.19);
+    mid =hsl(sh,      0.66,0.48);
+    hot =hsl(sh+14.0, 0.34,0.88);
+  }
+  else if(St<6){      deep=hsl(348.0,0.85,0.16); mid=hsl(354.0,0.80,0.40); hot=hsl(12.0,0.55,0.80); }
+  else if(St<12){deep=hsl(268.0,0.70,0.20); mid=hsl(276.0,0.62,0.50); hot=hsl(292.0,0.40,0.86); }
+  else if(St<18){deep=hsl(196.0,0.42,0.22); mid=hsl(188.0,0.35,0.52); hot=hsl(180.0,0.20,0.90); }
+  else if(St<24){deep=hsl(232.0,0.62,0.20); mid=hsl(246.0,0.55,0.52); hot=hsl(268.0,0.30,0.90); }
+  else if(St<27){deep=hsl(276.0,0.60,0.18); mid=hsl(288.0,0.48,0.46); hot=hsl(44.0, 0.62,0.82); }
+  else if(St<36){ float hh=EHUE[St-27];
+        deep=hsl(hh-12.0,0.58,0.19); mid=hsl(hh,0.52,0.50); hot=hsl(hh+16.0,0.30,0.88); }
+  else{ float hh=NHUE[St-36];
+        deep=hsl(hh-10.0,0.50,0.17); mid=hsl(hh,0.46,0.48); hot=hsl(hh+18.0,0.26,0.90); }
+
+  if(St==0){                    // HAKI AURA
+    float haze=fbm(p*0.03+vec2(T*0.4,T*0.2));
+    col=deep*halo*(1.6+haze*1.4);
+    col+=mid*aa(d)*0.55;
+    col=mix(col,vec3(0.02,0.01,0.02),aa(d+uW*0.55)*0.92);   // black core, light only at the rim
+    col+=hot*aa(abs(d)-uW*0.10)*0.30;
+  }
+  else if(St==1){               // CONQUEROR — branching black lightning
+    float acc=0.0;
+    for(int k=0;k<5;k++){
+      float fk=float(k), off=(h11(fk*3.7)-0.5)*uW*3.2;
+      float j=(fbm(vec2(t*7.0+fk*9.0, floor(T*7.0)+fk))-0.5)*uW*3.4;
+      float dd=abs(ds+off+j)-uW*0.30;
+      acc+=aa(dd)*(0.5+0.5*h11(fk+floor(T*7.0)));
+    }
+    col=deep*halo*1.3+mid*acc*0.5;
+    col=mix(col,vec3(0.01),aa(ds-wid*0.55)*0.9);
+    col+=hot*acc*0.35;
+  }
+  else if(St==2){               // TENDRIL
+    for(int k=0;k<3;k++){
+      float fk=float(k);
+      float ph=T*(0.8+fk*0.35)+fk*2.1;
+      float off=sin(t*9.0+ph)*uW*1.5;
+      float dd=abs(ds+off)-uW*(0.34+0.10*fk)+er*0.6;
+      col+=mix(deep,mid,fk/2.0)*aa(dd)*0.45;
+    }
+    col+=deep*halo*1.5;
+    col+=hot*aa(ds-uW*0.16)*0.25;
+  }
+  else if(St==3){               // BLOOD INK
+    float drip=fbm(vec2(t*10.0,p.y*0.05-T*0.25));
+    float dd=d-drip*uW*0.55*uWisp;
+    col=deep*halo*1.1;
+    col=mix(col,deep*1.2,aa(dd));
+    col=mix(col,mid,aa(dd+uW*0.5)*0.85);
+    col+=hot*aa(dd+uW*0.95)*0.5*pow(t,1.5);
+  }
+  else if(St==4){               // SHADOW FRAY
+    float f1=aa(d), f2=aa(d+uW*0.9), f3=aa(ds-wid*1.8+er*2.2);
+    col=deep*halo*1.4+deep*f3*0.35;
+    col=mix(col,mix(deep,mid,0.4),f1*0.8);
+    col=mix(col,vec3(0.015,0.008,0.02),f2*0.85);
+    col+=hot*f2*0.10;
+  }
+  else{ if(St==5){              // VOID RIFT
+    float rift=abs(ds)-wid*0.34+er*0.5;
+    col=deep*halo*1.2;
+    col+=hot*aa(rift+uW*0.12)*0.9;                      // light escaping the tear
+    col=mix(col,vec3(0.0),aa(rift)*0.97);
+    col+=mid*pow(clamp(1.0-abs(rift)/(uW*2.2),0.0,1.0),2.5)*0.7;
+  }
+  else if(St==6){               // SIGIL CHAIN
+    col=deep*halo*1.2+mid*aa(ds-wid*0.30)*0.5;
+    for(int k=0;k<7;k++){
+      float fk=float(k), tk=fract(fk/7.0+T*0.06);
+      vec2 q=p-bez(tk);
+      float g=glyph(q,uW*1.5,fk*1.7);
+      col+=hot*aa(g)*0.55*sin(tk*3.14159);
+    }
+  }
+  else if(St==7){               // SUMMON RING
+    col=deep*halo*1.1+mid*aa(d)*0.6+hot*aa(d+uW*0.7)*0.5;
+    for(int k=0;k<2;k++){
+      float fk=float(k);
+      vec2 q=p-A_; float ang=T*(0.5-fk)*0.9;
+      q=vec2(q.x*cos(ang)-q.y*sin(ang), q.x*sin(ang)+q.y*cos(ang));
+      float g=glyph(q,uW*(3.0+fk*1.6),fk*3.0);
+      col+=hot*aa(g)*0.45;
+    }
+  }
+  else if(St==8){               // SCRIPT FLOW
+    col=deep*halo*1.0+mid*aa(d)*0.45;
+    float run=fract(t*5.0-T*0.5);
+    float mark=step(0.55,h21(vec2(floor(t*5.0-T*0.5), floor(ds/(uW*0.6)))));
+    col+=hot*mark*aa(ds-wid*0.75)*run*0.9;
+  }
+  else if(St==9){               // HEX LATTICE
+    col=deep*halo*1.2+mid*aa(d+uW*0.4)*0.35;
+    vec2 lp=p*0.10; lp.x+=T*0.15;
+    float lat=min(abs(fract(lp.x)-0.5),abs(fract(lp.y)-0.5))*2.0;
+    col+=hot*(1.0-smoothstep(0.05,0.14,lat))*aa(ds-wid*1.4)*0.55;
+  }
+  else if(St==10){              // SEAL BURST
+    col=deep*halo*1.0+mid*aa(d)*0.5;
+    float b1=0.85+0.15*sin(T*1.3), b2=0.85+0.15*sin(T*1.3+2.0);
+    col+=hot*aa(glyph(p-A_,uW*3.2*b1,0.0))*0.5;
+    col+=hot*aa(glyph(p-B_,uW*2.4*b2,1.3))*0.6;
+  }
+  else if(St==11){              // LEY LINE
+    col=deep*halo*1.3;
+    col+=hot*aa(ds-uW*0.16)*0.95;
+    for(int k=0;k<6;k++){
+      float fk=float(k), tk=fract(fk/6.0+T*0.05);
+      vec2 c0=bez(tk);
+      vec2 nrm=normalize(vec2(-(B_-A_).y,(B_-A_).x));
+      vec2 q=p-(c0+nrm*sin(T*1.1+fk*2.0)*uW*1.6);
+      col+=mid*(1.0/(1.0+dot(q,q)*0.04/(uW*0.2+0.1)))*0.13;
+    }
+  }
+  else if(St==12){              // SPIRIT WISP
+    // Haze hugs tighter: reach scaled by uAura (was a fixed uW*3.0 that ignored the
+    // slider), layer spacing pulled in, and a steeper exponent so it falls off sooner.
+    float reach=uW*1.9*max(uAura,0.05);
+    for(int k=0;k<3;k++){
+      float fk=float(k);
+      float drift=uRev>0.5?-1.0:1.0;
+      float e=(fbm(p*(0.012+0.009*fk)+vec2(drift*T*(0.20+fk*0.12),-drift*T*0.10*fk))-0.5)
+              *uWisp*uW*(1.6+fk);
+      float dd=ds-wid*(1.0+0.34*fk)+e;
+      col+=mix(deep,mid,fk*0.5)*pow(clamp(1.0-max(dd,0.0)/(reach*(1.0+0.45*fk)),0.0,1.0),2.1)
+           *(0.5-fk*0.12);
+    }
+    col+=hot*pow(clamp(1.0-max(ds-wid*0.35,0.0)/(uW*0.8),0.0,1.0),2.2)*0.35;
+  }
+  else if(St==13){              // SMOKE RIBBON
+    float sm=fbm(p*0.02-vec2(T*0.35,T*0.1));
+    float dd=ds-wid+ (sm-0.45)*uW*2.4*uWisp*(1.15-t);
+    col=deep*halo*1.2;
+    col+=mix(deep,mid,0.55)*pow(clamp(1.0-max(dd,0.0)/(uW*2.2),0.0,1.0),1.5)*0.85;
+    col+=hot*aa(dd+uW*0.5)*0.35*pow(t,1.2);
+  }
+  else if(St==14){              // AURORA
+    float fold=sin(t*7.0+T*0.8)*uW*1.4;
+    float dd=abs(ds+fold)-wid*0.8+er*0.7;
+    float band=0.5+0.5*sin(t*11.0-T*1.4);
+    col=mix(deep,mid,band)*pow(clamp(1.0-max(dd,0.0)/(uW*3.2),0.0,1.0),1.4)*1.1;
+    col+=hot*band*aa(dd+uW*0.4)*0.35;
+    col+=deep*halo*0.8;
+  }
+  else if(St==15){              // PHANTOM
+    vec2 lag=normalize(B_-A_)*uW*1.6;
+    float t2; float ds2=spine(p+lag,t2);
+    col=deep*halo*1.1;
+    col+=mid*aa(ds2-taper(t2)+er)*0.35;
+    col+=mix(mid,hot,0.5)*aa(d)*0.55;
+  }
+  else if(St==16){              // BREATH
+    float br=0.80+0.32*sin(T*0.9);
+    float dd=ds-wid*br+er*0.8;
+    col=deep*pow(clamp(1.0-max(ds-wid,0.0)/(au*br*1.5),0.0,1.0),1.5)*1.6;
+    col+=mix(deep,mid,0.6)*aa(dd)*0.6;
+    col+=hot*aa(dd+uW*0.6)*0.45*br;
+  }
+  else if(St==17){              // UNWIND
+    float wave=fract(t*1.2-T*0.28);
+    float dd=d+ (1.0-smoothstep(0.0,0.35,wave))*uW*2.0;
+    col=deep*halo*1.1;
+    col+=mid*aa(dd)*0.7;
+    col+=hot*aa(dd+uW*0.55)*0.45;
+  }
+  else if(St==18){              // STARFALL
+    col=deep*halo*1.0+mid*aa(d)*0.45+hot*aa(d+uW*0.55)*0.35;
+    col+=motes(p,T,hot,uW*4.5,uMotes*22.0);
+  }
+  else if(St==19){              // CONSTELLATION
+    col=deep*halo*0.7;
+    col+=mid*pow(clamp(1.0-max(ds-wid*0.25,0.0)/(uW*1.2),0.0,1.0),2.2)*0.35;
+    for(int k=0;k<9;k++){
+      float fk=float(k), tk=fk/8.0;
+      vec2 c0=bez(tk);
+      float r=length(p-c0);
+      float tw=0.6+0.4*sin(T*1.7+fk*2.3);
+      col+=hot*tw*0.09/(1.0+r*r*0.05/(uW*0.15+0.1));
+    }
+  }
+  else if(St==20){              // NEBULA
+    float n1=fbm(p*0.012+vec2(T*0.10,0.0));
+    float n2=fbm(p*0.026-vec2(0.0,T*0.14));
+    float cloud=pow(clamp(1.0-max(ds-wid*1.1,0.0)/(uW*5.0),0.0,1.0),1.3);
+    col=mix(deep,mid,n1)*cloud*(0.8+n2*1.2);
+    col+=hot*aa(ds-wid*0.30)*0.30;
+  }
+  else if(St==21){              // COMET VEIL
+    float lead=pow(t,2.4);
+    float veil=pow(clamp(1.0-max(ds-wid*(0.4+lead),0.0)/(uW*(1.5+6.0*lead)),0.0,1.0),1.5);
+    col=mix(deep,mid,lead)*veil*(0.35+lead*1.5);
+    col+=hot*aa(ds-wid*0.45*lead-uW*0.25)*lead*0.9;
+    col+=motes(p,T,mid,uW*3.0,uMotes*10.0)*0.7;
+  }
+  else if(St==22){              // PRISM
+    float shift=t*160.0+T*40.0;
+    vec3 ir=hsl(232.0+shift,0.55,0.55);
+    col=deep*halo*0.9;
+    col+=ir*aa(d)*0.75;
+    col+=hsl(232.0+shift+40.0,0.30,0.88)*aa(d+uW*0.6)*0.5;
+  }
+  else if(St==23){              // ECLIPSE
+    float rim=abs(ds-wid*0.85)-uW*0.16+er*0.4;
+    col=deep*halo*1.4;
+    col+=hot*aa(rim)*0.95;
+    col=mix(col,vec3(0.006,0.004,0.012),aa(ds-wid*0.80)*0.96);
+    col+=mid*pow(clamp(1.0-max(ds-wid*0.85,0.0)/(uW*3.0),0.0,1.0),2.0)*0.55;
+  }
+  else if(St==24){              // FULL ARCANE — rings + glyph band + beam, counter-rotating
+    col=deep*halo*1.05;
+    col+=mid*aa(d)*0.55;
+    col+=hot*aa(d+uW*0.65)*0.45;
+    vec2 q=p-A_;
+    for(int k=0;k<3;k++){
+      float fk=float(k);
+      float ang=T*(0.30-fk*0.28)*(mod(fk,2.0)<0.5?1.0:-1.0);   // never resync
+      vec2 r=vec2(q.x*cos(ang)-q.y*sin(ang), q.x*sin(ang)+q.y*cos(ang));
+      float g=glyph(r,uW*(2.4+fk*1.5),fk*2.7);
+      col+=hot*aa(g)*(0.42-fk*0.08);
+    }
+    float band=abs(length(q)-uW*3.9)-uW*0.34;                   // glyph band between rings
+    float gl=step(0.62,h21(vec2(floor(atan(q.y,q.x)/6.2831*24.0+T*0.5),3.0)));
+    col+=hot*aa(band)*gl*0.55;
+  }
+  else if(St==25){              // GRAND SEAL — four independent layers
+    col=deep*halo*1.15+mid*aa(d)*0.5;
+    vec2 q=p-A_;
+    float ang1=T*0.16, ang2=-T*0.52, ang3=T*0.9;
+    vec2 r1=vec2(q.x*cos(ang1)-q.y*sin(ang1), q.x*sin(ang1)+q.y*cos(ang1));
+    vec2 r2=vec2(q.x*cos(ang2)-q.y*sin(ang2), q.x*sin(ang2)+q.y*cos(ang2));
+    vec2 r3=vec2(q.x*cos(ang3)-q.y*sin(ang3), q.x*sin(ang3)+q.y*cos(ang3));
+    col+=mid*aa(abs(length(r1)-uW*5.2)-uW*0.18)*0.45;           // slow outer
+    col+=hot*aa(glyph(r2,uW*3.4,1.1))*0.42;                     // fast counter
+    float band=abs(length(r3)-uW*2.1)-uW*0.26;
+    float gl=step(0.55,h21(vec2(floor(atan(r3.y,r3.x)/6.2831*18.0),7.0)));
+    col+=hot*aa(band)*gl*0.6;                                   // glyph band
+    col+=hot*aa(d+uW*0.8)*0.4;                                  // beam core
+  }
+  else if(St==26){              // EMBER VEIL — three explicit scales
+    float coarse=fbm(p*0.008+vec2(T*0.06,-T*0.04));
+    float cloud=pow(clamp(1.0-max(ds-wid*1.4,0.0)/(uW*7.0),0.0,1.0),1.2);
+    col=mix(deep,mid,coarse)*cloud*(0.55+coarse*1.1);           // scale 1: cloud
+    col+=mix(mid,hot,0.35)*aa(ds-wid*0.7+er*0.6)*0.55;          // scale 2: ribbon
+    col+=motes(p,T,hot,uW*2.6,uMotes*18.0)*1.15;                // scale 3: embers
+  }
+
+  else if(St==27){              // FROST — crystalline facets, cold rim
+    float fac=abs(fract(fbm(p*0.030)*6.0)-0.5)*2.0;
+    col=deep*halo*1.0;
+    col+=mid*aa(d)*0.55;
+    col+=hot*(1.0-smoothstep(0.06,0.20,fac))*aa(ds-wid*1.1)*0.75;
+    col+=hot*aa(abs(d)-uW*0.10)*0.45;
+  }
+  else if(St==28){              // MOLTEN — dark crust, heat in the cracks
+    float cr=fbm(p*0.026+vec2(T*0.05,0.0));
+    float crack=1.0-smoothstep(0.02,0.13,abs(cr-0.5));
+    col=deep*halo*1.3;
+    col=mix(col,vec3(0.035,0.016,0.010),aa(d)*0.95);
+    col+=mix(mid,hot,crack)*crack*aa(d+uW*0.2)*1.4;
+  }
+  else if(St==29){              // WHISPER — the restraint test
+    col=deep*halo*0.55;
+    col+=mix(deep,mid,0.5)*aa(d+uW*0.35)*0.40;
+    col+=hot*aa(d+uW*0.85)*0.22;
+  }
+  else if(St==30){              // THORN — spines shed backward
+    float dd=d;
+    for(int k=0;k<7;k++){ float f=float(k);
+      float tk=fract(f/7.0+0.13);
+      vec2 c0=bez(tk);
+      vec2 tg=normalize(bez(min(tk+0.03,1.0))-c0), pr=vec2(-tg.y,tg.x);
+      float side=(mod(f,2.0)<0.5)?1.0:-1.0;
+      vec2 tip2=c0+pr*side*uW*2.6-tg*uW*1.5;
+      dd=min(dd,sdSeg(p,c0,tip2)-uW*0.18*(1.0-h11(f)*0.5));
+    }
+    col=deep*halo*1.1;
+    col+=mix(deep,mid,0.6)*aa(dd)*0.75;
+    col+=hot*aa(dd+uW*0.30)*0.40;
+  }
+  else if(St==31){              // SILK — smooth band, travelling sheen
+    float sh=0.5+0.5*sin(t*5.0-T*0.7);
+    col=deep*halo*0.9;
+    col+=mix(deep,mid,0.55+0.45*sh)*pow(clamp(1.0-max(ds-wid,0.0)/(uW*2.4),0.0,1.0),1.3);
+    col+=hot*pow(sh,3.0)*aa(ds-wid*0.5)*0.55;
+  }
+  else if(St==32){              // FRACTURE — shards with dark gaps
+    float seg=floor(t*9.0);
+    float gap=step(0.16,fract(t*9.0))*step(fract(t*9.0),0.92);
+    float jit=(h11(seg*4.7)-0.5)*uW*1.2;
+    float dd=abs(ds+jit)-wid*0.9;
+    col=deep*halo*1.0;
+    col+=mid*aa(dd)*gap*0.85;
+    col+=hot*aa(dd+uW*0.45)*gap*0.55;
+  }
+  else if(St==33){              // PETAL — blossom motes, Wano armament tell
+    col=deep*halo*0.95+mix(deep,mid,0.5)*aa(d)*0.55+hot*aa(d+uW*0.6)*0.35;
+    for(int k=0;k<20;k++){
+      float f=float(k); if(f>uMotes*20.0) break;
+      float sd=h11(f*9.13);
+      float life=fract(T*(0.09+sd*0.13)+sd);
+      vec2 base=bez(clamp(life,0.0,1.0));
+      vec2 nrm=normalize(vec2(-(B_-A_).y,(B_-A_).x));
+      vec2 q=p-(base+nrm*sin(T*(0.8+sd*1.7)+sd*19.0)*uW*3.2);
+      float ang=T*(0.7+sd)+sd*6.0;
+      vec2 r=vec2(q.x*cos(ang)-q.y*sin(ang), q.x*sin(ang)+q.y*cos(ang));
+      float pr2=length(r)/(uW*0.85)-0.32*cos(5.0*atan(r.y,r.x));
+      col+=hot*(1.0-smoothstep(0.5,1.0,pr2))*sin(life*3.14159)*0.35;
+    }
+  }
+  else if(St==34){              // TIDE — a rolling crest
+    float crest=sin(t*4.0-T*0.85);
+    float dd=ds-wid*(0.75+0.55*max(crest,0.0))+er*0.5;
+    col=deep*halo*1.25;
+    col+=mix(deep,mid,0.5+0.5*crest)*pow(clamp(1.0-max(dd,0.0)/(uW*2.6),0.0,1.0),1.4);
+    col+=hot*pow(max(crest,0.0),2.5)*aa(dd+uW*0.4)*0.6;
+  }
+  else if(St==35){              // EMBERFALL — bright head, embers behind
+    float lead=pow(t,2.0);
+    col=deep*halo*(0.5+lead);
+    col+=mix(deep,mid,lead)*aa(d)*0.7;
+    col+=hot*aa(d+uW*0.55)*lead*0.8;
+    col+=motes(p,T,hot,uW*3.4,uMotes*16.0)*1.2;
+  }
+
+  else if(St==36){              // SEVER — a seam with darkness pushed aside
+    float seam=abs(ds)-uW*0.14+er*0.35;
+    col=deep*halo*0.9;
+    col=mix(col,vec3(0.010,0.006,0.012),aa(ds-wid*1.5)*0.90);
+    col+=hot*aa(seam)*1.15;
+    col+=mid*pow(clamp(1.0-abs(ds)/(uW*2.6),0.0,1.0),2.2)*0.55;
+  }
+  else if(St==37){              // WEAVE — threads braiding over and under
+    float dd=1e9;
+    for(int k=0;k<4;k++){ float f=float(k);
+      float ph=f*1.57+T*0.5;
+      float off=sin(t*8.0+ph)*uW*1.7;
+      float w=uW*0.26*(0.7+0.5*(0.5+0.5*cos(t*8.0+ph)));   // thins as it passes under
+      dd=min(dd,abs(ds+off)-w);
+    }
+    col=deep*halo*1.0;
+    col+=mid*aa(dd)*0.75;
+    col+=hot*aa(dd+uW*0.16)*0.45;
+  }
+  else if(St==38){              // PULSE RING — rings perpendicular to the path
+    col=deep*halo*0.85+mid*aa(d)*0.35;
+    for(int k=0;k<6;k++){ float f=float(k);
+      float tk=fract(f/6.0+T*0.13);
+      vec2 c0=bez(tk);
+      vec2 tg=normalize(bez(min(tk+0.02,1.0))-c0), pr=vec2(-tg.y,tg.x);
+      vec2 q=p-c0; vec2 lq=vec2(dot(q,tg),dot(q,pr));
+      float r=uW*(1.1+2.2*tk);
+      float ring=max(abs(abs(lq.y)-r)-uW*0.16, abs(lq.x)-uW*0.30);
+      col+=hot*aa(ring)*0.55*sin(tk*3.14159);
+    }
+  }
+  else if(St==39){              // FEATHER — fletching along the whole length
+    float dd=d;
+    for(int k=0;k<10;k++){ float f=float(k);
+      float tk=0.06+f*0.088;
+      vec2 c0=bez(tk);
+      vec2 tg=normalize(bez(min(tk+0.03,1.0))-c0), pr=vec2(-tg.y,tg.x);
+      float side=(mod(f,2.0)<0.5)?1.0:-1.0;
+      vec2 e=c0+pr*side*uW*2.2-tg*uW*2.0;
+      dd=min(dd,sdSeg(p,c0,e)-uW*0.13);
+    }
+    col=deep*halo*0.95;
+    col+=mix(deep,mid,0.65)*aa(dd)*0.70;
+    col+=hot*aa(dd+uW*0.22)*0.40;
+  }
+  else if(St==40){              // VINE — offshoots budding off the main line
+    float dd=d;
+    for(int k=0;k<6;k++){ float f=float(k);
+      float tk=fract(f/6.0+0.09);
+      float grow=clamp(sin(T*0.5+f*1.9),0.0,1.0);
+      vec2 c0=bez(tk);
+      vec2 tg=normalize(bez(min(tk+0.03,1.0))-c0), pr=vec2(-tg.y,tg.x);
+      float side=(mod(f,2.0)<0.5)?1.0:-1.0;
+      vec2 mid2=c0+pr*side*uW*1.6*grow+tg*uW*1.2*grow;
+      vec2 e=c0+pr*side*uW*2.6*grow+tg*uW*0.2*grow;
+      dd=min(dd,min(sdSeg(p,c0,mid2),sdSeg(p,mid2,e))-uW*0.16*grow);
+    }
+    col=deep*halo*1.0;
+    col+=mid*aa(dd)*0.72;
+    col+=hot*aa(dd+uW*0.30)*0.42;
+  }
+  else if(St==41){              // CIRCUIT — right-angle traces with nodes
+    vec2 tg=normalize(B_-A_), pr=vec2(-tg.y,tg.x);
+    vec2 q=p-A_; vec2 lq=vec2(dot(q,tg),dot(q,pr));
+    float L2=length(B_-A_);
+    float step8=floor(lq.x/L2*8.0);
+    float jog=(h11(step8*3.3)-0.5)*uW*3.0;
+    float trace=min(abs(lq.y-jog)-uW*0.22,
+                    abs(lq.x-(step8+0.5)*L2/8.0)-uW*0.22);
+    col=deep*halo*0.9;
+    col+=mid*aa(trace)*0.75;
+    for(int k=0;k<8;k++){ float f=float(k);
+      vec2 n=A_+tg*(f/8.0*L2)+pr*(h11(f*3.3)-0.5)*uW*3.0;
+      col+=hot*(1.0/(1.0+dot(p-n,p-n)*0.10/(uW*0.2+0.1)))*0.10;
+    }
+  }
+  else if(St==42){              // ASH — crumbling from the tail forward
+    float crumble=smoothstep(0.0,0.55,t+fbm(p*0.05)*0.35-0.15);
+    col=deep*halo*0.85;
+    col=mix(col,mix(deep,mid,0.4),aa(d)*crumble);
+    col+=hot*aa(d+uW*0.6)*crumble*0.45;
+    col+=motes(p,T,mix(deep,hot,0.5),uW*3.8,uMotes*20.0)*(1.0-crumble*0.4)*1.1;
+  }
+  else if(St==43){              // HALO CHAIN — rings beaded on the path
+    col=deep*halo*0.8+mid*aa(ds-uW*0.14)*0.45;
+    for(int k=0;k<8;k++){ float f=float(k);
+      float tk=fract(f/8.0+T*0.05);
+      vec2 c0=bez(tk);
+      float r=uW*(0.9+0.9*sin(T*0.8+f*1.3)*0.25+0.9*tk);
+      col+=hot*aa(abs(length(p-c0)-r)-uW*0.13)*0.50;
+    }
+  }
+  else if(St==44){              // MIRROR — two offset copies converging at the head
+    vec2 pr=normalize(vec2(-(B_-A_).y,(B_-A_).x));
+    float conv=1.0-smoothstep(0.55,1.0,t);
+    float sep=uW*1.7*conv;
+    float d1=abs(ds+sep)-wid*0.55+er*0.5;
+    float d2=abs(ds-sep)-wid*0.55+er*0.5;
+    float dd=min(min(d1,d2),headDist);   // headDist is already resolved in main
+    col=deep*halo*1.0;
+    col+=mid*aa(dd)*0.70;
+    col+=hot*aa(dd+uW*0.30)*0.45;
+  }}   // close the St>=5 group
+
+  // Fine micro-variation stays on uDetail.
+  if(uDetail>0.01){
+    float fine=fbm(p*0.085+vec2(T*0.05,-T*0.035));
+    col*=0.88+0.26*fine*uDetail;
+  }
+  // PROGRESSION — its own control and its own amplitude. This used to be scaled by
+  // uDetail, which sits at 0.25, so the surge landed at ~0.15 of one colour and was
+  // buried under the aura and each style's internal motion: the selector worked but
+  // nothing visibly changed. It now modulates the whole arrow, not just adds to it.
+  if(uSurge>0.01){
+    int pm=(uProg<-0.5)?PROGD[St]:int(uProg+0.5);
+    // Reverse runs every travelling progression from the head back toward the source.
+    // Mirroring the parameter flips travel, wake and fill direction in one place rather
+    // than needing a reversed variant of each of the twelve.
+    // mode 12 walks the combined 0..2 path; the rest walk the spine alone
+    float tp=(pm==12)?phase:((uRev>0.5)?(1.0-t):t);
+    float flare,wake; float sg=prog(pm,tp,T,flare,wake);
+    float onBody=aa(ds-wid*0.60);
+    // ...and the arrival flare has to land where the motion now ends: the source.
+    // Runout must NOT pre-light the whole head. Flashing the entire silhouette as the
+    // surge crosses the tip reveals both barbs before the pulse has travelled them,
+    // which telegraphs the motion and flattens it. Confine that flare to a small glint
+    // at the point; the pulse running out along the barbs is the event by itself.
+    float landing=(pm==12)
+      ? pow(clamp(1.0-length(p-B_)/(uW*0.95),0.0,1.0),3.0)
+      : ((uRev>0.5)
+          ? pow(clamp(1.0-length(p-A_)/(uW*2.4),0.0,1.0),2.0)
+          : aa(headDist));
+    float flareAmt=(pm==12)?0.80:1.70;
+    col*=0.80+0.45*sg*uSurge;                       // whole arrow responds
+    col+=hot*sg*onBody*1.15*uSurge;                 // bright band on the body
+    col+=deep*sg*halo*0.80*uSurge;                  // the aura answers it too
+    col+=mid*wake*onBody*0.34*uSurge;               // trailing wake
+    col+=hot*flare*landing*flareAmt*uSurge;         // arrival flash, at whichever end
+  }
+  // the aura breathes on its own slow period, never in step with the surge
+  col*=0.93+0.07*sin(T*0.55);
+
+  if(uSil>0.5){ col=vec3(0.88)*clamp(0.5-(ds-wid)/max(fwidth(ds-wid),1e-6),0.0,1.0); }
+  col*=uExpo;
+  frag=vec4(clamp(col,0.0,1.0),1.0);
+}`;
+
+function mk(ctx){
+  const s=(ty,src)=>{const o=ctx.createShader(ty);ctx.shaderSource(o,src);ctx.compileShader(o);
+    if(!ctx.getShaderParameter(o,ctx.COMPILE_STATUS))throw new Error(ctx.getShaderInfoLog(o));return o;};
+  const p=ctx.createProgram();
+  ctx.attachShader(p,s(ctx.VERTEX_SHADER,VS));ctx.attachShader(p,s(ctx.FRAGMENT_SHADER,FS));
+  ctx.linkProgram(p);
+  if(!ctx.getProgramParameter(p,ctx.LINK_STATUS))throw new Error(ctx.getProgramInfoLog(p));
+  ctx.useProgram(p);
+  const va=ctx.createVertexArray();ctx.bindVertexArray(va);
+  const b=ctx.createBuffer();ctx.bindBuffer(ctx.ARRAY_BUFFER,b);
+  ctx.bufferData(ctx.ARRAY_BUFFER,new Float32Array([0,0,1,0,0,1,0,1,1,0,1,1]),ctx.STATIC_DRAW);
+  const l=ctx.getAttribLocation(p,'a');ctx.enableVertexAttribArray(l);
+  ctx.vertexAttribPointer(l,2,ctx.FLOAT,false,0,0);
+  return {p,U:n=>ctx.getUniformLocation(p,n)};
+}
+function fail(msg){
+  const d=document.createElement('pre');
+  d.style.cssText='position:fixed;inset:12px;z-index:99;overflow:auto;padding:14px;'
+    +'background:#170c0c;border:1px solid #6b2b2b;color:#ffb4a8;border-radius:5px;'
+    +'font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap';
+  d.textContent='Shader / WebGL failure\n\n'+msg;
+  document.body.append(d);
+}
+let P1=null,P2=null;
+try{
+  if(!gl||!gl2) throw new Error('WebGL2 unavailable.');
+  P1=mk(gl); P2=mk(gl2);
+}catch(e){ fail(e&&e.message?e.message:String(e)); }
+
+let cur=23, live=1, zoom=1, sil=0, rev=0, progMode=-1, stateCol=-1;  // opens on Eclipse
+const PROGN=['launch','pulse train','charge','breathe','flicker','crawl',
+             'ripple','bloom','shimmer','heartbeat','chase','drain','runout (down the barbs)'];
+// per-style defaults, mirroring PROGD in the shader
+const PROGD=[3,4,5,11,8,9, 1,2,5,8,9,10, 3,11,6,10,3,11, 0,8,3,0,5,12, 2,2,6, 8,5,3,4,5,4,6,11,0, 4,5,1,3,7,0,11,6,10];
+let origin=null,aim=null,target=null,vel={x:0,y:0},t0=performance.now();
+
+function push(ctx,PR,w,h,a,b,z,style){
+  ctx.uniform2f(PR.U('uRes'),w,h);
+  ctx.uniform2f(PR.U('uA'),a.x,a.y); ctx.uniform2f(PR.U('uB'),b.x,b.y);
+  ctx.uniform1f(PR.U('uZoom'),z);
+  ctx.uniform1f(PR.U('uTime'),(performance.now()-t0)/1000);
+  ctx.uniform1f(PR.U('uW'),V('width'));   ctx.uniform1f(PR.U('uWisp'),V('wisp'));
+  ctx.uniform1f(PR.U('uMotes'),V('motes'));ctx.uniform1f(PR.U('uAura'),V('aura'));
+  ctx.uniform1f(PR.U('uCurve'),V('curve'));ctx.uniform1f(PR.U('uExpo'),V('expo'));
+  ctx.uniform1f(PR.U('uStyle'),style);    ctx.uniform1f(PR.U('uLive'),live);
+  ctx.uniform1f(PR.U('uDetail'),V('detail'));
+  ctx.uniform1f(PR.U('uHeadW'),V('headW')); ctx.uniform1f(PR.U('uHeadL'),V('headL'));
+  ctx.uniform1f(PR.U('uBarb'),V('barb'));   ctx.uniform1f(PR.U('uSil'),sil);
+  ctx.uniform1f(PR.U('uProg'),progMode); ctx.uniform1f(PR.U('uSurge'),V('surge'));
+  ctx.uniform1f(PR.U('uHeadCrv'),V('headCrv')); ctx.uniform1f(PR.U('uTipSharp'),V('tipSharp')); ctx.uniform1f(PR.U('uTipPinch'),V('tipPinch')); ctx.uniform1f(PR.U('uRev'),rev);
+  ctx.uniform1f(PR.U('uAuto'),V('auto')); ctx.uniform1f(PR.U('uStateCol'),stateCol);
+  ctx.drawArrays(ctx.TRIANGLES,0,6);
+}
+
+function frame(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const cw=big.clientWidth, ch=big.clientHeight;
+  const w=Math.round(cw*dpr), h=Math.round(ch*dpr);
+  if(big.width!==w||big.height!==h){big.width=w;big.height=h;}
+  if(!origin){origin={x:-cw*0.27,y:-ch*0.19};aim={x:cw*0.23,y:ch*0.15};target={...aim};}
+  if(!reduced){const k=320,dd=2*Math.sqrt(320)*0.8,dt=1/60;
+    vel.x+=((target.x-aim.x)*k-vel.x*dd)*dt;vel.y+=((target.y-aim.y)*k-vel.y*dd)*dt;
+    aim.x+=vel.x*dt;aim.y+=vel.y*dt;}else aim={...target};
+  gl.useProgram(P1.p); gl.viewport(0,0,w,h);
+  push(gl,P1,w,h,origin,aim,zoom*dpr,cur);
+
+  const gw=Math.round(grid.clientWidth*dpr), gh=Math.round(grid.clientHeight*dpr);
+  if(grid.width!==gw||grid.height!==gh){grid.width=gw;grid.height=gh;}
+  gl2.useProgram(P2.p);
+  gl2.clearColor(0.016,0.012,0.031,1); gl2.clear(gl2.COLOR_BUFFER_BIT);
+  const cwp=gw/9, chp=gh/5, cwCss=cwp/dpr, chCss=chp/dpr;
+  for(let i=0;i<45;i++){
+    const cx=i%9, cy=Math.floor(i/9);
+    gl2.viewport(Math.round(cx*cwp), Math.round((4-cy)*chp), Math.round(cwp), Math.round(chp));
+    push(gl2,P2,Math.round(cwp),Math.round(chp),
+      {x:-cwCss*0.28,y:-chCss*0.16},{x:cwCss*0.26,y:chCss*0.14}, dpr*0.55, i);
+  }
+  requestAnimationFrame(frame);
+}
+
+const sel=document.getElementById('progSel');
+{ const o=document.createElement('option'); o.value='-1';
+  o.textContent='auto (per style)'; sel.append(o); }
+PROGN.forEach((n,i)=>{const o=document.createElement('option');o.value=String(i);
+  o.textContent=n; sel.append(o);});
+sel.onchange=()=>{progMode=parseFloat(sel.value); sync();};
+
+const lab=document.getElementById('labels');
+S.forEach(s=>{const e=document.createElement('span');e.textContent=s[0];lab.append(e);});
+function sync(){
+  document.getElementById('nameTag').textContent=S[cur][0];
+  document.getElementById('famTag').textContent=S[cur][1];
+  document.getElementById('title').textContent=S[cur][0];
+  document.getElementById('fam').textContent=S[cur][1];
+  document.getElementById('desc').textContent=S[cur][2];
+  const eff = progMode<0 ? PROGD[cur] : progMode;
+  document.getElementById('famTag').textContent=S[cur][1]+' · '+PROGN[eff];
+  [...lab.children].forEach((c,i)=>c.classList.toggle('on',i===cur));
+}
+grid.addEventListener('click',e=>{
+  const r=grid.getBoundingClientRect();
+  const cx=Math.floor((e.clientX-r.left)/r.width*9);
+  const cy=Math.floor((e.clientY-r.top)/r.height*5);
+  cur=Math.max(0,Math.min(44,cy*9+cx)); sync();
+});
+for(const id of ['width','headW','headL','barb','headCrv','tipSharp','tipPinch','auto','wisp','motes','aura','detail','surge','curve','expo']){
+  const el=document.getElementById(id),o=document.getElementById(id+'V');
+  const u=()=>o.textContent=parseFloat(el.value).toFixed(2);
+  el.addEventListener('input',u);u();
+}
+const press=(b,on)=>b.setAttribute('aria-pressed',on?'true':'false');
+const bc=document.getElementById('bCalm'), bl=document.getElementById('bLive');
+bc.onclick=()=>{live=0;press(bc,1);press(bl,0);};
+bl.onclick=()=>{live=1;press(bc,0);press(bl,1);};
+const bsil=document.getElementById('bSil');
+bsil.onclick=()=>{sil=sil?0:1;press(bsil,sil);};
+const brev=document.getElementById('bRev');
+brev.onclick=()=>{rev=rev?0:1;press(brev,rev);};
+
+const stateBtns=[['bStateOff',-1],['bAim',0],['bValid',1],['bInvalid',2]];
+for(const [id,val] of stateBtns){
+  document.getElementById(id).onclick=()=>{
+    stateCol=val;
+    for(const [i2] of stateBtns) press(document.getElementById(i2),false);
+    press(document.getElementById(id),true);
+  };
+}
+
+// Settings survive a reload only if you take them with you: dump everything that
+// defines the current look as text, so a tuned style can be handed off verbatim.
+document.getElementById('bExport').onclick=()=>{
+  const ids=['width','headW','headL','barb','headCrv','tipSharp','tipPinch','auto',
+             'curve','wisp','motes','aura','detail','surge','expo'];
+  const o={style:S[cur][0], styleIndex:cur, family:S[cur][1],
+           progression:(progMode<0?'auto ('+PROGN[PROGD[cur]]+')':PROGN[progMode]),
+           progIndex:progMode, reverseFlow:!!rev,
+           stateColour:['family','neutral','valid','invalid'][stateCol+1]};
+  for(const id of ids) o[id]=parseFloat(document.getElementById(id).value);
+  const txt=JSON.stringify(o,null,2);
+  const box=document.createElement('div');
+  box.style.cssText='position:fixed;inset:8% 18%;z-index:99;display:flex;flex-direction:column;'
+    +'gap:8px;background:#0D0C14;border:1px solid #B78CE8;border-radius:6px;padding:14px';
+  const ta=document.createElement('textarea');
+  ta.value=txt; ta.readOnly=true;
+  ta.style.cssText='flex:1;background:#09090F;color:#DFD8EE;border:1px solid #1E1B29;'
+    +'border-radius:4px;padding:10px;font:11px/1.55 ui-monospace,monospace;resize:none';
+  const row=document.createElement('div');
+  row.style.cssText='display:flex;gap:8px;justify-content:flex-end';
+  const copy=document.createElement('button'); copy.textContent='copy';
+  copy.onclick=()=>{ ta.select(); try{document.execCommand('copy');}catch(e){} copy.textContent='copied'; };
+  const close=document.createElement('button'); close.textContent='close';
+  close.onclick=()=>box.remove();
+  row.append(copy,close); box.append(ta,row); document.body.append(box);
+  ta.focus(); ta.select();
+};
+document.getElementById('bClean').onclick=()=>{
+  // the honest baseline: shape only, no erosion, no motes, no filigree
+  for(const [id,v] of [['wisp',0],['motes',0],['detail',0],['aura',0.5]]){
+    const el=document.getElementById(id); el.value=v; el.dispatchEvent(new Event('input'));
+  }
+};
+
+let drag=false;
+big.addEventListener('pointerdown',e=>{drag=true;big.setPointerCapture(e.pointerId);mv(e);});
+big.addEventListener('pointermove',e=>{if(drag)mv(e);});
+big.addEventListener('pointerup',()=>drag=false);
+big.addEventListener('pointercancel',()=>drag=false);
+function mv(e){const r=big.getBoundingClientRect();
+  target={x:((e.clientX-r.left)-r.width/2)/zoom, y:-((e.clientY-r.top)-r.height/2)/zoom};}
+big.addEventListener('wheel',e=>{e.preventDefault();
+  zoom=Math.min(30,Math.max(0.4,zoom*Math.exp(-e.deltaY*0.0016)));},{passive:false});
+
+sync();
+if(P1&&P2) requestAnimationFrame(frame);
+</script>

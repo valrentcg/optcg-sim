@@ -1,0 +1,469 @@
+<title>Ten targeting arrows — exact SDF, fwidth AA</title>
+<style>
+  :root{
+    --ground:#070A0E;--panel:#0D141B;--panel2:#0A1016;--line:#1A242F;
+    --ink:#DBE6F0;--dim:#7288A0;--accent:#7ECBE8;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme:light){:root{--ground:#E9EEF2;--panel:#FFF;--panel2:#F3F7F9;
+    --line:#D0DAE2;--ink:#0C141C;--dim:#546C7E;--accent:#0E7B9B;}}
+  :root[data-theme="dark"]{--ground:#070A0E;--panel:#0D141B;--panel2:#0A1016;--line:#1A242F;
+    --ink:#DBE6F0;--dim:#7288A0;--accent:#7ECBE8;}
+  :root[data-theme="light"]{--ground:#E9EEF2;--panel:#FFF;--panel2:#F3F7F9;--line:#D0DAE2;
+    --ink:#0C141C;--dim:#546C7E;--accent:#0E7B9B;}
+  *{box-sizing:border-box}html,body{height:100%}
+  body{margin:0;overflow:hidden;background:var(--ground);color:var(--ink);
+       font-family:var(--sans);font-size:13px;line-height:1.5}
+  .app{display:grid;grid-template-rows:minmax(0,1fr) auto;height:100dvh}
+  .top{display:grid;grid-template-columns:minmax(0,1fr) 290px;min-height:0}
+  .stage{position:relative;background:#05080B;overflow:hidden}
+  #big{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+  .hud{position:absolute;top:13px;left:15px;display:flex;flex-direction:column;gap:6px;
+       align-items:flex-start;font-family:var(--mono);font-size:11px;pointer-events:none}
+  .tag{background:rgba(5,8,11,.8);border:1px solid var(--line);padding:4px 10px;border-radius:3px}
+  .tag b{color:var(--accent)}.tag.dim{color:var(--dim)}
+  .bar{position:absolute;bottom:13px;left:15px;display:flex;gap:7px;flex-wrap:wrap}
+  button{font-family:var(--mono);font-size:11px;color:var(--ink);background:rgba(9,15,21,.86);
+    border:1px solid var(--line);border-radius:3px;padding:6px 11px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);
+    color:#04222E;font-weight:600}
+  .rail{background:var(--panel);border-left:1px solid var(--line);overflow-y:auto;padding:14px}
+  .rail h2{margin:0 0 2px;font-size:16px;letter-spacing:-.01em}
+  .rail .origin{margin:0 0 8px;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+    text-transform:uppercase;color:var(--accent)}
+  .rail p{margin:0 0 10px}
+  dl{margin:0 0 12px;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:12px}
+  dt{font-family:var(--mono);font-size:10px;letter-spacing:.07em;text-transform:uppercase;
+     color:var(--dim);padding-top:2px}
+  dd{margin:0}
+  .ctl{border-top:1px solid var(--line);padding-top:11px;margin-top:4px}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:8px}
+  .row label{font-family:var(--mono);font-size:11px}
+  .row output{font-family:var(--mono);font-size:11px;color:var(--accent);
+    font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--accent);height:15px;display:block;margin:2px 0 0}
+  input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .tray{border-top:1px solid var(--line);background:var(--panel2)}
+  #strip{display:block;width:100%;height:78px;cursor:pointer}
+  .labels{display:grid;grid-template-columns:repeat(10,1fr);border-top:1px solid var(--line)}
+  .labels span{font-family:var(--mono);font-size:9.5px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--dim);text-align:center;padding:5px 2px;border-right:1px solid var(--line);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .labels span:last-child{border-right:0}
+  .labels span.on{color:var(--accent);background:rgba(126,203,232,.08)}
+  @media (max-width:820px){.top{grid-template-columns:minmax(0,1fr)}.rail{display:none}}
+</style>
+
+<div class="app">
+  <div class="top">
+    <div class="stage">
+      <canvas id="big"></canvas>
+      <div class="hud">
+        <span class="tag"><b id="nameTag">Beam</b> · <b id="stateTag">valid</b></span>
+        <span class="tag dim">drag to aim · wheel to zoom · check every one in greyscale</span>
+      </div>
+      <div class="bar">
+        <button id="sAim">aim</button>
+        <button id="sValid" aria-pressed="true">valid</button>
+        <button id="sInvalid">invalid</button>
+        <button id="bGrey" aria-pressed="false">greyscale</button>
+        <button id="bFlat" aria-pressed="false">flat silhouette</button>
+      </div>
+    </div>
+    <aside class="rail">
+      <p class="origin" id="origin"></p>
+      <h2 id="title"></h2>
+      <p id="desc"></p>
+      <dl>
+        <dt>Edges</dt><dd id="edges"></dd>
+        <dt>Reads</dt><dd id="reads"></dd>
+        <dt>Weight</dt><dd id="weight"></dd>
+      </dl>
+      <div class="ctl">
+        <div class="row"><label for="shaft">shaft half px</label><output id="shaftV"></output></div>
+        <input type="range" id="shaft" min="1.5" max="14" step="0.1" value="5">
+        <div class="row"><label for="headW">head half px</label><output id="headWV"></output></div>
+        <input type="range" id="headW" min="6" max="42" step="0.5" value="18">
+        <div class="row"><label for="headL">head length px</label><output id="headLV"></output></div>
+        <input type="range" id="headL" min="16" max="110" step="1" value="46">
+        <div class="row"><label for="curve">curvature</label><output id="curveV"></output></div>
+        <input type="range" id="curve" min="0" max="1.1" step="0.02" value="0.32">
+        <div class="row"><label for="glow">halo px</label><output id="glowV"></output></div>
+        <input type="range" id="glow" min="0" max="46" step="0.5" value="16">
+        <div class="row"><label for="expo">exposure</label><output id="expoV"></output></div>
+        <input type="range" id="expo" min="0.35" max="1.8" step="0.02" value="1">
+      </div>
+    </aside>
+  </div>
+  <div class="tray">
+    <canvas id="strip"></canvas>
+    <div class="labels" id="labels"></div>
+  </div>
+</div>
+
+<script>
+const STYLES=[
+ {n:'Beam',o:'Refined current',d:'Luminous ribbon with a small near-white core inside a saturated body inside a restrained fringe. The value hierarchy is the design — the brightest region is the smallest.',e:'Soft, with a hard core boundary',r:'Dark boards',w:'Medium'},
+ {n:'Blade',o:'Riot clarity',d:'Flat fill, dark keyline, no bloom. Information rather than spectacle — it never competes with card art and stays legible on any background.',e:'Hard throughout',r:'Everything',w:'Light'},
+ {n:'Chevron',o:'MOBA skillshot',d:'Marks travelling toward the target. Nothing is drawn between them, so the board stays visible through the arrow — the cheapest option in visual noise.',e:'Hard marks, soft glow',r:'Busy boards',w:'Very light'},
+ {n:'Rope',o:'Hearthstone',d:'Discrete links with a keyline, the classic card-game arrow. Reads instantly because each segment is a separate object rather than a gradient.',e:'Hard, keylined',r:'Any background',w:'Heavy'},
+ {n:'Ink',o:'Sumi-e',d:'A tapered brush stroke that swells before the head and thins at the origin. Sits beside One Piece card art in a way a neon beam never will.',e:'Hard, organic',r:'Light boards',w:'Medium'},
+ {n:'Cutlass',o:'Pirate steel',d:'An asymmetric blade — straight spine, curved cutting edge, single glint. Shape language carries aggression without colour doing the work.',e:'Hard, with one specular',r:'Dark boards',w:'Medium'},
+ {n:'Chain',o:'Rigging',d:'Interlocking links ending in a grapple. Leans hardest into the setting; reads as rigging thrown across the board rather than a cursor.',e:'Hard, repeated',r:'Dark boards',w:'Heavy'},
+ {n:'Ribbon',o:'Console UI',d:'A tapered band with a gradient along its length and no keyline. The quietest option — it recedes the moment you stop looking at it.',e:'Soft only',r:'Dark boards',w:'Light'},
+ {n:'Bolt',o:'Impact VFX',d:'A jagged path reseeded a few times a second. Communicates urgency, but the noise fights small text — best reserved for one specific action.',e:'Hard core, soft halo',r:'Dark boards',w:'Medium'},
+ {n:'Comet',o:'Projectile',d:'Almost all the value sits at the head, with the trail falling away behind it. The strongest option for pulling the eye to the target rather than the source.',e:'Soft trail, hard head',r:'Dark boards',w:'Light'},
+];
+
+const big=document.getElementById('big'), strip=document.getElementById('strip');
+const gl=big.getContext('webgl2',{antialias:false});
+const gl2=strip.getContext('webgl2',{antialias:false});
+const V=id=>parseFloat(document.getElementById(id).value);
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const VS=`#version 300 es
+in vec2 a; out vec2 vUv;
+void main(){ vUv=a; gl_Position=vec4(a*2.0-1.0,0.0,1.0); }`;
+
+const FS=`#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 frag;
+uniform vec2 uRes,uA,uB; uniform float uZoom,uTime;
+uniform float uShaft,uHeadW,uHeadL,uCurve,uGlow,uExpo;
+uniform float uStyle,uState,uGrey,uFlat;
+
+// ---------- exact primitives (Inigo Quilez) ----------
+float sdUC(vec2 p,float r1,float r2,float h){
+  p.x=abs(p.x); float b=(r1-r2)/h, a=sqrt(1.0-b*b);
+  float k=dot(p,vec2(-b,a));
+  if(k<0.0) return length(p)-r1;
+  if(k>a*h) return length(p-vec2(0.0,h))-r2;
+  return dot(p,vec2(a,b))-r1;
+}
+float capAB(vec2 p,vec2 A,vec2 B,float ra,float rb){
+  vec2 ab=B-A; float h=length(ab);
+  if(h<1e-5) return length(p-A)-max(ra,rb);
+  vec2 d=ab/h, q=p-A;
+  return sdUC(vec2(dot(q,vec2(d.y,-d.x)),dot(q,d)),ra,rb,h);
+}
+float sdTri(vec2 p,vec2 p0,vec2 p1,vec2 p2){
+  vec2 e0=p1-p0,e1=p2-p1,e2=p0-p2, v0=p-p0,v1=p-p1,v2=p-p2;
+  vec2 q0=v0-e0*clamp(dot(v0,e0)/dot(e0,e0),0.0,1.0);
+  vec2 q1=v1-e1*clamp(dot(v1,e1)/dot(e1,e1),0.0,1.0);
+  vec2 q2=v2-e2*clamp(dot(v2,e2)/dot(e2,e2),0.0,1.0);
+  float s=sign(e0.x*e2.y-e0.y*e2.x);
+  vec2 d=min(min(vec2(dot(q0,q0),s*(v0.x*e0.y-v0.y*e0.x)),
+                 vec2(dot(q1,q1),s*(v1.x*e1.y-v1.y*e1.x))),
+                 vec2(dot(q2,q2),s*(v2.x*e2.y-v2.y*e2.x)));
+  return -sqrt(d.x)*sign(d.y);
+}
+float sdBox(vec2 p,vec2 b){ vec2 d=abs(p)-b; return length(max(d,0.0))+min(max(d.x,d.y),0.0); }
+float hash(float n){ float s=sin(n*127.1)*43758.5453; return s-floor(s); }
+
+vec2 bez(vec2 a,vec2 c,vec2 b,float t){ float u=1.0-t; return u*u*a+2.0*u*t*c+t*t*b; }
+
+// ---------- shared curve ----------
+vec2 A,B,C,HB,DIR,PER; float LEN,TB;
+void setup(){
+  A=uA; B=uB; vec2 ab=B-A; LEN=max(length(ab),1e-3);
+  vec2 n=vec2(-ab.y,ab.x)/LEN;
+  C=A+ab*0.5+n*uCurve*min(LEN*0.30,190.0);
+  TB=clamp(1.0-uHeadL/LEN,0.0,0.985);
+  HB=bez(A,C,B,TB); DIR=normalize(B-HB); PER=vec2(-DIR.y,DIR.x);
+}
+// tapered shaft from t=0..TB
+float shaft(vec2 p,float r0,float r1){
+  float d=1e9; vec2 prev=A; float rp=r0;
+  for(int i=1;i<=8;i++){
+    float t=float(i)/8.0*TB;
+    vec2 cur=bez(A,C,B,t);
+    float r=mix(r0,r1,t/max(TB,1e-4));
+    d=min(d,capAB(p,prev,cur,rp,r)); prev=cur; rp=r;
+  }
+  return d;
+}
+float head(vec2 p){ return sdTri(p,B,HB+PER*uHeadW,HB-PER*uHeadW); }
+
+// coverage with correct derivative AA — sub-pixel geometry fades, never vanishes
+float cov(float d){ return clamp(0.5-d/max(fwidth(d),1e-6),0.0,1.0); }
+
+// ---------- palette: deep / mid / hot, analogous, never 0% or 100% sat ----------
+vec3 hsl(float h,float s,float l){
+  h=fract(h/360.0); vec3 k=mod(vec3(0.0,8.0,4.0)+h*12.0,12.0);
+  return l-s*min(l,1.0-l)*clamp(min(k-3.0,9.0-k),-1.0,1.0);
+}
+void pal(out vec3 deep,out vec3 mid,out vec3 hot,out vec3 ink){
+  float h= uState<0.5 ? 205.0 : (uState<1.5 ? 148.0 : 8.0);
+  float s= uState<1.5 ? 0.72 : 0.66;
+  deep=hsl(h-12.0,s*0.95,0.26);
+  mid =hsl(h,      s,     0.52);
+  hot =hsl(h+14.0, s*0.42,0.86);
+  ink =hsl(h-20.0, 0.55,  0.06);
+}
+
+// value hierarchy: restrained fringe, saturated body, light inner, tiny near-white core
+vec3 lumin(float d,float glowPx,vec3 deep,vec3 mid,vec3 hot,float coreInset){
+  float halo=glowPx>0.5 ? pow(clamp(1.0-max(d,0.0)/glowPx,0.0,1.0),1.7) : 0.0;
+  float body=cov(d);
+  float inner=cov(d+coreInset*0.55);
+  float core=cov(d+coreInset);
+  vec3 c=deep*halo*0.55;
+  c=mix(c,mid,body*0.95);
+  c=mix(c,mix(mid,hot,0.55),inner*0.85);
+  c=mix(c,hot,core*0.9);
+  return c;
+}
+
+void main(){
+  vec2 p=(vUv-0.5)*uRes/uZoom;
+  setup();
+  vec3 deep,mid,hot,ink; pal(deep,mid,hot,ink);
+  int S=int(uStyle+0.5);
+  vec3 col=vec3(0.0);
+  float dAll=1e9;
+
+  if(S==0){                                   // BEAM
+    float d=min(shaft(p,uShaft*0.45,uShaft),head(p)); dAll=d;
+    col=lumin(d,uGlow,deep,mid,hot,uShaft*0.85);
+  }
+  else if(S==1){                              // BLADE — hard, keylined, no bloom
+    float d=min(shaft(p,uShaft*0.4,uShaft*0.9),head(p)); dAll=d;
+    float fill=cov(d), line=cov(abs(d+2.2)-1.6);
+    col=mix(col,mid*0.92,fill);
+    col=mix(col,ink,cov(abs(d)-1.9)*0.9);     // dark keyline on the silhouette
+    col=mix(col,hot,line*0.5*fill);           // inner hairline: depth from one detail line
+  }
+  else if(S==2){                              // CHEVRON
+    float d=1e9;
+    for(int i=0;i<11;i++){
+      float t=fract(float(i)/11.0+uTime*0.10);
+      if(t>TB) continue;
+      vec2 c0=bez(A,C,B,t);
+      vec2 tg=normalize(bez(A,C,B,min(t+0.02,1.0))-c0), pr=vec2(-tg.y,tg.x);
+      float s=(0.45+0.75*t)*uHeadW*0.42;
+      float e=min(capAB(p,c0-tg*s*0.5+pr*s,c0+tg*s*0.55,uShaft*0.55,uShaft*0.30),
+                  capAB(p,c0-tg*s*0.5-pr*s,c0+tg*s*0.55,uShaft*0.55,uShaft*0.30));
+      d=min(d,e);
+    }
+    d=min(d,head(p)); dAll=d;
+    col=lumin(d,uGlow*0.55,deep,mid,hot,uShaft*0.6);
+  }
+  else if(S==3){                              // ROPE — discrete keylined links
+    float d=1e9;
+    for(int i=0;i<16;i++){
+      float t=float(i)/16.0*TB;
+      vec2 c0=bez(A,C,B,t);
+      vec2 tg=normalize(bez(A,C,B,min(t+0.02,1.0))-c0);
+      vec2 q=p-c0; q=vec2(dot(q,tg),dot(q,vec2(-tg.y,tg.x)));
+      float w=mix(uShaft*0.5,uShaft,t/max(TB,1e-4));
+      d=min(d,sdBox(q,vec2(uShaft*0.62,w))-w*0.45);
+    }
+    d=min(d,head(p)); dAll=d;
+    col=mix(col,mid,cov(d));
+    col=mix(col,ink,cov(abs(d)-2.0)*0.95);
+    col=mix(col,hot,cov(d+uShaft*0.75)*0.55);
+  }
+  else if(S==4){                              // INK — organic width, no glow
+    float d=1e9; vec2 prev=A; float rp=uShaft*0.18;
+    for(int i=1;i<=10;i++){
+      float t=float(i)/10.0*TB; vec2 cur=bez(A,C,B,t);
+      float w=(0.18+1.25*pow(t/max(TB,1e-4),0.8))*uShaft;
+      w*=0.82+0.36*hash(float(i)*3.7);
+      d=min(d,capAB(p,prev,cur,rp,w)); prev=cur; rp=w;
+    }
+    d=min(d,head(p)); dAll=d;
+    col=mix(col,mix(ink,deep,0.55),cov(d));
+    col=mix(col,mid*0.85,cov(d+uShaft*0.9)*0.5);
+  }
+  else if(S==5){                              // CUTLASS — asymmetric blade + glint
+    float d=1e9; vec2 prev=A; float rp=uShaft*0.35;
+    for(int i=1;i<=8;i++){
+      float t=float(i)/8.0*TB; vec2 cur=bez(A,C,B,t);
+      float r=mix(uShaft*0.35,uShaft*1.15,t/max(TB,1e-4));
+      d=min(d,capAB(p,prev,cur,rp,r)); prev=cur; rp=r;
+    }
+    float hd=sdTri(p,B,HB+PER*uHeadW*1.15,HB-PER*uHeadW*0.30);   // asymmetric head
+    d=min(d,hd); dAll=d;
+    col=mix(col,mid*0.85,cov(d));
+    col=mix(col,ink,cov(abs(d)-1.7)*0.85);
+    float g=cov(d+2.5+sin(uTime*1.4)*0.6);                        // travelling specular
+    col=mix(col,hot,g*0.55);
+  }
+  else if(S==6){                              // CHAIN
+    float d=1e9;
+    for(int i=0;i<15;i++){
+      float t=float(i)/15.0*TB;
+      vec2 c0=bez(A,C,B,t);
+      vec2 tg=normalize(bez(A,C,B,min(t+0.02,1.0))-c0);
+      vec2 q=p-c0; q=vec2(dot(q,tg),dot(q,vec2(-tg.y,tg.x)));
+      bool wide=mod(float(i),2.0)<0.5;   // 'flat' is a reserved GLSL interpolation qualifier
+      vec2 r=wide?vec2(uShaft*1.25,uShaft*0.80):vec2(uShaft*1.25,uShaft*0.34);
+      d=min(d,abs(length(q/r)*min(r.x,r.y)-min(r.x,r.y)*0.72)-uShaft*0.26);
+    }
+    d=min(d,abs(head(p))-uShaft*0.30); dAll=d;                    // hollow hook head
+    col=mix(col,mid,cov(d));
+    col=mix(col,hot,cov(d+uShaft*0.35)*0.6);
+    col+=deep*pow(clamp(1.0-max(d,0.0)/(uGlow*0.5),0.0,1.0),2.0)*0.3;
+  }
+  else if(S==7){                              // RIBBON — soft only, gradient along length
+    float d=min(shaft(p,uShaft*0.25,uShaft*1.25),head(p)); dAll=d;
+    float t=clamp(dot(p-A,B-A)/dot(B-A,B-A),0.0,1.0);
+    vec3 grad=mix(deep,mix(mid,hot,0.35),pow(t,0.9));
+    col=deep*pow(clamp(1.0-max(d,0.0)/uGlow,0.0,1.0),2.1)*0.4;
+    col=mix(col,grad,cov(d)*0.96);
+  }
+  else if(S==8){                              // BOLT
+    float d=1e9; float seed=floor(uTime*9.0);
+    vec2 prev=A; float rp=uShaft*0.4;
+    for(int i=1;i<=9;i++){
+      float t=float(i)/9.0*TB; vec2 cur=bez(A,C,B,t);
+      vec2 tg=normalize(cur-prev), pr=vec2(-tg.y,tg.x);
+      if(i<9) cur+=pr*(hash(float(i)*7.3+seed*13.1)-0.5)*uHeadW*0.85;
+      float r=mix(uShaft*0.4,uShaft*0.85,t/max(TB,1e-4));
+      d=min(d,capAB(p,prev,cur,rp,r)); prev=cur; rp=r;
+    }
+    d=min(d,head(p)); dAll=d;
+    col=lumin(d,uGlow*1.15,deep,mid,hot,uShaft*0.5);
+  }
+  else{                                       // COMET — value concentrated at the head
+    float d=min(shaft(p,uShaft*0.10,uShaft*1.05),head(p)); dAll=d;
+    float t=clamp(dot(p-A,B-A)/dot(B-A,B-A),0.0,1.0);
+    float lead=pow(t,2.2);
+    float halo=pow(clamp(1.0-max(d,0.0)/(uGlow*(0.35+lead)),0.0,1.0),1.8);
+    col=deep*halo*(0.25+lead*0.75);
+    col=mix(col,mid,cov(d)*(0.35+0.65*lead));
+    col=mix(col,hot,cov(d+uShaft*0.8)*lead);
+  }
+
+  if(uFlat>0.5){ col=vec3(0.86)*cov(dAll); }   // flat silhouette: geometry before shading
+  col*=uExpo;
+  if(uGrey>0.5){ float l=dot(col,vec3(0.299,0.587,0.114)); col=vec3(l); }
+  frag=vec4(clamp(col,0.0,1.0),1.0);
+}`;
+
+function mk(ctx){
+  const s=(t,src)=>{const o=ctx.createShader(t);ctx.shaderSource(o,src);ctx.compileShader(o);
+    if(!ctx.getShaderParameter(o,ctx.COMPILE_STATUS))throw new Error(ctx.getShaderInfoLog(o));return o;};
+  const p=ctx.createProgram();
+  ctx.attachShader(p,s(ctx.VERTEX_SHADER,VS));ctx.attachShader(p,s(ctx.FRAGMENT_SHADER,FS));
+  ctx.linkProgram(p);
+  if(!ctx.getProgramParameter(p,ctx.LINK_STATUS))throw new Error(ctx.getProgramInfoLog(p));
+  ctx.useProgram(p);
+  const va=ctx.createVertexArray();ctx.bindVertexArray(va);
+  const b=ctx.createBuffer();ctx.bindBuffer(ctx.ARRAY_BUFFER,b);
+  ctx.bufferData(ctx.ARRAY_BUFFER,new Float32Array([0,0,1,0,0,1,0,1,1,0,1,1]),ctx.STATIC_DRAW);
+  const l=ctx.getAttribLocation(p,'a');ctx.enableVertexAttribArray(l);
+  ctx.vertexAttribPointer(l,2,ctx.FLOAT,false,0,0);
+  return {p,U:n=>ctx.getUniformLocation(p,n)};
+}
+// A shader that fails to compile used to kill this script silently and leave two blank
+// canvases with no indication why. Surface it instead.
+function fail(msg){
+  const d=document.createElement('pre');
+  d.style.cssText='position:fixed;inset:12px;z-index:99;overflow:auto;padding:14px;'
+    +'background:#170c0c;border:1px solid #6b2b2b;color:#ffb4a8;border-radius:5px;'
+    +'font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap';
+  d.textContent='Shader / WebGL failure\n\n'+msg;
+  document.body.append(d);
+}
+let P1,P2;
+try{
+  if(!gl||!gl2) throw new Error('WebGL2 context unavailable in this browser.');
+  P1=mk(gl); P2=mk(gl2);
+}catch(err){ fail(err && err.message ? err.message : String(err)); }
+
+let cur=0,state=1,grey=0,flat=0,zoom=1;
+let origin=null,aim=null,target=null,vel={x:0,y:0},t0=performance.now();
+
+function push(ctx,PR,w,h,a,b,z,style){
+  ctx.uniform2f(PR.U('uRes'),w,h);
+  ctx.uniform2f(PR.U('uA'),a.x,a.y); ctx.uniform2f(PR.U('uB'),b.x,b.y);
+  ctx.uniform1f(PR.U('uZoom'),z);
+  ctx.uniform1f(PR.U('uTime'),(performance.now()-t0)/1000);
+  ctx.uniform1f(PR.U('uShaft'),V('shaft')); ctx.uniform1f(PR.U('uHeadW'),V('headW'));
+  ctx.uniform1f(PR.U('uHeadL'),V('headL')); ctx.uniform1f(PR.U('uCurve'),V('curve'));
+  ctx.uniform1f(PR.U('uGlow'),V('glow'));   ctx.uniform1f(PR.U('uExpo'),V('expo'));
+  ctx.uniform1f(PR.U('uStyle'),style); ctx.uniform1f(PR.U('uState'),state);
+  ctx.uniform1f(PR.U('uGrey'),grey); ctx.uniform1f(PR.U('uFlat'),flat);
+  ctx.drawArrays(ctx.TRIANGLES,0,6);
+}
+
+function frame(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const cw2=big.clientWidth, ch2=big.clientHeight;
+  const w=Math.round(cw2*dpr),h=Math.round(ch2*dpr);
+  if(big.width!==w||big.height!==h){big.width=w;big.height=h;}
+  // World units are CSS pixels: p spans +/-(cssWidth/2)/zoom in the shader, so the
+  // endpoints must be authored in CSS pixels too. Mixing device pixels in here pushed
+  // the tail off-frame on any display with devicePixelRatio > 1.
+  if(!origin){origin={x:-cw2*0.26,y:-ch2*0.18};aim={x:cw2*0.22,y:ch2*0.15};target={...aim};}
+  if(!reduced){const k=320,d=2*Math.sqrt(320)*0.8,dt=1/60;
+    vel.x+=((target.x-aim.x)*k-vel.x*d)*dt;vel.y+=((target.y-aim.y)*k-vel.y*d)*dt;
+    aim.x+=vel.x*dt;aim.y+=vel.y*dt;}else aim={...target};
+  gl.useProgram(P1.p); gl.viewport(0,0,w,h);
+  push(gl,P1,w,h,origin,aim,zoom*dpr,cur);
+
+  // thumbnail strip: ten viewports, one draw each
+  const sw=Math.round(strip.clientWidth*dpr),shh=Math.round(strip.clientHeight*dpr);
+  if(strip.width!==sw||strip.height!==shh){strip.width=sw;strip.height=shh;}
+  gl2.useProgram(P2.p);
+  gl2.clearColor(0.02,0.031,0.043,1); gl2.clear(gl2.COLOR_BUFFER_BIT);
+  const cw=sw/10, cellCss=cw/dpr, hCss=shh/dpr;
+  for(let i=0;i<10;i++){
+    gl2.viewport(Math.round(i*cw),0,Math.round(cw),shh);
+    push(gl2,P2,Math.round(cw),shh,
+         {x:-cellCss*0.30,y:-hCss*0.17},{x:cellCss*0.28,y:hCss*0.15},dpr*0.60,i);
+  }
+  requestAnimationFrame(frame);
+}
+
+function sync(){
+  const s=STYLES[cur];
+  document.getElementById('nameTag').textContent=s.n;
+  document.getElementById('title').textContent=s.n;
+  document.getElementById('origin').textContent=s.o;
+  document.getElementById('desc').textContent=s.d;
+  document.getElementById('edges').textContent=s.e;
+  document.getElementById('reads').textContent=s.r;
+  document.getElementById('weight').textContent=s.w;
+  [...document.getElementById('labels').children].forEach((c,i)=>
+    c.classList.toggle('on',i===cur));
+}
+const lab=document.getElementById('labels');
+STYLES.forEach((s,i)=>{const e=document.createElement('span');e.textContent=s.n;lab.append(e);});
+strip.addEventListener('click',e=>{
+  const r=strip.getBoundingClientRect();
+  cur=Math.max(0,Math.min(9,Math.floor((e.clientX-r.left)/r.width*10))); sync();
+});
+for(const id of ['shaft','headW','headL','curve','glow','expo']){
+  const el=document.getElementById(id),o=document.getElementById(id+'V');
+  const u=()=>o.textContent=parseFloat(el.value).toFixed(2);
+  el.addEventListener('input',u);u();
+}
+const press=(b,on)=>b.setAttribute('aria-pressed',on?'true':'false');
+const bs=[document.getElementById('sAim'),document.getElementById('sValid'),
+          document.getElementById('sInvalid')];
+bs.forEach((b,i)=>b.onclick=()=>{state=i;bs.forEach((x,j)=>press(x,i===j));
+  document.getElementById('stateTag').textContent=['aim','valid','invalid'][i];});
+const bg=document.getElementById('bGrey');
+bg.onclick=()=>{grey=grey?0:1;press(bg,grey);};
+const bf=document.getElementById('bFlat');
+bf.onclick=()=>{flat=flat?0:1;press(bf,flat);};
+
+let drag=false;
+big.addEventListener('pointerdown',e=>{drag=true;big.setPointerCapture(e.pointerId);mv(e);});
+big.addEventListener('pointermove',e=>{if(drag)mv(e);});
+big.addEventListener('pointerup',()=>drag=false);
+big.addEventListener('pointercancel',()=>drag=false);
+function mv(e){const r=big.getBoundingClientRect();
+  // screen CSS pixels -> world units (same space as origin/aim), y flipped for GL
+  target={x:((e.clientX-r.left)-r.width/2)/zoom, y:-((e.clientY-r.top)-r.height/2)/zoom};}
+big.addEventListener('wheel',e=>{e.preventDefault();
+  zoom=Math.min(40,Math.max(0.4,zoom*Math.exp(-e.deltaY*0.0016)));},{passive:false});
+
+sync();
+if(P1&&P2) requestAnimationFrame(frame);
+</script>

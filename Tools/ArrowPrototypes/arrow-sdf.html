@@ -1,0 +1,374 @@
+<title>Arrow — true SDF with fwidth antialiasing</title>
+<style>
+  :root{--ground:#070B10;--panel:#0E151D;--panel2:#0A1017;--line:#1B2632;
+    --ink:#DCE7F1;--dim:#7189A0;--accent:#7FD8B4;
+    --mono:ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;}
+  @media (prefers-color-scheme:light){:root{--ground:#EAEFF3;--panel:#FFF;--panel2:#F3F7F9;
+    --line:#D1DBE3;--ink:#0C151D;--dim:#546E80;--accent:#12805C;}}
+  :root[data-theme="dark"]{--ground:#070B10;--panel:#0E151D;--panel2:#0A1017;--line:#1B2632;
+    --ink:#DCE7F1;--dim:#7189A0;--accent:#7FD8B4;}
+  :root[data-theme="light"]{--ground:#EAEFF3;--panel:#FFF;--panel2:#F3F7F9;--line:#D1DBE3;
+    --ink:#0C151D;--dim:#546E80;--accent:#12805C;}
+  *{box-sizing:border-box}html,body{height:100%}
+  body{margin:0;overflow:hidden;background:var(--ground);color:var(--ink);
+       font-family:var(--sans);font-size:13px;line-height:1.5}
+  .app{display:grid;grid-template-columns:minmax(0,1fr) 310px;height:100dvh}
+  .stage{position:relative;overflow:hidden;background:#05080C}
+  #cv{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+  .hud{position:absolute;top:13px;left:15px;display:flex;flex-direction:column;gap:6px;
+       align-items:flex-start;font-family:var(--mono);font-size:11px;pointer-events:none}
+  .tag{background:rgba(5,9,13,.82);border:1px solid var(--line);padding:4px 10px;
+       border-radius:3px;letter-spacing:.04em}
+  .tag b{color:var(--accent)}.tag.dim{color:var(--dim)}
+  .bar{position:absolute;bottom:13px;left:15px;display:flex;gap:7px;flex-wrap:wrap}
+  button{font-family:var(--mono);font-size:11px;color:var(--ink);background:rgba(10,16,23,.86);
+    border:1px solid var(--line);border-radius:3px;padding:6px 11px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);
+    color:#052318;font-weight:600}
+  .rail{background:var(--panel);border-left:1px solid var(--line);display:flex;
+        flex-direction:column;min-height:0}
+  .head{padding:13px 15px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .head h1{margin:0;font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+    text-transform:uppercase;font-weight:600}
+  .head h1 span{color:var(--accent)}
+  .head p{margin:6px 0 0;font-size:11.5px;color:var(--dim)}
+  .scroll{overflow-y:auto;padding:4px 15px 20px;min-height:0}
+  details{border-bottom:1px solid var(--line)}details:last-of-type{border-bottom:0}
+  summary{cursor:pointer;list-style:none;padding:11px 0 6px;font-family:var(--mono);font-size:10px;
+    font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--dim);
+    display:flex;gap:7px;align-items:center}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"+";color:var(--accent);width:8px}
+  details[open] summary::before{content:"–"}
+  summary:hover{color:var(--ink)}
+  summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .note{margin:0 0 8px;font-size:11.5px;color:var(--dim)}
+  .note code{font-family:var(--mono)}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:8px}
+  .row label{font-family:var(--mono);font-size:11px}
+  .row output{font-family:var(--mono);font-size:11px;color:var(--accent);
+    font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--accent);height:15px;display:block;margin:2px 0 0}
+  input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  pre{margin:8px 0 0;padding:11px;background:var(--panel2);border:1px solid var(--line);
+    border-radius:4px;font-family:var(--mono);font-size:10.5px;line-height:1.6;
+    overflow-x:auto;white-space:pre}
+  .hl{color:var(--accent)}.cmt{color:var(--dim)}
+  @media (max-width:840px){.app{grid-template-columns:minmax(0,1fr)}
+    .rail{position:fixed;inset:auto 0 0 0;height:44dvh;border-left:0;
+      border-top:1px solid var(--line);z-index:5}}
+</style>
+
+<div class="app">
+  <div class="stage">
+    <canvas id="cv"></canvas>
+    <div class="hud">
+      <span class="tag">field <b id="fTag">true SDF</b> · AA <b id="aTag">fwidth</b></span>
+      <span class="tag dim">drag to aim · zoom with the wheel · the tip has no special case</span>
+    </div>
+    <div class="bar">
+      <button id="bTrue" aria-pressed="true">true SDF</button>
+      <button id="bRatio" aria-pressed="false">ratio field (yours)</button>
+      <button id="bAA" aria-pressed="true">fwidth AA</button>
+      <button id="bField">show field</button>
+    </div>
+  </div>
+
+  <aside class="rail">
+    <div class="head">
+      <h1>Arrow <span>· exact primitives</span></h1>
+      <p>Uneven capsules along the spine, one exact triangle for the head, unit-gradient throughout.</p>
+    </div>
+    <div class="scroll">
+      <details open>
+        <summary>Shape</summary>
+        <div class="row"><label for="rTail">tail radius</label><output id="rTailV"></output></div>
+        <input type="range" id="rTail" min="0.5" max="14" step="0.1" value="3">
+        <div class="row"><label for="rHead">shaft radius</label><output id="rHeadV"></output></div>
+        <input type="range" id="rHead" min="0.5" max="18" step="0.1" value="7">
+        <div class="row"><label for="hW">head half-width</label><output id="hWV"></output></div>
+        <input type="range" id="hW" min="5" max="46" step="0.5" value="21">
+        <div class="row"><label for="hL">head length</label><output id="hLV"></output></div>
+        <input type="range" id="hL" min="10" max="120" step="1" value="52">
+        <div class="row"><label for="curve">curvature</label><output id="curveV"></output></div>
+        <input type="range" id="curve" min="0" max="1.2" step="0.02" value="0.34">
+      </details>
+
+      <details open>
+        <summary>Offsets of one number</summary>
+        <p class="note">Core, outline and halo are all the same <code>d</code>, shifted. No second field,
+          no per-layer radius, nothing to reconcile at the tip.</p>
+        <div class="row"><label for="inset">core inset</label><output id="insetV"></output></div>
+        <input type="range" id="inset" min="0" max="14" step="0.1" value="4.5">
+        <div class="row"><label for="outl">outline width</label><output id="outlV"></output></div>
+        <input type="range" id="outl" min="0" max="8" step="0.1" value="1.6">
+        <div class="row"><label for="glow">halo width</label><output id="glowV"></output></div>
+        <input type="range" id="glow" min="0" max="70" step="0.5" value="26">
+        <div class="row"><label for="glowP">halo falloff</label><output id="glowPV"></output></div>
+        <input type="range" id="glowP" min="0.5" max="4" step="0.05" value="1.7">
+      </details>
+
+      <details>
+        <summary>Colour</summary>
+        <div class="row"><label for="hue">hue</label><output id="hueV"></output></div>
+        <input type="range" id="hue" min="0" max="360" step="1" value="196">
+        <div class="row"><label for="sat">saturation</label><output id="satV"></output></div>
+        <input type="range" id="sat" min="0.1" max="1" step="0.01" value="0.78">
+        <div class="row"><label for="expo">exposure</label><output id="expoV"></output></div>
+        <input type="range" id="expo" min="0.3" max="2" step="0.02" value="1">
+      </details>
+
+      <details open>
+        <summary>The whole thing</summary>
+        <pre id="out"></pre>
+      </details>
+    </div>
+  </aside>
+</div>
+
+<script>
+const cv=document.getElementById('cv');
+const gl=cv.getContext('webgl2',{antialias:false});
+const V=id=>parseFloat(document.getElementById(id).value);
+
+const VS=`#version 300 es
+in vec2 a; out vec2 vUv;
+void main(){ vUv=a; gl_Position=vec4(a*2.0-1.0,0.0,1.0); }`;
+
+const FS=`#version 300 es
+precision highp float;
+in vec2 vUv; out vec4 frag;
+
+uniform vec2 uRes, uA, uB;
+uniform float uZoom, uCurve, uRTail, uRHead, uHW, uHL;
+uniform float uInset, uOutl, uGlow, uGlowP, uHue, uSat, uExpo;
+uniform float uTrue, uAA, uField;
+
+// ---- exact primitives, Inigo Quilez ---------------------------------------
+// Uneven capsule: a segment with a DIFFERENT radius at each end. Exact, unit
+// gradient. This is precisely a tapered shaft — no envelope required.
+float sdUnevenCapsule(vec2 p, float r1, float r2, float h){
+  p.x = abs(p.x);
+  float b = (r1-r2)/h;
+  float a = sqrt(1.0-b*b);
+  float k = dot(p, vec2(-b,a));
+  if(k < 0.0)   return length(p) - r1;
+  if(k > a*h)   return length(p-vec2(0.0,h)) - r2;
+  return dot(p, vec2(a,b)) - r1;
+}
+float capsuleAB(vec2 p, vec2 A, vec2 B, float ra, float rb){
+  vec2 ab = B-A; float h = length(ab);
+  if(h < 1e-5) return length(p-A) - max(ra,rb);
+  vec2 d = ab/h;
+  vec2 q = p - A;
+  return sdUnevenCapsule(vec2(dot(q, vec2(d.y,-d.x)), dot(q,d)), ra, rb, h);
+}
+// Exact triangle from three points. The arrowhead's tip is a VERTEX of this
+// polygon — it cannot degrade, because nothing is converging to zero.
+float sdTriangle(vec2 p, vec2 p0, vec2 p1, vec2 p2){
+  vec2 e0=p1-p0, e1=p2-p1, e2=p0-p2;
+  vec2 v0=p-p0,  v1=p-p1,  v2=p-p2;
+  vec2 pq0=v0-e0*clamp(dot(v0,e0)/dot(e0,e0),0.0,1.0);
+  vec2 pq1=v1-e1*clamp(dot(v1,e1)/dot(e1,e1),0.0,1.0);
+  vec2 pq2=v2-e2*clamp(dot(v2,e2)/dot(e2,e2),0.0,1.0);
+  float s=sign(e0.x*e2.y-e0.y*e2.x);
+  vec2 d=min(min(vec2(dot(pq0,pq0), s*(v0.x*e0.y-v0.y*e0.x)),
+                 vec2(dot(pq1,pq1), s*(v1.x*e1.y-v1.y*e1.x))),
+                 vec2(dot(pq2,pq2), s*(v2.x*e2.y-v2.y*e2.x)));
+  return -sqrt(d.x)*sign(d.y);
+}
+
+vec2 bez(vec2 a, vec2 c, vec2 b, float t){
+  float u=1.0-t; return u*u*a + 2.0*u*t*c + t*t*b;
+}
+
+float scene(vec2 p, out float shaftOnly){
+  vec2 A=uA, B=uB;
+  vec2 ab=B-A; float L=max(length(ab),1e-4);
+  vec2 n=vec2(-ab.y,ab.x)/L;
+  vec2 C=A+ab*0.5+n*uCurve*min(L*0.30,190.0);
+  // head base sits back along the curve by the head's own length
+  float tBase=clamp(1.0-uHL/L,0.0,0.999);
+  vec2 base=bez(A,C,B,tBase);
+  vec2 dir=normalize(B-base);
+  vec2 per=vec2(-dir.y,dir.x);
+
+  // shaft: a chain of exact uneven capsules. Union by min() is EXACT outside
+  // the shapes, which is where every visible edge and the whole halo live.
+  float d=1e9;
+  const int N=7;
+  vec2 prev=A; float rPrev=uRTail;
+  for(int i=1;i<=N;i++){
+    float t=float(i)/float(N)*tBase;
+    vec2 cur=bez(A,C,B,t);
+    float r=mix(uRTail,uRHead,t/max(tBase,1e-4));
+    d=min(d, capsuleAB(p,prev,cur,rPrev,r));
+    prev=cur; rPrev=r;
+  }
+  shaftOnly=d;
+  float head=sdTriangle(p, B, base+per*uHW, base-per*uHW);
+  return min(d, head);
+}
+
+vec3 hsl(float h,float s,float l){
+  h=fract(h/360.0);
+  vec3 k=mod(vec3(0.0,8.0,4.0)+h*12.0,12.0);
+  return l - s*min(l,1.0-l)*clamp(min(k-3.0,9.0-k),-1.0,1.0);
+}
+
+void main(){
+  vec2 p=(vUv-0.5)*uRes/uZoom;
+  float so; float d=scene(p,so);
+
+  // THE RATIO FIELD, for comparison: dividing a distance by a varying radius
+  // destroys the unit gradient, so fwidth() no longer means anything and the
+  // taper vanishes instead of fading.
+  float dShown = d;
+  if(uTrue < 0.5){
+    float r = max(uRHead*3.4, 1e-4);
+    dShown = d / r * uRHead;      // same zero-set, wrong metric
+  }
+
+  // Correct antialiasing. Sub-pixel geometry is handled automatically: as the
+  // taper narrows, fwidth grows and coverage FADES rather than disappearing.
+  float w = uAA > 0.5 ? max(fwidth(dShown), 1e-6) : (1.0/uZoom)*0.7;
+  float cover = clamp(0.5 - dShown/w, 0.0, 1.0);
+
+  // every layer below is the SAME number, offset
+  float dCore = dShown + uInset;
+  float core  = clamp(0.5 - dCore/max(fwidth(dCore),1e-6), 0.0, 1.0);
+  float dOut  = abs(dShown) - uOutl;
+  float line  = clamp(0.5 - dOut/max(fwidth(dOut),1e-6), 0.0, 1.0);
+  float halo  = uGlow>0.01 ? pow(clamp(1.0-max(d,0.0)/uGlow,0.0,1.0), uGlowP) : 0.0;
+
+  vec3 deep=hsl(uHue-14.0,uSat,0.30);
+  vec3 mid =hsl(uHue,     uSat*0.95,0.55);
+  vec3 hot =hsl(uHue+16.0,uSat*0.55,0.86);
+
+  vec3 col = deep*halo*0.55;                       // soft additive halo
+  col = mix(col, mid, cover*0.92);                 // body, hard antialiased edge
+  col = mix(col, hot, core*0.85);                  // inner core
+  col = mix(col, hot*1.15, line*0.35*cover);       // keyline catches the edge
+  col *= uExpo;
+
+  if(uField > 0.5){
+    float band=fract(abs(d)*0.10);
+    col=mix(vec3(0.03,0.05,0.07), vec3(0.35,0.55,0.5), smoothstep(0.9,1.0,band));
+    col=mix(col, vec3(0.95,0.4,0.2), 1.0-smoothstep(0.0,1.5,abs(d)));
+  }
+  frag=vec4(col,1.0);
+}`;
+
+function sh(t,src){const s=gl.createShader(t);gl.shaderSource(s,src);gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(s));return s;}
+// Surface compile/link failures instead of leaving a silent blank canvas.
+function fail(msg){
+  const d=document.createElement('pre');
+  d.style.cssText='position:fixed;inset:12px;z-index:99;overflow:auto;padding:14px;'
+    +'background:#170c0c;border:1px solid #6b2b2b;color:#ffb4a8;border-radius:5px;'
+    +'font:11px/1.5 ui-monospace,monospace;white-space:pre-wrap';
+  d.textContent='Shader / WebGL failure\n\n'+msg;
+  document.body.append(d);
+}
+let prog=null;
+try{
+  if(!gl) throw new Error('WebGL2 context unavailable in this browser.');
+  prog=gl.createProgram();
+  gl.attachShader(prog,sh(gl.VERTEX_SHADER,VS));
+  gl.attachShader(prog,sh(gl.FRAGMENT_SHADER,FS));
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+  gl.useProgram(prog);
+}catch(err){ prog=null; fail(err&&err.message?err.message:String(err)); }
+if(prog){
+const vao=gl.createVertexArray();gl.bindVertexArray(vao);
+const buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([0,0,1,0,0,1,0,1,1,0,1,1]),gl.STATIC_DRAW);
+const loc=gl.getAttribLocation(prog,'a');
+gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+const U=n=>gl.getUniformLocation(prog,n);
+
+let zoom=1, isTrue=1, useAA=1, showField=0;
+let origin=null, aim=null, target=null, vel={x:0,y:0};
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+function frame(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const cssW=cv.clientWidth, cssH=cv.clientHeight;
+  const w=Math.round(cssW*dpr), h=Math.round(cssH*dpr);
+  if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h;}
+  // World units are CSS pixels — p spans +/-(cssWidth/2)/zoom in the shader. Authoring the
+  // endpoints in DEVICE pixels put the tail off-frame on every devicePixelRatio > 1 display.
+  if(!origin){origin={x:-cssW*0.28,y:-cssH*0.20};aim={x:cssW*0.24,y:cssH*0.16};target={...aim};}
+  if(!reduced){const k=320,dd=2*Math.sqrt(320)*0.8,dt=1/60;
+    vel.x+=((target.x-aim.x)*k-vel.x*dd)*dt;vel.y+=((target.y-aim.y)*k-vel.y*dd)*dt;
+    aim.x+=vel.x*dt;aim.y+=vel.y*dt;}else aim={...target};
+
+  gl.viewport(0,0,w,h);
+  gl.uniform2f(U('uRes'),w,h);
+  gl.uniform2f(U('uA'),origin.x,origin.y);
+  gl.uniform2f(U('uB'),aim.x,aim.y);
+  gl.uniform1f(U('uZoom'),zoom*dpr);
+  for(const [n,id] of [['uCurve','curve'],['uRTail','rTail'],['uRHead','rHead'],
+      ['uHW','hW'],['uHL','hL'],['uInset','inset'],['uOutl','outl'],['uGlow','glow'],
+      ['uGlowP','glowP'],['uHue','hue'],['uSat','sat'],['uExpo','expo']])
+    gl.uniform1f(U(n),V(id));
+  gl.uniform1f(U('uTrue'),isTrue);
+  gl.uniform1f(U('uAA'),useAA);
+  gl.uniform1f(U('uField'),showField);
+  gl.drawArrays(gl.TRIANGLES,0,6);
+  requestAnimationFrame(frame);
+}
+
+for(const id of ['rTail','rHead','hW','hL','curve','inset','outl','glow','glowP','hue','sat','expo']){
+  const el=document.getElementById(id),o=document.getElementById(id+'V');
+  const u=()=>{o.textContent=V(id).toFixed(2);snippet();};
+  el.addEventListener('input',u);u();
+}
+const press=(b,on)=>b.setAttribute('aria-pressed',on?'true':'false');
+const bT=document.getElementById('bTrue'),bR=document.getElementById('bRatio');
+bT.onclick=()=>{isTrue=1;press(bT,1);press(bR,0);document.getElementById('fTag').textContent='true SDF';snippet();};
+bR.onclick=()=>{isTrue=0;press(bT,0);press(bR,1);document.getElementById('fTag').textContent='ratio (yours)';snippet();};
+const bA=document.getElementById('bAA');
+bA.onclick=()=>{useAA=useAA?0:1;press(bA,useAA);
+  document.getElementById('aTag').textContent=useAA?'fwidth':'hardcoded 0.7px';};
+const bF=document.getElementById('bField');
+bF.onclick=()=>{showField=showField?0:1;press(bF,showField);};
+
+function snippet(){
+  document.getElementById('out').innerHTML=
+`<span class="cmt">// the entire arrow — two exact primitives, one metric</span>
+float d = <span class="hl">1e9</span>;
+for (i = 1..7) d = min(d, sdUnevenCapsule(p, a, b, r0, r1));
+d = min(d, sdTriangle(p, tip, baseL, baseR));
+
+<span class="cmt">// antialias: sub-pixel taper FADES, it does not vanish</span>
+float cover = clamp(0.5 - d / fwidth(d), 0.0, 1.0);
+
+<span class="cmt">// every layer is the same d, offset — nothing to reconcile</span>
+float core = clamp(0.5 - (d + <span class="hl">${V('inset').toFixed(1)}</span>) / fwidth(d), 0.0, 1.0);
+float line = clamp(0.5 - (abs(d) - <span class="hl">${V('outl').toFixed(1)}</span>) / fwidth(d), 0.0, 1.0);
+float halo = pow(1.0 - max(d,0.0) / <span class="hl">${V('glow').toFixed(0)}</span>, <span class="hl">${V('glowP').toFixed(2)}</span>);
+
+<span class="cmt">// replaced: SampleArm, ApexEnvelope, 3 profiles, floors,</span>
+<span class="cmt">// convergence, the forward cut, 64 loop iterations.</span>`;
+}
+snippet();
+
+let drag=false;
+cv.addEventListener('pointerdown',e=>{drag=true;cv.setPointerCapture(e.pointerId);mv(e);});
+cv.addEventListener('pointermove',e=>{if(drag)mv(e);});
+cv.addEventListener('pointerup',()=>drag=false);
+cv.addEventListener('pointercancel',()=>drag=false);
+function mv(e){const r=cv.getBoundingClientRect();
+  // screen CSS pixels -> world units, y flipped for GL
+  target={x:((e.clientX-r.left)-r.width/2)/zoom, y:-((e.clientY-r.top)-r.height/2)/zoom};}
+cv.addEventListener('wheel',e=>{e.preventDefault();
+  zoom=Math.min(60,Math.max(0.4,zoom*Math.exp(-e.deltaY*0.0016)));},{passive:false});
+
+requestAnimationFrame(frame);
+}   // end if(prog) — everything above is skipped when the shader failed to build
+</script>

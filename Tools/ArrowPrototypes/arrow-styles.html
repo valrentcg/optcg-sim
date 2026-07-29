@@ -1,0 +1,560 @@
+<title>Targeting Arrow — style picker</title>
+<style>
+  :root{
+    --ground:#0A1016; --panel:#111A23; --panel2:#0D151C; --line:#1F2C38;
+    --ink:#D6E2EC; --dim:#7B92A6; --accent:#E0A64B;
+    --mono: ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --ground:#ECF1F5; --panel:#FFF; --panel2:#F5F8FA; --line:#D4DEE6;
+           --ink:#111A22; --dim:#5A7183; --accent:#A9741C; }
+  }
+  :root[data-theme="dark"]{ --ground:#0A1016; --panel:#111A23; --panel2:#0D151C;
+    --line:#1F2C38; --ink:#D6E2EC; --dim:#7B92A6; --accent:#E0A64B; }
+  :root[data-theme="light"]{ --ground:#ECF1F5; --panel:#FFF; --panel2:#F5F8FA;
+    --line:#D4DEE6; --ink:#111A22; --dim:#5A7183; --accent:#A9741C; }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;overflow:hidden;background:var(--ground);color:var(--ink);
+       font-family:var(--sans);font-size:13px;line-height:1.5}
+
+  .app{display:grid;grid-template-columns:minmax(0,1fr) 330px;height:100dvh}
+  .left{display:grid;grid-template-rows:minmax(0,1fr) auto;min-width:0}
+
+  .stage{position:relative;background:#05090D;overflow:hidden}
+  :root[data-theme="light"] .stage{background:#0A1016}
+  #big{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+  .hud{position:absolute;top:12px;left:14px;display:flex;flex-direction:column;gap:5px;
+       align-items:flex-start;font-family:var(--mono);font-size:11px;pointer-events:none}
+  .tag{background:rgba(6,11,16,.75);border:1px solid var(--line);color:var(--ink);
+       padding:3px 9px;border-radius:3px;letter-spacing:.04em}
+  .tag b{color:var(--accent)}
+  .tag.dim{color:var(--dim)}
+
+  .tray{border-top:1px solid var(--line);background:var(--panel2);
+        display:flex;gap:8px;padding:10px;overflow-x:auto;overscroll-behavior-x:contain}
+  .card{flex:0 0 auto;width:132px;border:1px solid var(--line);border-radius:5px;
+        background:var(--panel);padding:0;cursor:pointer;overflow:hidden;
+        display:flex;flex-direction:column;gap:0;transition:border-color .12s}
+  .card:hover{border-color:var(--accent)}
+  .card[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .card canvas{display:block;width:100%;height:62px;background:#05090D}
+  .card span{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
+             text-transform:uppercase;color:var(--dim);padding:5px 6px;text-align:center}
+  .card[aria-pressed="true"] span{color:var(--accent)}
+  .card:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .rail{background:var(--panel);border-left:1px solid var(--line);
+        display:flex;flex-direction:column;min-height:0}
+  .head{padding:12px 14px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .head h1{margin:0;font-family:var(--mono);font-size:11px;font-weight:600;
+           letter-spacing:.12em;text-transform:uppercase}
+  .head h1 span{color:var(--accent)}
+  .head p{margin:5px 0 0;color:var(--dim);font-size:11.5px}
+  .scroll{overflow-y:auto;padding:14px;min-height:0;display:flex;flex-direction:column;gap:14px}
+
+  h2{margin:0;font-size:17px;letter-spacing:-.01em}
+  .origin{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+          color:var(--accent);margin:0}
+  .desc{margin:0;color:var(--ink)}
+  dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 10px;font-size:12px}
+  dt{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+     color:var(--dim);padding-top:2px}
+  dd{margin:0}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 7px;
+        border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .pill.good{color:#79C98A;border-color:#2C4A34}
+  .pill.mid{color:var(--accent);border-color:#4A3A1C}
+  .pill.hard{color:#D97C6A;border-color:#4E2C25}
+
+  .ctl{border-top:1px solid var(--line);padding-top:12px;display:flex;flex-direction:column;gap:9px}
+  .ctl h3{margin:0;font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+          text-transform:uppercase;color:var(--dim)}
+  .row{display:flex;align-items:baseline;justify-content:space-between;gap:8px}
+  .row label{font-family:var(--mono);font-size:11px}
+  .row output{font-family:var(--mono);font-size:11px;color:var(--accent);font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--accent);height:16px;display:block;margin:0}
+  input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .swatches{display:flex;gap:6px;flex-wrap:wrap}
+  button.sw{font-family:var(--mono);font-size:10.5px;padding:4px 9px;border-radius:3px;
+            border:1px solid var(--line);background:transparent;color:var(--ink);cursor:pointer}
+  button.sw:hover{border-color:var(--accent)}
+  button.sw[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#1A1206;font-weight:600}
+  button.sw:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .verdict{border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--dim)}
+  .verdict b{color:var(--ink)}
+
+  @media (max-width:860px){
+    .app{grid-template-columns:minmax(0,1fr)}
+    .rail{position:fixed;inset:auto 0 0 0;height:44dvh;border-left:0;border-top:1px solid var(--line);z-index:4}
+    .left{padding-bottom:44dvh}
+  }
+  @media (prefers-reduced-motion:reduce){ *{transition:none!important} }
+</style>
+
+<div class="app">
+  <div class="left">
+    <div class="stage">
+      <canvas id="big"></canvas>
+      <div class="hud">
+        <span class="tag"><b id="nameTag"></b></span>
+        <span class="tag dim">drag anywhere to aim · the arrow springs like the real one</span>
+      </div>
+    </div>
+    <div class="tray" id="tray"></div>
+  </div>
+
+  <aside class="rail">
+    <div class="head">
+      <h1>Targeting arrow <span>· style picker</span></h1>
+      <p>Ten approaches, each fully drawn. Pick the one that looks like your game.</p>
+    </div>
+    <div class="scroll">
+      <div>
+        <p class="origin" id="origin"></p>
+        <h2 id="title"></h2>
+      </div>
+      <p class="desc" id="desc"></p>
+      <dl>
+        <dt>Build</dt><dd id="build"></dd>
+        <dt>Tip</dt><dd id="tip"></dd>
+        <dt>Reads at</dt><dd id="reads"></dd>
+      </dl>
+
+      <div class="ctl">
+        <h3>Palette</h3>
+        <div class="swatches" id="pal"></div>
+        <h3 style="margin-top:4px">Feel</h3>
+        <div class="row"><label for="thick">thickness</label><output id="thickV"></output></div>
+        <input type="range" id="thick" min="0.4" max="2.2" step="0.05" value="1">
+        <div class="row"><label for="curve">curvature</label><output id="curveV"></output></div>
+        <input type="range" id="curve" min="0" max="1.2" step="0.02" value="0.42">
+        <div class="row"><label for="headSz">head size</label><output id="headSzV"></output></div>
+        <input type="range" id="headSz" min="0.5" max="2.4" step="0.05" value="1">
+      </div>
+
+      <p class="verdict">Every style here draws the head as an <b>authored polygon anchored at the tip</b>.
+        That is why none of them have the convergence problem — the point is a vertex, not the limit of a
+        shrinking field.</p>
+    </div>
+  </aside>
+</div>
+
+<script>
+const PALETTES = {
+  attack:  {core:'#FFFFFF', hot:'#FFE9C2', mid:'#E8913C', edge:'#B4431A', ink:'#2A0F06'},
+  ability: {core:'#FFFFFF', hot:'#D8F2FF', mid:'#4FB6E8', edge:'#1F5FA8', ink:'#04121F'},
+  counter: {core:'#FFFFFF', hot:'#EADCFF', mid:'#9A6BE0', edge:'#5A2E9E', ink:'#170A2A'},
+};
+let pal = PALETTES.ability, palName = 'ability';
+
+// ---- path helpers ----------------------------------------------------------
+function samples(p0, p1, curv, n){
+  const dx = p1.x-p0.x, dy = p1.y-p0.y;
+  const L = Math.hypot(dx,dy) || 1;
+  const nx = -dy/L, ny = dx/L;                     // left normal
+  const bow = curv * Math.min(L*0.28, 190);
+  const c1 = {x:p0.x+dx*0.28+nx*bow*0.7, y:p0.y+dy*0.28+ny*bow*0.7};
+  const c2 = {x:p0.x+dx*0.72+nx*bow*0.9, y:p0.y+dy*0.72+ny*bow*0.9};
+  const out = [];
+  for(let i=0;i<=n;i++){
+    const t=i/n, u=1-t;
+    const x = u*u*u*p0.x + 3*u*u*t*c1.x + 3*u*t*t*c2.x + t*t*t*p1.x;
+    const y = u*u*u*p0.y + 3*u*u*t*c1.y + 3*u*t*t*c2.y + t*t*t*p1.y;
+    out.push({x,y,t});
+  }
+  for(let i=0;i<=n;i++){
+    const a = out[Math.max(0,i-1)], b = out[Math.min(n,i+1)];
+    const tx = b.x-a.x, ty = b.y-a.y, m = Math.hypot(tx,ty)||1;
+    out[i].tx = tx/m; out[i].ty = ty/m;
+    out[i].nx = -ty/m; out[i].ny = tx/m;
+  }
+  return out;
+}
+// total length, used to keep dash/chevron spacing constant regardless of distance
+function pathLen(pts){ let L=0; for(let i=1;i<pts.length;i++) L+=Math.hypot(pts[i].x-pts[i-1].x, pts[i].y-pts[i-1].y); return L; }
+
+function headPoly(ctx, p, dirx, diry, len, wid){
+  const nx = -diry, ny = dirx;
+  ctx.beginPath();
+  ctx.moveTo(p.x, p.y);
+  ctx.lineTo(p.x - dirx*len + nx*wid, p.y - diry*len + ny*wid);
+  ctx.lineTo(p.x - dirx*len*0.62, p.y - diry*len*0.62);
+  ctx.lineTo(p.x - dirx*len - nx*wid, p.y - diry*len - ny*wid);
+  ctx.closePath();
+}
+function taperedBody(ctx, pts, wAt){
+  ctx.beginPath();
+  for(let i=0;i<pts.length;i++){ const p=pts[i], w=wAt(p.t);
+    if(i===0) ctx.moveTo(p.x+p.nx*w, p.y+p.ny*w); else ctx.lineTo(p.x+p.nx*w, p.y+p.ny*w); }
+  for(let i=pts.length-1;i>=0;i--){ const p=pts[i], w=wAt(p.t);
+    ctx.lineTo(p.x-p.nx*w, p.y-p.ny*w); }
+  ctx.closePath();
+}
+
+// ---- the ten styles --------------------------------------------------------
+// Each: draw(ctx, p0, p1, o) where o = {time, thick, curve, head}
+const STYLES = [
+{ id:'rope', name:'Rope', origin:'Hearthstone',
+  desc:'Segmented quads marching along a bezier, each a discrete piece with its own outline. The classic card-game arrow — unmistakable at a glance and readable on any background because of the dark keyline.',
+  build:'~40 quads on a spline', tip:'Filled polygon head', reads:['good','Any background'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,44);
+    const hl = 38*o.head, hw = 25*o.head;
+    const end = pts[pts.length-1];
+    for(let i=0;i<pts.length-1;i++){
+      const p=pts[i], t=p.t;
+      if(t > 1 - hl/Math.max(pathLen(pts),1)) continue;
+      const w = (5 + 9*t) * o.thick;
+      ctx.save();
+      ctx.translate(p.x,p.y); ctx.rotate(Math.atan2(p.ty,p.tx));
+      ctx.fillStyle = pal.mid; ctx.strokeStyle = pal.ink; ctx.lineWidth = 2.4;
+      ctx.beginPath(); ctx.roundRect(-6, -w, 12, w*2, 3); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = pal.hot; ctx.globalAlpha = .5;
+      ctx.beginPath(); ctx.roundRect(-4, -w*0.45, 8, w*0.5, 2); ctx.fill();
+      ctx.restore();
+    }
+    ctx.fillStyle = pal.mid; ctx.strokeStyle = pal.ink; ctx.lineWidth = 3;
+    headPoly(ctx, end, end.tx, end.ty, hl, hw); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = pal.hot; ctx.globalAlpha = .55;
+    headPoly(ctx, {x:end.x-end.tx*5,y:end.y-end.ty*5}, end.tx, end.ty, hl*0.6, hw*0.5); ctx.fill();
+    ctx.globalAlpha = 1;
+  }},
+
+{ id:'chevron', name:'Chevron flow', origin:'MOBA skillshot',
+  desc:'A chain of chevrons sliding toward the target. Motion carries the direction, so the shape can stay light — nothing is drawn between the marks, which keeps the board visible underneath.',
+  build:'Repeating marks, animated offset', tip:'Lead chevron is the head', reads:['good','Busy boards'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,120);
+    const L = pathLen(pts), gap = 34, flow = (o.time*90) % gap;
+    ctx.lineCap='round'; ctx.lineJoin='round';
+    for(let d=flow; d<L-26*o.head; d+=gap){
+      const i = Math.min(pts.length-1, Math.round(d/L*(pts.length-1)));
+      const p = pts[i], t = p.t;
+      const s = (0.45 + 0.55*t) * o.head, a = Math.min(1, t*2.6);
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(Math.atan2(p.ty,p.tx));
+      ctx.globalAlpha = a*0.9; ctx.strokeStyle = pal.mid; ctx.lineWidth = 5*o.thick*s;
+      ctx.beginPath(); ctx.moveTo(-9*s, -10*s); ctx.lineTo(4*s, 0); ctx.lineTo(-9*s, 10*s); ctx.stroke();
+      ctx.globalAlpha = a; ctx.strokeStyle = pal.hot; ctx.lineWidth = 2*o.thick*s;
+      ctx.beginPath(); ctx.moveTo(-9*s, -10*s); ctx.lineTo(4*s, 0); ctx.lineTo(-9*s, 10*s); ctx.stroke();
+      ctx.restore();
+    }
+    const e = pts[pts.length-1];
+    ctx.globalAlpha=1; ctx.fillStyle = pal.core;
+    headPoly(ctx, e, e.tx, e.ty, 30*o.head, 19*o.head); ctx.fill();
+    ctx.fillStyle = pal.mid; ctx.globalAlpha=.85;
+    headPoly(ctx, e, e.tx, e.ty, 30*o.head, 19*o.head); ctx.fill(); ctx.globalAlpha=1;
+  }},
+
+{ id:'vector', name:'Clean vector', origin:'Riot clarity rules',
+  desc:'One flat colour, one dark keyline, a crisp triangular head. No bloom at all. This is what the style guide argues for when an element is information rather than spectacle — it never competes with the cards.',
+  build:'Two filled paths', tip:'Vertex of a triangle', reads:['good','Everything'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,60);
+    const hl = 34*o.head, hw = 22*o.head;
+    const body = pts.slice(0, Math.max(2, pts.length - Math.ceil(hl/6)));
+    const wAt = t => (3.5 + 7.5*t) * o.thick;
+    ctx.lineJoin='round';
+    taperedBody(ctx, body, wAt);
+    ctx.fillStyle = pal.mid; ctx.fill();
+    ctx.strokeStyle = pal.ink; ctx.lineWidth = 3; ctx.stroke();
+    const e = pts[pts.length-1];
+    headPoly(ctx, e, e.tx, e.ty, hl, hw);
+    ctx.fillStyle = pal.mid; ctx.fill(); ctx.strokeStyle = pal.ink; ctx.lineWidth=3; ctx.stroke();
+  }},
+
+{ id:'ink', name:'Ink brush', origin:'Sumi-e / manga',
+  desc:'A tapered brush stroke that thins at the origin and swells before the head, with dry-brush breaks along the edge. Sits naturally next to One Piece card art in a way a neon beam never will.',
+  build:'Tapered polygon + texture breaks', tip:'Brush point', reads:['mid','Light boards'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve*1.15,70);
+    const hl = 40*o.head, hw = 26*o.head;
+    const body = pts.slice(0, Math.max(2, pts.length - Math.ceil(hl/5)));
+    const wAt = t => (1.5 + 13*Math.pow(t,0.75)) * o.thick;
+    ctx.fillStyle = pal.ink === '#04121F' ? '#0E1A24' : pal.ink;
+    ctx.fillStyle = pal.edge;
+    taperedBody(ctx, body, wAt); ctx.fill();
+    // dry-brush: scrape a few translucent gaps along the upper edge
+    ctx.globalCompositeOperation = 'destination-out';
+    for(let k=0;k<7;k++){
+      const t = 0.18 + k*0.11, i = Math.round(t*(body.length-1)), p = body[i];
+      if(!p) continue;
+      const w = wAt(p.t);
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      ctx.ellipse(p.x + p.nx*w*0.55, p.y + p.ny*w*0.55, 9+k*1.6, 1.6, Math.atan2(p.ty,p.tx), 0, 7);
+      ctx.fill();
+    }
+    ctx.globalCompositeOperation='source-over'; ctx.globalAlpha=1;
+    const e = pts[pts.length-1];
+    ctx.fillStyle = pal.edge;
+    ctx.beginPath();
+    ctx.moveTo(e.x, e.y);
+    ctx.quadraticCurveTo(e.x-e.tx*hl*0.5 - e.ty*hw*1.1, e.y-e.ty*hl*0.5 + e.tx*hw*1.1,
+                         e.x-e.tx*hl + -e.ty*hw*0.25, e.y-e.ty*hl + e.tx*hw*0.25);
+    ctx.lineTo(e.x-e.tx*hl*0.55, e.y-e.ty*hl*0.55);
+    ctx.lineTo(e.x-e.tx*hl + e.ty*hw*0.25, e.y-e.ty*hl - e.tx*hw*0.25);
+    ctx.quadraticCurveTo(e.x-e.tx*hl*0.5 + e.ty*hw*1.1, e.y-e.ty*hl*0.5 - e.tx*hw*1.1, e.x, e.y);
+    ctx.closePath(); ctx.fill();
+  }},
+
+{ id:'manga', name:'Manga panel', origin:'Shonen speed lines',
+  desc:'Heavy black keyline, flat fill, and speed lines raking back from the head. The loudest option here, and the most on-theme — it reads as a panel transition rather than a UI element.',
+  build:'Outline + radiating strokes', tip:'Inked vertex', reads:['good','Anything'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve*0.6,60);
+    const e = pts[pts.length-1];
+    const hl = 42*o.head, hw = 30*o.head;
+    ctx.save(); ctx.globalAlpha=.5; ctx.strokeStyle = pal.core; ctx.lineWidth=2; ctx.lineCap='round';
+    for(let k=0;k<13;k++){
+      const a = Math.atan2(e.ty,e.tx) + Math.PI + (k-6)*0.13;
+      const r0 = 44*o.head + (k%3)*10, r1 = r0 + 30 + (k%4)*22;
+      ctx.beginPath();
+      ctx.moveTo(e.x+Math.cos(a)*r0, e.y+Math.sin(a)*r0);
+      ctx.lineTo(e.x+Math.cos(a)*r1, e.y+Math.sin(a)*r1);
+      ctx.stroke();
+    }
+    ctx.restore();
+    const body = pts.slice(0, Math.max(2, pts.length - Math.ceil(hl/6)));
+    const wAt = t => (4 + 9*t) * o.thick;
+    taperedBody(ctx, body, wAt);
+    ctx.fillStyle = pal.core; ctx.fill();
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 5; ctx.lineJoin='round'; ctx.stroke();
+    headPoly(ctx, e, e.tx, e.ty, hl, hw);
+    ctx.fillStyle = pal.mid; ctx.fill(); ctx.strokeStyle='#000'; ctx.lineWidth=5; ctx.stroke();
+  }},
+
+{ id:'beam', name:'Energy beam', origin:'Current build',
+  desc:'Additive core and halo — what the project has now, but drawn as stacked strokes with a real blur instead of an analytic field. Same look, none of the convergence maths, because the head is still a polygon.',
+  build:'3 stacked strokes + shadowBlur', tip:'Polygon over the glow', reads:['mid','Dark boards'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,60);
+    const stroke = (w,c,blur,alpha)=>{
+      ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=alpha;
+      ctx.strokeStyle=c; ctx.lineWidth=w; ctx.lineCap='round'; ctx.lineJoin='round';
+      ctx.shadowColor=c; ctx.shadowBlur=blur;
+      ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+      for(const p of pts) ctx.lineTo(p.x,p.y);
+      ctx.stroke(); ctx.restore();
+    };
+    stroke(26*o.thick, pal.edge, 34, .40);
+    stroke(13*o.thick, pal.mid,  20, .55);
+    stroke(4.5*o.thick, pal.core, 10, .95);
+    const e = pts[pts.length-1];
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    ctx.shadowColor=pal.mid; ctx.shadowBlur=26;
+    ctx.fillStyle=pal.mid; headPoly(ctx,e,e.tx,e.ty,34*o.head,21*o.head); ctx.fill();
+    ctx.shadowBlur=12; ctx.fillStyle=pal.core;
+    headPoly(ctx,e,e.tx,e.ty,22*o.head,12*o.head); ctx.fill(); ctx.restore();
+  }},
+
+{ id:'dashed', name:'Marching dashes', origin:'Mobile strategy',
+  desc:'Dashes travelling toward the target. Cheapest thing here to draw and the least visually heavy — good if the arrow is on screen a lot and you want it to stop shouting.',
+  build:'One stroke, animated dash offset', tip:'Small solid head', reads:['good','Busy boards'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,60);
+    ctx.save();
+    ctx.setLineDash([15,11]); ctx.lineDashOffset = -o.time*70;
+    ctx.strokeStyle = pal.mid; ctx.lineWidth = 7*o.thick; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(pts[0].x,pts[0].y);
+    for(const p of pts) ctx.lineTo(p.x,p.y);
+    ctx.stroke();
+    ctx.setLineDash([]); ctx.restore();
+    const e = pts[pts.length-1];
+    ctx.fillStyle = pal.mid; headPoly(ctx,e,e.tx,e.ty,26*o.head,17*o.head); ctx.fill();
+  }},
+
+{ id:'chain', name:'Chain & hook', origin:'Pirate rigging',
+  desc:'Interlocking links ending in a grapple. Leans hardest into the setting of the game — it reads as rigging thrown across the board rather than a cursor.',
+  build:'Alternating ellipses + hook path', tip:'Hook point', reads:['mid','Dark boards'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,140);
+    const L = pathLen(pts), gap = 17*o.thick;
+    for(let d=6; d<L-30*o.head; d+=gap){
+      const i = Math.min(pts.length-1, Math.round(d/L*(pts.length-1)));
+      const p = pts[i], flat = (Math.round(d/gap)%2)===0;
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(Math.atan2(p.ty,p.tx));
+      ctx.strokeStyle = flat ? pal.mid : pal.hot; ctx.lineWidth = 3.4*o.thick;
+      ctx.beginPath();
+      ctx.ellipse(0,0, 11*o.thick, (flat?7:3.4)*o.thick, 0, 0, 7);
+      ctx.stroke(); ctx.restore();
+    }
+    const e = pts[pts.length-1];
+    ctx.save(); ctx.translate(e.x,e.y); ctx.rotate(Math.atan2(e.ty,e.tx));
+    ctx.strokeStyle = pal.hot; ctx.lineWidth = 5*o.thick; ctx.lineCap='round'; ctx.lineJoin='round';
+    const s = o.head;
+    ctx.beginPath();
+    ctx.moveTo(-26*s, 0); ctx.lineTo(-4*s, 0);
+    ctx.moveTo(-4*s, 0); ctx.quadraticCurveTo(-16*s, -18*s, -30*s, -9*s);
+    ctx.moveTo(-4*s, 0); ctx.quadraticCurveTo(-16*s,  18*s, -30*s,  9*s);
+    ctx.stroke();
+    ctx.fillStyle = pal.core; ctx.beginPath(); ctx.arc(0,0,4.5*s,0,7); ctx.fill();
+    ctx.restore();
+  }},
+
+{ id:'bolt', name:'Lightning', origin:'Impact VFX',
+  desc:'A jagged path reseeded a few times a second, with short forks. Communicates urgency well, but the noise fights small text — best reserved for a specific action rather than every target.',
+  build:'Seeded jitter polyline', tip:'Polygon head over the arc', reads:['mid','Dark boards'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,40);
+    const seed = Math.floor(o.time*11);
+    const rnd = (i)=>{ const x = Math.sin(i*127.1 + seed*311.7)*43758.5; return x-Math.floor(x); };
+    const j = pts.map((p,i)=>{ const k = (i===0||i===pts.length-1)?0:(rnd(i)-0.5)*22*o.thick;
+      return {x:p.x+p.nx*k, y:p.y+p.ny*k, tx:p.tx, ty:p.ty}; });
+    const line = (w,c,a,blur)=>{ ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=a;
+      ctx.strokeStyle=c; ctx.lineWidth=w; ctx.lineJoin='round'; ctx.lineCap='round';
+      ctx.shadowColor=c; ctx.shadowBlur=blur;
+      ctx.beginPath(); ctx.moveTo(j[0].x,j[0].y); for(const p of j) ctx.lineTo(p.x,p.y); ctx.stroke(); ctx.restore(); };
+    line(14*o.thick, pal.edge, .45, 26);
+    line(5*o.thick,  pal.mid,  .8, 14);
+    line(1.8*o.thick, pal.core, 1, 6);
+    for(let k=2;k<j.length-3;k+=6){
+      const p=j[k], a=rnd(k*3)*6.28, r=14+rnd(k*5)*22;
+      ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.globalAlpha=.5;
+      ctx.strokeStyle=pal.mid; ctx.lineWidth=1.6*o.thick;
+      ctx.beginPath(); ctx.moveTo(p.x,p.y); ctx.lineTo(p.x+Math.cos(a)*r, p.y+Math.sin(a)*r); ctx.stroke(); ctx.restore();
+    }
+    const e = pts[pts.length-1];
+    ctx.save(); ctx.globalCompositeOperation='lighter'; ctx.shadowColor=pal.mid; ctx.shadowBlur=18;
+    ctx.fillStyle=pal.core; headPoly(ctx,e,e.tx,e.ty,26*o.head,16*o.head); ctx.fill(); ctx.restore();
+  }},
+
+{ id:'ribbon', name:'Gradient ribbon', origin:'Modern console UI',
+  desc:'A single tapered shape with a gradient along its length and no keyline. Quiet, contemporary, and it disappears politely when you let go — the closest thing here to a pure UI affordance.',
+  build:'One filled path + linear gradient', tip:'Vertex of the ribbon', reads:['mid','Dark boards'],
+  draw(ctx,p0,p1,o){
+    const pts = samples(p0,p1,o.curve,70);
+    const hl = 30*o.head, hw = 20*o.head;
+    const body = pts.slice(0, Math.max(2, pts.length - Math.ceil(hl/6)));
+    const g = ctx.createLinearGradient(p0.x,p0.y,p1.x,p1.y);
+    g.addColorStop(0, pal.edge+'00'); g.addColorStop(.35, pal.edge);
+    g.addColorStop(.8, pal.mid); g.addColorStop(1, pal.hot);
+    taperedBody(ctx, body, t => (2 + 11*Math.pow(t,0.8)) * o.thick);
+    ctx.fillStyle = g; ctx.fill();
+    const e = pts[pts.length-1];
+    ctx.fillStyle = pal.hot; headPoly(ctx,e,e.tx,e.ty,hl,hw); ctx.fill();
+    ctx.globalAlpha=.5; ctx.fillStyle = pal.core;
+    headPoly(ctx,{x:e.x-e.tx*3,y:e.y-e.ty*3},e.tx,e.ty,hl*0.55,hw*0.45); ctx.fill(); ctx.globalAlpha=1;
+  }},
+];
+
+// ---- state -----------------------------------------------------------------
+let cur = 0;
+const big = document.getElementById('big');
+const bctx = big.getContext('2d');
+let aim = null, target = null, vel = {x:0,y:0}, origin = null;
+let t0 = performance.now();
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const opts = () => ({
+  time: (performance.now()-t0)/1000,
+  thick: parseFloat(document.getElementById('thick').value),
+  curve: parseFloat(document.getElementById('curve').value),
+  head:  parseFloat(document.getElementById('headSz').value),
+});
+
+function fit(cv){
+  const dpr = Math.min(devicePixelRatio||1, 2);
+  const w = Math.max(1, Math.round(cv.clientWidth*dpr)), h = Math.max(1, Math.round(cv.clientHeight*dpr));
+  if(cv.width!==w||cv.height!==h){ cv.width=w; cv.height=h; }
+  return dpr;
+}
+
+function board(ctx, w, h){
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#05090D'; ctx.fillRect(0,0,w,h);
+  // a couple of card silhouettes, so styles are judged against real board contrast
+  const cards = [[0.10,0.62],[0.24,0.62],[0.74,0.22],[0.86,0.22]];
+  for(const [fx,fy] of cards){
+    const cw = w*0.085, ch = cw*1.4, x = w*fx-cw/2, y = h*fy-ch/2;
+    ctx.fillStyle = '#0F1821'; ctx.beginPath(); ctx.roundRect(x,y,cw,ch,6); ctx.fill();
+    ctx.strokeStyle = '#1C2A36'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+}
+
+function frame(){
+  const dpr = fit(big);
+  const w = big.width, h = big.height;
+  if(!origin){ origin = {x:w*0.17, y:h*0.62}; aim = {x:w*0.8, y:h*0.26}; target = {...aim}; }
+  // spring, matching the feel of the shipped arrow
+  if(!reduced){
+    const k = 300, d = 2*Math.sqrt(k)*0.8, dt = 1/60;
+    const ax = (target.x-aim.x)*k - vel.x*d, ay = (target.y-aim.y)*k - vel.y*d;
+    vel.x += ax*dt; vel.y += ay*dt; aim.x += vel.x*dt; aim.y += vel.y*dt;
+  } else { aim = {...target}; }
+
+  board(bctx, w, h);
+  bctx.save(); bctx.scale(dpr,dpr);
+  STYLES[cur].draw(bctx, {x:origin.x/dpr,y:origin.y/dpr}, {x:aim.x/dpr,y:aim.y/dpr}, opts());
+  bctx.restore();
+
+  thumbs.forEach((tc,i)=>{
+    const d2 = fit(tc.cv); const cw = tc.cv.width, chh = tc.cv.height;
+    tc.ctx.clearRect(0,0,cw,chh); tc.ctx.fillStyle='#05090D'; tc.ctx.fillRect(0,0,cw,chh);
+    tc.ctx.save(); tc.ctx.scale(d2,d2);
+    const W = cw/d2, H = chh/d2;
+    STYLES[i].draw(tc.ctx, {x:W*0.12,y:H*0.72}, {x:W*0.88,y:H*0.3},
+      {...opts(), thick:0.5, head:0.5, curve:parseFloat(document.getElementById('curve').value)});
+    tc.ctx.restore();
+  });
+  requestAnimationFrame(frame);
+}
+
+// ---- tray ------------------------------------------------------------------
+const tray = document.getElementById('tray');
+const thumbs = STYLES.map((s,i)=>{
+  const b = document.createElement('button');
+  b.className='card'; b.setAttribute('aria-pressed', i===0?'true':'false');
+  const cv = document.createElement('canvas'); const sp = document.createElement('span');
+  sp.textContent = s.name; b.append(cv, sp); tray.append(b);
+  b.onclick = ()=>{ cur=i; sync(); };
+  return {cv, ctx:cv.getContext('2d'), btn:b};
+});
+
+function sync(){
+  const s = STYLES[cur];
+  document.getElementById('nameTag').textContent = s.name.toUpperCase();
+  document.getElementById('title').textContent = s.name;
+  document.getElementById('origin').textContent = s.origin;
+  document.getElementById('desc').textContent = s.desc;
+  document.getElementById('build').textContent = s.build;
+  document.getElementById('tip').textContent = s.tip;
+  document.getElementById('reads').innerHTML =
+    `<span class="pill ${s.reads[0]}">${s.reads[1]}</span>`;
+  thumbs.forEach((t,i)=> t.btn.setAttribute('aria-pressed', i===cur?'true':'false'));
+}
+
+// palette buttons
+const palWrap = document.getElementById('pal');
+Object.keys(PALETTES).forEach((k,i)=>{
+  const b=document.createElement('button'); b.className='sw'; b.textContent=k;
+  b.setAttribute('aria-pressed', i===1?'true':'false');
+  b.onclick=()=>{ pal=PALETTES[k]; palName=k;
+    [...palWrap.children].forEach(c=>c.setAttribute('aria-pressed','false'));
+    b.setAttribute('aria-pressed','true'); };
+  palWrap.append(b);
+});
+
+['thick','curve','headSz'].forEach(id=>{
+  const el=document.getElementById(id), out=document.getElementById(id+'V');
+  const upd=()=> out.textContent = parseFloat(el.value).toFixed(2);
+  el.addEventListener('input', upd); upd();
+});
+
+let drag=false;
+big.addEventListener('pointerdown', e=>{ drag=true; big.setPointerCapture(e.pointerId); move(e); });
+big.addEventListener('pointermove', e=>{ if(drag) move(e); });
+big.addEventListener('pointerup', ()=> drag=false);
+big.addEventListener('pointercancel', ()=> drag=false);
+function move(e){
+  const r = big.getBoundingClientRect();
+  const dpr = Math.min(devicePixelRatio||1,2);
+  target = {x:(e.clientX-r.left)*dpr, y:(e.clientY-r.top)*dpr};
+}
+
+sync();
+requestAnimationFrame(frame);
+</script>

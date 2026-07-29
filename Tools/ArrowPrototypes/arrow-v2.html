@@ -1,0 +1,409 @@
+<title>Targeting arrow — constant-offset glow</title>
+<style>
+  :root{
+    --ground:#080C11; --panel:#0F171F; --panel2:#0B1219; --line:#1C2733;
+    --ink:#DCE7F0; --dim:#7590A6; --accent:#5CC8E8;
+    --mono: ui-monospace,"Cascadia Mono","SF Mono",Menlo,Consolas,monospace;
+    --sans: ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{--ground:#E8EDF2;--panel:#FFF;--panel2:#F3F7FA;--line:#D2DCE5;
+          --ink:#0E1720;--dim:#55707F;--accent:#0F7FA0;}
+  }
+  :root[data-theme="dark"]{--ground:#080C11;--panel:#0F171F;--panel2:#0B1219;
+    --line:#1C2733;--ink:#DCE7F0;--dim:#7590A6;--accent:#5CC8E8;}
+  :root[data-theme="light"]{--ground:#E8EDF2;--panel:#FFF;--panel2:#F3F7FA;
+    --line:#D2DCE5;--ink:#0E1720;--dim:#55707F;--accent:#0F7FA0;}
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;overflow:hidden;background:var(--ground);color:var(--ink);
+       font-family:var(--sans);font-size:13px;line-height:1.5}
+  .app{display:grid;grid-template-columns:minmax(0,1fr) 320px;height:100dvh}
+  .stage{position:relative;background:#05080C;overflow:hidden}
+  #cv{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none}
+
+  .hud{position:absolute;top:14px;left:16px;display:flex;flex-direction:column;
+       gap:6px;align-items:flex-start;font-family:var(--mono);font-size:11px;pointer-events:none}
+  .tag{background:rgba(5,9,13,.8);border:1px solid var(--line);padding:4px 10px;
+       border-radius:3px;letter-spacing:.04em;backdrop-filter:blur(4px)}
+  .tag b{color:var(--accent)} .tag.dim{color:var(--dim)}
+  .bar{position:absolute;bottom:14px;left:16px;display:flex;gap:7px;flex-wrap:wrap;
+       max-width:calc(100% - 32px)}
+  button{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--ink);
+         background:rgba(10,17,24,.85);border:1px solid var(--line);border-radius:3px;
+         padding:6px 11px;cursor:pointer;backdrop-filter:blur(4px)}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);
+    color:#04222C;font-weight:600}
+
+  .rail{background:var(--panel);border-left:1px solid var(--line);
+        display:flex;flex-direction:column;min-height:0}
+  .head{padding:13px 15px;border-bottom:1px solid var(--line);background:var(--panel2)}
+  .head h1{margin:0;font-family:var(--mono);font-size:11px;letter-spacing:.13em;
+           text-transform:uppercase;font-weight:600}
+  .head h1 span{color:var(--accent)}
+  .head p{margin:6px 0 0;font-size:11.5px;color:var(--dim)}
+  .scroll{overflow-y:auto;padding:6px 15px 22px;min-height:0}
+
+  details{border-bottom:1px solid var(--line)}
+  details:last-of-type{border-bottom:0}
+  summary{cursor:pointer;list-style:none;padding:11px 0 7px;font-family:var(--mono);
+    font-size:10px;font-weight:600;letter-spacing:.13em;text-transform:uppercase;
+    color:var(--dim);display:flex;align-items:center;gap:7px}
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"+";color:var(--accent);width:8px}
+  details[open] summary::before{content:"–"}
+  summary:hover{color:var(--ink)}
+  summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .note{margin:0 0 10px;font-size:11.5px;color:var(--dim)}
+  .note code{font-family:var(--mono)}
+  .row{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-top:9px}
+  .row label{font-family:var(--mono);font-size:11px}
+  .row output{font-family:var(--mono);font-size:11px;color:var(--accent);
+              font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;accent-color:var(--accent);height:16px;display:block;margin:2px 0 0}
+  input[type=range]:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  .swatch{display:flex;gap:6px;margin-top:4px}
+  pre{margin:10px 0 0;padding:11px;background:var(--panel2);border:1px solid var(--line);
+      border-radius:4px;font-family:var(--mono);font-size:10.5px;line-height:1.6;
+      overflow-x:auto;white-space:pre;color:var(--ink)}
+  .hl{color:var(--accent)} .cmt{color:var(--dim)}
+  @media (max-width:840px){
+    .app{grid-template-columns:minmax(0,1fr)}
+    .rail{position:fixed;inset:auto 0 0 0;height:46dvh;border-left:0;border-top:1px solid var(--line);z-index:5}
+  }
+</style>
+
+<div class="app">
+  <div class="stage">
+    <canvas id="cv"></canvas>
+    <div class="hud">
+      <span class="tag">glow <b id="modeTag">constant offset</b> · <b id="styleTag">Beam</b></span>
+      <span class="tag dim">drag to aim · the tip is a vertex, not a limit</span>
+    </div>
+    <div class="bar">
+      <button id="sBeam"   aria-pressed="true">beam</button>
+      <button id="sVector" aria-pressed="false">vector</button>
+      <button id="sInk"    aria-pressed="false">ink</button>
+      <button id="sRope"   aria-pressed="false">rope</button>
+      <button id="bMode"   aria-pressed="false">show the bug</button>
+      <button id="bSlice"  aria-pressed="false">cross-section</button>
+    </div>
+  </div>
+
+  <aside class="rail">
+    <div class="head">
+      <h1>Arrow <span>· v2</span></h1>
+      <p>One tapered polyline, per-point width and colour, glow added as a constant —
+        the construction Shapes uses.</p>
+    </div>
+    <div class="scroll">
+      <details open>
+        <summary>Silhouette</summary>
+        <p class="note">Head length is a fraction of the whole draw, so proportion holds at any distance.</p>
+        <div class="row"><label for="shaftW">shaft half px</label><output id="shaftWV"></output></div>
+        <input type="range" id="shaftW" min="1" max="14" step="0.1" value="5.5">
+        <div class="row"><label for="headW">head half px</label><output id="headWV"></output></div>
+        <input type="range" id="headW" min="4" max="46" step="0.5" value="17">
+        <div class="row"><label for="headF">head % of length</label><output id="headFV"></output></div>
+        <input type="range" id="headF" min="0.06" max="0.42" step="0.005" value="0.17">
+        <div class="row"><label for="curve">curvature</label><output id="curveV"></output></div>
+        <input type="range" id="curve" min="0" max="1.1" step="0.02" value="0.38">
+        <div class="row"><label for="tailF">tail fade</label><output id="tailFV"></output></div>
+        <input type="range" id="tailF" min="0" max="0.6" step="0.01" value="0.22">
+      </details>
+
+      <details open>
+        <summary>Glow</summary>
+        <p class="note"><b>Constant</b> — added to the core half-width, never multiplied by it. This is the
+          whole fix: at the tip the core reaches zero, the halo does not.</p>
+        <div class="row"><label for="glow">glow extent px</label><output id="glowV"></output></div>
+        <input type="range" id="glow" min="0" max="46" step="0.5" value="15">
+        <div class="row"><label for="soft">falloff softness</label><output id="softV"></output></div>
+        <input type="range" id="soft" min="0.3" max="3" step="0.05" value="1.25">
+        <div class="row"><label for="bright">core brightness</label><output id="brightV"></output></div>
+        <input type="range" id="bright" min="0.2" max="1.6" step="0.02" value="1">
+      </details>
+
+      <details>
+        <summary>Palette</summary>
+        <div class="swatch" id="pal"></div>
+      </details>
+
+      <details open>
+        <summary>The construction</summary>
+        <pre id="out"></pre>
+      </details>
+    </div>
+  </aside>
+</div>
+
+<script>
+const PAL = {
+  ability:{edge:'#0E4FA8', mid:'#2E9BE0', hot:'#A9E4FF', core:'#FFFFFF', ink:'#06121E'},
+  attack: {edge:'#8E2410', mid:'#E0721C', hot:'#FFD9A0', core:'#FFFFFF', ink:'#1C0A04'},
+  counter:{edge:'#4B1E96', mid:'#8E5CE0', hot:'#DCC8FF', core:'#FFFFFF', ink:'#120726'},
+  sea:    {edge:'#0A5E5A', mid:'#25B0A0', hot:'#B8F2E4', core:'#FFFFFF', ink:'#041614'},
+};
+let pal = PAL.ability;
+let style = 'beam', showBug = false, showSlice = false;
+
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const V = id => parseFloat(document.getElementById(id).value);
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// ---------------------------------------------------------------- geometry
+// One polyline. Per-point CORE half-width; the glow is added afterwards as a
+// constant, exactly like a per-point thickness plus a fixed AA/bleed margin.
+function build(p0, p1, o){
+  const dx=p1.x-p0.x, dy=p1.y-p0.y, L=Math.hypot(dx,dy)||1;
+  const nx=-dy/L, ny=dx/L;
+  const bow = o.curve * Math.min(L*0.26, 175);
+  const c1={x:p0.x+dx*0.30+nx*bow*0.65, y:p0.y+dy*0.30+ny*bow*0.65};
+  const c2={x:p0.x+dx*0.70+nx*bow*0.95, y:p0.y+dy*0.70+ny*bow*0.95};
+  const N=110, pts=[];
+  for(let i=0;i<=N;i++){
+    const t=i/N,u=1-t;
+    pts.push({
+      x:u*u*u*p0.x+3*u*u*t*c1.x+3*u*t*t*c2.x+t*t*t*p1.x,
+      y:u*u*u*p0.y+3*u*u*t*c1.y+3*u*t*t*c2.y+t*t*t*p1.y, t});
+  }
+  for(let i=0;i<=N;i++){
+    const a=pts[Math.max(0,i-1)], b=pts[Math.min(N,i+1)];
+    const tx=b.x-a.x, ty=b.y-a.y, m=Math.hypot(tx,ty)||1;
+    pts[i].nx=-ty/m; pts[i].ny=tx/m;
+    pts[i].tx=tx/m;  pts[i].ty=ty/m;
+  }
+  // core half-width: shaft ramps in, then the head's straight taper to a point
+  const hf=o.headF, shaftEnd=1-hf;
+  for(const p of pts){
+    if(p.t < shaftEnd){
+      const s = p.t/shaftEnd;
+      p.w = o.shaftW * (0.42 + 0.58*(s*s*(3-2*s)));      // smoothstep ramp
+      p.a = o.tailF>0 ? Math.min(1, s/o.tailF) : 1;       // fade the tail out
+    } else {
+      const u = (p.t-shaftEnd)/hf;                        // 0 at head base, 1 at tip
+      p.w = o.headW * (1-u);
+      p.a = 1;
+    }
+  }
+  return pts;
+}
+
+// symmetric cross-section, authored as gradient stops. |u|=1 at the outer glow
+// edge, 0 at the centreline. k = where the solid core ends inside that span.
+function crossSection(g, k, alpha, o){
+  const soft = o.soft, B = o.bright;
+  const A = a => Math.max(0, Math.min(1, a*alpha));
+  const rgba = (hex,a)=>{
+    const n=parseInt(hex.slice(1),16);
+    return `rgba(${n>>16&255},${n>>8&255},${n&255},${A(a)})`;
+  };
+  const stops = [];
+  // outer halo — a soft shoulder that exists no matter how thin the core is
+  stops.push([0.00, rgba(pal.edge, 0)]);
+  stops.push([0.16, rgba(pal.edge, 0.07/soft)]);
+  stops.push([0.40, rgba(pal.edge, 0.20/soft)]);
+  stops.push([0.66, rgba(pal.mid,  0.42/soft)]);
+  const kk = Math.max(0.0001, Math.min(0.92, k));
+  const inner = 1 - kk;                     // where the core begins
+  stops.push([Math.max(0.67, inner*0.86), rgba(pal.mid, 0.62)]);
+  if(kk > 0.02){
+    stops.push([Math.max(0.70, inner), rgba(pal.hot, 0.90*B)]);
+    stops.push([Math.max(0.80, inner + kk*0.45), rgba(pal.core, 1.0*B)]);
+  }
+  stops.push([1.00, rgba(pal.core, kk>0.02 ? 1.0*B : 0.55*B)]);
+  // mirror: gradient runs -1 .. +1 across the ribbon
+  for(const [s,c] of stops) g.addColorStop(0.5 - s*0.5, c);
+  for(const [s,c] of stops.slice().reverse()) g.addColorStop(0.5 + s*0.5, c);
+}
+
+function drawRibbon(pts, o){
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  for(let i=0;i<pts.length-1;i++){
+    const a=pts[i], b=pts[i+1];
+    // THE FIX: constant offset. The old build multiplied instead — see showBug.
+    const ha = showBug ? a.w*3.4 : a.w + o.glow;
+    const hb = showBug ? b.w*3.4 : b.w + o.glow;
+    if(ha<=0.05 && hb<=0.05) continue;
+    const mx=(a.x+b.x)/2, my=(a.y+b.y)/2, hm=(ha+hb)/2;
+    const ex=a.tx*0.6, ey=a.ty*0.6;                        // overlap: kills seams
+    const g = ctx.createLinearGradient(mx-a.nx*hm, my-a.ny*hm, mx+a.nx*hm, my+a.ny*hm);
+    crossSection(g, hm>0 ? Math.min(1,(showBug? a.w*3.4 : a.w)/hm) : 0, (a.a+b.a)/2, o);
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(a.x+a.nx*ha-ex, a.y+a.ny*ha-ey);
+    ctx.lineTo(b.x+b.nx*hb+ex, b.y+b.ny*hb+ey);
+    ctx.lineTo(b.x-b.nx*hb+ex, b.y-b.ny*hb+ey);
+    ctx.lineTo(a.x-a.nx*ha-ex, a.y-a.ny*ha-ey);
+    ctx.closePath(); ctx.fill();
+  }
+  // round the halo over the very tip — the cap Shapes would add
+  const e = pts[pts.length-1];
+  if(!showBug && o.glow>0.5){
+    const rg = ctx.createRadialGradient(e.x,e.y,0, e.x,e.y,o.glow);
+    const n=parseInt(pal.mid.slice(1),16);
+    rg.addColorStop(0,   `rgba(${n>>16&255},${n>>8&255},${n&255},0.55)`);
+    rg.addColorStop(0.5, `rgba(${n>>16&255},${n>>8&255},${n&255},0.20)`);
+    rg.addColorStop(1,   `rgba(${n>>16&255},${n>>8&255},${n&255},0)`);
+    ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(e.x,e.y,o.glow,0,7); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function fillSolid(pts, o, fill, stroke, lw){
+  ctx.beginPath();
+  for(let i=0;i<pts.length;i++){const p=pts[i];
+    if(i===0) ctx.moveTo(p.x+p.nx*p.w,p.y+p.ny*p.w); else ctx.lineTo(p.x+p.nx*p.w,p.y+p.ny*p.w);}
+  for(let i=pts.length-1;i>=0;i--){const p=pts[i]; ctx.lineTo(p.x-p.nx*p.w,p.y-p.ny*p.w);}
+  ctx.closePath();
+  if(fill){ ctx.fillStyle=fill; ctx.fill(); }
+  if(stroke){ ctx.strokeStyle=stroke; ctx.lineWidth=lw; ctx.lineJoin='round'; ctx.stroke(); }
+}
+
+// ---------------------------------------------------------------- styles
+function render(p0,p1,o){
+  const pts = build(p0,p1,o);
+  if(style==='beam'){ drawRibbon(pts,o); }
+  else if(style==='vector'){
+    fillSolid(pts,o,null,pal.ink,7);
+    const g=ctx.createLinearGradient(p0.x,p0.y,p1.x,p1.y);
+    g.addColorStop(0,pal.edge); g.addColorStop(.75,pal.mid); g.addColorStop(1,pal.hot);
+    fillSolid(pts,o,g,null,0);
+  }
+  else if(style==='ink'){
+    const g=ctx.createLinearGradient(p0.x,p0.y,p1.x,p1.y);
+    g.addColorStop(0,pal.edge); g.addColorStop(1,pal.ink);
+    fillSolid(pts,o,pal.ink,null,0);
+    ctx.save(); ctx.globalAlpha=.5; ctx.globalCompositeOperation='destination-out';
+    for(let k=0;k<9;k++){
+      const i=Math.round((0.14+k*0.085)*(pts.length-1)), p=pts[i]; if(!p) continue;
+      ctx.beginPath();
+      ctx.ellipse(p.x+p.nx*p.w*0.5, p.y+p.ny*p.w*0.5, 8+k*1.4, 1.4,
+                  Math.atan2(p.ty,p.tx),0,7); ctx.fill();
+    }
+    ctx.restore();
+  }
+  else if(style==='rope'){
+    for(let i=0;i<pts.length-1;i+=4){
+      const p=pts[i]; if(p.w<0.4) continue;
+      ctx.save(); ctx.translate(p.x,p.y); ctx.rotate(Math.atan2(p.ty,p.tx));
+      ctx.globalAlpha=p.a;
+      ctx.fillStyle=pal.mid; ctx.strokeStyle=pal.ink; ctx.lineWidth=2.2;
+      ctx.beginPath(); ctx.roundRect(-5.5,-p.w,11,p.w*2,Math.min(3,p.w)); ctx.fill(); ctx.stroke();
+      ctx.globalAlpha=p.a*.55; ctx.fillStyle=pal.hot;
+      ctx.beginPath(); ctx.roundRect(-3.5,-p.w*.5,7,p.w*.55,2); ctx.fill();
+      ctx.restore();
+    }
+  }
+  if(showSlice) sliceOverlay(pts,o);
+}
+
+// a live plot of the cross-section at three points, so the profile is legible
+function sliceOverlay(pts,o){
+  const marks=[0.45,0.88,0.995];
+  ctx.save(); ctx.setLineDash([3,3]); ctx.strokeStyle='rgba(255,255,255,.4)'; ctx.lineWidth=1;
+  for(const m of marks){
+    const p=pts[Math.round(m*(pts.length-1))]; if(!p) continue;
+    const h=(showBug? p.w*3.4 : p.w+o.glow);
+    ctx.beginPath();
+    ctx.moveTo(p.x-p.nx*h,p.y-p.ny*h); ctx.lineTo(p.x+p.nx*h,p.y+p.ny*h); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle='rgba(255,255,255,.85)'; ctx.font='10px ui-monospace,monospace';
+    ctx.fillText(`core ${p.w.toFixed(1)}  halo ${h.toFixed(1)}`, p.x+p.nx*h+6, p.y+p.ny*h+3);
+    ctx.setLineDash([3,3]);
+  }
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- loop
+let origin=null, aim=null, target=null, vel={x:0,y:0};
+function frame(){
+  const dpr=Math.min(devicePixelRatio||1,2);
+  const w=Math.round(cv.clientWidth*dpr), h=Math.round(cv.clientHeight*dpr);
+  if(cv.width!==w||cv.height!==h){cv.width=w;cv.height=h;}
+  if(!origin){origin={x:w*0.16/dpr,y:h*0.70/dpr}; aim={x:w*0.80/dpr,y:h*0.30/dpr}; target={...aim};}
+  if(!reduced){
+    const k=320,d=2*Math.sqrt(320)*0.80,dt=1/60;
+    vel.x+=((target.x-aim.x)*k-vel.x*d)*dt; vel.y+=((target.y-aim.y)*k-vel.y*d)*dt;
+    aim.x+=vel.x*dt; aim.y+=vel.y*dt;
+  } else aim={...target};
+
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.fillStyle='#05080C'; ctx.fillRect(0,0,w,h);
+  ctx.scale(dpr,dpr);
+  const W=w/dpr, H=h/dpr;
+  for(const [fx,fy] of [[0.09,0.70],[0.22,0.70],[0.72,0.24],[0.85,0.24]]){
+    const cw=W*0.082, ch=cw*1.4;
+    ctx.fillStyle='#0E1620'; ctx.beginPath();
+    ctx.roundRect(W*fx-cw/2,H*fy-ch/2,cw,ch,6); ctx.fill();
+    ctx.strokeStyle='#1B2836'; ctx.lineWidth=1.4; ctx.stroke();
+  }
+  render(origin, aim, {
+    shaftW:V('shaftW'), headW:V('headW'), headF:V('headF'), curve:V('curve'),
+    tailF:V('tailF'), glow:V('glow'), soft:V('soft'), bright:V('bright'),
+  });
+  requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------- ui
+['shaftW','headW','headF','curve','tailF','glow','soft','bright'].forEach(id=>{
+  const el=document.getElementById(id), out=document.getElementById(id+'V');
+  const u=()=>{out.textContent=parseFloat(el.value).toFixed(2); syncOut();};
+  el.addEventListener('input',u); u();
+});
+const press=(b,on)=>b.setAttribute('aria-pressed',on?'true':'false');
+const sBtns={beam:'sBeam',vector:'sVector',ink:'sInk',rope:'sRope'};
+Object.entries(sBtns).forEach(([k,id])=>{
+  document.getElementById(id).onclick=()=>{
+    style=k; Object.values(sBtns).forEach(v=>press(document.getElementById(v),false));
+    press(document.getElementById(id),true);
+    document.getElementById('styleTag').textContent=k[0].toUpperCase()+k.slice(1);
+    syncOut();
+  };
+});
+const bMode=document.getElementById('bMode');
+bMode.onclick=()=>{showBug=!showBug; press(bMode,showBug);
+  document.getElementById('modeTag').textContent = showBug?'× half (the bug)':'constant offset';
+  syncOut();};
+const bSlice=document.getElementById('bSlice');
+bSlice.onclick=()=>{showSlice=!showSlice; press(bSlice,showSlice);};
+
+const palWrap=document.getElementById('pal');
+Object.keys(PAL).forEach((k,i)=>{
+  const b=document.createElement('button'); b.textContent=k; press(b,i===0);
+  b.onclick=()=>{pal=PAL[k];[...palWrap.children].forEach(c=>press(c,false));press(b,true);};
+  palWrap.append(b);
+});
+
+function syncOut(){
+  document.getElementById('out').innerHTML =
+`<span class="cmt">// per-point CORE half-width — one polyline, shaft into head</span>
+if (t &lt; 1.0 - <span class="hl">${V('headF').toFixed(3)}</span>)
+    w = <span class="hl">${V('shaftW').toFixed(1)}</span> * smoothstep(shaftRamp);
+else
+    w = <span class="hl">${V('headW').toFixed(1)}</span> * (1.0 - headU);   <span class="cmt">// → 0 at the tip</span>
+
+<span class="cmt">// THE FIX — glow ADDED, never multiplied</span>
+${showBug
+? `half = w * <span class="hl">3.4</span>;                <span class="cmt">// old: dies with w at the tip</span>`
+: `half = w + <span class="hl">${V('glow').toFixed(1)}</span>;              <span class="cmt">// core→0, halo stays</span>`}
+
+<span class="cmt">// cross-section authored as gradient stops across the ribbon,</span>
+<span class="cmt">// k = w/half = how much of the span the solid core occupies.</span>
+<span class="cmt">// k→0 at the tip, so the profile becomes pure halo on its own.</span>`;
+}
+syncOut();
+
+let drag=false;
+cv.addEventListener('pointerdown',e=>{drag=true;cv.setPointerCapture(e.pointerId);mv(e);});
+cv.addEventListener('pointermove',e=>{if(drag)mv(e);});
+cv.addEventListener('pointerup',()=>drag=false);
+cv.addEventListener('pointercancel',()=>drag=false);
+function mv(e){const r=cv.getBoundingClientRect(); target={x:e.clientX-r.left,y:e.clientY-r.top};}
+
+requestAnimationFrame(frame);
+</script>

@@ -1,0 +1,779 @@
+<title>Arrow Beam Bench — apex convergence</title>
+<style>
+  :root{
+    --ground:#0A0E13; --panel:#111922; --panel-2:#0C131A; --line:#1F2A36;
+    --ink:#C6D4E0; --dim:#6E869A; --accent:#57D6E3; --warn:#E9A13C;
+    --mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --rail: 300px;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --ground:#E9EEF3; --panel:#FFFFFF; --panel-2:#F4F7FA; --line:#D2DCE5;
+      --ink:#152029; --dim:#5C7185; --accent:#0E8FA1;
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0A0E13; --panel:#111922; --panel-2:#0C131A; --line:#1F2A36;
+    --ink:#C6D4E0; --dim:#6E869A; --accent:#57D6E3;
+  }
+  :root[data-theme="light"]{
+    --ground:#E9EEF3; --panel:#FFFFFF; --panel-2:#F4F7FA; --line:#D2DCE5;
+    --ink:#152029; --dim:#5C7185; --accent:#0E8FA1;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; overflow:hidden; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:13px; line-height:1.5;
+  }
+
+  .app{display:grid; grid-template-columns:minmax(0,1fr) var(--rail); height:100dvh}
+
+  /* ---- viewport ---- */
+  .stage{position:relative; background:#04070A; overflow:hidden}
+  canvas{position:absolute; inset:0; width:100%; height:100%; display:block; touch-action:none; cursor:grab}
+  canvas.drag{cursor:grabbing}
+
+  .hud{position:absolute; pointer-events:none; font-family:var(--mono); font-size:11px}
+  .hud.tl{top:12px; left:14px; display:flex; flex-direction:column; gap:5px; align-items:flex-start}
+  .hud.bl{bottom:12px; left:14px; display:flex; flex-wrap:wrap; gap:6px; pointer-events:auto; max-width:calc(100% - 28px)}
+  .tag{
+    background:rgba(6,11,16,.72); border:1px solid var(--line); color:var(--ink);
+    padding:3px 8px; border-radius:3px; letter-spacing:.04em; backdrop-filter:blur(3px);
+  }
+  .tag b{color:var(--accent); font-weight:600}
+  .tag.hint{color:var(--dim)}
+
+  button{
+    font-family:var(--mono); font-size:11px; letter-spacing:.04em; color:var(--ink);
+    background:rgba(10,16,22,.82); border:1px solid var(--line); border-radius:3px;
+    padding:5px 9px; cursor:pointer; backdrop-filter:blur(3px);
+  }
+  :root[data-theme="light"] button, :root:not([data-theme]) button{background:var(--panel)}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme]) button{background:rgba(10,16,22,.82)} }
+  button:hover{border-color:var(--accent); color:var(--accent)}
+  button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  button[aria-pressed="true"]{background:var(--accent); border-color:var(--accent); color:#04252A; font-weight:600}
+
+  /* ---- control rail ---- */
+  .rail{
+    background:var(--panel); border-left:1px solid var(--line);
+    display:flex; flex-direction:column; min-height:0;
+  }
+  .railhead{
+    display:flex; align-items:center; justify-content:space-between; gap:8px;
+    padding:10px 12px; border-bottom:1px solid var(--line); background:var(--panel-2);
+  }
+  .railhead h1{
+    margin:0; font-family:var(--mono); font-size:11px; font-weight:600;
+    letter-spacing:.11em; text-transform:uppercase;
+  }
+  .railhead h1 span{color:var(--accent)}
+  .scroll{overflow-y:auto; overscroll-behavior:contain; padding:4px 12px 20px; min-height:0}
+
+  details{border-bottom:1px solid var(--line); padding:2px 0 8px}
+  details:last-of-type{border-bottom:0}
+  summary{
+    cursor:pointer; list-style:none; padding:8px 0 4px;
+    font-family:var(--mono); font-size:10px; font-weight:600;
+    letter-spacing:.13em; text-transform:uppercase; color:var(--dim);
+    display:flex; align-items:center; gap:6px;
+  }
+  summary::-webkit-details-marker{display:none}
+  summary::before{content:"+"; color:var(--accent); font-size:12px; width:8px}
+  details[open] summary::before{content:"–"}
+  summary:hover{color:var(--ink)}
+  summary:focus-visible{outline:2px solid var(--accent); outline-offset:2px; border-radius:2px}
+  .note{margin:0 0 8px; font-size:11px; color:var(--dim); line-height:1.45}
+  .note code{font-family:var(--mono)}
+
+  .row{display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-top:8px}
+  .row label{font-family:var(--mono); font-size:11px}
+  .row output{font-family:var(--mono); font-size:11px; color:var(--accent); font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%; margin:1px 0 0; accent-color:var(--accent); height:16px; display:block}
+  input[type=range]:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:3px}
+
+  pre{
+    margin:8px 0 0; padding:10px; background:var(--panel-2); border:1px solid var(--line);
+    border-radius:4px; font-family:var(--mono); font-size:10.5px; line-height:1.55;
+    overflow-x:auto; white-space:pre;
+  }
+  .hl{color:var(--accent)} .cmt{color:var(--dim)}
+
+  /* ---- why-panel ---- */
+  .why{
+    position:absolute; top:12px; right:12px; width:min(430px, calc(100% - 28px));
+    background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--warn);
+    border-radius:5px; padding:12px 14px; font-size:12.5px; line-height:1.55;
+    box-shadow:0 12px 34px rgba(0,0,0,.42);
+  }
+  .why[hidden]{display:none}
+  .why h2{margin:0 0 6px; font-family:var(--mono); font-size:10px; letter-spacing:.12em;
+          text-transform:uppercase; color:var(--warn)}
+  .why p{margin:0 0 8px} .why p:last-of-type{margin:0}
+  .why code{font-family:var(--mono); font-size:.92em}
+  .why .close{position:absolute; top:8px; right:8px; padding:2px 7px}
+
+  /* ---- narrow: rail becomes a drawer so the canvas keeps the full window ---- */
+  .drawerBtn{display:none}
+  @media (max-width:820px){
+    .app{grid-template-columns:minmax(0,1fr)}
+    .rail{
+      position:fixed; top:0; right:0; bottom:0; width:min(300px, 86vw); z-index:5;
+      transform:translateX(101%); transition:transform .22s ease; box-shadow:-14px 0 34px rgba(0,0,0,.4);
+    }
+    .rail.open{transform:translateX(0)}
+    .drawerBtn{display:inline-block}
+  }
+  @media (prefers-reduced-motion:reduce){ .rail{transition:none} }
+</style>
+
+<div class="app">
+  <div class="stage" id="stage">
+    <canvas id="gl" aria-label="Arrow beam render"></canvas>
+
+    <div class="hud tl">
+      <span class="tag">zoom <b id="zTag">1.0×</b> · apex <b id="mTag">perpendicular</b></span>
+      <span class="tag" id="stepTag"></span>
+      <span class="tag hint">wheel = zoom at cursor · drag = pan · double-click = recentre on tip</span>
+    </div>
+
+    <div class="hud bl">
+      <button id="mShipped" aria-pressed="true">shipped cut</button>
+      <button id="mRadial" aria-pressed="false">radial</button>
+      <button id="bIso" aria-pressed="false">iso-lines</button>
+      <button id="bGrid" aria-pressed="false">pixel grid</button>
+      <button id="bTip">jump to tip</button>
+      <button id="bRebuilt" aria-pressed="false">REBUILT</button>
+      <button id="bCap">old patch</button>
+      <button id="bWhy">why?</button>
+      <button id="bDrawer" class="drawerBtn">controls</button>
+    </div>
+
+    <div class="why" id="why" hidden>
+      <button class="close" id="whyClose" aria-label="Close">✕</button>
+      <h2>Why the bloom flattens</h2>
+      <p>Every radius goes to zero at the junction — shaft half-width, both barb half-widths, and the pixel
+        floors that taper with them. No layer has anything left to draw with at the point.</p>
+      <p>What survives is <code>forwardCoverage</code>, a <code>smoothstep</code> on
+        <code>dot(fromApex, backDir)</code>. That's a half-plane test, and a half-plane boundary is a
+        <em>straight line</em> — so the bloom's leading edge is a straight line sitting exactly where the barbs
+        meet the tip. The white core converges anyway because its radius multiplier is 1×, so the cut lands
+        outside anything visible; the outer layer's 3.4× pushes its field past the cut, which is what you see.</p>
+      <p>Switch to <b>radial</b> to measure that falloff from the apex <em>point</em> instead of across the axis.</p>
+    </div>
+  </div>
+
+  <aside class="rail" id="rail">
+    <div class="railhead">
+      <h1>Arrow bench <span>· apex</span></h1>
+      <button id="bReset">reset</button>
+    </div>
+    <div class="scroll">
+
+      <details open>
+        <summary>Geometry</summary>
+        <p class="note">Defaults are the values <code>Rebuild()</code> actually derives on a 1080-tall canvas at
+          <code>width 0.52 / head 0.45 / sweep 0.42</code> — <code>thicknessScale ≈ 12.5</code>,
+          <code>wMax ≈ 12.7</code>, <code>armLen ≈ 57</code>.</p>
+        <div class="row"><label for="spread">barb spread °</label><output id="spreadV"></output></div>
+        <input type="range" id="spread" min="18" max="70" step="0.5" value="36.5">
+        <div class="row"><label for="headLen">head length px</label><output id="headLenV"></output></div>
+        <input type="range" id="headLen" min="14" max="140" step="1" value="57">
+        <div class="row"><label for="maxHalf">barb max half px</label><output id="maxHalfV"></output></div>
+        <input type="range" id="maxHalf" min="0.5" max="24" step="0.1" value="12.7">
+        <div class="row"><label for="shaftHalf">shaft half px</label><output id="shaftHalfV"></output></div>
+        <input type="range" id="shaftHalf" min="0.5" max="24" step="0.1" value="12.5">
+        <div class="row"><label for="taperF">shaft taper × armLen</label><output id="taperFV"></output></div>
+        <input type="range" id="taperF" min="0.2" max="1.5" step="0.01" value="0.55">
+        <div class="row"><label for="pxLocal">_PixelToLocal</label><output id="pxLocalV"></output></div>
+        <input type="range" id="pxLocal" min="0.25" max="3" step="0.05" value="1">
+      </details>
+
+      <details open>
+        <summary>Apex envelope</summary>
+        <p class="note"><code>forward band</code> is the perpendicular cut — the flat front. Under
+          <b>radial</b> the two bands sum into a falloff radius from the point.</p>
+        <div class="row"><label for="capR">cap radius px <small>(radial)</small></label><output id="capRV"></output></div>
+        <input type="range" id="capR" min="0" max="40" step="0.5" value="12">
+        <div class="row"><label for="fwdBack">fwd band back px</label><output id="fwdBackV"></output></div>
+        <input type="range" id="fwdBack" min="0" max="4" step="0.05" value="0.75">
+        <div class="row"><label for="fwdFwd">fwd band front px</label><output id="fwdFwdV"></output></div>
+        <input type="range" id="fwdFwd" min="0" max="4" step="0.05" value="0.25">
+        <div class="row"><label for="slopeO">outer slope</label><output id="slopeOV"></output></div>
+        <input type="range" id="slopeO" min="0.2" max="3" step="0.05" value="1.05">
+        <div class="row"><label for="baseO">outer base px</label><output id="baseOV"></output></div>
+        <input type="range" id="baseO" min="0" max="10" step="0.05" value="0.32">
+        <div class="row"><label for="baseMidF">mid base ×</label><output id="baseMidFV"></output></div>
+        <input type="range" id="baseMidF" min="0" max="1.2" step="0.01" value="0.75">
+        <div class="row"><label for="baseCoreF">core base ×</label><output id="baseCoreFV"></output></div>
+        <input type="range" id="baseCoreF" min="0" max="1.2" step="0.01" value="0.50">
+        <div class="row"><label for="floorMin">glow floor at tip</label><output id="floorMinV"></output></div>
+        <input type="range" id="floorMin" min="0" max="1" step="0.01" value="0">
+        <div class="row"><label for="convA">convergence from</label><output id="convAV"></output></div>
+        <input type="range" id="convA" min="0" max="0.6" step="0.01" value="0.13">
+        <div class="row"><label for="convB">convergence to</label><output id="convBV"></output></div>
+        <input type="range" id="convB" min="0.05" max="0.9" step="0.01" value="0.24">
+      </details>
+
+      <details open>
+        <summary>Rebuilt glow</summary>
+        <p class="note">Distance to the skeleton, normalised once by a constant radius. The halo becomes a
+          uniform sheath around the whole arrow and caps the apex as a disc automatically — no tip special
+          case, no pinch at the neck. The body underneath still tapers to a point.</p>
+        <div class="row"><label for="accum">bloom accumulation</label><output id="accumV"></output></div>
+        <input type="range" id="accum" min="0" max="1" step="0.01" value="1">
+        <div class="row"><label for="glowR">glow radius px</label><output id="glowRV"></output></div>
+        <input type="range" id="glowR" min="4" max="110" step="1" value="34">
+        <div class="row"><label for="midR">mid radius px <small>(the visible halo)</small></label><output id="midRV"></output></div>
+        <input type="range" id="midR" min="2" max="60" step="0.5" value="14">
+        <div class="row"><label for="glowMul">glow strength</label><output id="glowMulV"></output></div>
+        <input type="range" id="glowMul" min="0.2" max="4" step="0.05" value="1.5">
+      </details>
+
+      <details>
+        <summary>End glow <small>(old patch — off in rebuilt)</small></summary>
+        <p class="note">A floor under the half-width the BLUR layers use, so the outer and mid fields keep
+          a radius where the ribbons converge. Runs through the same profiles as the body, so it matches.
+          Fixes the shaft tip and both barb points at once. Core is untouched — the needle stays sharp.</p>
+        <div class="row"><label for="minHalf">min half — outer px</label><output id="minHalfV"></output></div>
+        <input type="range" id="minHalf" min="0" max="20" step="0.1" value="12.7">
+        <div class="row"><label for="outerEnv">outer follows envelope</label><output id="outerEnvV"></output></div>
+        <input type="range" id="outerEnv" min="0" max="1" step="0.01" value="0.15">
+        <div class="row"><label for="minMidF">min half — mid ×</label><output id="minMidFV"></output></div>
+        <input type="range" id="minMidF" min="0" max="1" step="0.01" value="0.45">
+      </details>
+
+      <details>
+        <summary>Tip point light <small>(additive — off)</small></summary>
+        <p class="note">The earlier approach: a separate radial emitter. Kept for comparison, but it reads
+          as a ball of a different material because it bypasses the profile ramps. Leave at 0.</p>
+        <div class="row"><label for="tipR">tip radius px</label><output id="tipRV"></output></div>
+        <input type="range" id="tipR" min="0" max="50" step="0.5" value="16">
+        <div class="row"><label for="tipStr">tip halo</label><output id="tipStrV"></output></div>
+        <input type="range" id="tipStr" min="0" max="1" step="0.01" value="0">
+        <div class="row"><label for="tipCore">tip hot centre</label><output id="tipCoreV"></output></div>
+        <input type="range" id="tipCore" min="0" max="1" step="0.01" value="0">
+      </details>
+
+      <details>
+        <summary>Blur radii &amp; floors</summary>
+        <p class="note">Radius is <code>half × mult + floor × floorScale</code>. The outer multiplier magnifies
+          the steep width curve into the visible flare.</p>
+        <div class="row"><label for="mOuter">outer × half</label><output id="mOuterV"></output></div>
+        <input type="range" id="mOuter" min="1" max="6" step="0.05" value="3.4">
+        <div class="row"><label for="mMid">mid × half</label><output id="mMidV"></output></div>
+        <input type="range" id="mMid" min="1" max="4" step="0.05" value="1.7">
+        <div class="row"><label for="fOuter">outer floor px</label><output id="fOuterV"></output></div>
+        <input type="range" id="fOuter" min="0" max="7" step="0.05" value="3.25">
+        <div class="row"><label for="fMid">mid floor px</label><output id="fMidV"></output></div>
+        <input type="range" id="fMid" min="0" max="4" step="0.05" value="1.55">
+        <div class="row"><label for="fCore">core floor px</label><output id="fCoreV"></output></div>
+        <input type="range" id="fCore" min="0" max="2" step="0.05" value="0.65">
+        <div class="row"><label for="fAct">floor activation px</label><output id="fActV"></output></div>
+        <input type="range" id="fAct" min="0.05" max="4" step="0.05" value="0.75">
+      </details>
+
+      <details>
+        <summary>Ribbon width curve</summary>
+        <p class="note">The <code>t^0.55</code> envelopes. Infinite slope at 0, so width appears almost
+          immediately after the tip.</p>
+        <div class="row"><label for="armExp">barb exponent</label><output id="armExpV"></output></div>
+        <input type="range" id="armExp" min="0.3" max="2.5" step="0.05" value="0.55">
+        <div class="row"><label for="joinSpan">shared-end span</label><output id="joinSpanV"></output></div>
+        <input type="range" id="joinSpan" min="0.1" max="0.9" step="0.01" value="0.45">
+        <div class="row"><label for="freeSpan">free-end span</label><output id="freeSpanV"></output></div>
+        <input type="range" id="freeSpan" min="0.2" max="1" step="0.01" value="0.70">
+      </details>
+
+      <details>
+        <summary>Emission</summary>
+        <div class="row"><label for="bloom">_Bloom</label><output id="bloomV"></output></div>
+        <input type="range" id="bloom" min="0" max="1" step="0.01" value="0.52">
+        <div class="row"><label for="inten">_Intensity</label><output id="intenV"></output></div>
+        <input type="range" id="inten" min="0.2" max="3" step="0.05" value="1.35">
+      </details>
+
+      <details>
+        <summary>HLSL to paste back</summary>
+        <pre id="out"></pre>
+      </details>
+
+    </div>
+  </aside>
+</div>
+
+<script>
+const cv = document.getElementById('gl');
+const stage = document.getElementById('stage');
+const gl = cv.getContext('webgl', {antialias:false, premultipliedAlpha:false});
+
+const VS = `
+attribute vec2 a; varying vec2 vUv;
+void main(){ vUv = a; gl_Position = vec4(a*2.0-1.0, 0.0, 1.0); }`;
+
+const FS = `
+precision highp float;
+varying vec2 vUv;
+
+uniform vec2  uRes, uCenter;
+uniform float uZoom, uSpread, uHeadLen, uTaperF, uPxLocal;
+uniform float uArmExp, uJoinSpan, uFreeSpan, uMaxHalf, uShaftHalf;
+uniform float uMOuter, uMMid, uFOuter, uFMid, uFCore, uFAct;
+uniform float uSlopeO, uBaseO, uFwdBack, uFwdFwd, uConvA, uConvB;
+uniform float uBaseMidF, uBaseCoreF, uFloorMin, uCapR;
+uniform float uTipR, uTipStr, uTipCore, uMinHalf, uMinMidF, uOuterEnv;
+uniform float uRebuilt, uGlowR, uGlowMul, uMidR, uAccum;
+uniform float uBloom, uInten, uRadial, uGrid, uIso;
+
+const int SPINE = 32;
+const int ARMS  = 16;
+
+vec3 HUE    = vec3(0.30, 0.78, 1.00);
+vec3 FRINGE = vec3(0.10, 0.42, 0.85);
+vec3 LIGHT  = vec3(0.72, 0.93, 1.00);
+vec3 CORE   = vec3(1.00, 1.00, 1.00);
+
+vec3 OuterProfile(float d){
+  if(d < 0.16) return HUE * mix(0.34, 0.28, d/0.16);
+  if(d < 0.48) return mix(HUE*0.28, FRINGE*0.16, (d-0.16)/0.32);
+  return FRINGE * (0.16 * clamp((1.0-d)/0.52, 0.0, 1.0));
+}
+vec3 MidProfile(float d){
+  if(d < 0.28) return mix(LIGHT*0.68, HUE*0.50, d/0.28);
+  if(d < 0.60) return mix(HUE*0.50, FRINGE*0.22, (d-0.28)/0.32);
+  return FRINGE * (0.22 * clamp((1.0-d)/0.40, 0.0, 1.0));
+}
+vec3 CoreProfile(float d){
+  if(d < 0.16) return mix(CORE, LIGHT*0.90, d/0.16);
+  if(d < 0.42) return mix(LIGHT*0.90, HUE*0.66, (d-0.16)/0.26);
+  if(d < 0.74) return mix(HUE*0.66, FRINGE*0.34, (d-0.42)/0.32);
+  return FRINGE * (0.34 * clamp((1.0-d)/0.26, 0.0, 1.0));
+}
+
+float ArmEnvelope(float t){
+  if(t <= 0.0 || t >= 1.0) return 0.0;
+  float j = pow(t / uJoinSpan, uArmExp);
+  float f = pow((1.0 - t) / uFreeSpan, uArmExp);
+  float inv = pow(max(j,1e-5), -4.0) + pow(max(f,1e-5), -4.0);
+  return pow(inv, -0.25);
+}
+
+void SampleArm(vec2 P, vec2 apex, vec2 backDir, vec2 endAxis,
+               float headLength, float maxHalf,
+               out float dist, out float half_){
+  dist = 1e20; half_ = 0.0;
+  vec2 control = apex + backDir * (headLength * 0.24);
+  vec2 armEnd  = apex + endAxis * headLength;
+  vec2 A = apex;
+  for(int s = 0; s < ARMS; s++){
+    float tB = float(s + 1) / float(ARMS);
+    float om = 1.0 - tB;
+    vec2 B = om*om*apex + 2.0*om*tB*control + tB*tB*armEnd;
+    vec2 ab = B - A;
+    float ab2 = max(dot(ab,ab), 1e-6);
+    float on = clamp(dot(P - A, ab)/ab2, 0.0, 1.0);
+    float cand = length(P - (A + ab*on));
+    if(cand < dist){
+      dist = cand;
+      half_ = maxHalf * ArmEnvelope((float(s) + on) / float(ARMS));
+    }
+    A = B;
+  }
+}
+
+float ApexEnvelope(vec2 P, vec2 apex, vec2 backDir, float headLength,
+                   float px, float slope, float basePx){
+  vec2 fromApex = P - apex;
+  float backward = dot(fromApex, backDir);
+  float sideways = abs(backDir.x*fromApex.y - backDir.y*fromApex.x);
+  float aa = max(0.70*px, 1e-5);
+
+  float halfAtRow = max(backward, 0.0)*slope + basePx*px;
+  float sideCoverage = 1.0 - smoothstep(halfAtRow - aa, halfAtRow + aa, sideways);
+
+  float coverage;
+  if(uRadial > 0.5){
+    // UNION a disc centred on the apex with the cone, rather than multiplying by a
+    // half-plane. Multiplying could only ever cut the front off; a union lets the cap
+    // round over the vertex. Continuous at backward = 0, so there is no seam — behind
+    // the apex the cone outgrows the disc within a few px and takes over on its own.
+    float disc = 1.0 - smoothstep(0.0, max((basePx + uCapR)*px, 1e-5), length(fromApex));
+    coverage = max(sideCoverage, disc);
+  } else {
+    coverage = sideCoverage * smoothstep(-uFwdBack*px, uFwdFwd*px, backward);
+  }
+
+  float convergence = 1.0 - smoothstep(headLength*uConvA, headLength*uConvB, max(backward, 0.0));
+  return mix(1.0, coverage, convergence);
+}
+
+// WidthAtS — the shaft's own thickness ramp, 0.32 → 1.0 over the first 55% of the run
+float WidthAtS(float s, float L){
+  return 0.32 + 0.68 * pow(min(s / max(L*0.55, 0.001), 1.0), 0.8);
+}
+
+void main(){
+  // _PixelToLocal is 1/canvasScale in game — FIXED, independent of how the view is
+  // magnified. Tying it to zoom (as the first cut of this bench did) changed the
+  // shader's behaviour while zooming instead of just changing the view.
+  float px = uPxLocal;
+  vec2  P  = (vUv - vec2(0.5)) * uRes / uZoom + uCenter;
+
+  vec2 apex = vec2(0.0);
+  vec2 back = vec2(-1.0, 0.0);
+
+  float L = 400.0;
+  float taper = uHeadLen * uTaperF;
+  float shaftDist = 1e20, shaftHalf = 0.0;
+  vec2  A = apex + back * L;
+  float halfA = uShaftHalf * WidthAtS(0.0, L) * pow(clamp(L/max(taper,0.001), 0.0, 1.0), 0.55);
+  for(int i = 0; i < SPINE; i++){
+    float dToTip = L - float(i + 1) / float(SPINE) * L;
+    vec2  B = apex + back * dToTip;
+    float halfB = uShaftHalf * WidthAtS(L - dToTip, L)
+                * pow(clamp(dToTip/max(taper,0.001), 0.0, 1.0), 0.55);
+    vec2 ab = B - A;
+    float ab2 = max(dot(ab,ab), 1e-6);
+    float on = clamp(dot(P - A, ab)/ab2, 0.0, 1.0);
+    float cand = length(P - (A + ab*on));
+    if(cand < shaftDist){ shaftDist = cand; shaftHalf = mix(halfA, halfB, on); }
+    A = B; halfA = halfB;
+  }
+
+  float rad = radians(uSpread);
+  vec2 axA = vec2(back.x*cos(rad) - back.y*sin(rad), back.x*sin(rad) + back.y*cos(rad));
+  vec2 axB = vec2(back.x*cos(rad) + back.y*sin(rad), -back.x*sin(rad) + back.y*cos(rad));
+  float dA, hA, dB, hB;
+  SampleArm(P, apex, back, axA, uHeadLen, uMaxHalf, dA, hA);
+  SampleArm(P, apex, back, axB, uHeadLen, uMaxHalf, dB, hB);
+
+  float act = max(uFAct*px, 1e-5);
+  float sfs = 1.0 - exp(-shaftHalf/act);
+  float afA = 1.0 - exp(-hA/act);
+  float afB = 1.0 - exp(-hB/act);
+
+  // The OUTER layer is the glow. Letting its floor taper all the way out is what strips the
+  // halo off the last few pixels — uFloorMin keeps a residual radius alive at the point.
+  // Mid and core keep the original taper so the needle stays sharp inside the halo.
+  float sfsO = mix(sfs, 1.0, uFloorMin);
+  float afAO = mix(afA, 1.0, uFloorMin);
+  float afBO = mix(afB, 1.0, uFloorMin);
+
+  // A floor under the half-width used by the BLUR layers only. This is what keeps the
+  // glow alive at all three converging ends — the shaft tip and both barb points — using
+  // the same OuterProfile/MidProfile ramps as the body, so it is the same kind of glow
+  // rather than a separate blob. The core keeps the true half, so the needle stays sharp.
+  float mH  = uMinHalf * px;
+  float sB  = max(shaftHalf, mH), aAB = max(hA, mH), aBB = max(hB, mH);
+  float mHm = uMinHalf * uMinMidF * px;
+  float sM  = max(shaftHalf, mHm), aAM = max(hA, mHm), aBM = max(hB, mHm);
+
+  float outerD = min(shaftDist / max(sB*uMOuter + uFOuter*px*sfsO, 1e-5),
+                 min(dA / max(aAB*uMOuter + uFOuter*px*afAO, 1e-5),
+                     dB / max(aBB*uMOuter + uFOuter*px*afBO, 1e-5)));
+  float midD   = min(shaftDist / max(sM*uMMid + uFMid*px*sfs, 1e-5),
+                 min(dA / max(aAM*uMMid + uFMid*px*afA, 1e-5),
+                     dB / max(aBM*uMMid + uFMid*px*afB, 1e-5)));
+  float coreD  = min(shaftDist / max(shaftHalf + uFCore*px*sfs, 1e-5),
+                 min(dA / max(hA + uFCore*px*afA, 1e-5),
+                     dB / max(hB + uFCore*px*afB, 1e-5)));
+
+  // The outer layer IS the glow, and a glow has no business converging to a point — that
+  // is the core's job. Letting the cone clamp it re-narrows the exact region the min-half
+  // floor just rescued, which is the second half of the pinch.
+  float oApex = mix(1.0, ApexEnvelope(P, apex, back, uHeadLen, px, uSlopeO, uBaseO), uOuterEnv);
+  float mApex = ApexEnvelope(P, apex, back, uHeadLen, px, uSlopeO*0.743, uBaseO*uBaseMidF);
+  float cApex = ApexEnvelope(P, apex, back, uHeadLen, px, uSlopeO*0.514, uBaseO*uBaseCoreF);
+
+  // ---- REBUILT GLOW --------------------------------------------------------
+  // min() of TRUE distances is the exact distance to the union of the three ribbons.
+  // min() of distances already divided by three different collapsing radii is not a
+  // distance to anything — that ordering is what destroyed the tip. Normalise ONCE,
+  // after the union, by a radius that does not depend on the taper. The apex is a point
+  // ON the skeleton, so the halo caps it as a disc for free, with no special case, and
+  // the neck cannot pinch because no radius shrinks there.
+  float oApexUse = oApex, mApexUse = mApex;
+  if(uRebuilt > 0.5){
+    float dSkel = min(shaftDist, min(dA, dB));
+    outerD = dSkel / max(uGlowR*px, 1e-5);
+    // The MID layer carries ~10x the outer's light (0.26 vs 0.115 against brighter ramps),
+    // so it IS the visible halo. Rebuilding only the outer changed almost nothing on screen.
+    // Mid gets the same skeleton field at a tighter radius; only the CORE still tapers.
+    midD = dSkel / max(uMidR*px, 1e-5);
+    oApexUse = 1.0;
+    mApexUse = 1.0;
+  }
+
+  float gs = 0.5 + uBloom*1.1;
+  vec3 col  = OuterProfile(outerD) * (0.115*gs*mix(1.0, uGlowMul, uRebuilt)) * oApexUse;
+       col += MidProfile(midD)     * (0.26*gs)  * mApexUse;
+
+  // ---- ACCUMULATION -------------------------------------------------------
+  // min() keeps only the NEAREST ribbon's field and throws the other two away, so the one
+  // place where all three coincide — the tip — gets no more light than open shaft. Light
+  // adds. Summing the three contributions makes the bloom pile up wherever geometry
+  // converges, which is what "converge to a bloom point" actually asks for. Falls out of
+  // the geometry: the junction concentrates too, and nothing is special-cased.
+  if(uRebuilt > 0.5 && uAccum > 0.001){
+    float gR = max(uGlowR*px, 1e-5), mR = max(uMidR*px, 1e-5);
+    vec3 sum  = (OuterProfile(shaftDist/gR) + OuterProfile(dA/gR) + OuterProfile(dB/gR))
+              * (0.115*gs*uGlowMul);
+         sum += (MidProfile(shaftDist/mR) + MidProfile(dA/mR) + MidProfile(dB/mR))
+              * (0.26*gs);
+    col = mix(col, sum, uAccum);
+  }
+
+       col += CoreProfile(coreD)   * 0.48       * cApex;
+
+  // --- TIP LIGHT ------------------------------------------------------------
+  // Every ribbon half-width is zero AT the apex, so the ribbon fields have no radius to
+  // give there and no envelope setting can conjure one — masks only subtract. The point
+  // therefore needs its own emitter. Added AFTER the envelope so it is not clamped by
+  // sideCoverage, and radial by construction, so it wraps the vertex instead of ending
+  // on a plane. Core term is a much tighter power so the needle still reads inside it.
+  float tipR = max(uTipR*px, 1e-5);
+  float tg = 1.0 - smoothstep(0.0, tipR, length(P - apex));
+  col += (HUE*0.55 + LIGHT*0.45) * (uTipStr * gs) * tg * tg;
+  col += CORE * uTipCore * pow(tg, 6.0);
+
+  col = clamp(col * uInten, 0.0, 1.0);
+
+  if(uIso > 0.5){
+    float band = fract(outerD * 4.0);
+    if(outerD < 1.0 && band < 0.055) col = mix(col, vec3(1.0, 0.45, 0.22), 0.6);
+  }
+  if(uGrid > 0.5 && uZoom > 6.0){
+    vec2 g = abs(fract(P/px) - 0.5);
+    col += vec3(0.045,0.06,0.075) * step(0.47, max(g.x, g.y));
+  }
+  gl_FragColor = vec4(col, 1.0);
+}`;
+
+function sh(t, src){
+  const s = gl.createShader(t);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, VS));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FS));
+gl.linkProgram(prog); gl.useProgram(prog);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,0, 1,0, 0,1, 0,1, 1,0, 1,1]), gl.STATIC_DRAW);
+const aLoc = gl.getAttribLocation(prog, 'a');
+gl.enableVertexAttribArray(aLoc);
+gl.vertexAttribPointer(aLoc, 2, gl.FLOAT, false, 0, 0);
+const U = n => gl.getUniformLocation(prog, n);
+
+const ids = ['spread','headLen','taperF','pxLocal','armExp','joinSpan','freeSpan','maxHalf','shaftHalf',
+             'mOuter','mMid','fOuter','fMid','fCore','fAct',
+             'slopeO','baseO','baseMidF','baseCoreF','floorMin','capR','minHalf','minMidF','outerEnv','accum','glowR','midR','glowMul','tipR','tipStr','tipCore','fwdBack','fwdFwd','convA','convB','bloom','inten'];
+const el = {}, defaults = {};
+ids.forEach(id => { el[id] = document.getElementById(id); defaults[id] = el[id].value; });
+const V = id => parseFloat(el[id].value);
+
+let zoom = 1, cx = 0, cy = 0, radial = 0, grid = 0, iso = 0, rebuilt = 0;
+
+function recentre(){ cx = -V('headLen') * 0.55; cy = 0; }
+recentre();
+
+function resize(){
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(stage.clientWidth  * dpr));
+  const h = Math.max(1, Math.round(stage.clientHeight * dpr));
+  if(cv.width !== w || cv.height !== h){ cv.width = w; cv.height = h; }
+  draw();
+}
+
+function draw(){
+  gl.viewport(0, 0, cv.width, cv.height);
+  gl.uniform2f(U('uRes'), cv.width, cv.height);
+  gl.uniform2f(U('uCenter'), cx, cy);
+  gl.uniform1f(U('uZoom'), zoom * Math.min(window.devicePixelRatio || 1, 2));
+  ids.forEach(id => gl.uniform1f(U('u' + id[0].toUpperCase() + id.slice(1)), V(id)));
+  gl.uniform1f(U('uRadial'), radial);
+  gl.uniform1f(U('uRebuilt'), rebuilt);
+  gl.uniform1f(U('uGrid'), grid);
+  gl.uniform1f(U('uIso'), iso);
+  gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+  ids.forEach(id => { const o = document.getElementById(id + 'V'); if(o) o.textContent = V(id).toFixed(2); });
+  document.getElementById('zTag').textContent = zoom.toFixed(1) + '×';
+  document.getElementById('mTag').textContent =
+    rebuilt ? 'REBUILT — skeleton glow' : (radial ? 'radial' : 'perpendicular');
+
+  // The shoulder: at headLength*convB the apex envelope switches OFF (mix -> 1), so the
+  // silhouette jumps from the cone's half-width to the bloom's native radius in one step.
+  // A ratio near 1 means the two meet smoothly; 3x is a visible ledge behind the tip.
+  const armEnv = t => {
+    if(t <= 0 || t >= 1) return 0;
+    const j = Math.pow(t / V('joinSpan'), V('armExp'));
+    const f = Math.pow((1 - t) / V('freeSpan'), V('armExp'));
+    return Math.pow(Math.pow(Math.max(j,1e-5), -4) + Math.pow(Math.max(f,1e-5), -4), -0.25);
+  };
+  const pxl = V('pxLocal');
+  const back = V('headLen') * V('convB');
+  const cone = V('slopeO') * back + V('baseO') * pxl;
+  const armT = (back / Math.cos(V('spread') * Math.PI / 180)) / V('headLen');
+  const h = V('maxHalf') * armEnv(Math.min(armT, 0.999));
+  const nativeR = h * V('mOuter') + V('fOuter') * pxl * (1 - Math.exp(-h / (V('fAct') * pxl)));
+  const ratio = nativeR / Math.max(cone, 1e-5);
+  const tag = document.getElementById('stepTag');
+  tag.innerHTML = `shoulder at <b>${back.toFixed(1)}px</b> back · bloom <b>${nativeR.toFixed(1)}</b>`
+                + ` vs cone <b>${cone.toFixed(1)}</b> → step <b>${ratio.toFixed(2)}×</b>`;
+  tag.style.borderColor = ratio > 1.6 ? 'var(--warn)' : 'var(--line)';
+
+  if(rebuilt){
+    document.getElementById('out').innerHTML =
+`<span class="cmt">// THE FIX — normalise once, AFTER the union, by a constant radius.</span>
+<span class="cmt">// min() of true distances = exact distance to the union of the ribbons.</span>
+<span class="cmt">// min() of pre-normalised distances = not a distance to anything, and</span>
+<span class="cmt">// every divisor collapses to zero at the apex. That was the whole bug.</span>
+
+float gR = <span class="hl">${V('glowR').toFixed(0)}</span> * _PixelToLocal;
+float mR = <span class="hl">${V('midR').toFixed(1)}</span> * _PixelToLocal;
+
+<span class="cmt">// ADD the three fields — do not min() them. Light adds; a union discards</span>
+<span class="cmt">// two thirds of it, so the tip never gets brighter than open shaft.</span>
+col  = (OuterProfile(shaftDist/gR) + OuterProfile(armDistA/gR) + OuterProfile(armDistB/gR))
+     * (0.115 * glowScale * <span class="hl">${V('glowMul').toFixed(2)}</span>);
+col += (MidProfile(shaftDist/mR) + MidProfile(armDistA/mR) + MidProfile(armDistB/mR))
+     * (0.26 * glowScale);
+
+<span class="cmt">// ONLY the core still tapers per-ribbon — that is what keeps the needle sharp</span>
+col += CoreProfile(coreD) * 0.48 * coreApex;
+
+<span class="cmt">// DELETE, all of it: the apex forward-cut on the outer layer, the min-half</span>
+<span class="cmt">// floors, the residual floor term, the tip point light, the cap disc.</span>
+<span class="cmt">// Each was compensating for the ordering above.</span>`;
+    return;
+  }
+  document.getElementById('out').innerHTML =
+`<span class="cmt">// SampleArm — barb width envelope</span>`+`
+pow(armT / <span class="hl">${V('joinSpan').toFixed(2)}</span>, <span class="hl">${V('armExp').toFixed(2)}</span>)
+pow((1.0 - armT) / <span class="hl">${V('freeSpan').toFixed(2)}</span>, <span class="hl">${V('armExp').toFixed(2)}</span>)
+
+<span class="cmt">// blur floors + radii</span>
+outerFloor = <span class="hl">${V('fOuter').toFixed(2)}</span> * _PixelToLocal;
+midFloor   = <span class="hl">${V('fMid').toFixed(2)}</span> * _PixelToLocal;
+coreFloor  = <span class="hl">${V('fCore').toFixed(2)}</span> * _PixelToLocal;
+activation = <span class="hl">${V('fAct').toFixed(2)}</span> * _PixelToLocal;
+half * <span class="hl">${V('mOuter').toFixed(2)}</span> + outerFloor * floorScale
+half * <span class="hl">${V('mMid').toFixed(2)}</span> + midFloor   * floorScale
+
+<span class="cmt">// ApexEnvelope — ${radial ? 'RADIAL (candidate)' : 'perpendicular cut (shipped)'}</span>
+${radial
+? `float r = length(fromApex);
+forwardCoverage = backward >= 0.0 ? 1.0
+    : 1.0 - smoothstep(0.0, <span class="hl">${V('capR').toFixed(1)}</span> * pixelToLocal, r);`
+: `forwardCoverage = smoothstep(<span class="hl">-${V('fwdBack').toFixed(2)}</span> * pixelToLocal,
+                             <span class="hl">${V('fwdFwd').toFixed(2)}</span> * pixelToLocal, backward);`}
+slope <span class="hl">${V('slopeO').toFixed(2)}</span>, base <span class="hl">${V('baseO').toFixed(2)}</span>
+<span class="cmt">// per-layer minimum radius at the point — this is what keeps the halo alive</span>
+outer base <span class="hl">${V('baseO').toFixed(2)}</span>px · mid <span class="hl">${(V('baseO')*V('baseMidF')).toFixed(2)}</span>px · core <span class="hl">${(V('baseO')*V('baseCoreF')).toFixed(2)}</span>px
+outerFloorScale = mix(1.0 - exp(-half/act), 1.0, <span class="hl">${V('floorMin').toFixed(2)}</span>);
+
+<span class="cmt">// END GLOW — floor the half-width the BLUR layers use, so the fields keep a</span>
+<span class="cmt">// radius at the shaft tip and both barb points. Core uses the true half.</span>
+float minHalfOuter = <span class="hl">${V('minHalf').toFixed(1)}</span> * _PixelToLocal;
+float minHalfMid   = <span class="hl">${(V('minHalf')*V('minMidF')).toFixed(2)}</span> * _PixelToLocal;
+outerRadius = max(half, minHalfOuter) * <span class="hl">${V('mOuter').toFixed(2)}</span> + outerFloor * floorScale;
+oApex = mix(1.0, ApexEnvelope(...), <span class="hl">${V('outerEnv').toFixed(2)}</span>);  <span class="cmt">// glow must not converge</span>
+midRadius   = max(half, minHalfMid)   * <span class="hl">${V('mMid').toFixed(2)}</span> + midFloor   * floorScale;
+
+<span class="cmt">// ApexEnvelope: UNION a disc with the cone instead of multiplying by a half-plane</span>
+float disc = 1.0 - smoothstep(0.0, (basePx + <span class="hl">${V('capR').toFixed(1)}</span>) * _PixelToLocal, length(fromApex));
+coverage = max(sideCoverage, disc);
+convergence = 1.0 - smoothstep(headLength * <span class="hl">${V('convA').toFixed(2)}</span>,
+                               headLength * <span class="hl">${V('convB').toFixed(2)}</span>, backward);`;
+}
+
+ids.forEach(id => el[id].addEventListener('input', draw));
+
+// wheel zooms about the cursor so the tip stays put while you dive in
+stage.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect();
+  const ox = (e.clientX - r.left - r.width/2);
+  const oy = -(e.clientY - r.top - r.height/2);
+  const before = 1/zoom;
+  zoom = Math.min(120, Math.max(0.4, zoom * Math.exp(-e.deltaY * 0.0016)));
+  const after = 1/zoom;
+  cx += ox * (before - after);
+  cy += oy * (before - after);
+  draw();
+}, {passive:false});
+
+let dragging = false, lx = 0, ly = 0;
+cv.addEventListener('pointerdown', e => {
+  dragging = true; lx = e.clientX; ly = e.clientY;
+  cv.setPointerCapture(e.pointerId); cv.classList.add('drag');
+});
+cv.addEventListener('pointermove', e => {
+  if(!dragging) return;
+  cx -= (e.clientX - lx) / zoom;
+  cy += (e.clientY - ly) / zoom;
+  lx = e.clientX; ly = e.clientY;
+  draw();
+});
+const endDrag = () => { dragging = false; cv.classList.remove('drag'); };
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+cv.addEventListener('dblclick', () => { cx = 0; cy = 0; zoom = Math.max(zoom, 14); draw(); });
+
+const press = (b, on) => b.setAttribute('aria-pressed', on ? 'true' : 'false');
+const bS = document.getElementById('mShipped'), bR = document.getElementById('mRadial');
+bS.onclick = () => { radial = 0; press(bS,true);  press(bR,false); draw(); };
+bR.onclick = () => { radial = 1; press(bS,false); press(bR,true);  draw(); };
+const bG = document.getElementById('bGrid'), bI = document.getElementById('bIso');
+bG.onclick = () => { grid = grid ? 0 : 1; press(bG, grid); draw(); };
+bI.onclick = () => { iso  = iso  ? 0 : 1; press(bI, iso);  draw(); };
+document.getElementById('bTip').onclick = () => { cx = 0; cy = 0; zoom = 18; draw(); };
+
+// The rebuild. Turns OFF every patch from the earlier rounds — they were all compensating
+// for the broken normalise order and only fight the correct field.
+const bRb = document.getElementById('bRebuilt');
+bRb.onclick = () => {
+  rebuilt = rebuilt ? 0 : 1;
+  press(bRb, rebuilt);
+  if(rebuilt){
+    el.minHalf.value = 0; el.minMidF.value = 0; el.floorMin.value = 0;
+    el.tipStr.value = 0;  el.tipCore.value = 0; el.outerEnv.value = 1;
+    el.baseO.value = 0.32; el.baseMidF.value = 0.75; el.baseCoreF.value = 0.50;
+    radial = 0; press(bS, true); press(bR, false);
+    cx = 0; cy = 0; zoom = Math.max(zoom, 6);
+  }
+  draw();
+};
+
+// One click to the proposal: a soft halo that survives the point, with the white needle
+// still converging inside it. Outer keeps a wide base and a residual floor; core does not.
+document.getElementById('bCap').onclick = () => {
+  el.baseO.value = 3.5; el.baseMidF.value = 0.34; el.baseCoreF.value = 0.07;
+  el.floorMin.value = 0.55; el.capR.value = 14;
+  el.tipR.value = 16; el.tipStr.value = 0; el.tipCore.value = 0;
+  el.minHalf.value = 12.7; el.minMidF.value = 0.45; el.outerEnv.value = 0.15;
+  radial = 1; press(bS, false); press(bR, true);
+  cx = 0; cy = 0; zoom = Math.max(zoom, 10);
+  draw();
+};
+document.getElementById('bReset').onclick = () => {
+  ids.forEach(id => el[id].value = defaults[id]);
+  zoom = 1; recentre(); draw();
+};
+
+const why = document.getElementById('why');
+document.getElementById('bWhy').onclick = () => { why.hidden = !why.hidden; };
+document.getElementById('whyClose').onclick = () => { why.hidden = true; };
+
+const rail = document.getElementById('rail');
+document.getElementById('bDrawer').onclick = () => rail.classList.toggle('open');
+
+new ResizeObserver(resize).observe(stage);
+window.addEventListener('resize', resize);
+resize();
+</script>
