@@ -65,6 +65,10 @@ namespace OnePieceTcg.Sim
             // The brief's other half, in its one gateable form: if the engine took your payment,
             // it owes you an effect or a prompt. Reverting the up-to-N fix turns this red.
             ("paidfornothing",        PaidForNothingSweep.Run),
+            // Diffs the retire predicate against itself (retirement on vs off). It DELETES
+            // effects, so a false positive costs the player their card silently. Reverting the
+            // conjunction fix turns this red.
+            ("retiresweep",           RetireFalsePositiveSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt
             // --- Life: flip, heal, re-arrange, and battle damage --------------------
             ("lifefaceup",            LifeFaceUpTest.Run),

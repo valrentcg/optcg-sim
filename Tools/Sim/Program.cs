@@ -141,6 +141,8 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "retiresweep":
+        return OnePieceTcg.Sim.RetireFalsePositiveSweep.Run();
     case "paidfornothing":
         return OnePieceTcg.Sim.PaidForNothingSweep.Run();
     case "optionalfires":

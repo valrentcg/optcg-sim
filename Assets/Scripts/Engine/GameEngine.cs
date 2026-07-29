@@ -6911,6 +6911,17 @@ namespace OnePieceTcg.Engine
         /// every affected clause under both gates and diff the outcome. Never set in the game.</summary>
         public static bool AuditLegacyWholeTextAutoResolveGate = false;
 
+        /// <summary>Test-only: stop RetireUnresolvablePendingEffects from removing anything, so a
+        /// sweep can run the same clause with retirement on and off and diff the two.
+        ///
+        /// That predicate DELETES effects, which makes a false positive expensive and invisible — the
+        /// player's card simply does nothing, with a rule citation in the log to make it look
+        /// deliberate. Three separate defects have been found in it (a DON!! cost counted against the
+        /// Character area; "up to N" read as "exactly N"), each caught only because the card happened
+        /// to also charge a cost. Comparing the two runs finds the rest without needing that luck.
+        /// Never set in the game.</summary>
+        public static bool AuditDisableRetireSweep = false;
+
         public static string AuditInferZone(string text) => InferTargetZone(text).ToString();
         public static int AuditThenSplit(string text) => FindThenClause(text ?? "");
 
@@ -8018,7 +8029,14 @@ namespace OnePieceTcg.Engine
             // divider) or a sentence break, so a Character mentioned later in the clause cannot vouch
             // for a count that was never about Characters.
             string afterCount = text.Substring(counted.Index + counted.Length);
-            var nounPhrase = System.Text.RegularExpressions.Regex.Match(afterCount, @"^[^:.;]{0,60}");
+            // Stop at a CONJUNCTION as well as at the colon. Scanning to the colon alone let a compound
+            // cost reach across "and" and borrow the word Character from a different conjunct:
+            // OP10-028 Momonosuke pays "rest 2 of your DON!! cards AND trash this Character", so the
+            // DON!! count was validated against the Character area again — the very thing this check
+            // was added to stop, one conjunct further along.
+            var nounPhrase = System.Text.RegularExpressions.Regex.Match(
+                afterCount, @"^(?:(?!\band\b|\bor\b)[^:.;])* {0,60}",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (nounPhrase.Value.IndexOf("Character", StringComparison.OrdinalIgnoreCase) < 0) return false;
 
             string whose = counted.Groups["whose"].Value.ToLowerInvariant();
@@ -8071,6 +8089,7 @@ namespace OnePieceTcg.Engine
 
         private static void RetireUnresolvablePendingEffects(GameState state)
         {
+            if (AuditDisableRetireSweep) return;   // test-only, see the flag
             if (state?.PendingEffects == null) return;
             // A postponed removal whose question has vanished — retired here, cleared with the battle,
             // or lost to any other path — must still be carried out. Otherwise "ask me first" would be

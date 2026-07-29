@@ -11,7 +11,7 @@
       "crash": 0
     },
     "avgTurns": 10.912222222222223,
-    "avgCommands": 115.30222222222223,
+    "avgCommands": 115.5988888888889,
     "firstPlayerWinRate": {
       "rate": 0.5389,
       "wins": 485,
@@ -21,7 +21,7 @@
         0.5712
       ]
     },
-    "elapsedSeconds": 9.77
+    "elapsedSeconds": 9.74
   },
   "perDeck": {
     "st01": {
