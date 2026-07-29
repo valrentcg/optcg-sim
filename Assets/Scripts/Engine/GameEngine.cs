@@ -7916,7 +7916,14 @@ namespace OnePieceTcg.Engine
         {
             if (state.PendingEffects.Count == 0) return null;
             if (!string.IsNullOrEmpty(effectId)) return state.PendingEffects.FirstOrDefault(e => e.EffectId == effectId && e.Seat == seat);
-            return state.PendingEffects.FirstOrDefault(e => e.Seat == seat) ?? state.PendingEffects[0];
+            // NEVER fall back across seats. The id-supplied path above checks Seat, but this one used to
+            // end in "?? state.PendingEffects[0]" — whoever queued first, regardless of who is asking. So
+            // a resolveEffect from the OPPONENT with no EffectId resolved YOUR decision: it paid your
+            // cost, rested your Character and drew you a card, on their click. Both callers here are the
+            // player-facing resolve and pass paths, so a seat that owns no pending effect has nothing to
+            // answer and must get null. Reachable without any malice — a client with a single pending
+            // effect has no reason to send the id at all.
+            return state.PendingEffects.FirstOrDefault(e => e.Seat == seat);
         }
 
         // An effect is genuinely optional when its text says so ("You may …", "up to N", a
