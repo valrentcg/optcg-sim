@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "wordingvariant":
+        return OnePieceTcg.Sim.WordingVariantTest.Run();
     case "liferearrange":
         return OnePieceTcg.Sim.LifeRearrangeTest.Run();
     case "healsweep":

@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**62 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**63 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -237,9 +237,20 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 62 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 63 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
+
+**The wording-variant class, swept and closed.** Four defects here shared one shape — the pool
+prints a wording the engine's literal does not accept: "You **can**" vs "You may" (OP01-031),
+slash-combined `[On Play]/[When Attacking]` vs a slash-blind stripper (39 cards), "place **them** at
+the top of your deck" vs "place 1" (ST13-016/ST13-004), and "Look at all **your** Life cards" vs
+"all **of** your". So the shape was swept systematically: all **302** literal card-text phrases the
+engine matches on, against the pool, looking for a card printing a near-variant and not the phrase.
+**5 candidates, all benign** — two are the Life pair already fixed, one is a different construct
+handled elsewhere, one a false positive, and one (Moby Dick's "all your Characters" buff) was
+verified by MEASURING the power rather than by reading the code. `wordingvariant` keeps that last
+one pinned, since a passive buff that fails to apply has no prompt and no log line.
 
 **A divergence in the source is not a defect until it is shown to be reachable.** The engine
 spells the power cap two ways, `(\d{1,5})` and `(\d{3,5}) power or less`, and three digits cannot

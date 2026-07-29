@@ -116,6 +116,9 @@ namespace OnePieceTcg.Sim
             // The brief's third Life keyword. A reorder is a LOOK: count unchanged, facing
             // unchanged, and the opponent variant must move THEIR stack.
             ("liferearrange",         LifeRearrangeTest.Run),
+            // A passive buff that silently fails to apply has no prompt and no log line — the only
+            // symptom is a Character losing a fight it should win.
+            ("wordingvariant",        WordingVariantTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),
