@@ -89,6 +89,23 @@ Five prompts named the wrong zone. Check the instruction matches where the highl
 
 ---
 
+## What is already confirmed WIRED (do not spend play-test time proving these)
+
+Static audit of the client against every engine field and command this workstream added. None of
+this proves a panel is *visible* — that is still what you are testing — but it does mean a failure
+below is a layout/z-order problem, not a missing code path, and it removes four things from the list
+of suspects:
+
+| checked | result |
+|---|---|
+| The five engine fields added this workstream (`LifeToDeckTop`, `LifeOwnerSeat`, `EligibleInstanceIds`, `DeclineContinuation`, `DeclineSeat`) | **Engine-internal by design.** No client file references any of them, and none needs to: the engine consumes them itself at confirm time (`GameEngine.cs:3825`) |
+| Glow vs resolver on frozen picks | **Consistent.** The client derives glow from `IsValidEffectTarget`, which itself honours `EligibleInstanceIds` — so the two cannot disagree on this axis |
+| Life re-arrange confirm command | **Correctly routed.** `GameManager.cs:10055` sends `deckLookConfirmOrder` for a rearrange and `deckLookScryConfirm` only for a scry |
+| Life re-arrange panel affordance | **Present.** The `rearrange` step is drag-to-reorder plus an explicit Confirm button, not a confirm-only dialog |
+
+So for §1.2, the useful question is not "does confirming work" but "does the panel appear, over the
+right stack, and can you reach the Confirm button".
+
 ## What a failure here means
 
 The engine behaviour is verified, so a failure is almost certainly in the **panel, the glow, or the
