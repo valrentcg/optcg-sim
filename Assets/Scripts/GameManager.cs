@@ -9468,27 +9468,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // no engine suite can see that, since the engine resolves clicks and never words them.
     private string EffectTargetPrompt(PendingEffect effect) => GameEngine.DescribeTargetPrompt(state, effect);
 
-    // Button label for the resolve button: the card's effect text VERBATIM (players
-    // know how to read card text — paraphrasing loses context). Only the leading
-    // timing tags (already shown in the panel header) and the standard DON!!-return
-    // reminder parenthetical are stripped, and whitespace is collapsed.
-    private static string ResolveEffectLabel(PendingEffect effect)
-    {
-        string text = effect.Text ?? "";
-        // Strip leading timing tags like [Activate: Main] / [On Play]/[On K.O.].
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]*\]\s*/?\s*)+", "").Trim();
-        // Strip the boilerplate DON!!-return reminder text.
-        text = System.Text.RegularExpressions.Regex.Replace(text,
-            @"\(You may return the specified number of DON!! cards from your field to your DON!! deck\.?\)", "");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
-        return string.IsNullOrEmpty(text) ? "Resolve effect" : UpperFirst(text);
-    }
-
-    private static string UpperFirst(string s)
-    {
-        return string.IsNullOrEmpty(s) ? s : char.ToUpperInvariant(s[0]) + s.Substring(1);
-    }
-
     private static string NormalizeSign(string value)
     {
         return value.Replace(" ", "").Replace('−', '-').Replace('–', '-');
@@ -12291,7 +12270,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     // Strip leading timing tags (already in the panel header) and the boilerplate DON!!-return
     // reminder, and collapse whitespace — so the written-out text is clean and clause lookups line
-    // up. Mirrors ResolveEffectLabel's cleaning (kept separate so it does not upper-case).
+    // up. Shared with the engine (GameEngine.CleanClauseText) — there used to be a second,
+    // dead copy of this cleaning in this file, which is exactly how the two halves of a rule drift.
     // The single ability line containing "[Activate: Main]" (whole text if not found), so the
     // selected-card panel can write out just that ability.
     private static string ExtractActivateMainClause(string effect)
@@ -12303,15 +12283,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return effect;
     }
 
-    private static string CleanEffectText(string text)
-    {
-        text = text ?? "";
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]*\]\s*/?\s*)+", "").Trim();
-        text = System.Text.RegularExpressions.Regex.Replace(text,
-            @"\(You may return the specified number of DON!! cards from your field to your DON!! deck\.?\)", "");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
-        return text;
-    }
+    private static string CleanEffectText(string text) => GameEngine.CleanClauseText(text);
 
     // Drives the TypeRacer-style fill: a shown fraction eases toward the resolved fraction each
     // frame, and characters below the cutoff render in their clause colour (green = done, red =

@@ -36,6 +36,7 @@ namespace OnePieceTcg.Sim
             TagsAreStrippedAndWidthIsRespected();
             EveryCostPrefixRoutesToTheUseButton();
             APaidOrTargetingStepDoesNotRouteToUse();
+            CleanedTextIsReadable();
             Console.WriteLine($"costlabel: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -192,6 +193,40 @@ namespace OnePieceTcg.Sim
                   !GameEngine.IsUnpaidCostPrefix(midPick),
                   "an effect with selections outstanding was sent back to Use, so the pick it is "
                   + "waiting on would never be offered");
+        }
+
+        /// <summary>The cleaning behind the pending-effect progress ledger — the green/red text both
+        /// players watch fill in. The cleaned string is ALSO matched back against sub-clauses to
+        /// decide which characters get coloured, so a cleaning bug shows twice: garbled text, and
+        /// colouring that lines up against the wrong words.
+        ///
+        /// It lived in the UI in two copies, one live and one dead, with a comment saying they were
+        /// "kept separate". Driven over the whole pool now that there is one copy, in the engine.</summary>
+        private static void CleanedTextIsReadable()
+        {
+            int total = 0, emptied = 0, taggy = 0, reminder = 0, doubled = 0;
+            foreach (var def in CardData.Library.Values.Where(d => d != null && !string.IsNullOrEmpty(d.Effect))
+                                                       .GroupBy(d => d.Id).Select(g => g.First()))
+            {
+                foreach (var raw in def.Effect.Split((char)10))
+                {
+                    var clause = raw.Trim();
+                    if (clause.Length == 0) continue;
+                    total++;
+                    var cleaned = GameEngine.CleanClauseText(clause);
+                    // A clause that is ONLY tags legitimately cleans to nothing; anything with real
+                    // words must survive.
+                    bool onlyTags = System.Text.RegularExpressions.Regex.IsMatch(
+                        clause, @"^\s*(\[[^\]]*\]\s*/?\s*)+$");
+                    if (cleaned.Length == 0 && !onlyTags) emptied++;
+                    if (cleaned.StartsWith("[", StringComparison.Ordinal)) taggy++;
+                    if (cleaned.IndexOf("specified number of DON!!", StringComparison.OrdinalIgnoreCase) >= 0) reminder++;
+                    if (cleaned.Contains("  ")) doubled++;
+                }
+            }
+            Check($"cleaned clause text stays readable across {total} clauses",
+                  emptied == 0 && taggy == 0 && reminder == 0 && doubled == 0,
+                  $"emptied={emptied} leadingTag={taggy} reminderLeft={reminder} doubleSpace={doubled}");
         }
 
         private static string Trim(string s, int n) =>

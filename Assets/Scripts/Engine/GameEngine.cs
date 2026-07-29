@@ -1938,6 +1938,31 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
+        /// <summary>Clause text with the leading timing tags and the boilerplate DON!!-return
+        /// reminder removed and whitespace collapsed — what the player actually reads.
+        ///
+        /// Drives the pending-effect progress ledger (the green/done, red/skipped text on both
+        /// clients), where the cleaned string is also matched back against sub-clauses to decide
+        /// which characters are coloured. So a cleaning bug is visible twice: as garbled text, and
+        /// as colouring that lines up against the wrong words.
+        ///
+        /// In the engine because it was duplicated in the UI — one live copy and one dead one, with
+        /// a comment noting they were "kept separate". Two copies of a rule is how this codebase
+        /// produces defects; the dead one has been deleted.</summary>
+        public static string CleanClauseText(string text)
+        {
+            text = text ?? "";
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(\[[^\]]*\]\s*/?\s*)+", "").Trim();
+            // Both DON!! reminder wordings, not just the RETURN one. The pool prints three
+            // variants — return-to-deck (178), rest-in-cost-area (92), and the same without its
+            // full stop (2) — and only the first was stripped, so ~94 clauses showed the
+            // boilerplate verbatim in the progress ledger the player watches fill in.
+            text = System.Text.RegularExpressions.Regex.Replace(text,
+                @"\(You may (?:rest|return) the specified number of DON!! cards[^)]*\)", "",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            return System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
+        }
+
         /// <summary>The short board-anchored instruction for a targeting step — where to click.
         ///
         /// Pure text, moved out of the UI so it can be checked against the pool: a prompt naming the
