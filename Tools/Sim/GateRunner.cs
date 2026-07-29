@@ -17,6 +17,13 @@ namespace OnePieceTcg.Sim
     /// `stallsweep`) which print leads for a human and always exit 0 by design. A gate whose members
     /// can pass without asserting anything is theatre.
     ///
+    /// `glowsweep` was briefly a member and was removed. Its one assertion - that no clause may
+    /// leave the player with a MANDATORY prompt and an inert board - is not falsifiable: it still
+    /// reads 0 with RetireUnresolvablePendingEffects disabled, so it cannot fail. A check that
+    /// cannot fail is worse than no check, because it reads as coverage. That regression IS
+    /// caught, by notargettest and replacementchoice, which both go red when the retire sweep is
+    /// disabled. Do not re-add it without first making it fail on purpose.
+    ///
     /// Run: dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
     /// </summary>
     public static class GateRunner
@@ -43,7 +50,7 @@ namespace OnePieceTcg.Sim
             ("countercost",           CounterCostTest.Run),
             ("sacrifice",             SacrificeProtectionTest.Run),
             ("timingsweep",           TimingDispatchSweep.Run),
-
+            // Asserts a real invariant - no clause may leave the player with a mandatory prompt
             // --- Life: flip, heal, re-arrange, and battle damage --------------------
             ("lifefaceup",            LifeFaceUpTest.Run),
             ("lifemechanics",         LifeMechanicsTest.Run),
