@@ -70,50 +70,32 @@ than saying "Use Effect".
 
 ## Do the fixes matter in real games?
 
-Measured, not assumed. Temporary counters on the fixed paths, over 2,160 bot-vs-bot games
-using six META decks (starter decks contain none of the affected cards and report zero):
+Measured, and it took three attempts to get right. The numbers below are the third and the
+only ones I stand behind — arrived at over **6,724 bot-vs-bot games across all 41 imported
+meta decks**, counting when a fix **CHANGED A VERDICT** rather than when its code path ran:
 
-| path | firings | per game |
-|---|---|---|
-| optional effect queued for a decision | 45,688 | ~21 |
-| "up to N" code path taken | 17,330 | ~8 |
-| counter cost-prefix queued | 0 -> 2,723 | see below |
-| reveal cost handed to the player | 0 | — |
+| fix | path taken | actually changed the outcome | per game |
+|---|---|---|---|
+| "up to N" is a ceiling (#6) | 47,090 | **790** | ~0.12 |
+| compound-cost / noun-phrase guard (#3, #7) | 14,600 | **4,290** | ~0.64 |
+| counter valuation restored to the AI (#4) | — | **2,723 plays** (was 0) | ~1.3 |
 
-**CORRECTION.** I first read that second row as "17,330 clauses rescued, ~8 a game". It is not:
-the counter incremented whenever the up-to code path was TAKEN, not whenever it changed the
-answer. A paired A/B settled it — the same 3,840 games with the fix on and off, identical seeds:
+**How I got it wrong twice, because the method matters more than the numbers.**
 
-```
-FIXED  (up to N is a ceiling)     P(first) = 47.86%   n=1,920
-LEGACY (up to N == exactly N)     P(first) = 47.86%   n=1,920
-up-to path taken            8,100
-up-to CHANGED the verdict       0
-```
+First I counted the up-to-N code path being *taken* — 17,330 — and reported it as "~8 rescued
+per game". A counter on a code path measures the path. The ceiling only changes anything when
+the candidate count falls BELOW the printed N while staying above zero, which is far narrower.
 
-Identical to the digit, because the ceiling only matters when the candidate count falls BELOW
-the printed N while staying above zero — and in 3,840 bot games that never once happened. The
-fix is still correct: OP12-038 with exactly one legal victim is a real board, demonstrated in
-`paidfornothing`, where the player rests two DON!! and gets nothing. But its frequency in bot
-play here is **zero**, not eight a game, and the earlier figure overstated it.
+So I corrected it with a paired A/B: same seeds, fix on and off. Identical win rate to the
+digit, and a precise verdict-counter reading **0**. I published that as the correction.
 
-The lesson is the one this session keeps repeating in new clothes: a counter placed on a code
-path measures the path, not the effect.
+That was also wrong. It ran on four decks. Across all 41 the same counter reads **790** — the
+fix does fire, roughly once every eight games. The four-deck zero was coverage, not absence,
+which is the same trap as `disjunctionsweep` reporting clean on a path it could not see.
 
-**The first zero was a regression I had introduced.** Chasing it: the bots pick counters with
-`.Where(GetCounterPower(c) > 0)`, and making the flat path return 0 for a cost-prefixed counter —
-correct, and the whole point of fix #4 — made all 15 of those cards invisible to the AI. Measured
-at **0 played across 44,143 counters** in decks that contain them. `GetCounterPower` (what a card
-is WORTH to a player who can pay) is now separate from the flat boost the engine applies
-automatically (still 0). After the split: **2,723 played**. A rules fix that silently removes
-cards from the AI's repertoire is not finished, and no unit test would have noticed — the rules
-assertion passes either way.
-
-The remaining zero is an honest gap rather than good news: the bots never played a reveal cost in 2,160 games, so that fix is correct by test but
-unmeasured in play. Do not read 0 as "does not happen" — read it as "this harness did
-not reach it".
-
-Instrumentation was reverted; these numbers are a snapshot, not a standing check.
+The order of the errors is the useful part: overstated, then over-corrected, and only a broad
+sample settled it. A zero from a narrow sample is not evidence of absence, and neither is a
+large number from a path counter evidence of impact.
 
 ## Did any other fix break a consumer?
 
