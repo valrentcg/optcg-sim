@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**42 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**43 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -44,6 +44,10 @@ than saying "Use Effect".
   prompt. **0** across 451 unconditional-body clauses.
 - **DON!! gates** — `donthreshold`: [DON!! xN] is a gate, not a trigger — 42 you-may clauses
   sit behind one. Shut on N-1, open on N, both directions.
+- **Once-per-turn gates** — `onceperturn`: the other gate hiding behind a timing tag, 27 you-may
+  clauses. Runs the first time, refuses a second use in the same turn, reopens next turn. The
+  third case matters on its own: without it, a gate that closed *permanently* would still pass,
+  quietly turning the card once-per-game.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.

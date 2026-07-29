@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "onceperturn":
+        return OnePieceTcg.Sim.OncePerTurnTest.Run();
     case "donthreshold":
         return OnePieceTcg.Sim.DonThresholdTest.Run();
     case "realplay":
