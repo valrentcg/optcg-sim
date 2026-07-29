@@ -29,6 +29,13 @@ Reach figures count **distinct card ids** unless the row says "clauses". The poo
 printings of the same card across set files, so an un-deduplicated scan inflates every count — two
 figures in this table were wrong for exactly that reason and are corrected.
 
+The **sweeps were then audited for the same mistake and are clean**: each one deduplicates before
+counting (by card id, or by normalised clause text where it reports clause shapes) and each labels
+its output with the denominator it actually used — `triggerfield` says "cards" and dedupes by id;
+`autopick`, `lifefacing`, `usevsskip` and `healsweep` say "clauses"/"shapes" and dedupe by text. So
+the instruments were right and the prose describing them was wrong, which is the more comfortable
+way round but worth writing down so nobody re-audits it.
+
 | # | Defect | Reach |
 |---|---|---|
 | 1 | Cost-prefix effects offered **Skip alone, nothing clickable** — the panel asked `EffectHasValidTarget`, which is the wrong question while a cost is still unpaid | 512 clauses |
