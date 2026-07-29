@@ -62,6 +62,9 @@ namespace OnePieceTcg.Sim
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),
+            // The brief's other half, in its one gateable form: if the engine took your payment,
+            // it owes you an effect or a prompt. Reverting the up-to-N fix turns this red.
+            ("paidfornothing",        PaidForNothingSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt
             // --- Life: flip, heal, re-arrange, and battle damage --------------------
             ("lifefaceup",            LifeFaceUpTest.Run),

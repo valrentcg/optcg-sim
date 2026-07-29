@@ -7996,6 +7996,16 @@ namespace OnePieceTcg.Engine
                 System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (!counted.Success) return false;
             if (!int.TryParse(counted.Groups[1].Value, out int required) || required < 1) return false;
+            // "UP TO N" is a ceiling, not a requirement. Reading it as a requirement retired the whole
+            // clause whenever fewer than N targets existed, so OP12-038 ("You may rest 2 of your DON!!
+            // cards: K.O. up to 2 of your opponent's rested Characters with a base cost of 4 or less")
+            // rested two DON!! and then did nothing at all against a single legal victim — the player
+            // paid and got neither the K.O. nor the DON!! back. With a ceiling, the clause is only
+            // impossible at ZERO candidates, and one target is a perfectly good answer to "up to 2".
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                    text.Substring(0, counted.Index), @"\bup to\s*$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                required = 1;
 
             // The counted phrase has to BE the Character selection. "You may rest 2 of your DON!!
             // cards: <body that mentions a Character>" matches above on the COST — the text contains
