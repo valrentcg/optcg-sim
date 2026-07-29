@@ -357,6 +357,15 @@ caught the two that mattered most. **Seven suites now carry floors**:
 | `triggerfield` | 42 Triggers actually fire | fails below 30 |
 | `drawoutcome` | 13 draw clauses actually verified | fails below 10 |
 
+A **fourth break** — Life damage taking no card — was run because the brief asks for Life mechanics
+specifically and the first three all targeted the effect machinery. **8 of 66 go red, and no new
+holes.** That small count is the correct answer, not a weak one: only the two damage-driven suites
+(`lifedamage`, `lifedamageedge`) and the four `[Trigger]` suites depend on that path, since a
+`[Trigger]` fires only when a Life card is dealt. Every other Life suite — heal, flip, rearrange,
+`lifeshapes`, `lifefacing`, `lifeend`, `lifeboundary` — drives clauses directly and is legitimately
+insensitive. **That partition is worth knowing before reading any Life number here**: the coverage
+splits into damage-driven and clause-driven, and a break in one path leaves the other silent.
+
 `retiresweep` has one too (709 clauses classified as retired), with a narrower guarantee that is
 noted in the file: it calls the retire predicate directly, so disabling the engine's retire pass
 does not move its count. Every suite that can skip its way to an empty run now fails instead of
