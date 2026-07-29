@@ -7671,11 +7671,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // vanish and regrow from the tip backwards every frame. It also threw away the spring
     // velocity, which is the entire source of the arrow's weight. They hang off the canvas
     // instead, where nothing clears them.
-    private readonly Dictionary<string, TargetingArrowGraphic> beams =
-        new Dictionary<string, TargetingArrowGraphic>();
-    private readonly Dictionary<string, int> beamLastFrame = new Dictionary<string, int>();
+    // Swapped to the field-shader arrow (TargetingArrowEclipse + ArrowEclipse.shader),
+    // which is a direct port of the browser prototype. The ribbon-mesh version remains in
+    // TargetingArrowGraphic.cs and can be restored by reverting this type and Beam() below.
+    private readonly Dictionary<string, TargetingArrowEclipse> beams =
+        new Dictionary<string, TargetingArrowEclipse>();
 
-    private TargetingArrowGraphic Beam(string key, Transform parentCanvas)
+    private TargetingArrowEclipse Beam(string key, Transform parentCanvas)
     {
         if (parentCanvas == null) return null;
 
@@ -7692,7 +7694,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         if (beams.TryGetValue(key, out var beam) && beam != null)
         {
-            beamLastFrame[key] = Time.frameCount;
             beam.transform.SetAsLastSibling();
             return beam;
         }
@@ -7700,10 +7701,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         go.transform.SetParent(parentCanvas, false);
         var rt = (RectTransform)go.transform;
         Stretch(rt, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        beam = go.AddComponent<TargetingArrowGraphic>();
+        beam = go.AddComponent<TargetingArrowEclipse>();
         beam.raycastTarget = false;
         beams[key] = beam;
-        beamLastFrame[key] = Time.frameCount;
         return beam;
     }
 
@@ -7734,7 +7734,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var start = sourceCenter + dir * RectScreenRadius(source, 0.56f);
         var end = targetCenter - dir * RectScreenRadius(target, 0.50f);
         var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
-        if (beam != null) beam.Track(start, end, beamState);
+        if (beam != null) beam.Track(start, end, (TargetingArrowEclipse.ArrowState)(int)beamState);
     }
 
     // Same curved arrow, but the tip follows an arbitrary screen point (the cursor) instead of a
@@ -7756,7 +7756,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var beam = Beam(root.name, root.GetComponentInParent<Canvas>()?.transform ?? root.parent);
         // The surge is a shader effect on a persistent mesh, so unlike the old sprite sparks
         // it costs nothing to keep running while the pointer moves.
-        if (beam != null) beam.Track(start, end, beamState);
+        if (beam != null) beam.Track(start, end, (TargetingArrowEclipse.ArrowState)(int)beamState);
     }
 
     // Runtime-loaded FX sprites (StreamingAssets/fx/<name>.png). Cached; soft dot fallback.
