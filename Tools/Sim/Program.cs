@@ -143,6 +143,8 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
     case "donrest":
         return OnePieceTcg.Sim.DonRestCostTest.Run();
+    case "hygiene":
+        return OnePieceTcg.Sim.SourceHygieneTest.Run();
     case "timingsweep":
         return OnePieceTcg.Sim.TimingDispatchSweep.Run();
     case "lifeadvanced":
