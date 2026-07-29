@@ -141,6 +141,8 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "clonefidelity":
+        return OnePieceTcg.Sim.CloneFidelityTest.Run();
     case "botprompts":
         return OnePieceTcg.Sim.BotAnswersPromptsTest.Run();
     case "disjunctionresolve":

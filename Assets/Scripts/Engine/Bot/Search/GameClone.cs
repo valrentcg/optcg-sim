@@ -39,6 +39,35 @@ namespace OnePieceTcg.Engine.Bot.Search
             g.NameOverrides = new Dictionary<string, string>(s.NameOverrides);
             g.BasePowerOverrides = s.BasePowerOverrides.Select(b => new BasePowerOverride { TargetInstanceId = b.TargetInstanceId, Value = b.Value, OwnerSeat = b.OwnerSeat, Duration = b.Duration }).ToList();
             g.TimedPowerBonuses = s.TimedPowerBonuses.Select(b => new TimedPowerBonus { TargetInstanceId = b.TargetInstanceId, Delta = b.Delta, OwnerSeat = b.OwnerSeat, Duration = b.Duration }).ToList();
+
+            // These twelve were silently absent. A hand-written clone falls behind GameState every time
+            // a field is added, and the cost is paid by the SEARCH: the bot plans against a board where
+            // the restriction never happened. Most of these are "this turn" prohibitions, so the bot
+            // would consider plays the engine then refuses — which is a rejected command, a wasted
+            // rollout, and a worse decision, all without anything looking broken.
+            //
+            // DeferredRemovals matters most: it is the record that a Character is only still on the
+            // field because a protection question has not been answered yet. Drop it and the search
+            // sees the victim alive with nothing owed for it.
+            g.DeferredRemovals = s.DeferredRemovals.Select(d => new DeferredRemoval
+            {
+                EffectId = d.EffectId, VictimSeat = d.VictimSeat, VictimInstanceId = d.VictimInstanceId,
+                GuardInstanceId = d.GuardInstanceId, Kind = d.Kind, ByBattleKo = d.ByBattleKo,
+            }).ToList();
+            g.ActivatedEventIds = new List<string>(s.ActivatedEventIds);
+            g.NoPlayCharBaseCostAtLeast = new Dictionary<string, int>(s.NoPlayCharBaseCostAtLeast);
+            g.CharRestedByEffectThisTurn = new HashSet<string>(s.CharRestedByEffectThisTurn);
+            g.StartStageDoneSeats = new HashSet<string>(s.StartStageDoneSeats);
+            g.BattledOppCharThisTurn = new HashSet<string>(s.BattledOppCharThisTurn);
+            g.NoPlayFromHandThisTurn = new HashSet<string>(s.NoPlayFromHandThisTurn);
+            g.CannotAttackLeaderThisTurn = new HashSet<string>(s.CannotAttackLeaderThisTurn);
+            g.NoAddLifeToHandThisTurn = new HashSet<string>(s.NoAddLifeToHandThisTurn);
+            g.NoSetDonActiveViaCharThisTurn = new HashSet<string>(s.NoSetDonActiveViaCharThisTurn);
+            g.RestedKoProtectionPaid = new HashSet<string>(s.RestedKoProtectionPaid);
+            g.BattleKoTrashSaveSeats = new HashSet<string>(s.BattleKoTrashSaveSeats);
+            // A 13th, found because the reflective check reports fields it could NOT populate
+            // instead of skipping them quietly. "unchecked" is not "passing".
+            g.LastPowerBuffTargetId = s.LastPowerBuffTargetId;
             return g;
         }
 
@@ -70,6 +99,9 @@ namespace OnePieceTcg.Engine.Bot.Search
             Blocked = b.Blocked, CounterPower = b.CounterPower, AttackPower = b.AttackPower, DefensePower = b.DefensePower,
             RevealedLife = CloneCard(b.RevealedLife), PendingLifeDamage = b.PendingLifeDamage,
             NoBlocker = b.NoBlocker, BlockerPowerBan = b.BlockerPowerBan,
+            // Both ban CEILINGS were dropped, so a searching bot believed it could Blocker
+            // with cards the battle had already excluded.
+            BlockerPowerBanMax = b.BlockerPowerBanMax, BlockerCostBanMax = b.BlockerCostBanMax,
             BattlePowerBonus = new Dictionary<string, int>(b.BattlePowerBonus),
         };
 
@@ -78,6 +110,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             EffectId = e.EffectId, Seat = e.Seat, SourceInstanceId = e.SourceInstanceId, SourceCardId = e.SourceCardId,
             Timing = e.Timing, Text = e.Text, Optional = e.Optional, Scope = e.Scope, TargetZone = e.TargetZone,
             DonPaymentRemaining = e.DonPaymentRemaining, SelectionsRemaining = e.SelectionsRemaining,
+            PlayedPickIds = e.PlayedPickIds == null ? null : new List<string>(e.PlayedPickIds),
             RemainingBudget = e.RemainingBudget, FirstPickId = e.FirstPickId, PendingContinuation = e.PendingContinuation,
             OriginalText = e.OriginalText,
             DoneParts = e.DoneParts != null ? new System.Collections.Generic.List<string>(e.DoneParts) : new System.Collections.Generic.List<string>(),

@@ -56,6 +56,7 @@ namespace OnePieceTcg.Sim
             // pending effect is a hung solo game, and botstall plays random matchups that may
             // never draw these cards.
             ("botprompts",            BotAnswersPromptsTest.Run),
+            ("clonefidelity",         CloneFidelityTest.Run),
             ("sacrifice",             SacrificeProtectionTest.Run),
             ("timingsweep",           TimingDispatchSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt
