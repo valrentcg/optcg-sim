@@ -39,6 +39,8 @@ namespace OnePieceTcg.Sim
             WyperQueuesWithItsCostPrefixIntact();
             RealPlayKeepsTheCostPrefix("OP15-114", "Wyper");
             RealPlayKeepsTheCostPrefix("OP15-101", "Kalgara");
+            CostIsPaidEvenWhenAТargetIsSupplied();
+            NamiOnKoCostIsPaidWithATargetSupplied();
             Console.WriteLine($"lifefaceup: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -141,6 +143,54 @@ namespace OnePieceTcg.Sim
                 pe.Text ?? "", @"^(?:\[[^\]]+\]\s*/?\s*)*You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             Check($"{label} ({cardId}) queues with its cost prefix on a REAL play", prefixed,
                   pe == null ? "no pending effect was queued at all" : "queued text: " + pe.Text);
+        }
+
+        /// <summary>A resolveEffect that carries a TARGET must still pay an unpaid "You may &lt;cost&gt;:"
+        /// prefix first. Paying the cost IS the first interaction — that is fix #1, and the UI
+        /// follows it by sending no target for these effects.
+        ///
+        /// The bots do supply one, and measurement showed the consequence: over 2,880 games, 72 of
+        /// these effects were resolved, ALL of them with a target, and the cost-prefix block was
+        /// reached zero times. Every existing suite missed it because every suite resolves with
+        /// null, exactly as the UI does — so none could produce the state that breaks.</summary>
+        private static void CostIsPaidEvenWhenAТargetIsSupplied()
+        {
+            var b = new Board(); b.Life("south", 6);
+            var wyper = b.Character("south", "OP15-114");
+            var oppo = b.Character("north", "OP15-040");
+            GameEngine.QueueClauseForTest(b.St, "south", wyper, "onPlay",
+                "You may turn 1 card from the top of your Life cards face-up: "
+                + "Give all of your opponent's Characters -2000 power during this turn.");
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+            if (pe == null) { Check("cost paid with a target supplied", false, "nothing queued"); return; }
+
+            // Resolve WITH a target, the way the bot does.
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = oppo.InstanceId });
+
+            Check("an unpaid cost is still paid when a target is supplied",
+                  Top(b.S).FaceUp,
+                  "the top Life card was not turned face-up — a supplied target skipped the cost");
+        }
+
+        /// <summary>The same question for EB03-053 Nami's [On K.O.], which is the OTHER clause whose
+        /// text matches "from the top of your Life cards face-" and is far commoner in the meta decks
+        /// measured (five of six contain her, one contains Wyper).</summary>
+        private static void NamiOnKoCostIsPaidWithATargetSupplied()
+        {
+            var b = new Board(); b.Life("south", 4);
+            var nami = b.Character("south", "EB03-053");
+            var body = b.Hand("south", "EB03-002");
+            GameEngine.AuditKoByEffect(b.St, "south", nami.InstanceId);
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+            if (pe == null) { Check("Nami [On K.O.] cost with a target", false, "nothing queued"); return; }
+
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = body.InstanceId });
+
+            Check("Nami [On K.O.]: the cost is paid when a target is supplied",
+                  Top(b.S).FaceUp,
+                  "no Life card turned face-up — the supplied target skipped the cost");
         }
 
         private sealed class Board

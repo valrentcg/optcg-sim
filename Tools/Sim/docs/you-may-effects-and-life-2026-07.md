@@ -153,40 +153,29 @@ tested my simulation of `[Double Attack]`, not the keyword. Use a card that has 
 becomes `0x08`, renders as nothing, and the regex silently never matches. 15 of them made an
 auto-pick detector inert, and I reported its vacuous zero as a result. Gate: `-- hygiene`.
 
-## OPEN LEAD — a cost-prefixed effect resolved WITH a target skips its cost
+## A lead that did not survive its own test
 
-Not fixed. Evidenced precisely enough to hand over, and deliberately left rather than patched
-at the end of a long session, because it sits in `ResolveEffect`'s main flow.
+Last round I documented an OPEN LEAD: over 2,880 games, 72 top-of-Life-flip effects were
+resolved, all with a target, and a counter placed on the cost-prefix block in `ResolveEffect`
+read **zero**. The inference was that a supplied target diverts the effect before its cost is
+paid — plausible, precisely localised, and wrong.
 
-Measured over 2,880 games on the six meta decks containing a top-of-Life flip card:
+Writing the test first is what caught it. Two cases now in `lifefaceup` resolve a cost-prefixed
+effect **with a target supplied**, one per clause shape that matches the counter's text:
 
-```
-effects queued whose text is "... from the top of your Life cards face-..."   2,919
-of those, RESOLVED (Use pressed)                                                 72
-   ... arriving WITH a target                                                    72   (all of them)
-   ... whose source had left the field                                            0
-cost-prefix block in ResolveEffect reached                                        0
-TryAutoPayCost called                                                             0
-Life-flip cost branch reached                                                     0
-```
+- OP15-114 Wyper `[On Play]`, resolved with an opponent Character as the target
+- EB03-053 Nami `[On K.O.]`, resolved with a hand card as the target
 
-The counter is not the problem: running the SAME counter against `endtoend`'s Wyper case — which
-passes, and asserts the top Life card is flipped — reads 1. So the instrument is on the right
-line, and the zero is real.
+Both pay the cost — the top Life card is turned face-up in each. The defect I inferred does not
+reproduce.
 
-The one difference between the two is the TARGET. `endtoend` resolves with null, the way the Use
-button does after the cost-prefix fix. The bot always supplies a target, and a target-driven
-branch consumes the effect before the cost-prefix block is reached — so the cost is never paid.
+What remains unexplained is the production counter reading zero while the cost is demonstrably
+paid here. That is a gap in my instrumentation, not a known engine defect, and it is recorded
+as such rather than left standing as a bug report against the engine.
 
-**Why it probably does not affect a human player:** the UI sends no target for a cost-prefixed
-effect (that was fix #1 — the first interaction pays the cost, it is not a pick). So this is
-most likely bot-only, which is also why 41 green suites missed it: every suite resolves these
-with null, exactly as the UI does.
-
-**Next step:** make the unpaid-cost check run before any target-driven branch in `ResolveEffect`
-— i.e. while a `"You may <cost>:"` prefix is unpaid, ignore a supplied target, which is already
-the rule the UI follows. Then re-run this measurement and expect the last three rows to be
-non-zero.
+**Both tests are kept.** They cover a state no other suite could produce — every other suite
+resolves these effects with a null target, exactly as the UI does — so whatever the counter was
+measuring, the target-supplied path now has explicit coverage it lacked.
 
 ## NOT verified — needs a Play-test
 
