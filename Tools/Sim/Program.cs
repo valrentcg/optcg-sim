@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "autopick":
+        return OnePieceTcg.Sim.AutoPickSweep.Run();
     case "selfdisposal":
         return OnePieceTcg.Sim.SelfDisposalChoiceTest.Run();
     case "opponentpicks":

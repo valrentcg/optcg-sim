@@ -68,6 +68,10 @@ namespace OnePieceTcg.Sim
             ("opponentbranch",        OpponentBranchTest.Run),
             ("opponentpicks",         OpponentPicksTest.Run),
             ("selfdisposal",          SelfDisposalChoiceTest.Run),
+            // The instrument the last five auto-pick defects should have been found by, rather than
+            // one at a time by reading. Falsifiable: restoring any one of those auto-picks turns it
+            // red, which is what earns it a place here.
+            ("autopick",              AutoPickSweep.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

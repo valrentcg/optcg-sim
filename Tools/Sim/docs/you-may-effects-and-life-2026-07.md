@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**48 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**49 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -77,6 +77,12 @@ than saying "Use Effect".
   The player who owns the cards is asked which one goes, for both wordings; mandatory, so a skip
   still costs them. One shared helper feeds both call sites — two implementations of "the
   opponent disposes of their own card" is the drift this engine keeps producing.
+- **Nobody chose that** — `autopick`: the class-level instrument for the five auto-pick defects
+  above, which were all found one at a time by reading. Drives 523 distinct selective clauses and
+  asks whether any took cards from a zone holding MORE candidates than it took, without raising a
+  prompt. **0.** Restoring any one of the fixed auto-picks turns it red (4), which is the only
+  reason the zero means anything — a sweep that cannot fail reads as coverage and is worse than
+  none. Ratcheted, not gated on zero: some auto-picks are legitimate.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -107,7 +113,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 48 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 49 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
