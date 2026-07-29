@@ -36,6 +36,7 @@ namespace OnePieceTcg.Sim
             ActivateMainDoesNotConsumeWhenAttacking();
             WhenAttackingDoesNotConsumeActivateMain();
             EachIsStillOncePerTurnOnItsOwn();
+            EveryCardPairingTheTwoTimings();
             Console.WriteLine($"multiclause: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -91,6 +92,58 @@ namespace OnePieceTcg.Sim
                   + "repeatable");
         }
 
+        /// <summary>The same invariant across the ENTIRE population where this collision is
+        /// possible: every card carrying both an [Activate: Main] and a [When Attacking] ability.
+        ///
+        /// multisweep cannot cover this — it queues clauses directly and never runs the dispatch
+        /// that assigns once-per-turn keys, which its own control proved. So the timing-driven check
+        /// is extended here from one card to all 8, including OP05-041 Sakazuki, the card the
+        /// engine's comment names as the reason the distinct key exists.
+        ///
+        /// What the control then showed, and worth knowing before reading the pass: restoring the
+        /// shared key reddens this on OP06-118 ALONE. A shared key can only bite when BOTH abilities
+        /// are [Once Per Turn]; the other 7 pair one with a non-gated ability and are unaffected by
+        /// construction. Five cards in the pool carry two [Once Per Turn] abilities (EB04-044,
+        /// OP06-118, OP11-041, OP12-061, OP13-002) and only OP06-118 pairs them on the two timings
+        /// that share a key today. So this case guards a population of ONE against the known bug,
+        /// and the other 7 against a future key that is not timing-scoped.</summary>
+        private static void EveryCardPairingTheTwoTimings()
+        {
+            var ids = CardData.Library.Values
+                .Where(d => d != null && !string.IsNullOrEmpty(d.Effect))
+                .GroupBy(d => d.Id).Select(g => g.First())
+                .Where(d => d.Effect.Contains("[Activate: Main]") && d.Effect.Contains("[When Attacking]"))
+                .Select(d => d.Id).OrderBy(x => x, StringComparer.Ordinal).ToList();
+
+            int checkedCards = 0;
+            var lost = new System.Collections.Generic.List<string>();
+            foreach (var id in ids)
+            {
+                bool soloAttack;
+                try
+                {
+                    // Does the When-Attacking ability offer at all on a clean board?
+                    var solo = new Board();
+                    soloAttack = solo.AttackAndWasOffered(solo.Subject(id));
+                    if (!soloAttack) continue;      // nothing to lose; not this card's test
+
+                    var both = new Board();
+                    var c = both.Subject(id);
+                    both.ActivateMain(c);
+                    checkedCards++;
+                    if (!both.AttackAndWasOffered(c)) lost.Add(id);
+                }
+                catch (Exception) { continue; }
+            }
+
+            Check($"across all {ids.Count} cards pairing the two timings, using one keeps the other "
+                  + $"({checkedCards} actually checked)",
+                  checkedCards >= 3 && lost.Count == 0,
+                  lost.Count > 0
+                      ? "lost the When-Attacking ability on: " + string.Join(", ", lost)
+                      : $"only {checkedCards} cards were checkable — too few to mean anything");
+        }
+
         private sealed class Board
         {
             public GameState St;
@@ -121,9 +174,9 @@ namespace OnePieceTcg.Sim
                 St.PendingEffects.Clear();
             }
 
-            public CardInstance Subject()
+            public CardInstance Subject(string cardId = TwoOnce)
             {
-                var c = Make(TwoOnce, "south", "character");
+                var c = Make(cardId, "south", "character");
                 S.CharacterArea[0] = c;
                 c.PlayedOnTurn = 0; c.Rested = false;
                 return c;

@@ -248,6 +248,12 @@ than saying "Use Effect".
   abilities with different circled DON!! costs. Using either must leave the other available, and
   each must still be once per turn on its own. Restoring the documented shared-key bug (the bare
   instance id for both timings) reddens the first case.
+  Extended to **all 8 cards** carrying both an `[Activate: Main]` and a `[When Attacking]` ability —
+  but the control bounds that too: the shared key reddens **`OP06-118` alone**, because a shared key
+  can only bite when BOTH abilities are `[Once Per Turn]`, and the other 7 pair one with a non-gated
+  ability. Five cards in the pool have two `[Once Per Turn]`s; only this one pairs them on the two
+  timings that share a key. So the case guards a population of **one** against the known bug, and
+  the other seven against a future key that is not timing-scoped.
   `multisweep` then asks the same question of all 22 cards — **43 ordered clause pairs, 0
   interference** — but is NARROWER, not broader: it queues clauses directly, so it never runs the
   dispatch that assigns once-per-turn keys, and the shared-key control leaves it reporting 0 while
