@@ -49,6 +49,9 @@ namespace OnePieceTcg.Sim
             ("donrest",               DonRestCostTest.Run),
             ("countercost",           CounterCostTest.Run),
             ("revealcost",            RevealCostTest.Run),
+            // Falsifiable, unlike disjunctionsweep: crippling the shared match-any tag loop makes
+            // its playability case fail. That is what qualifies it here.
+            ("disjunctionresolve",    DisjunctionResolveTest.Run),
             ("sacrifice",             SacrificeProtectionTest.Run),
             ("timingsweep",           TimingDispatchSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt
