@@ -6,7 +6,7 @@ namespace OnePieceTcg.Sim
 {
     /// <summary>
     /// An audit of the highest-reach fix in this workstream: "up to N" is a CEILING, not a
-    /// requirement. 917 cards carry the wording, and the fix made
+    /// requirement. 1,601 distinct cards carry the wording, and the fix made
     /// ClauseHasNoLegalCharacterTarget treat "up to N" as needing only ONE legal target, so a
     /// clause is retired solely when there are ZERO.
     ///

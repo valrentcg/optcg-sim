@@ -25,6 +25,10 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
 
+Reach figures count **distinct card ids** unless the row says "clauses". The pool ships duplicate
+printings of the same card across set files, so an un-deduplicated scan inflates every count — two
+figures in this table were wrong for exactly that reason and are corrected.
+
 | # | Defect | Reach |
 |---|---|---|
 | 1 | Cost-prefix effects offered **Skip alone, nothing clickable** — the panel asked `EffectHasValidTarget`, which is the wrong question while a cost is still unpaid | 512 clauses |
@@ -32,7 +36,7 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 3 | Auto-skip gate counted a **DON!! cost against the Character area**, retiring the effect before the player was asked (OP14-049 Jinbe) | 117 cards |
 | 4 | Counter events granted their **power bonus for free** — the `+N` was grepped out and applied flat, ignoring the cost, and the clause was then blocked from queueing *because* it contains "gains +N" | 13 cards |
 | 5 | Reveal-from-hand costs **auto-selected** the card, **logged only a count** (a reveal nobody can see is not a cost), and read `{A} or {B}` as `{A}` | 58 disjunction clauses |
-| 6 | **"up to N" read as "exactly N"** — the clause was retired whenever fewer than N targets existed, so OP12-038 rested 2 DON!! and did nothing against one legal victim | 917 cards carry the wording |
+| 6 | **"up to N" read as "exactly N"** — the clause was retired whenever fewer than N targets existed, so OP12-038 rested 2 DON!! and did nothing against one legal victim | **1,601 cards** carry the wording |
 | 7 | A **compound cost** reached across "and" to borrow the word *Character* from the other conjunct (OP10-028: "rest 2 of your DON!! cards AND trash this Character") | — |
 | 8 | **PvP: the opponent could resolve or skip YOUR pending effect** by omitting the effect id — `FindPendingEffect`'s no-id fallback ended in `PendingEffects[0]`, whoever queued first | every optional effect |
 | 9 | `GameClone` silently dropped **20 fields** across two hand-written copies, incl. `DeferredRemovals` and `OnceKey`. Measured: turn-state was non-empty in **12.9%** of search clones | bot search, Sandbox undo, puzzle solver |
@@ -53,7 +57,7 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 19 | **My own "if they do not" fix never fired when the opponent COULDN'T pay** — I argued the retire sweep would catch it. It only detects missing CHARACTER targets, so a clause wanting a Life card or DON!! is never unresolvable to it. The opponent held a prompt they could only Skip, and a controller who had rested a Character got nothing unless they pressed it | OP05-099, OP15-059 |
 | 17 | **My own trigger fix let a DRAWN card pay the cost** — it plays the card then queues the discard, so "Play this card. Then, draw 1 card." put a fresh card in hand before the pick. Rule 8-4-1-3 pays costs first. Fixed with an eligibility snapshot enforced in BOTH the glow filter and the resolver | OP08-104 + the top-or-bottom-Life bodies |
 | 18 | `GameClone` dropped `PickedInstanceIds` and `CostPaidRefs` (pre-existing, found while adding the new field) — a rollout restarts a pick with a clean slate and can re-spend a card the real game already spent | bot search, Sandbox undo, puzzle solver |
-| 16 | **`[Trigger]` costs auto-trashed `Hand[0]`** — "[Trigger] You may trash 1 card from your hand: Play this card." The Trigger press answers *whether*; nothing ever asked *which*. Invisible to every sweep here, which all enumerate `effect` while these clauses live in the separate `trigger` field | **44 cards** |
+| 16 | **`[Trigger]` costs auto-trashed `Hand[0]`** — "[Trigger] You may trash 1 card from your hand: Play this card." The Trigger press answers *whether*; nothing ever asked *which*. Invisible to every sweep here, which all enumerate `effect` while these clauses live in the separate `trigger` field | **24 cards** |
 | 15 | The place-at-deck-bottom half had **no skip enforcement** — once it became a prompt, declining it was a free escape (found by testing the fix, not the code) | 8 of those 25 |
 
 The Use button's label is now derived by `GameEngine.DescribeCostPrefix` rather than inside
