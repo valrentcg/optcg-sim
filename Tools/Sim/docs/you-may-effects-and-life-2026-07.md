@@ -175,10 +175,13 @@ than saying "Use Effect".
   enumerated. **63 distinct shapes**; each is driven against three fixtures (few Life / many Life /
   full trash, since the gates pull in opposite directions) and the resulting Life card inspected for
   SOURCE zone, TOP-of-Life position, and FACING. 0 wrong on all three.
-  Scope: **39 of 63** shapes heal in these fixtures (up from 20 — the sweep learned to build the
-  Leader each gate names, and to detect a heal by card IDENTITY rather than by Life COUNT, since a
-  cost-prefixed heal pays from Life and nets zero). The other 24 need DON!! payments, reactive
-  timings or hand/trash totals it does not construct. Two explicit probes keep the facing check
+  Scope: **42 of 63** shapes heal in these fixtures, up from 20. Each increase came from closing a
+  fixture blindness rather than lowering a bar — building the Leader each gate names, putting a card
+  of the required `{Type}` in hand, adding an empty-Life board, and detecting a heal by card
+  IDENTITY rather than by Life COUNT (a cost-prefixed heal pays *from* Life and nets zero). **The
+  face-up defect was only visible after those changes.** The remaining 21 need a different drive
+  path — DON!! payments, `[DON!! xN]` gates, reactive timings — which is a boundary, not a gap:
+  those populations belong to `triggerfield` and `timingsweep`. Two explicit probes keep the facing check
   two-sided: a "face-up" clause must land face-UP, and the SAME clause without those words face-DOWN.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).

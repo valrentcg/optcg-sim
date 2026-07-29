@@ -50,11 +50,19 @@ namespace OnePieceTcg.Sim
                 Board b = null;
                 bool any = false;
                 string grewSeat = "south";
-                foreach (var variant in new[] { 1, 4, 30 })
+                // A fourth board with a SMALL hand: several gates read the hand and Life together
+                // ("a total of 4 or less cards in your Life area and hand"), which a 4-card hand can
+                // never satisfy. Variants exist because the conditions genuinely conflict, not to
+                // pad the count.
+                // variant 0 = an EMPTY Life area, for the "if you have 0 Life cards" gates.
+                foreach (var variant in new[] { 1, 4, 30, 99, 0 })
                 {
                     Board t;
-                    try { t = new Board(lifeCards: variant == 1 ? 1 : 4, trashCards: variant == 30 ? 34 : 0,
-                                        leaderId: LeaderFor(clause)); }
+                    try { t = new Board(lifeCards: variant == 4 ? 4 : (variant == 0 ? 0 : 1),
+                                        trashCards: variant == 30 ? 34 : 0,
+                                        handCards: variant == 99 ? 1 : 4,
+                                        leaderId: LeaderFor(clause),
+                                        extraHandCardId: HandCardOfType(clause)); }
                     catch (Exception) { continue; }
                     // BOTH seats. The face-up heals say "to the top of the OWNER's Life cards", so
                     // targeting an opponent Character grows NORTH's Life — measuring only south
@@ -108,8 +116,12 @@ namespace OnePieceTcg.Sim
             // sweep cannot synthesise — stated rather than implied, since "63 shapes" in a summary
             // would read as 63 verified.
             Console.WriteLine($"    of those: {faceUpWanted} want face-UP, {healed - faceUpWanted} want face-DOWN");
-            Console.WriteLine($"    {shapes.Count - healed} never healed here (DON!! payments, reactive timings, "
-                              + "and hand/trash totals this sweep does not construct)");
+            // The remainder need a different DRIVE PATH, not a richer fixture: DON!!-N payments,
+            // [DON!! xN] gates, and reactive timings ([On K.O.], [Counter], [Trigger]) which fire
+            // from battle rather than from a queued main clause. Those populations belong to
+            // triggerfield and timingsweep; this is a boundary, not an unclosed gap.
+            Console.WriteLine($"    {shapes.Count - healed} need another drive path (DON!! payments, "
+                              + "[DON!! xN] gates, reactive timings) — see triggerfield / timingsweep");
             Report("wrong FACING (face-up leaks a card the opponent may not see)", wrongFacing);
             Report("added below the existing TOP of Life", wrongPosition);
             Report("card came from the wrong ZONE", wrongSource);
@@ -201,6 +213,25 @@ namespace OnePieceTcg.Sim
             return null;
         }
 
+        /// <summary>A Character card carrying the {Type} the clause filters its hand source on.
+        ///
+        /// Several heals read "add up to 1 {Revolutionary Army} type Character card FROM YOUR HAND
+        /// to the top of your Life". A hand of arbitrary cards satisfies none of them, so those
+        /// shapes silently never fired — the same class of fixture blindness as the Leader gates.
+        /// Build the hand the card expects instead of recording another limitation.</summary>
+        private static string HandCardOfType(string clause)
+        {
+            var tag = System.Text.RegularExpressions.Regex.Match(clause, @"\{([^}]+)\} type");
+            if (!tag.Success) return null;
+            foreach (var def in CardData.Library.Values)
+            {
+                if (def == null || !string.Equals(def.Type, "character", StringComparison.OrdinalIgnoreCase)) continue;
+                if (def.Cost > 4) continue;                       // keep it playable/selectable
+                if (def.HasFeature(tag.Groups[1].Value)) return def.Id;
+            }
+            return null;
+        }
+
         private static void Report(string label, List<string> rows)
         {
             Console.WriteLine($"  {label}: {rows.Count}");
@@ -254,7 +285,8 @@ namespace OnePieceTcg.Sim
             public readonly HashSet<string> StartLifeIds = new HashSet<string>();
             public readonly HashSet<string> StartNorthLifeIds = new HashSet<string>();
 
-            public Board(int lifeCards = 1, int trashCards = 0, string leaderId = null)
+            public Board(int lifeCards = 1, int trashCards = 0, int handCards = 4,
+                         string leaderId = null, string extraHandCardId = null)
             {
                 St = GameEngine.CreateMatch(new MatchConfig
                 { SouthDeck = "st01", NorthDeck = "st01", Seed = "heal-sweep" });
@@ -264,7 +296,7 @@ namespace OnePieceTcg.Sim
                     p.TurnsStarted = 4;
                     for (int i = 0; i < 5; i++) p.CharacterArea[i] = null;
                     p.Hand.Clear(); p.Life.Clear(); p.CostArea.Clear();
-                    foreach (var id in new[] { "ST29-004", "ST29-009", "ST01-005", "EB01-004" })
+                    foreach (var id in new[] { "ST29-004", "ST29-009", "ST01-005", "EB01-004" }.Take(handCards))
                         p.Hand.Add(Make(id, p.Seat, "hand"));
                     // ONE Life card: most heals are gated on "if you have N or less Life", so a full
                     // Life area would leave most shapes untested and the sweep would read clean.
@@ -277,6 +309,7 @@ namespace OnePieceTcg.Sim
                 S.CharacterArea[0] = Make("ST29-010", "south", "character");
                 N.CharacterArea[0] = Make("OP15-040", "north", "character");
                 if (!string.IsNullOrEmpty(leaderId)) S.Leader = Make(leaderId, "south", "leader");
+                if (!string.IsNullOrEmpty(extraHandCardId)) S.Hand.Add(Make(extraHandCardId, "south", "hand"));
                 St.PendingEffects.Clear();
                 foreach (var x in S.Deck) StartDeckIds.Add(x.InstanceId);
                 foreach (var x in S.Hand) StartHandIds.Add(x.InstanceId);
