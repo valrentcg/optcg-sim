@@ -76,6 +76,10 @@ namespace OnePieceTcg.Sim
             // "bottom of" as positional, which is right for the ~200 clauses naming ONE end and
             // wrong for the 46 offering a choice BETWEEN them.
             ("lifeend",               LifeEndChoiceTest.Run),
+            // glowsweep drives every card's text on its CONTROLLER's seat, so a decision handed to
+            // the opponent is a state it cannot construct. Three of those are mandatory, where
+            // nothing clickable is a frozen game rather than an annoyance.
+            ("crossglow",             CrossSeatGlowTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

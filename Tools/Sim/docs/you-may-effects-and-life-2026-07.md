@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**50 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**51 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -92,6 +92,13 @@ than saying "Use Effect".
   these. A real decision: Life damage comes off the top, so the end chosen decides whether the
   player keeps their next `[Trigger]`. Both the cost form and the body form are driven, because
   they are separate handlers, and each one's cases go red independently under control.
+- **Is it clickable?** — `crossglow`: every prompt this workstream added sits on a seat that does
+  not control the source, and `glowsweep` cannot reach any of them — it drives each card's text on
+  the CONTROLLER's seat, so an opponent-owned decision is a state it never constructs. Three of the
+  new prompts are mandatory, where nothing clickable is a frozen game rather than an annoyance.
+  Asserts not just that something lights up but that it belongs to the right player, since half of
+  them deliberately point at the other player's hand. Restricting glow to the acting seat's own
+  cards reddens exactly the cross-seat case.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -122,7 +129,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 50 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 51 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
