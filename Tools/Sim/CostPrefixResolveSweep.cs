@@ -76,6 +76,12 @@ namespace OnePieceTcg.Sim
                                             && m.IndexOf("cost cannot be paid", StringComparison.OrdinalIgnoreCase) < 0)
                                    .ToList();
 
+                        if (Environment.GetEnvironmentVariable("OPTCG_PROBE") == def.Id)
+                        {
+                            Console.WriteLine($"      [probe {def.Id}] waiting={stillWaiting} hand={b.S.Hand.Count}");
+                            foreach (var h in b.S.Hand) Console.WriteLine($"        hand: {h.CardId}");
+                            foreach (var mm in did) Console.WriteLine("      [probe log] " + mm);
+                        }
                         if (stillWaiting) waiting++;
                         else if (did.Count > 0)
                         {

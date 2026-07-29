@@ -141,6 +141,8 @@ switch (mode)
         return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "revealcost":
+        return OnePieceTcg.Sim.RevealCostTest.Run();
     case "glowsweep":
         return OnePieceTcg.Sim.GlowDeadlockSweep.Run();
     case "gate":

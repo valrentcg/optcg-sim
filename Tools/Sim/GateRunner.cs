@@ -48,6 +48,7 @@ namespace OnePieceTcg.Sim
             ("endtoend",              EffectEndToEndTest.Run),
             ("donrest",               DonRestCostTest.Run),
             ("countercost",           CounterCostTest.Run),
+            ("revealcost",            RevealCostTest.Run),
             ("sacrifice",             SacrificeProtectionTest.Run),
             ("timingsweep",           TimingDispatchSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt

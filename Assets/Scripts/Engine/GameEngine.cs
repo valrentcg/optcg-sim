@@ -8676,12 +8676,35 @@ namespace OnePieceTcg.Engine
                     string tag = incl.Success ? incl.Groups[1].Value.Trim() : ParseCurlyBraceTag(filt);
                     bool reqEvent = System.Text.RegularExpressions.Regex.IsMatch(filt, @"\bEvents?\b");
                     bool reqChar = System.Text.RegularExpressions.Regex.IsMatch(filt, @"\bCharacter\b");
-                    int matchN = p.Hand.Count(c => { var cd = GetCard(c); return cd != null
-                        && (!reqEvent || cd.Type == "event") && (!reqChar || cd.Type == "character")
-                        && (!pw.Success || cd.Power == int.Parse(pw.Groups[1].Value))
-                        && (string.IsNullOrEmpty(tag) || cd.HasFeature(tag)); });
-                    if (matchN < n) return 0;
-                    actions.Add(() => Log(state, seat, $"Reveals {n} matching card(s) from hand (cost)."));
+                    // Use the SHARED matcher, not a hand-rolled copy. The local version read a single
+                    // tag via ParseCurlyBraceTag, so "{Music} or {FILM} type card" only ever matched
+                    // {Music} — while CostCardMatches (what the click path and the glow filter use)
+                    // treats multiple tags as match-any. The two disagreeing is the same class of bug
+                    // as the glow filter drifting from the resolver: a hand holding only the second
+                    // type reads as unpayable, and one holding both looks like a forced single match
+                    // when it is really a choice. 58 clauses carry a "{A} or {B}" disjunction.
+                    Func<CardInstance, bool> revMatch = c =>
+                    {
+                        var cd = GetCard(c);
+                        return cd != null
+                            && (!reqEvent || cd.Type == "event") && (!reqChar || cd.Type == "character")
+                            && (!pw.Success || cd.Power == int.Parse(pw.Groups[1].Value))
+                            && CostCardMatches(part, cd);
+                    };
+                    var revCands = p.Hand.Where(revMatch).ToList();
+                    if (revCands.Count < n) return 0;
+                    // More matches than the cost needs is a CHOICE, and this cost is paid entirely in
+                    // information — which card you show is the whole decision. Hand it to the pick path
+                    // (-1 = unrecognized component, the same route trash-from-hand takes) rather than
+                    // choosing for the player. The glow filter already lights reveal-from-hand cards;
+                    // auto-paying here meant that UI code could never fire.
+                    if (revCands.Count > n) return -1;
+                    // Forced: exactly enough matches, so there is nothing to ask. Name what was shown —
+                    // a reveal that logs only a COUNT tells the opponent nothing, and being seen is the
+                    // entire cost being paid.
+                    var shown = revCands.Take(n).ToList();
+                    actions.Add(() => Log(state, seat,
+                        $"Reveals {string.Join(", ", shown.Select(c => NameId(GetCard(c))))} from hand (cost)."));
                     continue;
                 }
                 // rest your N Leader (cost) — rest the Leader.
@@ -10343,6 +10366,49 @@ namespace OnePieceTcg.Engine
                         chosenLife.Zone = "hand"; chosenLife.FaceUp = true;
                         owner.Hand.Add(chosenLife);
                         Log(state, effect.Seat, $"{sourceName} cost: adds the {(costIsTop ? "top" : "bottom")} Life card to hand.");
+                        QueueBody(state, effect, bodyText);
+                        return EffectResolution.Resolved;
+                    }
+
+                    // Cost: reveal N (matching) cards from your hand. Structurally the trash cost below,
+                    // except the cards STAY in hand — what is spent is the opponent SEEING them, so the
+                    // only thing this cost produces is a log line naming what was shown.
+                    //
+                    // The auto-payer used to settle this by counting matches and logging "Reveals N
+                    // matching card(s)", which chose for the player and told the opponent nothing. It
+                    // now hands any real choice here (more matches than needed) and pays a forced one
+                    // itself. Without this handler that hand-off resolved into nothing at all: the glow
+                    // filter lights reveal-from-hand cards, but no flow consumed the click.
+                    if (ContainsAll(costText, "reveal") && ContainsAll(costText, "from your hand"))
+                    {
+                        if (effect.SelectionsRemaining <= 0)
+                        {
+                            var rvN = System.Text.RegularExpressions.Regex.Match(costText, @"reveal (\d+)",
+                                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                            effect.SelectionsRemaining = rvN.Success ? int.Parse(rvN.Groups[1].Value) : 1;
+                            effect.TargetZone = EffectTargetZone.Hand;
+                        }
+                        if (string.IsNullOrEmpty(targetId))
+                        {
+                            Log(state, effect.Seat, $"Click {effect.SelectionsRemaining} card(s) in your hand to reveal as the cost of {sourceName}, or skip.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        int rvIdx = owner.Hand.FindIndex(c => c.InstanceId == targetId);
+                        if (rvIdx < 0) { Log(state, effect.Seat, "That card is not in your hand."); return EffectResolution.WaitingForTarget; }
+                        var rvDef = GetCard(owner.Hand[rvIdx]);
+                        if (!CostCardMatches(costText, rvDef))
+                        {
+                            Log(state, effect.Seat, $"{NameId(rvDef)} does not match the cost requirement: {costText}.");
+                            return EffectResolution.WaitingForTarget;
+                        }
+                        // Named, not counted — a reveal the opponent cannot identify is not a cost.
+                        Log(state, effect.Seat, $"{sourceName} cost: revealed {NameId(rvDef)} from hand.");
+                        effect.SelectionsRemaining--;
+                        if (effect.SelectionsRemaining > 0)
+                        {
+                            Log(state, effect.Seat, $"Reveal {effect.SelectionsRemaining} more card(s) to pay {sourceName}'s cost, or skip.");
+                            return EffectResolution.WaitingForTarget;
+                        }
                         QueueBody(state, effect, bodyText);
                         return EffectResolution.Resolved;
                     }
