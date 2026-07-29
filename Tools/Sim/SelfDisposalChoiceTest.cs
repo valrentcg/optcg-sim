@@ -37,6 +37,7 @@ namespace OnePieceTcg.Sim
                  (b, id) => b.N.Deck.Any(c => c.InstanceId == id));
             SkippingStillCostsThem("Your opponent trashes 1 card from their hand.", "trash");
             SkippingStillCostsThem("Your opponent places 1 card from their hand at the bottom of their deck.", "place");
+            PartialPaymentStillTakesWhatItCan();
             Console.WriteLine($"selfdisposal: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -92,6 +93,30 @@ namespace OnePieceTcg.Sim
                   $"north hand {n0}->{b.N.Hand.Count} — they choose WHICH, never WHETHER");
         }
 
+        /// <summary>Rule 8-4-4-1: "the player must choose as many cards ... as they can, up to the
+        /// number specified." So "trash 2" against a 1-card hand takes that one card, not nothing.
+        ///
+        /// This is where making the disposal a PROMPT could regress the old auto-pick: PassEffect's
+        /// enforcement only fires when the hand can cover the full count, so a short hand may fall
+        /// through to an ordinary skip and pay nothing at all — a free escape the auto-pick never
+        /// allowed.</summary>
+        private static void PartialPaymentStillTakesWhatItCan()
+        {
+            var b = new Board();
+            b.N.Hand.Clear();
+            b.N.Hand.Add(b.MakeHand("north", "EB01-004"));    // exactly ONE card, cost demands two
+            b.Queue("Your opponent trashes 2 cards from their hand.");
+            var pe = b.Mine("north");
+            if (pe == null) { Check("partial payment", false, "north was never asked"); return; }
+
+            b.Apply(new GameCommand { Type = "passEffect", Seat = "north", EffectId = pe.EffectId });
+
+            Check("a 1-card hand still pays what it can against a \"trash 2\"",
+                  b.N.Hand.Count == 0,
+                  $"north hand 1->{b.N.Hand.Count} — a short hand must pay as many as it can "
+                  + "(rule 8-4-4-1), not escape the cost entirely");
+        }
+
         private sealed class Board
         {
             public GameState St;
@@ -141,6 +166,8 @@ namespace OnePieceTcg.Sim
                 Apply(new GameCommand
                 { Type = "resolveEffect", Seat = seat, EffectId = pe.EffectId, Target = target });
             }
+
+            public CardInstance MakeHand(string seat, string id) => Card(id, seat, "hand");
 
             public CardInstance Hand(string seat, string id)
             { var c = Card(id, seat, "hand"); St.Players[seat].Hand.Add(c); return c; }

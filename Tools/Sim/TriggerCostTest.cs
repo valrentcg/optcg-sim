@@ -45,6 +45,7 @@ namespace OnePieceTcg.Sim
             SkippingThePickStillCosts();
             PayingCostsExactlyOneHandCard();
             TheCardNAMEDIsTheOneTrashed();
+            AnEmptyHandCannotPayAndGetsNothing();
             Console.WriteLine($"triggercost: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -151,6 +152,28 @@ namespace OnePieceTcg.Sim
             Check("the card the player NAMES is the one trashed",
                   wentAway && keptTheOther && b.S.Trash.Any(x => x.InstanceId == want.InstanceId),
                   $"named={want.CardId} gone={wentAway} keptHand0={keptTheOther}");
+        }
+
+        /// <summary>The inverse of "paid for nothing", and the more valuable failure: payoff without
+        /// payment. With an EMPTY hand the "trash 1 card from your hand" cost cannot be paid, so the
+        /// Trigger must not play the card — the Life card just becomes ordinary damage.
+        ///
+        /// This branch predates my change (the old code trashed "what it could", which is nothing,
+        /// and played the card anyway) but sits directly under it, so it belongs in this audit.
+        /// </summary>
+        private static void AnEmptyHandCannotPayAndGetsNothing()
+        {
+            var b = new Board();
+            b.S.Hand.Clear();                     // nothing to pay with
+            b.DamageSouth();
+            if (!b.AtTriggerStep) { Check("an empty hand cannot pay", false, "fixture: never reached the trigger step"); return; }
+            b.ActivateTrigger();
+
+            bool onBoard = b.S.CharacterArea.Any(c => c != null && c.CardId == TrigCard);
+            Check("an empty hand cannot pay the cost, so the card is NOT played",
+                  !onBoard,
+                  "the card was played with the cost unpayable — a free body for a card the player "
+                  + "was about to lose anyway");
         }
 
         private sealed class Board

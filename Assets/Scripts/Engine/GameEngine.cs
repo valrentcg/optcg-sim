@@ -1979,6 +1979,17 @@ namespace OnePieceTcg.Engine
             }
             var src = FindCardInstance(state, effect.SourceInstanceId);
             if (src == null) return EffectResolution.Resolved;
+            // Clamp the count to what the hand can actually cover (rule 8-4-4-1: choose as many as
+            // you can, up to the number specified). Without this, "trash 2" against a 1-card hand
+            // queues an unpayable pick, HandDiscardCannotBePaid retires the whole effect, and the
+            // opponent pays NOTHING — a free escape the auto-pick this replaced never allowed. My
+            // regression, found by auditing the change rather than by any sweep.
+            var nm = System.Text.RegularExpressions.Regex.Match(clause, @"(\d+)");
+            int want = nm.Success ? int.Parse(nm.Groups[1].Value) : 1;
+            int payable = Math.Min(want, opp.Hand.Count);
+            if (payable != want)
+                clause = clause.Replace($"{want} card", $"{payable} card")
+                               .Replace($"{payable} cards", $"{payable} card");
             QueueEffect(state, oppSeat, src, effect.Timing, clause, false,
                         EffectScope.Instant, EffectTargetZone.Hand);
             Log(state, effect.Seat, $"{srcName}: {opp.Name} chooses which card to {what}.");
