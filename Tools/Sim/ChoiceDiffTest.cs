@@ -31,10 +31,18 @@ namespace OnePieceTcg.Sim
         /// <summary>Held line, not a target. See the class comment: an option whose targets the
         /// fixture cannot supply is correctly inert.</summary>
         private const int Baseline = 0;
-        /// <summary>Held line for the softer signal. 5 options are inert in THIS fixture because it
-        /// cannot supply their targets or preconditions; that is not 5 broken cards. Lower it when
-        /// one is genuinely fixed; never raise it to make a run pass.</summary>
-        private const int OneInertBaseline = 4;
+        /// <summary>Held line for the softer signal, and it started at 5. Each reduction came from
+        /// making the FIXTURE able to express the option, never from relaxing the check:
+        ///
+        ///   5 -> 4  record COST, so "-4 cost" is visible at all
+        ///   4 -> 3  record KEYWORDS, and field a {Dressrosa} body for "gains [Blocker]"
+        ///   3 -> 2  field a RESTED {East Blue} body — "set as active" changes nothing on a
+        ///           Character that is already active, so the type alone was not enough
+        ///
+        /// The 2 left are correct: EB01-052's "turn all of your Life cards face-down" against an
+        /// already face-down Life area, and OP06-116's branch gated on the opponent holding exactly
+        /// 1 Life. Lower this when one is genuinely fixed; never raise it to make a run pass.</summary>
+        private const int OneInertBaseline = 2;
 
         public static int Run()
         {
@@ -145,10 +153,32 @@ namespace OnePieceTcg.Sim
                     // opponent's Characters -4 cost", which a power-only fingerprint cannot see —
                     // it reported a working option as inert.
                     sb.Append(c == null ? "-" : c.CardId + ":" + (c.Rested ? "R" : "A")
-                              + ":" + GameEngine.GetPower(st, c) + ":" + GameEngine.GetCost(st, c)).Append(';');
+                              + ":" + GameEngine.GetPower(st, c) + ":" + GameEngine.GetCost(st, c) + ":" + Keywords(st, c)).Append(';');
                 sb.Append("||");
             }
             return sb.ToString();
+        }
+
+        /// <summary>Granted keywords, so "gains [Blocker]" is visible.
+        ///
+        /// A power/cost fingerprint cannot see a keyword grant, and a keyword IS the effect for a
+        /// whole family of clauses — OP15-055's second option is exactly "up to 1 of your
+        /// {Dressrosa} type Characters gains [Blocker]". Without this the option reads as inert
+        /// even when it worked.</summary>
+        private static string Keywords(GameState st, CardInstance c) =>
+            (GameEngine.HasRush(st, c) ? "R" : "")
+            + (GameEngine.HasBlocker(st, c) ? "B" : "")
+            + (GameEngine.HasDoubleAttack(st, c) ? "D" : "");
+
+        /// <summary>First Character carrying a {Type}, for building the deck a card expects.</summary>
+        private static string FirstOfType(string tag)
+        {
+            foreach (var def in CardData.Library.Values.OrderBy(d => d?.Id, StringComparer.Ordinal))
+            {
+                if (def == null || !string.Equals(def.Type, "character", StringComparison.OrdinalIgnoreCase)) continue;
+                if (def.HasFeature(tag)) return def.Id;
+            }
+            return null;
         }
 
         private static Board Build() => new Board();
@@ -183,6 +213,17 @@ namespace OnePieceTcg.Sim
                 N.CharacterArea[0] = Make("OP15-040", "north", "character");
                 N.CharacterArea[1] = Make("EB03-002", "north", "character");
                 N.CharacterArea[1].Rested = true;
+                // A {Dressrosa} body of my own, so keyword-granting options ("up to 1 of your
+                // {Dressrosa} type Characters gains [Blocker]" — OP15-055) have something to land
+                // on. Without it the option is correctly inert and the keyword fingerprint added
+                // alongside this would be untestable.
+                var dress = FirstOfType("Dressrosa");
+                if (dress != null) S.CharacterArea[2] = Make(dress, "south", "character");
+                // An {East Blue} body, RESTED: OP03-028's option is "set up to 1 of your {East Blue}
+                // ... as active", which changes nothing against a Character that is already active.
+                // The type alone is not enough — the fixture has to make the option MEANINGFUL.
+                var eb = FirstOfType("East Blue");
+                if (eb != null) { S.CharacterArea[3] = Make(eb, "south", "character"); S.CharacterArea[3].Rested = true; }
                 St.PendingEffects.Clear();
             }
 

@@ -212,9 +212,12 @@ than saying "Use Effect".
   `usevsskip` checks the first. Resolves option A and option B from identical boards and requires
   them to differ; **0** produce the same board. Separates three failures because they need different
   fixes — neither option acts, exactly one acts, both act identically. It found the EB01-052 defect
-  above on its first run. Triaging the "one option inert" rows then found a defect in the
-  INSTRUMENT: the fingerprint recorded power but not COST, so EB02-051's "give −4 cost" option read
-  as doing nothing. Both differentials now record cost.
+  above on its first run. Triaging the "one option inert" rows then found the INSTRUMENT at fault
+  three times over — the fingerprint recorded power but not **cost**, and not **keywords**, and the
+  fixture could not express "set as active" (it had no rested Character to set). Fixing those took
+  the inert count **5 → 4 → 3 → 2** with no engine change; **7 of 9** modals now offer two genuinely
+  different outcomes. The 2 remaining are correct: a "turn all your Life face-down" option against
+  an already face-down Life area, and a branch gated on the opponent holding exactly 1 Life.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.

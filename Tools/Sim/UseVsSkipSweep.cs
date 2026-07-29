@@ -142,7 +142,7 @@ namespace OnePieceTcg.Sim
                     // fingerprint and reads as "using the effect did nothing".
                     sb.Append(c == null ? "-" : c.CardId + ":" + (c.Rested ? "R" : "A")
                               + ":" + GameEngine.GetPower(st, c) + ":" + GameEngine.GetCost(st, c)
-                              + ":" + c.AttachedDonIds.Count).Append(';');
+                              + ":" + c.AttachedDonIds.Count + ":" + Keywords(st, c)).Append(';');
                 sb.Append('|').Append(p.Leader == null ? "-" : GameEngine.GetPower(st, p.Leader).ToString());
                 foreach (var c in p.Life) sb.Append(c.FaceUp ? 'U' : 'd');
                 sb.Append("||");
@@ -220,6 +220,17 @@ namespace OnePieceTcg.Sim
         private static string Normalize(string s) =>
             System.Text.RegularExpressions.Regex.Replace(
                 System.Text.RegularExpressions.Regex.Replace(s, "[0-9]+", "N"), @"\[[^\]]*\]", "[T]").Trim();
+
+        /// <summary>Granted keywords, so "gains [Blocker]" is visible.
+        ///
+        /// A power/cost fingerprint cannot see a keyword grant, and a keyword IS the effect for a
+        /// whole family of clauses — OP15-055's second option is exactly "up to 1 of your
+        /// {Dressrosa} type Characters gains [Blocker]". Without this the option reads as inert
+        /// even when it worked.</summary>
+        private static string Keywords(GameState st, CardInstance c) =>
+            (GameEngine.HasRush(st, c) ? "R" : "")
+            + (GameEngine.HasBlocker(st, c) ? "B" : "")
+            + (GameEngine.HasDoubleAttack(st, c) ? "D" : "");
 
         private static string Trim(string s, int n) =>
             string.IsNullOrEmpty(s) ? "" : (s.Length <= n ? s : s.Substring(0, n) + "…");
