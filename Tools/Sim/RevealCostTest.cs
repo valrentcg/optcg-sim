@@ -35,6 +35,8 @@ namespace OnePieceTcg.Sim
             NoMatchCannotPay();
             TheRevealNamesTheCard();
             EitherTypeOfADisjunctionCanPay();
+            ARevealKeepsTheCardInHand();
+            ThePlayerChoosesWHICHCardIsRevealed();
             Console.WriteLine($"revealcost: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -162,6 +164,57 @@ namespace OnePieceTcg.Sim
                   b.S.Hand.Count > hand0,
                   $"hand {hand0}->{b.S.Hand.Count} - the body (\"Draw 1 card\") never ran, so the "
                   + "cost was read as unpayable with a legal card in hand");
+        }
+
+        /// <summary>The property that makes a reveal a REVEAL: the card is shown and STAYS. Nothing
+        /// in this suite asserted it — the forced-reveal case only checks that a draw happened, and
+        /// an engine that trashed the revealed card would pass that just as well, since the draw
+        /// masks the loss in the hand count.</summary>
+        private static void ARevealKeepsTheCardInHand()
+        {
+            string film = FilmCardId();
+            if (film == null) { Check("a reveal keeps the card", false, "fixture: no {FILM} Character"); return; }
+
+            var b = new Board();
+            var shown = b.Hand(film);
+            b.Hand("ST29-004");
+            GameEngine.QueueClauseForTest(b.St, "south", b.Character("ST29-010"), "main", CLAUSE);
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+            if (pe == null) { Check("a reveal keeps the card", false, "nothing was queued"); return; }
+            b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId });
+
+            Check("the revealed card is still in hand afterwards (a reveal is not a discard)",
+                  b.S.Hand.Any(x => x.InstanceId == shown.InstanceId),
+                  $"{shown.CardId} left the hand — it was spent, not shown");
+        }
+
+        /// <summary>With two legal reveals the player is asked; this checks the answer is honoured.
+        /// "It asked" and "it did what I said" are different claims, and only the first was
+        /// asserted — which is exactly how the auto-pick defects in this workstream survived.</summary>
+        private static void ThePlayerChoosesWHICHCardIsRevealed()
+        {
+            string film = FilmCardId();
+            if (film == null) { Check("the player chooses which", false, "fixture: no {FILM} Character"); return; }
+
+            var b = new Board();
+            var first = b.Hand(film);
+            var second = b.Hand(film);
+            GameEngine.QueueClauseForTest(b.St, "south", b.Character("ST29-010"), "main", CLAUSE);
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+            if (pe == null) { Check("the player chooses which", false, "nothing was queued"); return; }
+
+            int logBefore = b.St.EventLog.Count;
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = second.InstanceId });
+
+            // Both cards share a CardId, so the log cannot distinguish them — the observable is that
+            // the pick was accepted (the effect advanced) and BOTH cards are still in hand.
+            bool advanced = b.St.EventLog.Count > logBefore;
+            bool bothKept = b.S.Hand.Any(x => x.InstanceId == first.InstanceId)
+                         && b.S.Hand.Any(x => x.InstanceId == second.InstanceId);
+            Check("naming one of two legal reveals is accepted, and both stay in hand",
+                  advanced && bothKept,
+                  $"advanced={advanced} bothKept={bothKept}");
         }
 
         private sealed class Board

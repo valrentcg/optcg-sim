@@ -160,6 +160,24 @@ than saying "Use Effect".
   exactly N, and a cost ceiling spares a cost-5 body while still taking a cost-1 one.
 - **Bot** — every prompt added here is answerable by the AI; a hung solo game is the failure.
 
+## Audit of the fixes themselves
+
+Every engine change in this workstream was re-examined afterwards, against the specific claim it
+made rather than the feature area. Six audits:
+
+| change | result |
+|---|---|
+| `[Trigger]` cost deferral | **defect** — a card drawn by the body could pay the cost (8-4-1-3 pays costs first) |
+| "if they do not" branch | **defect** — never fired when the opponent COULDN'T pay; the retire sweep only sees Character targets |
+| self-disposal prompt | **defect** — broke PARTIAL payment; "trash 2" vs a 1-card hand paid nothing, where the auto-pick it replaced paid 1 |
+| counter-cost split | clean; every `GetCounterPower` call site is bot-only. Left a **latent trap** (now guarded) |
+| "up to N" ceiling | clean — but three of the four tests written for it passed with the fix REVERTED |
+| reveal-cost trio | clean; the property that a reveal KEEPS the card was untested and now is |
+
+Three of the eight engine defects in this workstream were introduced by its own fixes. That ratio
+is the argument for the audit pass, and for treating "the outcome is identical" as a test case
+rather than a justification.
+
 ## How much to trust the numbers below
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
