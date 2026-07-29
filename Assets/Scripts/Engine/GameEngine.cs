@@ -1040,7 +1040,17 @@ namespace OnePieceTcg.Engine
             return total;
         }
 
-        public static int GetCounterPower(CardInstance instance) => AutomatedCounterPower(instance);
+        /// <summary>What a card is WORTH as a counter — used by the bots to decide whether to play
+        /// one. Deliberately different from the flat boost the engine applies: a cost-prefixed
+        /// "[Counter] You may &lt;cost&gt;: ... +N power" grants nothing automatically (the player must
+        /// pay) but IS worth +N to a player able to pay, so it must not read as zero here.
+        ///
+        /// Splitting these two meanings is not cosmetic. Making the flat path return 0 — correct, and
+        /// the fix for counters granting their bonus free — also made the bot filter
+        /// (.Where(cp > 0)) discard all 15 of those cards: measured at 0 played across 44,143
+        /// counters in decks that contain them. A rules fix that silently removes cards from the
+        /// AI's repertoire is not finished.</summary>
+        public static int GetCounterPower(CardInstance instance) => CounterPowerCore(instance, includeCostPrefixed: true);
 
         /// <summary>
         /// Effective cost of a card: printed cost plus every CostDelta in the instance's
@@ -4914,6 +4924,9 @@ namespace OnePieceTcg.Engine
         }
 
         private static int AutomatedCounterPower(CardInstance instance)
+            => CounterPowerCore(instance, includeCostPrefixed: false);
+
+        private static int CounterPowerCore(CardInstance instance, bool includeCostPrefixed)
         {
             var def = GetCard(instance);
             // Characters/stages with a printed Counter value
@@ -4936,7 +4949,7 @@ namespace OnePieceTcg.Engine
             // and the clause was then blocked from queueing precisely because it contains "gains +N",
             // so the player was never asked at all. 13 counter Events share the shape.
             // Returning 0 here hands the clause to the queue path below, which asks and then applies.
-            if (System.Text.RegularExpressions.Regex.IsMatch(counterClause,
+            if (!includeCostPrefixed && System.Text.RegularExpressions.Regex.IsMatch(counterClause,
                     @"^\s*(?:\[[^\]]+\]\s*/?\s*)*You (?:may|can) [^:]+:",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 return 0;

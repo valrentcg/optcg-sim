@@ -77,16 +77,24 @@ using six META decks (starter decks contain none of the affected cards and repor
 |---|---|---|
 | optional effect queued for a decision | 45,688 | ~21 |
 | **"up to N" rescued from retirement** | **17,330** | **~8** |
-| counter cost-prefix queued | 0 | — |
+| counter cost-prefix queued | 0 -> 2,723 | see below |
 | reveal cost handed to the player | 0 | — |
 
 The second row is the one that matters. Before that fix, each of those 17,330 clauses was
 being **retired** — the card did nothing, with a rule citation in the log to make it look
 deliberate. Roughly eight times a game, in decks people actually play.
 
-The two zeros are honest gaps rather than good news: the bots in this harness never played a
-cost-prefixed [Counter] or a reveal cost in 2,160 games, so those fixes are correct by test
-but unmeasured in play. Do not read 0 as "does not happen" — read it as "this harness did
+**The first zero was a regression I had introduced.** Chasing it: the bots pick counters with
+`.Where(GetCounterPower(c) > 0)`, and making the flat path return 0 for a cost-prefixed counter —
+correct, and the whole point of fix #4 — made all 15 of those cards invisible to the AI. Measured
+at **0 played across 44,143 counters** in decks that contain them. `GetCounterPower` (what a card
+is WORTH to a player who can pay) is now separate from the flat boost the engine applies
+automatically (still 0). After the split: **2,723 played**. A rules fix that silently removes
+cards from the AI's repertoire is not finished, and no unit test would have noticed — the rules
+assertion passes either way.
+
+The remaining zero is an honest gap rather than good news: the bots never played a reveal cost in 2,160 games, so that fix is correct by test but
+unmeasured in play. Do not read 0 as "does not happen" — read it as "this harness did
 not reach it".
 
 Instrumentation was reverted; these numbers are a snapshot, not a standing check.

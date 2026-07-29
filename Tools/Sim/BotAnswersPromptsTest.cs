@@ -36,6 +36,7 @@ namespace OnePieceTcg.Sim
             BotAnswersCounterCost();
             BotAnswersLifeFaceUpCost();
             BotAnswersTheTriggerStep();
+            BotStillValuesACostPrefixedCounter();
             BotAlwaysHasAFallbackAnswer();
             Console.WriteLine($"botprompts: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -166,6 +167,40 @@ namespace OnePieceTcg.Sim
             Check("bot answers the [Trigger] step and the battle moves on",
                   after.Battle == null || after.Battle.Step != "trigger",
                   $"issued {cmd.Type} but the battle is still parked on the trigger step");
+        }
+
+        /// <summary>Regression guard for a fix that quietly broke the AI.
+        ///
+        /// Making AutomatedCounterPower return 0 for a cost-prefixed "[Counter] You may &lt;cost&gt;:
+        /// ... +N power" was right — the boost must be bought, not free. But the bots pick counters
+        /// with .Where(GetCounterPower(c) > 0), so all 15 such cards became invisible to them:
+        /// measured at 0 played across 44,143 counters in decks that contain them.
+        ///
+        /// The two meanings are now separate — what applies automatically (0) versus what the card
+        /// is worth to a player who can pay (+N). This pins that split, because a plain unit test of
+        /// the rules fix passes either way.</summary>
+        private static void BotStillValuesACostPrefixedCounter()
+        {
+            string id = null;
+            foreach (var d in CardData.Library.Values)
+            {
+                if (d == null || string.IsNullOrEmpty(d.Effect)) continue;
+                foreach (var line in d.Effect.Split((char)10))
+                {
+                    if (!line.TrimStart().StartsWith("[Counter]")) continue;
+                    var body = System.Text.RegularExpressions.Regex.Replace(line, @"^\s*(\[[^\]]+\]\s*/?\s*)+", "").Trim();
+                    if (System.Text.RegularExpressions.Regex.IsMatch(body, @"^You may [^:]+:.*\+\d",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase)) { id = d.Id; break; }
+                }
+                if (id != null) break;
+            }
+            if (id == null) { Check("bot still values a cost-prefixed counter", false, "no such card in the pool"); return; }
+
+            var inst = new CardInstance { InstanceId = "probe", CardId = id, Owner = "south", Zone = "hand" };
+            Check("a cost-prefixed [Counter] is still WORTH something to the bot",
+                  GameEngine.GetCounterPower(inst) > 0,
+                  $"GetCounterPower({id}) = {GameEngine.GetCounterPower(inst)} — at 0 the bot's "
+                  + "counter filter discards it and the card is never played");
         }
 
         /// <summary>What actually guarantees the bot cannot hang on these prompts.
