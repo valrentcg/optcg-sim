@@ -108,20 +108,10 @@ namespace OnePieceTcg.Sim
 
         /// <summary>The engine marks cost payment two ways: "(cost)" on auto-paid components, and a
         /// "cost:" prefix from the click-driven pick path.</summary>
-        private static bool IsPayment(string m) =>
-            m.IndexOf("(cost)", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf(" cost: ", StringComparison.OrdinalIgnoreCase) >= 0;
+        private static bool IsPayment(string m) => SweepText.IsPaymentLog(m);
 
         /// <summary>Bookkeeping and refusals - neither payment nor outcome.</summary>
-        private static bool IsNoise(string m) =>
-            m.IndexOf("is pending", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("not carried out", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("effect skipped", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("cost cannot be paid", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("cannot pay the cost", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("Unknown condition", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("Click ", StringComparison.OrdinalIgnoreCase) >= 0;
+        private static bool IsNoise(string m) => SweepText.IsBookkeepingLog(m);
 
         private static string Trim(string s, int n) =>
             string.IsNullOrEmpty(s) ? "" : (s.Length <= n ? s : s.Substring(0, n - 1) + "…");

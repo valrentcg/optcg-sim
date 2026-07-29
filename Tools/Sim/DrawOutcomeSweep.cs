@@ -90,9 +90,7 @@ namespace OnePieceTcg.Sim
                         // " cost: " prefix from the click-driven pick path. Checking only the first
                         // classified 19 of 24 as unpayable when they had in fact been paid by a pick,
                         // which is the same two-forms detail PaidForNothingSweep already handles.
-                        bool paid = b.St.EventLog.Skip(logBefore).Any(l =>
-                            (l.Message ?? "").IndexOf("(cost)", StringComparison.OrdinalIgnoreCase) >= 0
-                            || (l.Message ?? "").IndexOf(" cost: ", StringComparison.OrdinalIgnoreCase) >= 0);
+                        bool paid = b.St.EventLog.Skip(logBefore).Any(l => SweepText.IsPaymentLog(l.Message));
                         if (!paid) { neverPaid++; continue; }
 
                         int got = b.S.Hand.Count - hand0;

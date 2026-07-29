@@ -128,15 +128,7 @@ namespace OnePieceTcg.Sim
             finally { GameEngine.AuditDisableRetireSweep = false; }
         }
 
-        private static bool IsNoise(string m) =>
-            m.IndexOf("is pending", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("not carried out", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("effect skipped", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("cost cannot be paid", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("cannot pay the cost", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("Unknown condition", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) >= 0
-            || m.IndexOf("Click ", StringComparison.OrdinalIgnoreCase) >= 0;
+        private static bool IsNoise(string m) => SweepText.IsBookkeepingLog(m);
 
         private static string Trim(string s, int n) =>
             string.IsNullOrEmpty(s) ? "" : (s.Length <= n ? s : s.Substring(0, n - 1) + "…");

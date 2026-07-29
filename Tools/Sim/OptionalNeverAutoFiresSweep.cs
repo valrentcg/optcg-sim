@@ -41,7 +41,7 @@ namespace OnePieceTcg.Sim
                 {
                     if (string.IsNullOrWhiteSpace(raw)) continue;
                     // Parenthesised text glosses a cost symbol; it is not a decision.
-                    var speakable = Regex.Replace(raw, @"\([^)]*\)", " ");
+                    var speakable = SweepText.WithoutReminderText(raw);
                     if (!Regex.IsMatch(speakable, @"\byou may\b", RegexOptions.IgnoreCase)) continue;
                     // Reactive "When ..." abilities are dispatched separately and never queued as a
                     // prompt; forcing one through this path invents a question that never existed.
