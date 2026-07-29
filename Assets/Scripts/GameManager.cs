@@ -9414,9 +9414,39 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         else
         {
-            AddButton(body, "Use Effect", () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
+            AddButton(body, EffectUseLabel(effect), () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }));
             AddButton(body, "Skip", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional);
         }
+    }
+
+    /// <summary>
+    /// "Use Effect" tells the player nothing about what they are agreeing to, which matters most on
+    /// exactly the cards that need the button: "You may &lt;cost&gt;: &lt;body&gt;" asks you to PAY
+    /// something, and the payment is the part worth naming. Label the button with the cost itself —
+    /// "Turn 1 card from the top of your Life cards face-up" — so the decision is readable without
+    /// parsing the effect text above it.
+    ///
+    /// Derived from the clause text, so it covers every card with the shape rather than a list of
+    /// card IDs. Falls back to the plain label when there is no cost prefix to name.
+    /// </summary>
+    private string EffectUseLabel(PendingEffect effect)
+    {
+        string text = effect?.Text ?? "";
+        // Queued text keeps its timing tags ("[On Play] You may ..."), so strip them before matching.
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(?:\[[^\]]+\]\s*/?\s*)+", "");
+        var m = System.Text.RegularExpressions.Regex.Match(
+            text, @"^You (?:may|can) (?<cost>[^:]{2,90}):",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (!m.Success) return "Use Effect";
+
+        string cost = m.Groups["cost"].Value.Trim();
+        if (cost.Length == 0) return "Use Effect";
+        // Sentence case: the clause reads "you may rest this Character", and only the leading word
+        // needs lifting — upper-casing more would wreck "{Fish-Man}" and "[Kaido]".
+        cost = char.ToUpperInvariant(cost[0]) + cost.Substring(1);
+        const int max = 58;   // keeps the bubble on one line at the panel's width
+        if (cost.Length > max) cost = cost.Substring(0, max - 1).TrimEnd() + "…";
+        return cost;
     }
 
     // True if any card in play/hand/trash is a legal target for the effect's CURRENT clause.

@@ -137,8 +137,12 @@ switch (mode)
     case "stallsweep":
         return OnePieceTcg.Sim.SilentStallSweep.Run();
 
+    case "costresolvesweep":
+        return OnePieceTcg.Sim.CostPrefixResolveSweep.Run();
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "playerchoice":
+        return OnePieceTcg.Sim.PlayerChoiceTest.Run();
     case "lifemechanics":
         return OnePieceTcg.Sim.LifeMechanicsTest.Run();
     case "lifefaceup":
