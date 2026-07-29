@@ -8810,6 +8810,20 @@ namespace OnePieceTcg.Engine
                 MoveToTrash(state, victimSeat, instanceId, isKo: true, byBattleKo: false);
         }
 
+        /// <summary>Test seam for the ASKED form. The plain overload above omits promptAs, so a
+        /// replacement applies itself silently — fine for checking the outcome, useless for checking
+        /// that the player got a say. Every real K.O. call site passes promptAs, so tests that want
+        /// the prompt → Use/Skip → outcome sequence need this one or they are exercising a path the
+        /// game never takes.</summary>
+        public static void AuditKoByEffectAsking(GameState state, string victimSeat, string instanceId)
+        {
+            var victim = FindAnyInPlay(state, instanceId, out _);
+            if (victim == null) return;
+            if (!TryRemovalReplacement(state, victimSeat, victim, isBattleKo: false,
+                                       promptAs: DeferredRemovalKind.Ko))
+                MoveToTrash(state, victimSeat, instanceId, isKo: true, byBattleKo: false);
+        }
+
         public static bool AuditCostCardMatches(string costText, string cardId)
             => CostCardMatches(costText, CardData.GetCard(cardId));
 

@@ -86,7 +86,7 @@ namespace OnePieceTcg.Sim
             bad += Drive("[Main]", mainTag, PlayFromHand);
             bad += Drive("[Blocker]", blocker, BlockAnAttack);
             bad += Drive("[Counter]", counter, CounterAnAttack);
-            bad += Drive("[Opponent's Turn]", oppTurn, BeAttacked);
+            bad += Drive("[Opponent's Turn]", oppTurn, KoDuringOpponentsTurn);
 
             Console.WriteLine();
             Console.WriteLine(bad == 0
@@ -160,15 +160,15 @@ namespace OnePieceTcg.Sim
             Segment("circled-DON cost", CircledDon);
             Segment("no circled DON", m => !CircledDon(m));
 
-            if (Environment.GetEnvironmentVariable("OPTCG_DUMP") == label)
-                foreach (var m in misses)
-                    Console.WriteLine($"      MISS {m.Id,-10} {Trim(m.Name, 16),-16} {Trim(m.Line, 120)}");
+            // Print EVERY miss, tagged, not just the unexplained ones. The 13 broken counter Events
+            // were all tagged "explained" by a classifier that matched their own "+3000 power" as if
+            // it were a target precondition; they only became visible when the full list was dumped.
+            // A heuristic tag is a hint to read past, never a filter to hide behind.
             var unexplained = misses.Where(m => !Explained(m)).ToList();
-            Console.WriteLine($"    of the misses, explained by an unmet precondition : {misses.Count - unexplained.Count}");
-            Console.WriteLine($"    of the misses, UNEXPLAINED                        : {unexplained.Count}");
-            foreach (var m in unexplained.Take(12))
-                Console.WriteLine($"      ?? {m.Id,-10} {Trim(m.Name, 16),-16} {Trim(m.Line, 96)}");
-            if (unexplained.Count > 10) Console.WriteLine($"      ... and {unexplained.Count - 10} more unexplained");
+            Console.WriteLine($"    misses: {misses.Count - unexplained.Count} look precondition-gated, {unexplained.Count} unexplained");
+            foreach (var m in misses.Take(12))
+                Console.WriteLine($"      {(Explained(m) ? "gated" : "  ?? ")} {m.Id,-10} {Trim(m.Name, 16),-16} {Trim(m.Line, 104)}");
+            if (misses.Count > 12) Console.WriteLine($"      ... and {misses.Count - 12} more");
             return (usable > 0 && offered == 0) ? 1 : 0;
         }
 
@@ -185,13 +185,8 @@ namespace OnePieceTcg.Sim
             // If it never reached the field the fixture failed, not the dispatch - do not count it.
             bool landed = b.S.CharacterArea.Any(x => x != null && x.CardId == c.Id)
                        || (b.S.Stage != null && b.S.Stage.CardId == c.Id);
-            if (Environment.GetEnvironmentVariable("OPTCG_PROBE") == c.Id)
-            {
-                Console.WriteLine($"      [probe {c.Id}] landed={landed} offered={b.Offered()} live={b.Live(logBefore)} pending={b.St.PendingEffects.Count} logBefore={logBefore} total={b.St.EventLog.Count}");
-                foreach (var l in b.St.EventLog.Skip(logBefore)) Console.WriteLine("      [probe log] " + l.Message);
-            }
             if (!landed) return true;
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id, " plays ");
         }
 
         /// <summary>[Activate: Main]: the card is already on the field; activate it.</summary>
@@ -212,7 +207,7 @@ namespace OnePieceTcg.Sim
                 foreach (var l in b.St.EventLog.Skip(before)) Console.WriteLine("      [probe log] " + l.Message);
                 if (b.St.EventLog.Count == before) Console.WriteLine("      [probe log] (the command produced NO log at all)");
             }
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id);
         }
 
         /// <summary>[On K.O.]: the card is on the field and gets K.O.'d by an effect - the EB03-053
@@ -225,7 +220,7 @@ namespace OnePieceTcg.Sim
             if (src == null) return true;
             int logBefore = b.St.EventLog.Count;
             GameEngine.AuditKoByEffect(b.St, "south", src.InstanceId);
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id, " goes to trash", " is K.O.'d");
         }
 
         /// <summary>[When Attacking]: the card is on the field and swings at the opponent's Leader.</summary>
@@ -241,7 +236,7 @@ namespace OnePieceTcg.Sim
             int logBefore = b.St.EventLog.Count;
             b.Apply(new GameCommand
             { Type = "declareAttack", Seat = "south", Attacker = src.InstanceId, Target = b.N.Leader?.InstanceId });
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id, " attacks ");
         }
 
         /// <summary>[On Your Opponent's Attack]: the card sits on OUR field while north swings at our
@@ -263,7 +258,7 @@ namespace OnePieceTcg.Sim
             int logBefore = b.St.EventLog.Count;
             b.Apply(new GameCommand
             { Type = "declareAttack", Seat = "north", Attacker = attacker.InstanceId, Target = b.S.Leader?.InstanceId });
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id, " attacks ", "Blocker");
         }
 
         /// <summary>[End of Your Turn]: end the turn with the card on the field.</summary>
@@ -275,7 +270,7 @@ namespace OnePieceTcg.Sim
             else if (b.Character("south", c.Id) == null) return true;
             int logBefore = b.St.EventLog.Count;
             b.Apply(new GameCommand { Type = "endTurn", Seat = "south" });
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id, "ends their turn", "draws a card");
         }
 
         /// <summary>[Blocker]: north declares an attack on our Leader and we interpose the card.</summary>
@@ -294,7 +289,7 @@ namespace OnePieceTcg.Sim
             { Type = "declareAttack", Seat = "north", Attacker = attacker.InstanceId, Target = b.S.Leader?.InstanceId });
             int logBefore = b.St.EventLog.Count;
             b.Apply(new GameCommand { Type = "blockAttack", Seat = "south", Blocker = guard.InstanceId });
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id, " blocks ");
         }
 
         /// <summary>[Counter]: the card is in HAND during north's attack, played at the counter step.</summary>
@@ -311,12 +306,39 @@ namespace OnePieceTcg.Sim
             int logBefore = b.St.EventLog.Count;
             b.Apply(new GameCommand
             { Type = "counterWithCard", Seat = "south", InstanceId = card.InstanceId, Target = b.S.Leader?.InstanceId });
-            if (Environment.GetEnvironmentVariable("OPTCG_PROBE") == c.Id)
-            {
-                Console.WriteLine($"      [probe {c.Id}] live={b.Live(logBefore)} pending={b.St.PendingEffects.Count} hand={b.S.Hand.Count} trash={b.S.Trash.Count}");
-                foreach (var l in b.St.EventLog.Skip(logBefore)) Console.WriteLine("      [probe log] " + l.Message);
-            }
-            return b.Live(logBefore);
+            return b.Live(logBefore, c.Id, " counters with ");
+        }
+
+        /// <summary>[Opponent's Turn]: driving this with an ATTACK reported 0% and looked like a dead
+        /// dispatch path. It is not - the clauses key off a K.O. or a removal, not off being attacked
+        /// ("[On K.O.] ...", "If your rested Character would be K.O.'d", "When this Character is K.O.'d
+        /// by your opponent's ..."). The stimulus has to match the wording or the number measures the
+        /// driver rather than the engine.</summary>
+        private static bool KoDuringOpponentsTurn(CardDefLite c)
+        {
+            if (!c.Type.Equals("character", StringComparison.OrdinalIgnoreCase)
+                && !c.Type.Equals("stage", StringComparison.OrdinalIgnoreCase)) return true;
+            // These clauses split on WHOSE K.O. matters: "[On K.O.] ..." and "when this Character is
+            // K.O.'d" need the card ITSELF removed, while "if your rested Character would be K.O.'d"
+            // needs a DIFFERENT body to die. Picking one stimulus measured the driver, not the engine
+            // - it read 0% with an attack and 11% with the wrong victim. Try both and accept either.
+            return KoStimulus(c, killSelf: true) || KoStimulus(c, killSelf: false);
+        }
+
+        private static bool KoStimulus(CardDefLite c, bool killSelf)
+        {
+            var b = new Board();
+            CardInstance src = c.Type.Equals("stage", StringComparison.OrdinalIgnoreCase)
+                ? b.Stage("south", c.Id) : b.Character("south", c.Id);
+            if (src == null) return false;
+            var other = b.Character("south", "ST29-009");
+            if (other != null) other.Rested = true;      // satisfies "your RESTED Character"
+            b.St.ActiveSeat = "north";                    // it is the opponent's turn
+            var target = killSelf ? src : (other ?? src);
+            if (target == null) return false;
+            int logBefore = b.St.EventLog.Count;
+            GameEngine.AuditKoByEffect(b.St, "south", target.InstanceId);
+            return b.Live(logBefore, c.Id, " goes to trash", " is K.O.'d");
         }
 
         private static string Trim(string s, int n) =>
@@ -372,27 +394,30 @@ namespace OnePieceTcg.Sim
             /// Scoring that as "never offered" put the timing at 57% when EB03-028 Yu had drawn its 2
             /// cards, OP01-013 Sanji had taken its Life card and gained +2000, and EB01-016 Bingoh had
             /// rested itself before correctly finding no target.</summary>
-            public bool Live(int logBefore)
+            /// <summary>Was the ability LIVE - the player was asked, or it went ahead and acted?
+            ///
+            /// Two things keep this honest. A log line only counts if it NAMES THE SOURCE CARD, which
+            /// discards the turn-transition noise endTurn produces and anything the opponent did. And
+            /// each driver passes the ECHO its own command emits - "X attacks Y", "X goes to trash",
+            /// "South counters with X" - because the engine narrates those whether or not the card's
+            /// effect ever fires. Counting the echo is what hid 13 broken counter Events behind a
+            /// reported 100%.</summary>
+            public bool Live(int logBefore, string cardId, params string[] echoes)
             {
                 if (Offered()) return true;
                 foreach (var l in St.EventLog.Skip(logBefore))
                 {
                     var m = l.Message ?? "";
-                    // "is pending" is the queue notice, not an outcome. "plays X" is the command
-                    // itself and happens whether or not the ability ever fires - counting it made
-                    // every [On Play] card score LIVE for free. And the two retirement notices are
-                    // the exact failure being hunted: pre-fix Jinbe logged "no legal target ... not
-                    // carried out" and would have passed a looser check.
+                    if (m.IndexOf("[" + cardId + "]", StringComparison.OrdinalIgnoreCase) < 0) continue;
                     if (m.IndexOf("is pending", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     if (m.IndexOf("not carried out", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     if (m.IndexOf("effect skipped", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                    if (m.IndexOf(" plays ", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                    // Command echoes, same reasoning as "plays": the engine narrates that the
-                    // counter/block was declared whether or not the card's EFFECT ever queued.
-                    // Counting them would make [Counter] read 100% for free.
-                    if (m.IndexOf(" counters with ", StringComparison.OrdinalIgnoreCase) >= 0) continue;
-                    if (m.IndexOf(" blocks ", StringComparison.OrdinalIgnoreCase) >= 0) continue;   // NOT a regex: an earlier "\b...\b" was written with literal backspace bytes and never matched
+                    if (m.IndexOf("cost cannot be paid", StringComparison.OrdinalIgnoreCase) >= 0) continue;
                     if (m.IndexOf("acknowledged for manual resolution", StringComparison.OrdinalIgnoreCase) >= 0) continue;
+                    bool isEcho = false;
+                    foreach (var e in echoes)
+                        if (m.IndexOf(e, StringComparison.OrdinalIgnoreCase) >= 0) { isEcho = true; break; }
+                    if (isEcho) continue;
                     return true;
                 }
                 return false;
