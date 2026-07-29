@@ -83,6 +83,10 @@ namespace OnePieceTcg.Sim
             // The cards the brief names, driven individually. Class fixes are proven by the cards
             // they touched; the ones they did NOT touch are where the next bug lives.
             ("namedcards",            NamedCardsTest.Run),
+            // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
+            // — they all enumerate `effect`. This is also where the brief's two halves meet: a
+            // [Trigger] only fires when a Life card is dealt as damage.
+            ("triggercost",           TriggerCostTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

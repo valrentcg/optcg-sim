@@ -17684,11 +17684,28 @@ namespace OnePieceTcg.Engine
                     if (openSlot >= 0)
                     {
                         if (trigDonMinus > 0) PayDonMinus(state, defenderSeat, trigDonMinus);
+                        // "[Trigger] You may trash N card(s) from your hand: Play this card." — 44
+                        // cards. Pressing the Trigger answers WHETHER; it never answered WHICH, and
+                        // this took Hand[0] outright. Same defect as the protection discard and the
+                        // 25-card self-disposal class, in a population no pool sweep can see: these
+                        // clauses live in the `trigger` DATA FIELD, and every sweep here enumerates
+                        // `effect`.
+                        //
+                        // Ordering is deliberate. Payability is checked up front, so the play is
+                        // already guaranteed and can happen now; the discard is then queued as a
+                        // MANDATORY pick, which PassEffect enforces with a deterministic fallback.
+                        // Outcome identical, choice real — and the battle's trigger step is never
+                        // left waiting on a pick to decide whether the card arrives.
+                        bool trigTrashDeferred = false;
                         if (trigTrashN > 0)
                         {
-                            for (int t = 0; t < trigTrashN && defender.Hand.Count > 0; t++)
-                            { var tc = defender.Hand[0]; defender.Hand.RemoveAt(0); tc.Zone = "trash"; defender.Trash.Add(tc); }
-                            Log(state, defenderSeat, $"{defender.Name} trashes {trigTrashN} card(s) from hand (Trigger cost).");
+                            if (defender.Hand.Count >= trigTrashN) trigTrashDeferred = true;
+                            else
+                            {
+                                for (int t = 0; t < trigTrashN && defender.Hand.Count > 0; t++)
+                                { var tc = defender.Hand[0]; defender.Hand.RemoveAt(0); tc.Zone = "trash"; defender.Trash.Add(tc); }
+                                Log(state, defenderSeat, $"{defender.Name} trashes {trigTrashN} card(s) from hand (Trigger cost).");
+                            }
                         }
                         if (trigLifeN > 0)
                         {
@@ -17696,6 +17713,10 @@ namespace OnePieceTcg.Engine
                             { var lc = defender.Life[defender.Life.Count - 1]; defender.Life.RemoveAt(defender.Life.Count - 1); lc.Zone = "trash"; lc.FaceUp = true; defender.Trash.Add(lc); }
                             Log(state, defenderSeat, $"{defender.Name} trashes {trigLifeN} Life card(s) (Trigger cost).");
                         }
+                        if (trigTrashDeferred)
+                            QueueEffect(state, defenderSeat, cardFromLife, "trigger",
+                                        $"Trash {trigTrashN} card{(trigTrashN == 1 ? "" : "s")} from your hand.",
+                                        false, EffectScope.Instant, EffectTargetZone.Hand);
                         cardFromLife.Zone = "character";
                         ResetOncePerTurnIdentity(state, cardFromLife);
                         cardFromLife.PlayedOnTurn = state.TurnNumber;

@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**52 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**53 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -35,6 +35,7 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 12 | "Return N of your **active** DON!! cards to your DON!! deck" existed only as a *cost*; as an effect body it resolved to nothing | same 2 cards + any future body use |
 | 13 | **"Your opponent chooses 1 card from your hand" auto-picked** `Hand[Count-1]` and logged "opponent chose …" — the engine deciding on a player's behalf, same shape as #10 | OP01-038 |
 | 14 | **The opponent's own discards were auto-picked too** — "your opponent trashes 1 card from their hand" / "… places 1 card from their hand at the bottom of their deck" took `Hand[Count-1]` at 5 sites. The controller cannot legally choose (3-4-3: you cannot view the other player's hand), so the owner must — and a discard is only ever as bad as the card you give up | **25 cards** |
+| 16 | **`[Trigger]` costs auto-trashed `Hand[0]`** — "[Trigger] You may trash 1 card from your hand: Play this card." The Trigger press answers *whether*; nothing ever asked *which*. Invisible to every sweep here, which all enumerate `effect` while these clauses live in the separate `trigger` field | **44 cards** |
 | 15 | The place-at-deck-bottom half had **no skip enforcement** — once it became a prompt, declining it was a free escape (found by testing the fix, not the code) | 8 of those 25 |
 
 Also: `"You may"` protections now prompt unconditionally (a decision, not a setting — the
@@ -106,6 +107,12 @@ than saying "Use Effect".
   (give your own Leader -5000), a VARIABLE cost ("1 or more DON!!"), a keyword-filtered cost
   (trash a card *with a [Trigger]*, asserted in BOTH directions), a compound rest cost, and
   Kalgara's deck-look. All six pass.
+- **`[Trigger]` costs** — `triggercost`: 42 "you may" clauses live in the `trigger` DATA FIELD,
+  which **no sweep here reads** — all five enumerate `def.Effect` (checked, not assumed). This is
+  where the brief's two halves meet: a [Trigger] fires only when a Life card is dealt as damage, so
+  each is a "you may" decision taken *during* the life mechanics. Six cases covering both answers
+  to the Trigger itself and both answers to the cost pick, incl. that the card the player NAMES is
+  the one trashed.
 - **Dispatch** — `timingsweep`: 10 timings, ~600 clauses driven on their *real* trigger.
 - **Retire predicate** — `retiresweep`: diffs it against itself (retirement on vs off).
 - **Seat** — `wrongseat`: 20 commands incl. every battle step; none accept the wrong seat.
@@ -136,7 +143,7 @@ than saying "Use Effect".
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 52 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 53 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
