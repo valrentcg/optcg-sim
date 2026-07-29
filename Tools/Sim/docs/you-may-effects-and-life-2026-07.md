@@ -230,6 +230,13 @@ branches that never consult the strict spelling, and both the capped and exact w
 correctly. `zeropowerko` is the test that refuted it. Six call sites were left alone rather than
 "fixed" on the strength of a plausible reading of the source.
 
+All three divergent pairs the intra-engine literal diff surfaced are now resolved: the
+slash-combined tag stripper was a **live defect** (fixed, 39 cards); the `(\d{1,5})` vs
+`(\d{3,5})` power cap and the `includes`/`including` type matcher are **benign** — the first
+unreachable, the second grammatically justified (filters say "including", conditions say
+"includes"). Neither was "fixed". Both now have the assumption they rest on asserted, so the day a
+set breaks it, the gate says so instead of a card quietly going dead.
+
 **A passing test is not evidence until it has been seen to fail.** The `uptonrider` suite is the
 cleanest example: three cases about an empty board all passed, and all three passed *identically*
 with the fix reverted — because at ZERO candidates the clause retires either way. They asserted

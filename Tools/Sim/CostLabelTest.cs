@@ -40,6 +40,7 @@ namespace OnePieceTcg.Sim
             CircledDonCostsParse();
             DonRestCostsParseIncludingCompound();
             SlashCombinedTagsAreStripped();
+            TypeWordingStaysGrammatical();
             Console.WriteLine($"costlabel: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -333,6 +334,43 @@ namespace OnePieceTcg.Sim
             Check("a slash-tagged clause still routes to the Use button",
                   GameEngine.IsUnpaidCostPrefix(new PendingEffect { Text = slashed, SelectionsRemaining = 0 }),
                   "the slash printing would show a board prompt with nothing clickable");
+        }
+
+        /// <summary>A data-shape assumption the engine silently rests on.
+        ///
+        /// The type matcher is spelled two ways: `type includ(?:es|ing)` at 4 sites and the narrower
+        /// `type including` at 7. That looks like a drift waiting to happen — the narrow sites would
+        /// miss the 41 cards printing "includes" — but the two wordings are GRAMMATICALLY distinct
+        /// in the pool, not variants:
+        ///
+        ///   "...with a type INCLUDING X"      a filter on a card   (129 occurrences)
+        ///   "...your Leader's type INCLUDES X" a condition          (70 occurrences)
+        ///
+        /// The narrow sites are filter sites, so they are correct today. Nothing was changed on the
+        /// strength of the divergence. What is asserted is the assumption itself: the day a set
+        /// prints "Character with a type includes X", those 7 sites go blind and this says so.</summary>
+        private static void TypeWordingStaysGrammatical()
+        {
+            int filterWithIncludes = 0, conditionWithIncluding = 0, total = 0;
+            foreach (var def in CardData.Library.Values.Where(d => d != null && !string.IsNullOrEmpty(d.Effect))
+                                                       .GroupBy(d => d.Id).Select(g => g.First()))
+            {
+                foreach (System.Text.RegularExpressions.Match m in
+                         System.Text.RegularExpressions.Regex.Matches(def.Effect, "([A-Za-z']+) type includ(es|ing)"))
+                {
+                    total++;
+                    bool possessive = m.Groups[1].Value.EndsWith("'s", StringComparison.Ordinal);
+                    bool isIncludes = m.Groups[2].Value == "es";
+                    // A filter ("a type including") is never possessive; a condition always is.
+                    if (!possessive && isIncludes) filterWithIncludes++;
+                    if (possessive && !isIncludes) conditionWithIncluding++;
+                }
+            }
+            Check($"the type wording stays grammatical ({total} occurrences)",
+                  total >= 100 && filterWithIncludes == 0 && conditionWithIncluding == 0,
+                  $"found={total} filtersSaying\"includes\"={filterWithIncludes} "
+                  + $"conditionsSaying\"including\"={conditionWithIncluding} — the 7 narrow "
+                  + "`type including` sites only cover the filter form");
         }
 
         private static string Trim(string s, int n) =>
