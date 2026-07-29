@@ -104,6 +104,10 @@ namespace OnePieceTcg.Sim
             // the face-up COST actually flips, and that the "if you have a face-up Life card"
             // condition reads the same flag.
             ("lifeflip",              LifeFlipTest.Run),
+
+            // OP10-088 Nami: the only brief-named card inside usevsskip's inert residual. Compound
+            // + alternative + type-filtered cost, driven from a board that CAN pay it.
+            ("altcost",               AlternativeCostTest.Run),
             // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.

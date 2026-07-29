@@ -106,7 +106,11 @@ namespace OnePieceTcg.Sim
 
             Console.WriteLine($"  drove {driven} cost-prefixed clauses; {differed} changed the board when USED");
             Console.WriteLine($"  Use and Skip indistinguishable: {identical.Count}");
-            foreach (var s in identical.Take(6)) Console.WriteLine("    " + s);
+            // The residual is a HELD LINE of 75, so its membership is the thing worth inspecting —
+            // "is card X hiding in here?" is the question this sweep gets asked. Six rows cannot
+            // answer it; OPT_DIAG=1 prints all of them.
+            bool listAll = Environment.GetEnvironmentVariable("OPT_DIAG") == "1";
+            foreach (var s in identical.Take(listAll ? int.MaxValue : 6)) Console.WriteLine("    " + s);
             Console.WriteLine($"  ...of those, board MOVED anyway (effect fired regardless of the answer): {firedRegardless.Count}");
             foreach (var s in firedRegardless.Take(10)) Console.WriteLine("    " + s);
 
