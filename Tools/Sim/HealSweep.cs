@@ -116,10 +116,20 @@ namespace OnePieceTcg.Sim
             // sweep cannot synthesise — stated rather than implied, since "63 shapes" in a summary
             // would read as 63 verified.
             Console.WriteLine($"    of those: {faceUpWanted} want face-UP, {healed - faceUpWanted} want face-DOWN");
-            // The remainder need a different DRIVE PATH, not a richer fixture: DON!!-N payments,
-            // [DON!! xN] gates, and reactive timings ([On K.O.], [Counter], [Trigger]) which fire
-            // from battle rather than from a queued main clause. Those populations belong to
-            // triggerfield and timingsweep; this is a boundary, not an unclosed gap.
+            // The remainder need a different DRIVE PATH, not a richer fixture — and the reason is
+            // now established rather than asserted. This sweep force-queues a clause
+            // (QueueClauseForTest), which enters BELOW the layer those gates live in:
+            //
+            //   [DON!! xN]         an OFFER-layer gate. Every ParseDonThreshold call site decides
+            //                      whether an ability is offered or an aura applies; none sits in
+            //                      the resolve path. Force-queuing therefore bypasses it BY DESIGN,
+            //                      so no probe built on this fixture can test it — a probe I wrote
+            //                      and deleted, because it "failed" against a correct engine.
+            //   reactive timings   [On K.O.] / [Counter] / [Trigger] fire from battle, not from a
+            //                      queued main clause.
+            //
+            // Both belong to the offer-path suites (triggerfield, timingsweep). The DON!!-N PAYMENT
+            // population was the one that could be tested here, and now is — see DonCostHealProbe.
             Console.WriteLine($"    {shapes.Count - healed} need another drive path (DON!! payments, "
                               + "[DON!! xN] gates, reactive timings) — see triggerfield / timingsweep");
             Report("wrong FACING (face-up leaks a card the opponent may not see)", wrongFacing);
