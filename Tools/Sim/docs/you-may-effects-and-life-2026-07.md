@@ -35,6 +35,7 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 12 | "Return N of your **active** DON!! cards to your DON!! deck" existed only as a *cost*; as an effect body it resolved to nothing | same 2 cards + any future body use |
 | 13 | **"Your opponent chooses 1 card from your hand" auto-picked** `Hand[Count-1]` and logged "opponent chose …" — the engine deciding on a player's behalf, same shape as #10 | OP01-038 |
 | 14 | **The opponent's own discards were auto-picked too** — "your opponent trashes 1 card from their hand" / "… places 1 card from their hand at the bottom of their deck" took `Hand[Count-1]` at 5 sites. The controller cannot legally choose (3-4-3: you cannot view the other player's hand), so the owner must — and a discard is only ever as bad as the card you give up | **25 cards** |
+| 21 | **`OP01-031` says "You CAN trash 1 …", not "may"** — the panel's routing predicate matched only `You may`, so the pool's lone "You can \<cost\>:" card showed a board prompt with nothing clickable. Defect #1's exact symptom, surviving in one card because the LABEL half of the feature accepted "can" and the ROUTING half did not | OP01-031 |
 | 20 | **My own self-disposal fix broke PARTIAL payment** — turning it into a prompt meant "trash 2" against a 1-card hand queued an unpayable pick, which `HandDiscardCannotBePaid` retired outright. The opponent paid NOTHING, where the auto-pick it replaced had correctly taken the one card (rule 8-4-4-1: choose as many as you can) | the 17 trash-from-hand cards |
 | 19 | **My own "if they do not" fix never fired when the opponent COULDN'T pay** — I argued the retire sweep would catch it. It only detects missing CHARACTER targets, so a clause wanting a Life card or DON!! is never unresolvable to it. The opponent held a prompt they could only Skip, and a controller who had rested a Character got nothing unless they pressed it | OP05-099, OP15-059 |
 | 17 | **My own trigger fix let a DRAWN card pay the cost** — it plays the card then queues the discard, so "Play this card. Then, draw 1 card." put a fresh card in hand before the pick. Rule 8-4-1-3 pays costs first. Fixed with an eligibility snapshot enforced in BOTH the glow filter and the resolver | OP08-104 + the top-or-bottom-Life bodies |
@@ -49,6 +50,11 @@ could call it — so a feature asked for by name shipped untested. `costlabel` n
 the body, no label exceeds the bubble width, and none leaks a timing tag. Controls: disabling
 truncation reports 98 over-width; a naive tag-stripper drops the 4 cards using slash-combined tags
 (`[On Play]/[When Attacking]`) back to "Use Effect".
+
+`costlabel` also drives the panel's ROUTING predicate (`GameEngine.IsUnpaidCostPrefix`), moved out
+of GameManager for the same reason: an unpaid cost prefix must route to the Use button, not to a
+board prompt. That is the predicate behind defect #1, and inline in the UI its anchored `^You may`
+was dead code for every tagged clause. Driving it pool-wide immediately found `OP01-031`.
 
 Also: `"You may"` protections now prompt unconditionally (a decision, not a setting — the
 per-seat flag and its UI toggle were deleted), and the Use button **names the cost** rather

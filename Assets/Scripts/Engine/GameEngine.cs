@@ -1938,6 +1938,33 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
+        /// <summary>True while this effect's first interaction is PAYING a "You may &lt;cost&gt;:" prefix
+        /// rather than picking a target.
+        ///
+        /// This is the predicate behind the first defect fixed in this workstream. Routing the panel
+        /// on "does the effect have a legal target" instead offered Skip alone whenever the BODY
+        /// happened to have targets, leaving the player nothing to click — OP15-114 Wyper showed only
+        /// Skip because the opponent had Characters for its give-all half, and 512 clauses shared the
+        /// shape. It lives in the engine so it can be checked against the whole card pool; while it
+        /// was inline in the UI its anchored ^You-may was dead code for every tagged clause and
+        /// nothing noticed.</summary>
+        public static bool IsUnpaidCostPrefix(PendingEffect effect)
+        {
+            if (effect == null || effect.SelectionsRemaining > 0) return false;
+            // Queued text keeps its timing tags ("[On Play] You may turn 1 card ..."), possibly
+            // slash-combined ("[On Play]/[When Attacking]"), so an anchored ^You may never matches
+            // without stripping them first.
+            return System.Text.RegularExpressions.Regex.IsMatch(
+                effect.Text ?? "",
+                // "may" OR "can": OP01-031 is the pool's lone "You can <cost>:" and it routed to a
+                // board prompt with nothing clickable — defect #1's exact symptom, surviving in one
+                // card because the LABEL half of this feature accepted "can" and the ROUTING half
+                // did not. The two halves of one feature drifting is what this engine does; keep
+                // this alternation identical to DescribeCostPrefix's.
+                @"^(?:\[[^\]]+\]\s*/?\s*)*You (?:may|can) [^:]+:",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        }
+
         /// <summary>Name the COST a "You may &lt;cost&gt;: &lt;body&gt;" clause is asking the player to pay,
         /// or null when the clause has no cost prefix.
         ///

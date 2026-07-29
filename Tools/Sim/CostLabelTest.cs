@@ -34,6 +34,8 @@ namespace OnePieceTcg.Sim
             TheLabelIsTheCostNotTheBody();
             NoCostPrefixMeansNoLabel();
             TagsAreStrippedAndWidthIsRespected();
+            EveryCostPrefixRoutesToTheUseButton();
+            APaidOrTargetingStepDoesNotRouteToUse();
             Console.WriteLine($"costlabel: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
         }
@@ -145,6 +147,51 @@ namespace OnePieceTcg.Sim
             Check($"no label exceeds the bubble width or starts with a timing tag ({total} labels)",
                   overWidth == 0 && taggy == 0,
                   $"{overWidth} too long, {taggy} still carry a leading [tag]");
+        }
+
+        /// <summary>The routing predicate behind the FIRST defect fixed in this workstream: an unpaid
+        /// "You may &lt;cost&gt;:" clause must send the panel to the Use button, not to a board prompt.
+        /// Routing it the other way is what showed Wyper only a Skip button with nothing clickable,
+        /// across 512 clauses.
+        ///
+        /// Worth asserting pool-wide precisely because the failure was SILENT: the check was inline
+        /// in the UI with an anchored ^You-may that never matched a tagged clause, so it was dead
+        /// code and every one of these routed the wrong way.</summary>
+        private static void EveryCostPrefixRoutesToTheUseButton()
+        {
+            var wrong = new List<string>();
+            int total = 0;
+            foreach (var (id, clause) in CostPrefixClauses())
+            {
+                total++;
+                // A freshly queued effect: no selections made yet, which is the state the panel sees
+                // the moment the decision appears.
+                var pe = new PendingEffect { Text = clause, SelectionsRemaining = 0 };
+                if (!GameEngine.IsUnpaidCostPrefix(pe)) wrong.Add($"{id} :: {Trim(clause, 70)}");
+            }
+            Check($"every unpaid cost prefix routes to the Use button ({total} clauses)",
+                  wrong.Count == 0,
+                  $"{wrong.Count} would show a board prompt with nothing clickable: "
+                  + string.Join(" | ", wrong.Take(4)));
+        }
+
+        /// <summary>The other direction, which is what stops the predicate being "return true".
+        /// A clause with no cost prefix, and a cost-prefixed clause MID-PICK (selections already
+        /// outstanding), must both route to the board prompt instead.</summary>
+        private static void APaidOrTargetingStepDoesNotRouteToUse()
+        {
+            var plain = new PendingEffect
+            { Text = "[On Play] K.O. up to 1 of your opponent's Characters.", SelectionsRemaining = 0 };
+            var midPick = new PendingEffect
+            { Text = "[On Play] You may trash 1 card from your hand: Draw 2 cards.", SelectionsRemaining = 2 };
+
+            Check("a clause with no cost prefix does NOT route to Use",
+                  !GameEngine.IsUnpaidCostPrefix(plain),
+                  "a plain targeting clause was sent to the Use button, hiding its board prompt");
+            Check("a cost-prefixed clause MID-PICK does NOT route to Use",
+                  !GameEngine.IsUnpaidCostPrefix(midPick),
+                  "an effect with selections outstanding was sent back to Use, so the pick it is "
+                  + "waiting on would never be offered");
         }
 
         private static string Trim(string s, int n) =>

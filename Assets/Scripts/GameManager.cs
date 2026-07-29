@@ -9400,12 +9400,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // click — OP15-114 Wyper ("You may turn 1 card from the top of your Life cards face-up:
         // Give all of your opponent's Characters -2000") showed only Skip because the opponent
         // had Characters for the give-all half. The body does its own targeting on the next step.
-        bool unpaidCostPrefix = System.Text.RegularExpressions.Regex.IsMatch(
-            effect.Text ?? "",
-            // Queued text keeps its timing tags - "[On Play] You may turn 1 card..." - so an
-            // anchored ^You may never matched and this check was dead code. Skip any leading tags.
-            @"^(?:\[[^\]]+\]\s*/?\s*)*You may [^:]+:", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
-            && effect.SelectionsRemaining <= 0;
+        // The predicate moved to GameEngine.IsUnpaidCostPrefix so it can be checked against the
+        // whole card pool; inline here its anchored ^You-may was dead code for every tagged clause
+        // and nothing noticed. See the engine method for the Wyper case that motivated it.
+        bool unpaidCostPrefix = GameEngine.IsUnpaidCostPrefix(effect);
         if (!unpaidCostPrefix && (EffectHasValidTarget(effect) || donGive))
         {
             AddInfo(body, donGive ? "Click a rested DON!! to give to your Leader." : EffectTargetPrompt(effect));
