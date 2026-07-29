@@ -167,6 +167,8 @@ switch (mode)
         return OnePieceTcg.Sim.WrongSeatSweep.Run();
     case "promptabuse":
         return OnePieceTcg.Sim.PromptAbuseTest.Run();
+    case "costlabel":
+        return OnePieceTcg.Sim.CostLabelTest.Run();
     case "uptonrider":
         return OnePieceTcg.Sim.UpToNRiderTest.Run();
     case "triggerorder":

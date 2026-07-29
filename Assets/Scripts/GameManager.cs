@@ -9431,22 +9431,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     /// </summary>
     private string EffectUseLabel(PendingEffect effect)
     {
-        string text = effect?.Text ?? "";
-        // Queued text keeps its timing tags ("[On Play] You may ..."), so strip them before matching.
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"^\s*(?:\[[^\]]+\]\s*/?\s*)+", "");
-        var m = System.Text.RegularExpressions.Regex.Match(
-            text, @"^You (?:may|can) (?<cost>[^:]{2,90}):",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (!m.Success) return "Use Effect";
-
-        string cost = m.Groups["cost"].Value.Trim();
-        if (cost.Length == 0) return "Use Effect";
-        // Sentence case: the clause reads "you may rest this Character", and only the leading word
-        // needs lifting — upper-casing more would wreck "{Fish-Man}" and "[Kaido]".
-        cost = char.ToUpperInvariant(cost[0]) + cost.Substring(1);
-        const int max = 58;   // keeps the bubble on one line at the panel's width
-        if (cost.Length > max) cost = cost.Substring(0, max - 1).TrimEnd() + "…";
-        return cost;
+        // The derivation moved to GameEngine.DescribeCostPrefix: it is pure text logic, and while it
+        // lived here (private, in a MonoBehaviour) it could not be tested headlessly over the card
+        // pool. 58 keeps the bubble on one line at the panel's width.
+        return GameEngine.DescribeCostPrefix(effect?.Text, maxLength: 58) ?? "Use Effect";
     }
 
     // True if any card in play/hand/trash is a legal target for the effect's CURRENT clause.

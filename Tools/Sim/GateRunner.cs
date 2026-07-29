@@ -97,6 +97,9 @@ namespace OnePieceTcg.Sim
             // Audits the highest-reach fix here ("up to N" is a ceiling). Only the 1-of-N case
             // discriminates it — the empty-board cases pass with the fix reverted.
             ("uptonrider",            UpToNRiderTest.Run),
+            // The Use-button label, asked for by name and shipped untested because the derivation
+            // was private to a MonoBehaviour. Moving it into the engine is what makes it testable.
+            ("costlabel",             CostLabelTest.Run),
             // The brief in one assertion: a card that says "you may" must never just do it.
             // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
             ("optionalfires",         OptionalNeverAutoFiresSweep.Run),

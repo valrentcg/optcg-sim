@@ -1938,6 +1938,38 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
+        /// <summary>Name the COST a "You may &lt;cost&gt;: &lt;body&gt;" clause is asking the player to pay,
+        /// or null when the clause has no cost prefix.
+        ///
+        /// "Use Effect" tells the player nothing about what they are agreeing to, which matters most
+        /// on exactly the cards that need the button. This lives in the engine rather than in the UI
+        /// for two reasons: it is pure text logic with no Unity dependency, so it can be tested over
+        /// the whole card pool headlessly (it could not be while it was private to GameManager); and
+        /// any second surface that needs the same wording — an opponent-side view, a replay, a log —
+        /// gets this one instead of growing a copy that drifts.
+        ///
+        /// `maxLength` truncates for a fixed-width control; pass 0 for the untruncated text.</summary>
+        public static string DescribeCostPrefix(string effectText, int maxLength = 0)
+        {
+            string text = effectText ?? "";
+            // Queued text keeps its timing tags ("[On Play] You may ..."), so strip them first.
+            text = System.Text.RegularExpressions.Regex.Replace(
+                text, @"^\s*(?:\[[^\]]+\]\s*/?\s*)+", "");
+            var m = System.Text.RegularExpressions.Regex.Match(
+                text, @"^You (?:may|can) (?<cost>[^:]{2,90}):",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!m.Success) return null;
+
+            string cost = m.Groups["cost"].Value.Trim();
+            if (cost.Length == 0) return null;
+            // Sentence case: the clause reads "you may rest this Character", and only the leading
+            // word needs lifting — upper-casing more would wreck "{Fish-Man}" and "[Kaido]".
+            cost = char.ToUpperInvariant(cost[0]) + cost.Substring(1);
+            if (maxLength > 1 && cost.Length > maxLength)
+                cost = cost.Substring(0, maxLength - 1).TrimEnd() + "…";
+            return cost;
+        }
+
         /// <summary>Rewrite a clause written about the opponent into one addressed TO them.
         ///
         /// "Your opponent may trash 1 card from the top of THEIR Life cards" is phrased from the

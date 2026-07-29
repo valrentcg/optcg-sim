@@ -14,7 +14,7 @@ Worked from one brief, repeated over many iterations:
 dotnet run --project Tools/Sim/Sim.csproj -c Release -- gate
 ```
 
-**56 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
+**57 suites, ~6s, exit 1 on any failure.** Run it after any engine change. It deliberately
 excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 
 ## Engine defects found and fixed
@@ -41,6 +41,14 @@ excludes `smoke` (statistical, not pass/fail) and the pure reporting sweeps.
 | 18 | `GameClone` dropped `PickedInstanceIds` and `CostPaidRefs` (pre-existing, found while adding the new field) — a rollout restarts a pick with a clean slate and can re-spend a card the real game already spent | bot search, Sandbox undo, puzzle solver |
 | 16 | **`[Trigger]` costs auto-trashed `Hand[0]`** — "[Trigger] You may trash 1 card from your hand: Play this card." The Trigger press answers *whether*; nothing ever asked *which*. Invisible to every sweep here, which all enumerate `effect` while these clauses live in the separate `trigger` field | **44 cards** |
 | 15 | The place-at-deck-bottom half had **no skip enforcement** — once it became a prompt, declining it was a free escape (found by testing the fix, not the code) | 8 of those 25 |
+
+The Use button's label is now derived by `GameEngine.DescribeCostPrefix` rather than inside
+GameManager. It is pure text logic, and while it was private to a MonoBehaviour nothing headless
+could call it — so a feature asked for by name shipped untested. `costlabel` now drives it over all
+**544** cost-prefixed clauses in the pool: every one produces a label, it names the COST and never
+the body, no label exceeds the bubble width, and none leaks a timing tag. Controls: disabling
+truncation reports 98 over-width; a naive tag-stripper drops the 4 cards using slash-combined tags
+(`[On Play]/[When Attacking]`) back to "Use Effect".
 
 Also: `"You may"` protections now prompt unconditionally (a decision, not a setting — the
 per-seat flag and its UI toggle were deleted), and the Use button **names the cost** rather
@@ -182,7 +190,7 @@ rather than a justification.
 
 Two kinds of claim appear in this document and they do **not** deserve equal weight.
 
-**Test-backed claims** come from the 56 gated suites. Each was negative-controlled — the fix was
+**Test-backed claims** come from the 57 gated suites. Each was negative-controlled — the fix was
 broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
 cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
 
