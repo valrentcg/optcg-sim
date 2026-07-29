@@ -139,6 +139,8 @@ switch (mode)
 
     case "costprefixsweep":
         return OnePieceTcg.Sim.CostPrefixSweep.Run();
+    case "lifemechanics":
+        return OnePieceTcg.Sim.LifeMechanicsTest.Run();
     case "lifefaceup":
         return OnePieceTcg.Sim.LifeFaceUpTest.Run();
     case "wypertest":
