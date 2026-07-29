@@ -59,6 +59,9 @@ namespace OnePieceTcg.Sim
             ("clonefidelity",         CloneFidelityTest.Run),
             ("sacrifice",             SacrificeProtectionTest.Run),
             ("timingsweep",           TimingDispatchSweep.Run),
+            // The brief in one assertion: a card that says "you may" must never just do it.
+            // Removing the opt-in guard turns this red with 127 auto-fires, so it can fail.
+            ("optionalfires",         OptionalNeverAutoFiresSweep.Run),
             // Asserts a real invariant - no clause may leave the player with a mandatory prompt
             // --- Life: flip, heal, re-arrange, and battle damage --------------------
             ("lifefaceup",            LifeFaceUpTest.Run),
