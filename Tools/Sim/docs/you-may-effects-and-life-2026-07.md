@@ -68,6 +68,28 @@ than saying "Use Effect".
   exactly N, and a cost ceiling spares a cost-5 body while still taking a cost-1 one.
 - **Bot** — every prompt added here is answerable by the AI; a hung solo game is the failure.
 
+## How much to trust the numbers below
+
+Two kinds of claim appear in this document and they do **not** deserve equal weight.
+
+**Test-backed claims** come from the 41 gated suites. Each was negative-controlled — the fix was
+broken and the suite confirmed to go red — and each re-runs on demand in ~6s. Counts of clauses,
+cards and shapes come from enumerating the card pool, which is reproducible. Treat these as solid.
+
+**Instrumentation-backed claims** are the "does it matter in play" figures: temporary counters
+added to the engine, run over bot games, then reverted. Treat these as indicative only. Across
+four rounds I got three of them wrong:
+
+1. Counted a code path being *taken* and reported it as impact (17,330 -> the real figure is 790).
+2. Corrected that to **0** from a four-deck sample; all 41 decks say **790**. A narrow zero is not
+   absence.
+3. Inferred an engine defect from a counter reading zero; two tests written against that exact
+   scenario both pass, and the defect does not exist. The counter remains unexplained.
+
+The engine was right in all three. The instrument was wrong in all three. Where a number here
+matters to a decision, re-derive it — and prefer writing a test, which in this workstream has
+been reliable in a way ad-hoc counters have not.
+
 ## Do the fixes matter in real games?
 
 Measured, and it took three attempts to get right. The numbers below are the third and the
