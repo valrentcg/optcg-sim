@@ -318,6 +318,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Events already burned this match — the transition fires once, but a rewind/resim can replay
     // the same hand->trash step, and burning twice would stack two showcases on screen.
     private readonly HashSet<string> burnedThisRender = new HashSet<string>();
+    // Guards against one card firing the board reaction twice within a single pose-diff pass.
+    // Cleared at the start of every pass — see the note there.
+    private readonly HashSet<string> boardReactedIds = new HashSet<string>();
     private readonly HashSet<string> suppressMoveAnim = new HashSet<string>();   // ids the LOCAL player just drag-placed (their drag was the animation)
     private int activeMoveGhosts;             // in-flight zone-move ghosts (bot waits on these)
     private RectTransform northHalfRect;      // playmat halves (turn-particle rim path)
@@ -332,6 +335,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // has no per-call pitch — it would inherit (and disturb) the shared source's.
     private AudioSource burnSfxSource;
     private AudioClip burnClip;
+    private AudioClip coinFlipClip;
     private bool sfxLoadStarted;
     public static float SfxVolume
     {
@@ -430,6 +434,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
     private void Awake()
     {
+        UiSfx.Ensure();          // global button click feedback (survives scene changes)
         font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         if (font == null) font = Resources.GetBuiltinResource<Font>("Arial.ttf");
         // Techy/mono faces to approximate the design mock (Chakra Petch / JetBrains Mono). Falls back
@@ -789,6 +794,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         lastCardPoses.Clear();
         suppressMoveAnim.Clear();
         burnedThisRender.Clear();
+        boardReactedIds.Clear();
+        deckLookHoldUntil = 0f;          // a new match must not inherit a held search
+        deckLookHoldPending = false;
         // A new match must never inherit a hidden trash top card from the last one.
         pendingReformIds.Clear();
         trashReveals.Clear();
@@ -2647,6 +2655,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             StartCoroutine(LoadSfxClip("card_draw", clip => cardDrawClip = clip));
             StartCoroutine(LoadSfxClip("attack", clip => attackClip = clip));
             StartCoroutine(LoadSfxClip("event_burn", clip => burnClip = clip));
+            StartCoroutine(LoadSfxClip("coin_flip", clip => coinFlipClip = clip));
         }
     }
 
@@ -2669,6 +2678,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         burnSfxSource.pitch = Mathf.Clamp(burnClip.length / burnDuration, 0.35f, 2.5f);
         burnSfxSource.volume = SfxVolume;
         burnSfxSource.Play();
+    }
+
+    /// <summary>The toss: one flick as the coin leaves the hand. Played once at the start of the spin
+    /// rather than once per rotation — the clip is a single flick, and repeating it per turn read as a
+    /// mechanical tick rather than a coin being thrown.</summary>
+    private void PlayCoinFlipSfx()
+    {
+        EnsureSfx();
+        if (coinFlipClip != null && sfxSource != null) sfxSource.PlayOneShot(coinFlipClip, SfxVolume);
     }
 
     private void PlayAttackSfx()
@@ -2848,6 +2866,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             int moves = 0;
             int lifeDealt = 0;
             int handDrawSeq = 0;   // staggers multi-card draws so each flies + sounds one at a time
+            // Per-PASS, not per-match: a Character can be bounced back to hand and played again,
+            // and a match-lifetime guard would silently skip the impact on every replay.
+            boardReactedIds.Clear();
             foreach (var kv in now)
             {
                 if (!lastCardPoses.TryGetValue(kv.Key, out var old))
@@ -2867,6 +2888,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     continue;
                 }
                 if (old.zone == kv.Value.zone) continue;
+
+                // A Character or Stage ARRIVING on the board makes the board react (bench #26).
+                // Detected from the pose diff for the same reason the burn below is: an opponent's
+                // play arrives as a replayed command and a card played by another card's effect
+                // never touches an input handler, so neither would ever reach a click path.
+                // Leader/Character/Stage all share the pose zone "board", so which reaction to run
+                // is resolved from game state inside BeginPlayImpact, not from this key.
+                if (old.zone.StartsWith("hand:") && kv.Value.zone == "board"
+                    && !boardReactedIds.Contains(kv.Key))
+                {
+                    boardReactedIds.Add(kv.Key);
+                    BeginPlayImpact(kv.Key);
+                }
 
                 // An Event/Counter leaving hand for the trash IS the burn. Detected here rather
                 // than in the click handlers, because those only ever see the LOCAL player's own
@@ -3038,10 +3072,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (to == null || to.rt == null) return null;
         if (to.zone.StartsWith("don@")) return null;         // the "rect" is the HOST character
         if (IsMoveAnchorRect(to.rt)) return null;            // shared pile anchor, not this card
-        var g = to.rt.GetComponent<CanvasGroup>();
-        if (g == null) g = to.rt.gameObject.AddComponent<CanvasGroup>();
+        // Hide the whole VISUAL UNIT, not just the card art. A board Character's summoning-sick veil
+        // and blocker shield are SIBLINGS of the card inside its "Character Holder", so hiding the
+        // card root alone left the dark veil sitting by itself in the slot for the whole flight — a
+        // grey panel on the board before its card had arrived. FlipUnit returns the card root
+        // unchanged for hand/leader/stage cards, which have no such overlays.
+        var unit = FlipUnit(to.rt);
+        var g = unit.GetComponent<CanvasGroup>();
+        if (g == null) g = unit.gameObject.AddComponent<CanvasGroup>();
         g.alpha = 0f;
-        return to.rt;
+        return unit;
     }
 
     private bool IsMoveAnchorRect(RectTransform rt)
@@ -4215,6 +4255,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             Destroy(deckLookOverlay.gameObject);
             deckLookOverlay = null;
+        }
+
+        // A searcher's look must not open on top of its own slam. The engine has already resolved
+        // it, so this is presentation only: stay torn down until the slam has finished and a beat
+        // has passed, then re-render once to bring it in. Guarded by deckLookHoldPending so the
+        // release schedules exactly one re-render no matter how many times Render runs meanwhile.
+        if (state.DeckLook != null && DeckLookHeld())
+        {
+            if (!deckLookHoldPending)
+            {
+                deckLookHoldPending = true;
+                StartCoroutine(ReleaseDeckLookHold());
+            }
+            return;
         }
 
         if (state.DeckLook == null)
@@ -6092,6 +6146,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (panel == null) { coinFlipRevealed = true; yield break; }
 
+        // The toss is the FIRST thing in a match, so nothing has kicked off the async SFX load yet.
+        // Start it here: the first tick is 185ms away, which is ample for a local file, and a clip
+        // that somehow arrives late just means a silent tick rather than a stall.
+        EnsureSfx();
+
         // WHICH FACE THE COIN LANDS ON. The toss used to run for a fixed 1.35s at a fixed rate, so the
         // final angle was always cos(11.475) ≈ +0.46 — the front face, every single time, regardless of
         // who actually won. Heads now means YOU won the flip and tails means you lost, so the coin
@@ -6121,6 +6180,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         faceText.fontStyle = FontStyle.Bold;
         Stretch(faceText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         faceText.raycastTarget = false;
+
+        // One flick, on the toss. Note it is played AFTER halfFlips is chosen but plays identically
+        // either way, so the audio cannot leak whether you won — same reason the spin holds a fixed
+        // rate and lets the duration vary.
+        PlayCoinFlipSfx();
 
         float t = 0f;
         while (t < dur && coin != null && panel != null)
@@ -9133,6 +9197,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             selectedId = null;
             selectedSeat = null;
             var dl = state.DeckLook;
+            // While the slam is still playing the overlay is deliberately not up yet, so offering
+            // its buttons here would mean choosing from cards that are not on screen.
+            if (DeckLookHeld())
+            {
+                AddInfo(body, $"{dl.SourceName} resolves…");
+                return;
+            }
             var selecting = dl.Step == "select";
             // Buttons only for the seat doing the look/search; the other side just waits. This must cover
             // the SOLO vs-AI case as well as the networked one — DrawDeckLookOverlay already hides the AI's
@@ -10866,6 +10937,398 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // sibling (the pile's count badge) rather than on top of the whole board.
         c.overrideSorting = overrideSorting;
         if (overrideSorting) c.sortingOrder = sortingOrder;
+    }
+
+    // ================= PLAY IMPACT: the board reacts when a card lands =================
+    // Bench effect #26, "Ripple Flex + Jolt — crest locked", ported with its constants intact:
+    //
+    //   hit   = ch * 0.055 * fall(d) * osc(e,           46, 18)   un-delayed: the whole row is
+    //                                                             struck on ONE frame
+    //   j     =                        osc(e - 0.045*d, 40, 12)   the travelling wave
+    //   move  = hit + ch * 0.07 * fall(d) * j
+    //   flex  = 4.2 * fall(d) * |j|                               outline swell, locked to j
+    //
+    // One oscillator (j) drives both the movement and the outline, which is what makes the flex
+    // read as a consequence of the motion instead of an accompaniment to it. The landing slot
+    // itself is not moved — it only snaps its outline, shove(e, 15, 11).
+    private const float ImpactDur = 0.70f;   // every channel above has decayed to nothing by here
+
+    // The ARRIVING card's own pose — the half of the bench that the board reaction is a response to.
+    // Without it the card just locks into its slot and the neighbours jiggle for no visible reason.
+    private const float ImpactLiftScale = 2.2f;    // held toward the player, off the board
+    private const float ImpactLiftHold  = 0.20f;   // the readable beat before it comes down
+    private const float ImpactSlam      = 0.20f;   // p-squared acceleration into the board
+
+    // How hard the board is hit is DERIVED from how far the card fell, so the two can never drift
+    // apart: raise the lift and every neighbour amplitude, the rim light and the recoil all follow.
+    // Normalised to 1.0 at the original 1.65x tuning, so the bench constants below stay readable as
+    // the values that were actually approved.
+    private const float ImpactForce = (ImpactLiftScale - 1f) / 0.65f;
+    // AnimateCardMoveGhost runs 0.38s and cross-fades the real card in at f>0.85. The lift is set
+    // before that, while the card is still alpha-0, so it is already oversized when it appears —
+    // setting it afterwards would pop.
+    private const float ImpactFlightReveal = 0.33f;
+    // A searcher's deck-look must not open over its own slam. Slam, breathe, then reveal.
+    private const float ImpactSearchBeat = 0.22f;
+
+    private float deckLookHoldUntil;          // unscaled time; deck-look presentation is held until then
+    private bool deckLookHoldPending;         // a re-render is already scheduled for the release
+
+    /// <summary>True while a card's slam is still playing and a deck-look would land on top of it.
+    /// Presentation only — the engine has already resolved, so nothing here can desync.</summary>
+    private bool DeckLookHeld() => Time.unscaledTime < deckLookHoldUntil;
+
+    private IEnumerator ReleaseDeckLookHold()
+    {
+        while (DeckLookHeld()) yield return null;
+        deckLookHoldPending = false;
+        // The one place a Render at the end of an effect is right: it exists to bring the look on
+        // screen, so the rebuild IS the payoff rather than a hitch tacked onto one.
+        if (state != null && state.DeckLook != null) Render();
+    }
+
+    private static float ImpactOsc(float t, float freq, float decay)
+        => t <= 0f ? 0f : Mathf.Sin(t * freq) * Mathf.Exp(-t * decay);
+
+    private static float ImpactShove(float t, float freq, float decay)
+        => t <= 0f ? 0f : Mathf.Cos(t * freq) * Mathf.Exp(-t * decay);
+
+    private static float ImpactFall(int d) => 1f / (1f + (d - 1) * 0.95f);
+
+    private sealed class ImpactTarget
+    {
+        public RectTransform Rect;          // the card that moves
+        public Vector2 Home;                // where it must end up, to the pixel
+        public int Dist;                    // slots from the landing
+        public bool Moves;                  // false for the landing slot: light only, no movement
+        public RectTransform Rim;           // the swelling rim light, parented to the SLOT so it
+                                            // stays put while the card moves, as in the bench
+        public Vector2 RimBase;
+        public Graphic RimGlow;
+        public Canvas Isolated;             // batching only; removed when the reaction ends
+    }
+
+    /// <summary>The rim light. One additive glow quad on the shared UiGlow sprite, sat BEHIND the
+    /// card and slightly larger than it: the card covers the middle, so what is left visible is a
+    /// glowing edge. Swelling its size pushes the light out past the card, which is the flex from
+    /// the bench and the rim lighting in one element — and because it is the shared glow
+    /// sprite/material, every card's rim batches into a single draw call.
+    ///
+    /// Four hard-edged quads were the first attempt and read as a drawn box rather than light.
+    /// Unity's Outline component is no use either: on a solid rect it duplicates the whole quad and
+    /// yields a larger SOLID block, not an outline.</summary>
+    private RectTransform BuildImpactGlow(RectTransform slot, Vector2 size, Color tint, out Graphic glow)
+    {
+        var holder = new GameObject("Impact Glow").AddComponent<RectTransform>();
+        holder.SetParent(slot, false);
+        holder.anchorMin = holder.anchorMax = new Vector2(0.5f, 0.5f);
+        holder.pivot = new Vector2(0.5f, 0.5f);
+        holder.anchoredPosition = Vector2.zero;
+        holder.sizeDelta = size;
+        holder.SetAsFirstSibling();          // behind the card, so only the edge light shows
+
+        var img = holder.gameObject.AddComponent<Image>();
+        img.sprite = UiGlow.Sprite;
+        img.material = UiGlow.Additive;
+        img.raycastTarget = false;
+        img.color = new Color(tint.r, tint.g, tint.b, 0f);
+        glow = img;
+        return holder;
+    }
+
+    /// <summary>The impact's light takes the played card's colour, same as the burn ramp does, so a
+    /// red Character lands red. Values match the bench's hot ramp tones.</summary>
+    private static Color ImpactGlowColor(CardDef def)
+    {
+        string c = (def?.Color ?? "").ToLowerInvariant();
+        if (c.Contains("red")) return new Color(1f, 0.88f, 0.82f);
+        if (c.Contains("green")) return new Color(0.89f, 1f, 0.90f);
+        if (c.Contains("blue")) return new Color(0.87f, 0.94f, 1f);
+        if (c.Contains("purple")) return new Color(0.94f, 0.88f, 1f);
+        if (c.Contains("black")) return new Color(0.91f, 0.93f, 0.96f);
+        return new Color(1f, 0.95f, 0.82f);      // yellow / default
+    }
+
+    // Card corners are a SHADER clip (RoundedCardMask, "RectMask2D-safe"), not a stencil mask, so a
+    // nested Canvas does not disturb them — which makes IsolateOnOwnCanvas usable here. It buys two
+    // things at once: the per-frame move rebuilds only that card's canvas instead of rebatching the
+    // whole board, and an explicit sortingOrder puts the lifted card in FRONT of the leader and life
+    // zones, which are siblings of the character row and were drawing over it.
+    // 620 is the burn showcase; stay below it so a burn still reads on top.
+    private const int ImpactLiftSorting = 400;
+
+    /// <summary>Entry point: a card has just arrived on the board from hand. A Character ripples
+    /// the whole character row it landed in; a Stage nudges that player's Leader. Events never
+    /// reach here — they land in the trash, not on the board — so this is Characters and Stages
+    /// only without needing a type test.</summary>
+    private void BeginPlayImpact(string instanceId)
+    {
+        if (state?.Players == null || string.IsNullOrEmpty(instanceId)) return;
+        foreach (var seat in state.Players.Keys)
+        {
+            if (!state.Players.TryGetValue(seat, out var p) || p == null) continue;
+
+            if (p.CharacterArea != null)
+            {
+                int slot = p.CharacterArea.FindIndex(c => c != null && c.InstanceId == instanceId);
+                if (slot >= 0) { StartPlayImpact(instanceId, seat, slot, false); return; }
+            }
+            if (p.Stage != null && p.Stage.InstanceId == instanceId)
+            { StartPlayImpact(instanceId, seat, -1, true); return; }
+        }
+    }
+
+    private void StartPlayImpact(string instanceId, string seat, int slot, bool isStage)
+    {
+        // Hold any deck-look this play is about to trigger until the slam has finished and a beat
+        // has passed. Set here rather than when the look appears, because the engine resolves the
+        // [On Play] search on the same frame the card lands.
+        // A generous CEILING only. The sequence tightens this to the real beat the instant the slam
+        // lands; this value just guarantees the look stays down until then and can never strand.
+        deckLookHoldUntil = Time.unscaledTime + ImpactFlightReveal + ImpactLiftHold + ImpactSlam + ImpactSearchBeat + 0.25f;
+        StartCoroutine(PlayImpactSequence(instanceId, seat, slot, isStage));
+    }
+
+    /// <summary>Lift, hold, slam — then the board reacts. This is the whole agreed motion: the card
+    /// is held oversized off the board, hangs long enough to read, drives down into its slot, and
+    /// the neighbours are struck at the moment it lands, not when it first appears.</summary>
+    private IEnumerator PlayImpactSequence(string instanceId, string seat, int slot, bool isStage)
+    {
+        // Scale the FLIP UNIT, not the card root. A board Character's summoning-sick veil and
+        // blocker shield are SIBLINGS of the card inside its "Character Holder"; scaling the card
+        // alone blew the art up to 1.65x and left the veil at 1x, which showed as a dark rounded
+        // box parked over the middle of the oversized card while it came down.
+        // The flip unit is both what we scale AND what the flight now hides and fades in, so the
+        // visibility poll below watches this same rect.
+        RectTransform card = cardTargetRects.TryGetValue(instanceId, out var rt) ? FlipUnit(rt) : null;
+
+        // A card lifted toward the player has to be in front of the whole board, not just its own
+        // row. Raising its sibling index only reordered it among the other character slots — the
+        // leader and life zones live one level up and kept drawing over it. An explicit sortingOrder
+        // on its own canvas puts it above all of them, and confines the per-frame rebuild to this
+        // card at the same time.
+        // Guarded: two plays in quick succession can target the same holder, and a second Canvas on
+        // one GameObject is not allowed. Only the call that added it destroys it.
+        Canvas lifted = null;
+        if (card != null && card.GetComponent<Canvas>() == null)
+        {
+            IsolateOnOwnCanvas(card.gameObject, ImpactLiftSorting);
+            lifted = card.GetComponent<Canvas>();
+        }
+
+        // Lifted BEFORE the flight reveals it, so it fades in already oversized.
+        if (card != null) card.localScale = Vector3.one * ImpactLiftScale;
+
+        // Wait until the card is genuinely on screen. Behind a ghost flight it is held at alpha 0
+        // until the cross-fade; when the local player drag-placed it there is no flight at all and
+        // it is visible immediately. Polling the alpha covers both without having to know which
+        // path ran — a fixed delay left drag-plays hanging lifted for an extra third of a second.
+        float guard = 0f;
+        while (guard < 0.6f && card != null)
+        {
+            var cg = card.GetComponent<CanvasGroup>();
+            if (cg == null || cg.alpha > 0.5f) break;
+            guard += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        float wait = 0f;
+        while (wait < ImpactLiftHold && card != null)
+        {
+            wait += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        // The slam: accelerating down to resting size.
+        float t = 0f;
+        while (t < ImpactSlam && card != null)
+        {
+            t += Time.unscaledDeltaTime;
+            float p = Mathf.Clamp01(t / ImpactSlam);
+            card.localScale = Vector3.one * (ImpactLiftScale + (1f - ImpactLiftScale) * p * p);
+            yield return null;
+        }
+        if (card != null) card.localScale = Vector3.one;
+
+        // Landed. Tighten the deck-look hold to the exact beat from HERE — the ceiling set when the
+        // sequence began is only a fallback for the case where this coroutine never reaches this
+        // line (a re-render destroyed the card), so a search can never be held forever.
+        deckLookHoldUntil = Time.unscaledTime + ImpactSearchBeat;
+
+        // NOW the board reacts.
+        if (isStage) StartCoroutine(PlayImpactLeader(seat));
+        else StartCoroutine(PlayImpactCharacterRow(seat, slot));
+
+        // Recoil: it drives in past resting size, springs back, settles. Runs alongside the row.
+        // Depth follows the drop, but clamped — past about 9% the card visibly shrinks rather than
+        // reading as compression.
+        float dip = Mathf.Min(0.05f * ImpactForce, 0.09f);
+        float over = Mathf.Min(0.028f * ImpactForce, 0.05f);
+        float r = 0f;
+        while (r < 0.28f && card != null)
+        {
+            r += Time.unscaledDeltaTime;
+            float s = r < 0.07f
+                ? 1f - dip * (1f - r / 0.07f)
+                : 1f + over * Mathf.Sin(Mathf.Clamp01((r - 0.07f) / 0.21f) * Mathf.PI);
+            card.localScale = Vector3.one * s;
+            yield return null;
+        }
+        if (card != null) card.localScale = Vector3.one;
+        // Back to normal board layering. Destroying the Canvas is what returns it — the card keeps
+        // its hierarchy position throughout, so nothing has to be restored.
+        if (lifted != null) Destroy(lifted);
+    }
+
+    private List<ImpactTarget> CaptureImpactTargets(PlayerState p, int landedSlot, Vector2 cardSize, Color tint)
+    {
+        var targets = new List<ImpactTarget>();
+        for (int i = 0; i < p.CharacterArea.Count; i++)
+        {
+            var c = p.CharacterArea[i];
+            if (c == null) continue;
+            if (!cardTargetRects.TryGetValue(c.InstanceId, out var rt) || rt == null) continue;
+            bool landing = i == landedSlot;
+            // Same reason as the arriving card: move the holder so each neighbour's summoning-sick
+            // veil and blocker shield travel WITH it. Moving the card root alone would slide the art
+            // out from under its own overlays on every jolt.
+            var unit = FlipUnit(rt);
+            // The rim light hangs off the unit's PARENT so it stays at the slot while the card
+            // moves, which is how the bench had it.
+            var slot = (unit.parent as RectTransform) ?? unit;
+            var t = new ImpactTarget
+            {
+                Rect = unit,
+                Home = unit.anchoredPosition,
+                Dist = Mathf.Abs(i - landedSlot),
+                // The arrival is already mid-flight from the move animation; touching its position
+                // would fight that. It still gets the light, exactly as the bench had it.
+                Moves = !landing,
+            };
+            t.Rim = BuildImpactGlow(slot, cardSize, tint, out var glow);
+            t.RimGlow = glow;
+            t.RimBase = cardSize;
+            // Jolting neighbours get batching isolation but NOT a sorting override: they must keep
+            // their existing draw order. Only the arriving card is allowed to come to the front.
+            if (t.Moves && t.Rect.GetComponent<Canvas>() == null)
+            {
+                IsolateOnOwnCanvas(t.Rect.gameObject, 0, overrideSorting: false);
+                t.Isolated = t.Rect.GetComponent<Canvas>();
+            }
+            targets.Add(t);
+        }
+        return targets;
+    }
+
+    private static void SetRim(ImpactTarget t, float pad, float alpha)
+    {
+        if (t.Rim == null) return;
+        t.Rim.sizeDelta = t.RimBase + new Vector2(pad * 2f, pad * 2f);
+        if (t.RimGlow == null) return;
+        var col = t.RimGlow.color;
+        col.a = alpha;
+        t.RimGlow.color = col;
+    }
+
+    private static void ReleaseImpact(List<ImpactTarget> targets)
+    {
+        for (int i = 0; i < targets.Count; i++)
+        {
+            var t = targets[i];
+            // Land exactly on the stored home. A decayed sine is near zero but never zero, and a
+            // card left a fraction of a pixel out would accumulate drift over a long match.
+            if (t.Rect != null && t.Moves) t.Rect.anchoredPosition = t.Home;
+            if (t.Rim != null) Destroy(t.Rim.gameObject);
+            if (t.Isolated != null) Destroy(t.Isolated);
+        }
+    }
+
+    private IEnumerator PlayImpactCharacterRow(string seat, int landedSlot)
+    {
+        if (state?.Players == null || !state.Players.TryGetValue(seat, out var p) || p?.CharacterArea == null)
+            yield break;
+        float ch = boardCardSize.y > 1f ? boardCardSize.y : 100f;
+        var cardSize = boardCardSize.x > 1f ? boardCardSize : new Vector2(ch * (1f / 1.4f), ch);
+
+        var landed = landedSlot >= 0 && landedSlot < p.CharacterArea.Count ? p.CharacterArea[landedSlot] : null;
+        var tint = ImpactGlowColor(landed != null ? GameEngine.GetCard(landed) : null);
+
+        var targets = CaptureImpactTargets(p, landedSlot, cardSize, tint);
+        if (targets.Count == 0) yield break;
+
+        float t = 0f;
+        while (t < ImpactDur)
+        {
+            t += Time.unscaledDeltaTime;
+            // A Render() clears boardRoot and destroys every rect captured above. It also puts the
+            // cards back where they belong, so aborting is the correct response, not a repair.
+            bool alive = true;
+            for (int k = 0; k < targets.Count; k++) if (targets[k].Rect == null) { alive = false; break; }
+            if (!alive) break;
+
+            for (int k = 0; k < targets.Count; k++)
+            {
+                var tg = targets[k];
+                float f = ImpactFall(tg.Dist);
+                if (tg.Moves)
+                {
+                    float j = ImpactOsc(t - 0.045f * tg.Dist, 40f, 12f);
+                    float hit = ch * 0.055f * ImpactForce * f * ImpactOsc(t, 46f, 18f);
+                    // Negative y: the first half-cycle presses DOWN into the board, matching the
+                    // bench, where a positive dy moved the card down-screen.
+                    tg.Rect.anchoredPosition = tg.Home
+                        + new Vector2(0f, -(hit + ch * 0.07f * ImpactForce * f * j));
+                    // Secondary light: the wave passing through, not the hit itself.
+                    SetRim(tg, ch * 0.07f * ImpactForce * f * Mathf.Abs(j),
+                           Mathf.Clamp01(Mathf.Abs(j) * 2.6f) * 0.5f);
+                }
+                else
+                {
+                    // The landing slot takes the flash — this is the rim light at the point of
+                    // impact, the brightest thing in the effect, and it snaps from full amplitude.
+                    float s = Mathf.Max(0f, ImpactShove(t, 15f, 11f));
+                    SetRim(tg, ch * 0.13f * ImpactForce * s, Mathf.Clamp01(s * 1.5f) * 0.95f);
+                }
+            }
+            yield return null;
+        }
+        ReleaseImpact(targets);
+    }
+
+    private IEnumerator PlayImpactLeader(string seat)
+    {
+        if (state?.Players == null || !state.Players.TryGetValue(seat, out var p) || p?.Leader == null)
+            yield break;
+        if (!cardTargetRects.TryGetValue(p.Leader.InstanceId, out var rt0) || rt0 == null) yield break;
+        var rt = FlipUnit(rt0);   // a Leader has no veil, but stay consistent with the row
+
+        float ch = boardCardSize.y > 1f ? boardCardSize.y : 100f;
+        var cardSize = boardCardSize.x > 1f ? boardCardSize : new Vector2(ch * (1f / 1.4f), ch);
+        Vector2 home = rt.anchoredPosition;
+
+        // The Leader gets the light too, in the Stage's colour, or the shake reads as a glitch
+        // rather than a reaction to something.
+        var tint = ImpactGlowColor(p.Stage != null ? GameEngine.GetCard(p.Stage) : null);
+        var slot = (rt.parent as RectTransform) ?? rt;
+        var glowRect = BuildImpactGlow(slot, cardSize, tint, out var glow);
+        var lit = new ImpactTarget { Rim = glowRect, RimGlow = glow, RimBase = cardSize };
+
+        float t = 0f;
+        while (t < 0.55f)
+        {
+            t += Time.unscaledDeltaTime;
+            if (rt == null) break;
+            // "A little": the Leader is a fixture with nothing beside it for a wave to travel
+            // across, so it takes the un-delayed hit channel alone, at about half a Character's
+            // amplitude. Same oscillator family, so it belongs to the same effect.
+            float o = ImpactOsc(t, 44f, 16f);
+            rt.anchoredPosition = home + new Vector2(0f, -ch * 0.035f * ImpactForce * o);
+            SetRim(lit, ch * 0.06f * ImpactForce * Mathf.Abs(o),
+                   Mathf.Clamp01(Mathf.Abs(o) * 2.4f) * 0.6f);
+            yield return null;
+        }
+        if (rt != null) rt.anchoredPosition = home;
+        if (glowRect != null) Destroy(glowRect.gameObject);
     }
 
     /// <summary>Feeds UI/CardDissolve the rounded-corner clip. Must run every frame the card
@@ -14539,11 +15002,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             if (ghost == null) return;
             var snapRect = manager.GetDragTargetRect(eventData, card, handSeat, out var snapValid);
-            if (snapValid && snapRect != null
-                && GameEngine.GetCard(card).Type == "character"
-                && snapRect.GetComponentInParent<CharacterSlotDrop>() != null)
+            // A Stage snaps to its zone exactly as a Character snaps to a slot. This was gated to
+            // Characters only, so dragging a Stage gave no placement preview at all — the same
+            // second-class treatment that stopped Stages being droppable in the first place.
+            var dragDef = GameEngine.GetCard(card);
+            string dragType = dragDef != null ? dragDef.Type : "";
+            bool snapsToZone = snapValid && snapRect != null
+                && ((dragType == "character" && snapRect.GetComponentInParent<CharacterSlotDrop>() != null)
+                 || (dragType == "stage" && snapRect.GetComponentInParent<StageDrop>() != null));
+            if (snapsToZone)
             {
-                // Hovering a valid character slot: snap the card onto the slot.
+                // Hovering a valid slot/zone: snap the card onto it.
                 ghost.transform.position = snapRect.position;
                 ghost.transform.localScale = Vector3.one;
             }

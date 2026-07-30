@@ -370,6 +370,7 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void Awake()
     {
+        UiSfx.Ensure();          // global button click feedback (survives scene changes)
         // Restore the last game mode the player had selected (AI, private room, ...)
         // so the menu reopens where they left off — across menu rebuilds AND app restarts.
         var savedMode = PlayerPrefs.GetString("optcg.lastmode", null);
@@ -1118,6 +1119,30 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.29", "Cards land with weight, and the board answers", "Jul 29, 2026", new (string, string[])[]
+        {
+            ("Playing a Character or Stage", new[]
+            {
+                "The card now lifts toward you, hangs just long enough to read, then slams down into its slot instead of appearing there.",
+                "The board answers the landing: the cards beside it are struck at once, then a wave travels outward from the impact, reaching the nearest neighbours hardest.",
+                "Each card the wave passes catches a rim light in the played card's colour — red lands red, blue lands blue.",
+                "Play a Stage and your Leader takes the hit instead of the character row.",
+            }),
+            ("Searchers", new[]
+            {
+                "A card that searches your deck on play now finishes its landing before the search window opens, instead of the cards appearing on top of the slam.",
+            }),
+            ("Sound", new[]
+            {
+                "The coin toss has a coin again.",
+                "Every button in the game gives a click when you press it — Skip, End Turn, the menus, the deck builder, sealed. Buttons that are greyed out stay silent, so a disabled control never sounds available.",
+            }),
+            ("Fixes that apply to every play", new[]
+            {
+                "A grey panel no longer sits in a slot before its card gets there. The summoning-sick shade was being drawn without its card for the length of the flight — it has been doing that for as long as the shade has existed.",
+                "Dragging a Stage now previews where it will land, the same as dragging a Character. Only Characters had a placement preview.",
+            }),
+        }),
         ("v1.0.28", "Stages, Life cards, and a Blocker lock that finally locks", "Jul 29, 2026", new (string, string[])[]
         {
             ("Stages", new[]

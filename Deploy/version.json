@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.28",
-  "buildNumber": 26,
+  "buildVersion": "1.0.29",
+  "buildNumber": 27,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "You can play a Stage from your hand again — dropping one onto an empty Stage zone did nothing at all, and since dragging is the only way to place your first Stage, no Stage could ever be played by hand. A Life card an effect turns face up now actually shows its face: with six or more Life the flipped card was never drawn, so the combat log said it had been turned up while the board still showed a card back (Wyper and Kalgara both looked broken because of it). Your opponent's Life stack now reads the right way round, with their top card nearest the middle. Abilities worded \"play a {Type} Character card or [Name]\" now offer both rather than requiring both, which is why Shirahoshi lit nothing in your hand. A mandatory effect with nothing legal to pick can no longer freeze the board behind a greyed-out Skip. And \"your opponent cannot activate a [Blocker]\" finally locks — on Shanks, Adio and the starter-deck cards sharing that wording it was being discarded as a note; attacking with Shanks no longer crashes.",
+  "notes": "Playing a Character or Stage now lands with weight. The card lifts toward you, hangs long enough to read, then slams down into its slot — and the board reacts: the cards beside it are struck at once and a wave travels outward from the impact, each one catching a rim light in the played card's colour. Play a Stage and your Leader takes the hit instead. A searcher's deck-look now waits for the slam to finish before it opens, instead of appearing on top of it. Two fixes that apply to every play, not just the new effect: a grey panel no longer sits in a slot before its card arrives (the summoning-sick shade was being drawn without its card during the flight), and dragging a Stage now previews where it will land, the same as dragging a Character. Sound: the coin toss now has a coin, and every button in the game — Skip, End Turn, menus, deck builder — gives a click when you press it.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
