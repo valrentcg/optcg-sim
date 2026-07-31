@@ -19,6 +19,11 @@
     <Compile Include="..\..\Assets\Scripts\Engine\GameEngine.cs" Link="Engine\GameEngine.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\GameState.cs" Link="Engine\GameState.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\CardData.cs" Link="Engine\CardData.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\DeckConstructionLegality.cs" Link="Engine\DeckConstructionLegality.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\SafeFile.cs" Link="Engine\SafeFile.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\TurnBannerText.cs" Link="Engine\TurnBannerText.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\CardFlipCue.cs" Link="Engine\CardFlipCue.cs" />
+    <Compile Include="..\..\Assets\Scripts\Engine\DeckListParser.cs" Link="Engine\DeckListParser.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\Bot\IntermediateBot.cs" Link="Engine\Bot\IntermediateBot.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\Bot\ChampionBot.cs" Link="Engine\Bot\ChampionBot.cs" />
     <Compile Include="..\..\Assets\Scripts\Engine\Bot\Search\GameClone.cs" Link="Engine\Bot\Search\GameClone.cs" />

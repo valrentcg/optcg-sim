@@ -12,3 +12,10 @@ database_id = "d752ffa2-72a4-4038-beeb-ed29303db39d"
 # APP_SECRET is NOT stored here. Set it as a secret:
 #   wrangler secret put APP_SECRET
 # (reuse the same value the client sends in X-App-Secret)
+
+# Forfeit sweep: settles ranked reports whose counterpart never arrived (hard quit / crash /
+# pulled cable). Without it the survivor's report waits forever and no rating moves, so a
+# rage-quit was a free escape from a ranked loss. Every 10 minutes; the sweep itself only
+# touches reports older than its 15-minute grace window.
+[triggers]
+crons = ["*/10 * * * *"]

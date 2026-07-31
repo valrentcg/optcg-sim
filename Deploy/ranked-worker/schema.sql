@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS match_results (
   match_id   TEXT PRIMARY KEY,
   winner_id  TEXT,
   loser_id   TEXT,
-  status     TEXT    NOT NULL,   -- 'settled' | 'disputed'
+  status     TEXT    NOT NULL,   -- 'settled' | 'disputed' | 'forfeit' (one-sided, swept after the grace window)
   settled_at INTEGER NOT NULL
 );
 

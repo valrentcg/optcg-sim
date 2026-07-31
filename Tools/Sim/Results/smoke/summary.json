@@ -10,45 +10,45 @@
       "stall": 0,
       "crash": 0
     },
-    "avgTurns": 10.912222222222223,
-    "avgCommands": 115.5988888888889,
+    "avgTurns": 10.671111111111111,
+    "avgCommands": 118.57555555555555,
     "firstPlayerWinRate": {
-      "rate": 0.5389,
-      "wins": 485,
+      "rate": 0.5489,
+      "wins": 494,
       "games": 900,
       "ci95": [
-        0.5062,
-        0.5712
+        0.5162,
+        0.5811
       ]
     },
-    "elapsedSeconds": 9.46
+    "elapsedSeconds": 8.86
   },
   "perDeck": {
     "st01": {
-      "rate": 0.465,
-      "wins": 279,
+      "rate": 0.4833,
+      "wins": 290,
       "games": 600,
       "ci95": [
-        0.4254,
-        0.505
+        0.4436,
+        0.5233
       ]
     },
     "st02": {
-      "rate": 0.5183,
-      "wins": 311,
+      "rate": 0.485,
+      "wins": 291,
       "games": 600,
       "ci95": [
-        0.4784,
-        0.5581
+        0.4452,
+        0.525
       ]
     },
     "st03": {
-      "rate": 0.5167,
-      "wins": 310,
+      "rate": 0.5317,
+      "wins": 319,
       "games": 600,
       "ci95": [
-        0.4767,
-        0.5564
+        0.4917,
+        0.5713
       ]
     }
   },
@@ -66,12 +66,12 @@
         ]
       },
       "southWinRate_goingSecond": {
-        "rate": 0.46,
-        "wins": 23,
+        "rate": 0.48,
+        "wins": 24,
         "games": 50,
         "ci95": [
-          0.3297,
-          0.596
+          0.348,
+          0.6149
         ]
       }
     },
@@ -79,34 +79,12 @@
       "south": "st01",
       "north": "st02",
       "southWinRate_goingFirst": {
-        "rate": 0.5,
-        "wins": 25,
+        "rate": 0.52,
+        "wins": 26,
         "games": 50,
         "ci95": [
-          0.3664,
-          0.6336
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.36,
-        "wins": 18,
-        "games": 50,
-        "ci95": [
-          0.2414,
-          0.4986
-        ]
-      }
-    },
-    {
-      "south": "st01",
-      "north": "st03",
-      "southWinRate_goingFirst": {
-        "rate": 0.48,
-        "wins": 24,
-        "games": 50,
-        "ci95": [
-          0.348,
-          0.6149
+          0.3851,
+          0.652
         ]
       },
       "southWinRate_goingSecond": {
@@ -120,59 +98,15 @@
       }
     },
     {
-      "south": "st02",
-      "north": "st01",
-      "southWinRate_goingFirst": {
-        "rate": 0.48,
-        "wins": 24,
-        "games": 50,
-        "ci95": [
-          0.348,
-          0.6149
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.48,
-        "wins": 24,
-        "games": 50,
-        "ci95": [
-          0.348,
-          0.6149
-        ]
-      }
-    },
-    {
-      "south": "st02",
-      "north": "st02",
-      "southWinRate_goingFirst": {
-        "rate": 0.54,
-        "wins": 27,
-        "games": 50,
-        "ci95": [
-          0.404,
-          0.6703
-        ]
-      },
-      "southWinRate_goingSecond": {
-        "rate": 0.56,
-        "wins": 28,
-        "games": 50,
-        "ci95": [
-          0.4231,
-          0.6884
-        ]
-      }
-    },
-    {
-      "south": "st02",
+      "south": "st01",
       "north": "st03",
       "southWinRate_goingFirst": {
-        "rate": 0.54,
-        "wins": 27,
+        "rate": 0.46,
+        "wins": 23,
         "games": 50,
         "ci95": [
-          0.404,
-          0.6703
+          0.3297,
+          0.596
         ]
       },
       "southWinRate_goingSecond": {
@@ -186,18 +120,31 @@
       }
     },
     {
-      "south": "st03",
+      "south": "st02",
       "north": "st01",
       "southWinRate_goingFirst": {
-        "rate": 0.7,
-        "wins": 35,
+        "rate": 0.5,
+        "wins": 25,
         "games": 50,
         "ci95": [
-          0.5625,
-          0.809
+          0.3664,
+          0.6336
         ]
       },
       "southWinRate_goingSecond": {
+        "rate": 0.4,
+        "wins": 20,
+        "games": 50,
+        "ci95": [
+          0.2761,
+          0.5382
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st02",
+      "southWinRate_goingFirst": {
         "rate": 0.54,
         "wins": 27,
         "games": 50,
@@ -205,27 +152,80 @@
           0.404,
           0.6703
         ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.66,
+        "wins": 33,
+        "games": 50,
+        "ci95": [
+          0.5215,
+          0.7756
+        ]
+      }
+    },
+    {
+      "south": "st02",
+      "north": "st03",
+      "southWinRate_goingFirst": {
+        "rate": 0.52,
+        "wins": 26,
+        "games": 50,
+        "ci95": [
+          0.3851,
+          0.652
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.32,
+        "wins": 16,
+        "games": 50,
+        "ci95": [
+          0.2076,
+          0.4581
+        ]
+      }
+    },
+    {
+      "south": "st03",
+      "north": "st01",
+      "southWinRate_goingFirst": {
+        "rate": 0.68,
+        "wins": 34,
+        "games": 50,
+        "ci95": [
+          0.5419,
+          0.7924
+        ]
+      },
+      "southWinRate_goingSecond": {
+        "rate": 0.46,
+        "wins": 23,
+        "games": 50,
+        "ci95": [
+          0.3297,
+          0.596
+        ]
       }
     },
     {
       "south": "st03",
       "north": "st02",
       "southWinRate_goingFirst": {
-        "rate": 0.48,
-        "wins": 24,
+        "rate": 0.58,
+        "wins": 29,
         "games": 50,
         "ci95": [
-          0.348,
-          0.6149
+          0.4423,
+          0.7063
         ]
       },
       "southWinRate_goingSecond": {
-        "rate": 0.36,
-        "wins": 18,
+        "rate": 0.38,
+        "wins": 19,
         "games": 50,
         "ci95": [
-          0.2414,
-          0.4986
+          0.2586,
+          0.5185
         ]
       }
     },
@@ -242,12 +242,12 @@
         ]
       },
       "southWinRate_goingSecond": {
-        "rate": 0.5,
-        "wins": 25,
+        "rate": 0.46,
+        "wins": 23,
         "games": 50,
         "ci95": [
-          0.3664,
-          0.6336
+          0.3297,
+          0.596
         ]
       }
     }

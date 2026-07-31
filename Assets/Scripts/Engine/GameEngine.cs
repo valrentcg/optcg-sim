@@ -242,6 +242,9 @@ namespace OnePieceTcg.Engine
             // which reject the command without touching Life — cannot leak the counter.
             int lifeBeforeS = state.Players.TryGetValue("south", out var _ls) ? _ls.Life.Count : 0;
             int lifeBeforeN = state.Players.TryGetValue("north", out var _ln) ? _ln.Life.Count : 0;
+            // One batch per TOP-LEVEL command. Effects queued while resolving this command share a
+            // batch and are therefore "activated at the same time" for rule 8-6-1 (see QueuedBatch).
+            if (_applyDepth == 0) state.CommandBatch++;
             _applyDepth++;
             try
             {
@@ -285,6 +288,18 @@ namespace OnePieceTcg.Engine
             if (_applyDepth <= 0) FireLifeRemovedWatchers(state, lifeBeforeS, lifeBeforeN);
             CheckRuleProcessing(state);
             RetireUnresolvablePendingEffects(state);
+            // Deferred block-step decision. MaybeAutoPassBlock is a no-op unless a battle is sitting
+            // at Step == "block" with an empty pending queue, so this is the point where a battle whose
+            // reaction effects have just finished resolving finally gets its blocker availability
+            // evaluated against the REAL board. Runs after the retire sweep because that sweep can
+            // itself drain the last pending effect.
+            // Order matters: stage-in the defender's reactions BEFORE deciding the block step, or a
+            // reaction that grants [Blocker] would arrive after the block step had been skipped.
+            if (_applyDepth <= 0) AdvanceBattleReactions(state);
+            if (_applyDepth <= 0) MaybeAutoPassBlock(state);
+            // Continue a staged end-of-turn whose effects have just finished resolving. Runs after the
+            // retire sweep so an unresolvable end-of-turn effect cannot wedge the sequence.
+            if (_applyDepth <= 0) AdvanceEndOfTurn(state);
             Record(state, command);
             return state;
         }
@@ -3535,8 +3550,18 @@ namespace OnePieceTcg.Engine
         // A deck-look feature filter may be a '|'-joined OR list ("Egghead|Straw Hat Crew") for a
         // "{A} or {B} type card" reveal (EB04-002, OP06-025, OP07-041) — match ANY. A single tag has no
         // '|' so it splits to one element and behaves exactly as before.
-        private static bool FeatureMatches(CardDef def, string feature) =>
-            string.IsNullOrEmpty(feature) || feature.Split('|').Any(f => def.HasFeature(f.Trim()));
+        /// <summary>Does this card satisfy a deck-look/search feature filter? The filter may be a
+        /// DISJUNCTION ("A|B") produced by ParseCurlyBraceTagsOr for "{A} or {B} type" text, so a raw
+        /// def.HasFeature(filter) is wrong — no card carries a literal piped feature, so it returns
+        /// false for EVERYTHING and nothing is selectable.
+        ///
+        /// PUBLIC because the UI's glow/selectable rule must be the SAME rule as the resolver's. It
+        /// wasn't: GameManager.IsDeckLookSelectable called def.HasFeature(dl.FeatureFilter) directly,
+        /// so OP11-030 Shirahoshi ("reveal up to 1 {Neptunian} or {Fish-Man Island} type card") opened
+        /// a look in which the engine would have accepted either type but the UI greyed out all five
+        /// cards — reported as "isn't letting me select cards on the search as valid targets".</summary>
+        public static bool FeatureMatches(CardDef def, string feature) =>
+            string.IsNullOrEmpty(feature) || feature.Split('|').Any(f => def != null && def.HasFeature(f.Trim()));
 
         // "{A} or {B} type" → "A|B"; a single "{A}" → "A". Used for deck-look reveal filters so a dual-type
         // OR does not collapse to only its FIRST tag (ParseCurlyBraceTag) and wrongly reject the second type.
@@ -4151,12 +4176,45 @@ namespace OnePieceTcg.Engine
             // "When this Leader attacks or is attacked, …" (OP03-001 Ace) — fires on BOTH sides.
             FireOnLeaderAttacksOrIsAttacked(state, seat, attacker);                      // the attacking Leader
             FireOnLeaderAttacksOrIsAttacked(state, OtherSeat(seat), defender);           // the attacked Leader
-            // [On Your Opponent's Attack] effects on the DEFENDER's board (e.g. OP11-041 Nami
-            // leader: "[DON!! x1] [On Your Opponent's Attack] [Once Per Turn] You may trash 1
-            // card from your hand: This Leader gains +2000 power during this turn."). Queued
-            // optional; the pending-effect panel takes priority over the battle UI.
+            // Rule 8-6-1 / 1-3-10: "When the activation timing of card effects of both the turn player
+            // and non-turn player is fulfilled at the same time, the turn player will resolve their
+            // effect first." The attacker's [When Attacking] (queued just above) and the defender's
+            // [On Your Opponent's Attack] activate together here, so the defender's are STAGED: they are
+            // not queued until the turn player's queue has drained.
+            //
+            // Staged rather than enforced by REFUSING a resolve. An earlier attempt did refuse, and it
+            // hung 5 games in the full sweep: the refused side retried forever while the turn player's
+            // effect went unanswered. A staged reaction cannot be spun on because it does not exist yet.
+            state.BattleReactionSeat = OtherSeat(seat);
+            AdvanceBattleReactions(state);
+        }
+
+        /// <summary>Queues the defending board's [On Your Opponent's Attack] reactions once the turn
+        /// player's simultaneous effects have resolved (rule 8-6-1). Re-entered from the ApplyCommand
+        /// tail. Must run BEFORE MaybeAutoPassBlock, and MaybeAutoPassBlock must not decide the block
+        /// step while this is still staged, or a reaction that GRANTS [Blocker] would arrive after the
+        /// block step was already skipped.</summary>
+        private static void AdvanceBattleReactions(GameState state)
+        {
+            if (state?.BattleReactionSeat == null) return;
+            if (state.Battle == null || state.Status == "finished") { state.BattleReactionSeat = null; return; }
+            if (state.PendingEffects.Count > 0) return;      // turn player still has the floor
+            string defSeatStaged = state.BattleReactionSeat;
+            state.BattleReactionSeat = null;
+            ApplyOnOpponentsAttackEffects(state, defSeatStaged);
+        }
+
+        // [On Your Opponent's Attack] effects on the DEFENDER's board (e.g. OP11-041 Nami
+        // leader: "[DON!! x1] [On Your Opponent's Attack] [Once Per Turn] You may trash 1
+        // card from your hand: This Leader gains +2000 power during this turn."). Queued
+        // optional; the pending-effect panel takes priority over the battle UI.
+        private static void ApplyOnOpponentsAttackEffects(GameState state, string defSeat)
+        {
+            var attacker = state.Battle == null
+                ? null
+                : FindInPlay(Player(state, state.Battle.AttackerSeat), state.Battle.AttackerId);
+            if (attacker == null) return;
             {
-                string defSeat = OtherSeat(seat);
                 var dp = Player(state, defSeat);
                 var reactors = new List<CardInstance>();
                 if (dp.Leader != null) reactors.Add(dp.Leader);
@@ -4219,6 +4277,7 @@ namespace OnePieceTcg.Engine
             MaybeAutoPassBlock(state);
         }
 
+
         // Advances block → counter automatically when no defending Character could legally
         // block: needs the [Blocker] keyword (printed or granted), must be active, not the
         // attack target, not negated, not power-banned, not un-restable (blocking rests it),
@@ -4226,6 +4285,20 @@ namespace OnePieceTcg.Engine
         private static void MaybeAutoPassBlock(GameState state)
         {
             if (state.Battle == null || state.Battle.Step != "block") return;
+            // NEVER decide the block step while effects are still queued. DeclareAttack QUEUES the
+            // defender's [On Your Opponent's Attack] reactions and the attacker's interactive
+            // [When Attacking] effects rather than resolving them inline, so at declaration time the
+            // board does not yet show a Blocker those reactions are about to produce (OP04-071 and
+            // OP04-059 grant [Blocker]; OP07-024 grants it to a {Fish-Man}; OP09-032 sets a rested
+            // Blocker active). Deciding early skipped the block step to "counter", and since
+            // Step = "block" is assigned in exactly one place — battle creation — it could never be
+            // re-entered: the defender lost the ability to block outright. ApplyCommand re-calls this
+            // once the queue has drained, which is when the real answer is knowable.
+            if (state.PendingEffects.Count > 0) return;
+            // Same reason, one step earlier: the defender's [On Your Opponent's Attack] reactions may
+            // still be STAGED (rule 8-6-1 gives the turn player the floor first). Deciding the block step
+            // before those are even queued would skip it before a reaction could grant [Blocker].
+            if (state.BattleReactionSeat != null) return;
             var defSeat = state.Battle.TargetSeat;
             var d = Player(state, defSeat);
             bool anyBlocker = false;
@@ -5295,25 +5368,77 @@ namespace OnePieceTcg.Engine
                 bool costPrefixedC = System.Text.RegularExpressions.Regex.IsMatch(primaryC,
                     @"^\s*(?:\[[^\]]+\]\s*/?\s*)*You (?:may|can) [^:]+:",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                bool picksRecipientC = CounterBuffPicksRecipient(primaryC);
+                bool primaryQueuedC = false;
+                PendingEffect primaryEffectC = null;
                 if (!string.IsNullOrWhiteSpace(primaryC)
                     && (costPrefixedC
+                        || picksRecipientC                          // recipient is picked, not the defender
                         || !System.Text.RegularExpressions.Regex.IsMatch(primaryC, @"gains? \+\d",
                                 System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
                 {
+                    // ALWAYS offered, never auto-applied — even when only one card could receive it.
+                    // "Up to 1 …" lets the player choose ZERO (Comprehensive 8-4-4-1: "if 'up to' is
+                    // specified, the player may also choose 0"), and declining is a real play: they may
+                    // want the damage to go through. An earlier version auto-applied whenever exactly
+                    // one candidate existed; that quietly removed a legal decision, so it is gone.
                     QueueEffect(state, defenderSeat, counterCard, "counter", primaryC,
                         IsOptionalEffectText(primaryC), EffectScope.Instant, InferTargetZone(primaryC));
+                    var lastC = state.PendingEffects.Count > 0
+                        ? state.PendingEffects[state.PendingEffects.Count - 1] : null;
+                    if (lastC != null && lastC.SourceInstanceId == counterCard.InstanceId)
+                        primaryEffectC = lastC;      // QueueEffect can decline a clause, so verify
+                    primaryQueuedC = primaryEffectC != null;
                 }
                 if (thenIdx >= 0)
                 {
                     string secondary = NormalizeClause(effectText.Substring(thenIdx).Trim());
-                    QueueEffect(state, defenderSeat, counterCard, "counter", secondary,
-                        IsOptionalEffectText(secondary), EffectScope.Instant, InferTargetZone(secondary));
+                    // A mandatory rider — including the "If <cond>, …" shape, where the CONDITION
+                    // decides and not the player — should fire on its own rather than sit waiting:
+                    // IsValidEffectTarget is permissive for a clause with no target language (a bare
+                    // "Draw 1 card." lights every own-side card), so a queued-but-unresolved rider lit
+                    // the whole board and demanded a meaningless click before the draw. OP15-078
+                    // Mamaragan, reported as "still had me select a character before giving me the draw".
+                    //
+                    // But ONLY when the primary is not itself waiting on the player. Auto-resolving
+                    // ahead of a pending pick runs the clauses out of order, and a rider that opens a
+                    // deck look (EB01-019 Off-White: "Then, look at 3 cards…") then blocks the primary
+                    // outright — ApplyCommand refuses other commands while state.DeckLook is set, so
+                    // the +4000 pick became unanswerable. countercost caught exactly that.
+                    if (primaryQueuedC)
+                        // CHAINED to the primary, not queued as a second independent effect. The
+                        // continuation machinery re-queues it through QueueAndAutoResolve the moment the
+                        // primary resolves (or is skipped — PassEffect carries it too), which gets both
+                        // halves right: a mandatory rider RUNS instead of sitting there as a Use/Skip
+                        // prompt, and it runs strictly AFTER the pick so a rider that opens a deck look
+                        // (EB01-019 Off-White) can't block the primary.
+                        //
+                        // Queued independently it was offered as skippable, and a player did exactly
+                        // that — "passEffect effect-6" in the report — losing the draw:
+                        // "Didn't play the draw portion of mamaragan" (OP15-078).
+                        primaryEffectC.PendingContinuation = secondary;
+                    else
+                        QueueAndAutoResolve(state, defenderSeat, counterCard, "counter", secondary,
+                            IsOptionalEffectText(secondary), EffectScope.Instant, InferTargetZone(secondary));
                 }
             }
         }
 
         private static int AutomatedCounterPower(CardInstance instance)
             => CounterPowerCore(instance, includeCostPrefixed: false);
+
+        /// <summary>Does this [Counter] clause let the PLAYER choose which card gains the boost
+        /// ("Up to 1 of your Leader or Character cards gains +1000 power"), rather than naming a fixed
+        /// recipient ("this Character gains +2000")? A chosen recipient must never be auto-applied to
+        /// whatever is in the battle — that silently spends the player's pick on the blocker.
+        ///
+        /// Deliberately matches only the CHOOSER phrase ("[up to] N of your …"); the caller has already
+        /// established there is a "gains +N" and has already cut the clause at "Then,", so this never
+        /// reads a rider's wording as the current clause's recipient.</summary>
+        private static bool CounterBuffPicksRecipient(string clause) =>
+            !string.IsNullOrWhiteSpace(clause)
+            && System.Text.RegularExpressions.Regex.IsMatch(clause, @"\b(?:up to )?\d+ of your\b",
+                   System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
         private static int CounterPowerCore(CardInstance instance, bool includeCostPrefixed)
         {
@@ -5342,6 +5467,13 @@ namespace OnePieceTcg.Engine
                     @"^\s*(?:\[[^\]]+\]\s*/?\s*)*You (?:may|can) [^:]+:",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 return 0;
+            // Same reasoning for a boost whose RECIPIENT IS CHOSEN ("Up to 1 of your Leader or
+            // Character cards gains +1000 power"). Granting it automatically hands it to whichever
+            // card happens to be in the battle — the blocker — and the player never gets the pick the
+            // card gives them. OP15-078 Mamaragan, reported as "Automatically gave the +1k to Kizaru,
+            // didn't have me select". Returning 0 hands the clause to the queue path below, which asks
+            // first and then applies; the two paths stay mutually exclusive.
+            if (!includeCostPrefixed && CounterBuffPicksRecipient(counterClause)) return 0;
             var m = System.Text.RegularExpressions.Regex.Match(
                 counterClause, @"\+(\d{3,5})\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (m.Success && int.TryParse(m.Groups[1].Value, out int parsed)) return parsed;
@@ -5448,7 +5580,25 @@ namespace OnePieceTcg.Engine
             // Taking damage just takes the top life card to hand; the card is NOT revealed unless its
             // owner chooses to use its [Trigger]. So log only the damage here, never the card identity.
             Log(state, defenderSeat, $"{p.Name} takes 1 damage.");
-            if (string.IsNullOrWhiteSpace(GetCard(cardFromLife).Trigger)) FinalizeTrigger(state, defenderSeat);
+            // The Trigger step is ALWAYS entered, even when the revealed card has no [Trigger].
+            //
+            // It used to auto-finalize here whenever Trigger text was absent, which leaked hidden
+            // information: a Life card WITH a [Trigger] paused for the defender's decision while one
+            // WITHOUT resolved instantly, so the attacker learned — on every single damage event —
+            // whether that face-down Life card was a Trigger card. Over a game that maps out the
+            // defender's Life and tells the attacker whether to fear a Trigger on the next hit.
+            // (Contrast the BLOCK step's auto-skip, which is fine: blocker availability is public
+            // because the board is visible. Life cards are not.)
+            //
+            // Cost is a pass click on damage that could not have done anything; that is the same
+            // trade every other sim makes here, and it is the defender's information to spend, not
+            // ours to leak by default. A client-side "auto-pass when I have no Trigger" convenience
+            // toggle can be offered, but it must be OFF by default and labelled, because enabling it
+            // re-creates exactly this tell.
+            //
+            // Safe for bots: both agents answer the step unconditionally
+            // (IntermediateBot -> useTrigger/passTrigger, AdvancedContractBot -> TriggerUtilityPolicy),
+            // and LegalActions lists both commands at Step == "trigger".
         }
 
         private static void FinalizeTrigger(GameState state, string defenderSeat)
@@ -5586,6 +5736,12 @@ namespace OnePieceTcg.Engine
             if (seat != defenderSeat) return;
             var cardFromLife = state.Battle.RevealedLife;
             if (cardFromLife == null) { FinalizeTrigger(state, defenderSeat); return; }
+            // No [Trigger] to use: treat Use exactly like Pass instead of falling through to the
+            // "needs manual resolution" branch and logging an empty clause. Reachable now that the
+            // Trigger step is always entered (see RevealLifeAndStartTrigger) — a client that shows a
+            // Use button for a blank Trigger, or a bot that picks useTrigger, must not be punished.
+            if (string.IsNullOrWhiteSpace(GetCard(cardFromLife).Trigger))
+            { FinalizeTrigger(state, defenderSeat); return; }
             if (TriggersNegatedFor(state, defenderSeat))
             {
                 Log(state, defenderSeat, $"{NameId(GetCard(cardFromLife))}'s [Trigger] is negated by the opponent.");
@@ -6527,12 +6683,27 @@ namespace OnePieceTcg.Engine
                         p.Life.Add(victim);   // end of the list = TOP of Life
                         Log(state, victimSeat, $"{NameId(GetCard(guard))}: {NameId(GetCard(victim))} placed {(addFaceUp ? "face-up" : "face-down")} on top of Life instead of being removed.");
                     }
-                    else if (ContainsAll(line, "trash") && ContainsAll(line, "from the top of your Life cards instead"))
+                    // "trash N card(s) from the top [or bottom] of your Life cards instead".
+                    // The "or bottom" variant (ST09-010 Ace) MUST be accepted here. It used to fall
+                    // through every branch to `return false`, and because the Use/Skip prompt is raised
+                    // upstream (see the removalChoice queue above), the player was offered the
+                    // protection, accepted it, paid NOTHING, and the Character was K.O.'d anyway.
+                    // Matching only "from the top of your Life cards instead" could not see it: the
+                    // card's wording is "from the top or bottom of …", which does not contain that
+                    // substring. Kept text-driven so any future card using either wording is covered.
+                    else if (ContainsAll(line, "trash")
+                             && (ContainsAll(line, "from the top of your Life cards instead")
+                                 || ContainsAll(line, "from the top or bottom of your Life cards instead")))
                     {
                         // OP05-100 Enel: burn the top N Life card(s) to keep this Character on the field.
-                        var tlM = System.Text.RegularExpressions.Regex.Match(line, @"trash (\d+) cards? from the top of your Life");
+                        var tlM = System.Text.RegularExpressions.Regex.Match(line, @"trash (\d+) cards? from the top (?:or bottom )?of your Life");
                         int tlN = tlM.Success ? int.Parse(tlM.Groups[1].Value) : 1;
                         if (p.Life.Count < tlN) continue;   // no Life to burn → can't pay → removal proceeds
+                        // Pay from the TOP. For the "or bottom" wording this does not yet offer the
+                        // two-way pick, matching the ONLY other implementation of this cost form in the
+                        // engine (OP03-100's Trigger cost, which also takes Life[Count-1] unprompted).
+                        // Deviation is shared by exactly those 2 cards; fix both together when the
+                        // Life-end picker exists, rather than inventing a one-off here.
                         for (int i = 0; i < tlN; i++) { var lc = Pop(p.Life); lc.Zone = "trash"; lc.FaceUp = false; p.Trash.Add(lc); }
                         Log(state, victimSeat, $"{NameId(GetCard(guard))}: trashes {tlN} card(s) from the top of Life instead of {NameId(GetCard(victim))} leaving the field.");
                     }
@@ -6962,6 +7133,15 @@ namespace OnePieceTcg.Engine
                         MoveToTrash(state, dr.VictimSeat, dr.VictimInstanceId,
                         isKo: dr.Kind == DeferredRemovalKind.Ko, byBattleKo: dr.ByBattleKo);
                 }
+                // This branch RETURNS, so it used to skip the TryFinalizeDeferredActivatedTrigger call at
+                // the end of the method. When a [Trigger] whose effect K.O.'s something ran into a
+                // removal PROTECTION, the K.O. deferred into this removalChoice, the activated trigger was
+                // parked in DeferredActivatedTriggerSeat, and answering the prompt never un-parked it —
+                // leaving Battle.Step == "trigger" with RevealedLife still set, so the SAME [Trigger] was
+                // activated a second time. One activation trashed the Event, the other routed it to hand:
+                // one instance in two zones (OP02-117 Ice Age, OP03-121 Thunder Bolt, and the ST09-009 /
+                // ST21-017 / ST29-013 variants — every dup-instanceId invariant violation).
+                TryFinalizeDeferredActivatedTrigger(state);
                 return;
             }
 
@@ -7068,7 +7248,7 @@ namespace OnePieceTcg.Engine
             if (state.DeckLook != null && !ReferenceEquals(state.DeckLook, dlBefore)
                 && string.IsNullOrEmpty(state.DeckLook.PostLookClause))
             {
-                var tail = ExtractHandDisposalTail(effect.Text);
+                var tail = ExtractPostLookTail(effect.Text);
                 if (tail != null) state.DeckLook.PostLookClause = tail;
             }
             // A [Once Per Turn] triggered effect is consumed only now that it RESOLVED (was used) —
@@ -7146,6 +7326,10 @@ namespace OnePieceTcg.Engine
                     MoveToTrash(state, drSkip.VictimSeat, drSkip.VictimInstanceId,
                         isKo: drSkip.Kind == DeferredRemovalKind.Ko, byBattleKo: drSkip.ByBattleKo);
                 }
+                // Same early-return gap as the resolve path above: declining the protection must also
+                // un-park a [Trigger] that was deferred waiting on this answer, or the trigger step stays
+                // live and the revealed Event can be activated twice (one instance, two zones).
+                TryFinalizeDeferredActivatedTrigger(state);
                 return;
             }
             // A MANDATORY "trash N cards from your hand" (bare N — NOT "up to"/"you may") is a cost/downside
@@ -7458,6 +7642,51 @@ namespace OnePieceTcg.Engine
             var ic = StringComparison.OrdinalIgnoreCase;
             return text.IndexOf(". Then,", ic) >= 0 || text.IndexOf(".\nThen,", ic) >= 0
                 || text.IndexOf(". After that,", ic) >= 0 || text.IndexOf(".\nAfter that,", ic) >= 0;
+        }
+
+        /// <summary>The effect's FIRST clause — everything up to a sentence-boundary ". Then, …" /
+        /// ". After that, …" rider. A rider resolves later as its own effect, so a handler deciding
+        /// what the CURRENT clause DOES must never read it.
+        ///
+        /// OP16-026 Ivankov is the case that forced this: "Look at 3 cards from the top of your deck;
+        /// reveal up to 1 {Impel Down} type card, add it to your hand and place the rest at the bottom
+        /// … . Then, play up to 1 Character card with a cost of 2 or less from your hand." The
+        /// deck-look PLAY-mode handler matched on the RIDER's "play up to" and then took its "cost of
+        /// 2" as the look's own filter, so the player was shown the 3 looked cards filtered to cost ≤2
+        /// and made to play one of THOSE — instead of revealing an {Impel Down} card to hand and then
+        /// playing from HAND. Reported by a playtester as "made me pick cost 2 or less than any
+        /// imperial down. forced me play from those 3 instaead of hand".</summary>
+        private static string LeadClause(string text)
+        {
+            if (string.IsNullOrEmpty(text) || ContainsAll(text, "Choose one")) return text ?? "";
+            var ic = StringComparison.OrdinalIgnoreCase;
+            int cut = -1;
+            foreach (var sep in new[] { ". Then,", ".\nThen,", ". After that,", ".\nAfter that," })
+            {
+                int i = text.IndexOf(sep, ic);
+                if (i >= 0 && (cut < 0 || i < cut)) cut = i;
+            }
+            return cut < 0 ? text : text.Substring(0, cut + 1);   // keep the sentence's period
+        }
+
+        /// <summary>A trailing clause the deck-look itself will never perform, stashed on
+        /// DeckLookState.PostLookClause and fired when the look completes. Deck-look texts
+        /// deliberately skip the ". Then," splitter, so without this the rider is silently DROPPED.
+        /// Covers the long-standing hand-disposal tail, plus any sequential rider that acts on the
+        /// HAND — a look holds DECK cards, so it can never satisfy one itself.</summary>
+        private static string ExtractPostLookTail(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return null;
+            var disposal = ExtractHandDisposalTail(text);
+            if (disposal != null) return disposal;
+            if (!HasSentenceThen(text)) return null;
+            int cut = FindThenClause(text);
+            if (cut < 0 || cut >= text.Length) return null;
+            string tail = text.Substring(cut).Trim();
+            if (tail.StartsWith("Then,", StringComparison.OrdinalIgnoreCase)) tail = tail.Substring(5).Trim();
+            else if (tail.StartsWith("After that,", StringComparison.OrdinalIgnoreCase)) tail = tail.Substring(11).Trim();
+            if (tail.Length == 0 || !ContainsAll(tail, "from your hand")) return null;
+            return char.ToUpperInvariant(tail[0]) + tail.Substring(1);
         }
 
         // "You may trash any number of [{tag} type / Event or Stage ]cards from your hand. <recipient>
@@ -8370,10 +8599,33 @@ namespace OnePieceTcg.Engine
             return true;
         }
 
+        // ---- Rule 8-6-1 / 1-3-10 is NOT enforced here. Attempted and REVERTED 2026-07-30. ----
+        //
+        // The rule: "When the activation timing of card effects of both the turn player and non-turn
+        // player is fulfilled at the same time, the turn player will resolve their effect first."
+        // The violation is real and reachable straight from DeclareAttack, which queues the attacker's
+        // [When Attacking] and the defender's [On Your Opponent's Attack] in the SAME command.
+        //
+        // The attempt refused a non-turn-player effect while a turn-player effect shared its
+        // QueuedBatch. Batch-scoping was meant to avoid deadlock (a turn-player effect can legitimately
+        // sit in the queue waiting on a prompt the NON-turn player owns), and it was not enough: the
+        // full-sweep gate reported 5 games that never reached 'finished', each with
+        // "resolves their effect first (rule 8-6-1)" repeating — the refused side retries forever while
+        // the turn player's effect is never answered. A hang is far worse than a mis-ordered pair, so
+        // the enforcement is gone and only the batch stamping remains as groundwork.
+        //
+        // A future attempt needs a liveness story, not just a priority test: e.g. refuse only while the
+        // turn player's same-batch effect is actually ACTIONABLE by them right now, and prove it on the
+        // DEFAULT full sweep (`dotnet run -- ` with no args), which is the gate that catches stalls —
+        // `invariants` and `coverage` both reported clean while this was hanging games.
+        //
+        // Note the rule does NOT constrain order among ONE player's own effects: 6-6-1-1-3/4 says those
+        // may be resolved "in any order", so the free choice below is correct and must stay.
         private static PendingEffect FindPendingEffect(GameState state, string seat, string effectId)
         {
             if (state.PendingEffects.Count == 0) return null;
-            if (!string.IsNullOrEmpty(effectId)) return state.PendingEffects.FirstOrDefault(e => e.EffectId == effectId && e.Seat == seat);
+            if (!string.IsNullOrEmpty(effectId))
+                return state.PendingEffects.FirstOrDefault(e => e.EffectId == effectId && e.Seat == seat);
             // NEVER fall back across seats. The id-supplied path above checks Seat, but this one used to
             // end in "?? state.PendingEffects[0]" — whoever queued first, regardless of who is asking. So
             // a resolveEffect from the OPPONENT with no EffectId resolved YOUR decision: it paid your
@@ -8398,6 +8650,20 @@ namespace OnePieceTcg.Engine
             effect != null
             && (effect.Optional || IsOptionalEffectText(effect.Text) || effect.SelectionsRemaining > 0);
 
+        /// <summary>Can the player decline this effect? An ACTIVATION COST always makes it declinable.
+        ///
+        /// Comprehensive Rules 8-3-1 defines the activation cost as "the action before the : colon",
+        /// and the official Q&A (General Rules → Keywords) is explicit that the cost is optional even
+        /// when the effect itself is mandatory:
+        ///
+        ///   Q. Can I play a Character card with an [On Play] effect without activating this [On Play] effect?
+        ///   A. No, you must activate the [On Play] effect whenever possible. However, IF THE EFFECT HAS A
+        ///      COST, YOU CAN CHOOSE NOT TO PAY THAT COST and play the card without activating the effect.
+        ///
+        /// This is NOT limited to costs written "you may". 8-3-1-4 describes that WORDING; it does not
+        /// restrict declining to it, and 8-3-1-5/8-3-1-6 ("①", "DON!! −X") describe how such a cost is
+        /// PAID, not that paying is compelled. A bare "DON!! −2:" is equally declinable — OP16-073
+        /// Borsalino, reported as "Didn't give me the option to skip effect, had to resolve".</summary>
         private static bool IsOptionalEffectText(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return true;
@@ -8405,7 +8671,30 @@ namespace OnePieceTcg.Engine
             return t.StartsWith("You may", StringComparison.OrdinalIgnoreCase)
                 || t.StartsWith("If ", StringComparison.OrdinalIgnoreCase)
                 || text.IndexOf("up to", StringComparison.OrdinalIgnoreCase) >= 0
-                || text.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0;
+                || text.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0
+                || HasActivationCostPrefix(t);
+        }
+
+        /// <summary>Does this (timing-tag-stripped) effect OPEN with an activation cost — the action
+        /// before a ":" (Comprehensive 8-3-1)? Bounded to the first SENTENCE so a colon belonging to a
+        /// later clause never counts.
+        ///
+        /// The sentence boundary is ". " (period + space), never a bare '.': card NAMES carry periods
+        /// ("Emporio.Ivankov", "Mr.1(Daz.Bonez)"), so a bare-'.' bound would cut inside a name and
+        /// silently mis-classify every cost that references one.</summary>
+        private static bool HasActivationCostPrefix(string tagStripped)
+        {
+            if (string.IsNullOrEmpty(tagStripped)) return false;
+            int colon = tagStripped.IndexOf(':');
+            if (colon <= 0) return false;
+            int sentenceEnd = tagStripped.IndexOf(". ", StringComparison.Ordinal);
+            if (sentenceEnd >= 0 && sentenceEnd < colon) return false;   // colon belongs to a later sentence
+            string prefix = tagStripped.Substring(0, colon).Trim();
+            if (prefix.Length == 0 || prefix.Length > 90) return false;
+            // "Choose one:" is a MODE selector, not a cost — the player picks a branch, they do not
+            // get to decline the effect on account of it.
+            if (prefix.IndexOf("Choose one", StringComparison.OrdinalIgnoreCase) >= 0) return false;
+            return true;
         }
 
         // A clause that must pick one of the OPPONENT'S Characters can never be satisfied when
@@ -8590,7 +8879,19 @@ namespace OnePieceTcg.Engine
                 foreach (var e in state.PendingEffects)
                 {
                     if (e == null || string.IsNullOrEmpty(e.Text)) continue;
-                    if (!ClauseHasNoLegalCharacterTarget(state, e.Seat, e.Text)
+                    // Judge only the LEAD clause, not a ". Then, …" rider. Rule 1-3-2 retires the part
+                    // that has no legal target, and this sweep retires the WHOLE pending effect — so
+                    // reading the rider let a dead rider cancel a live, mandatory lead clause. OP15-077
+                    // Lightning Dragon ("DON!! −1: Draw 1 card. Then, up to 1 of your opponent's rested
+                    // Characters … will not become active") lost its guaranteed draw whenever the
+                    // opponent happened to have no RESTED Character: the DON!! was spent, the Event went
+                    // to the trash, and the player drew nothing. The rider is queued as its own effect at
+                    // resolution time and is judged on its own merits when it gets there.
+                    string leadForRetire = e.Text;
+                    int thenAtRetire = FindThenClause(leadForRetire);
+                    if (thenAtRetire > 0 && thenAtRetire <= leadForRetire.Length)
+                        leadForRetire = leadForRetire.Substring(0, thenAtRetire);
+                    if (!ClauseHasNoLegalCharacterTarget(state, e.Seat, leadForRetire)
                         && !HandDiscardCannotBePaid(state, e)) continue;
                     stuck = e; break;
                 }
@@ -8649,6 +8950,7 @@ namespace OnePieceTcg.Engine
             {
                 EffectId = $"effect-{state.EffectSequence}",
                 Seat = seat,
+                QueuedBatch = state.CommandBatch,
                 SourceInstanceId = source.InstanceId,
                 SourceCardId = source.CardId,
                 Timing = timing,
@@ -9733,6 +10035,15 @@ namespace OnePieceTcg.Engine
             if (state == null || effect == null || card == null) return false;
             var def = GetCard(card);
             if (def == null) return false;
+            // AWAITING A "DON!! −N" PAYMENT: the only legal click right now is a DON!! card, and a DON!!
+            // is a DonInstance, never a CardInstance — so NO card is a valid target during this step.
+            // Without this the cost prefix is stripped a few lines below and the BODY decides the glow,
+            // so the effect lit up its body's targets while the cost was still unpaid. Reported on
+            // OP16-078 Marineford ("[Activate: Main] DON!! −1, You may rest this Stage: Draw 1 card and
+            // trash 1 card from your hand"): "Flagged my hand green but didn't don minus until i clicked
+            // an unlit one" — the hand glowed for the trash, and the DON!! that actually had to be paid
+            // did not. One gate here fixes the human glow, the red-invalid rule and the bot's scan alike.
+            if (effect.DonPaymentRemaining > 0) return false;
             // A card already chosen this multi-pick resolution is no longer a valid target (distinct picks).
             if (effect.PickedInstanceIds != null && effect.PickedInstanceIds.Contains(card.InstanceId)) return false;
             // A pick frozen to what was legal at queue time (see PendingEffect.EligibleInstanceIds).
@@ -11847,6 +12158,46 @@ namespace OnePieceTcg.Engine
                     Log(state, effect.Seat, $"{sourceName} sets the Leader as active.");
                 }
                 return EffectResolution.Resolved;
+            }
+
+            // ---- "[If <condition>,] set your Leader and all of your Characters as active." ----------
+            // Board-wide restand (OP16-038 "Let's Go!! To the Navy Headquarters!!": "You may rest 6 of
+            // your DON!! cards: If you have 5 {Impel Down} type Characters with different card names,
+            // set your Leader and all of your Characters as active"). There was NO handler for this
+            // body at all — only the power-gain and negation-aura variants of "Your Leader and all of
+            // your Characters" existed — so the clause fell through to the unimplemented-clause
+            // fallback: the player rested 6 DON!! for a guaranteed no-op. Reported from the opposing
+            // seat as "had 5 impel don characters and the effect on this card didn't work despite
+            // spending his don".
+            //
+            // The leading "If …," is evaluated HERE because this text reaches the resolver whole; the
+            // condition counter (EvaluateCondition) already handles "N {tag} type Characters with
+            // different card names" correctly, which is why the condition was never the problem.
+            // "your Leader and" is optional so a Characters-only wording restands only the Characters.
+            {
+                var restandAll = System.Text.RegularExpressions.Regex.Match(text,
+                    @"set (your Leader and )?all of your Characters as active",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (restandAll.Success)
+                {
+                    var raIf = System.Text.RegularExpressions.Regex.Match(text,
+                        @"^\s*If ([^,]+),", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (raIf.Success && !EvaluateCondition(state, effect.Seat, raIf.Groups[1].Value.Trim(),
+                                                           effect.SourceInstanceId))
+                    {
+                        Log(state, effect.Seat, $"{sourceName}: the condition is not met.");
+                        return EffectResolution.Resolved;
+                    }
+                    int woke = 0;
+                    if (restandAll.Groups[1].Success && owner.Leader != null && owner.Leader.Rested)
+                    { owner.Leader.Rested = false; woke++; }
+                    foreach (var rc in owner.CharacterArea)
+                        if (rc != null && rc.Rested) { rc.Rested = false; woke++; }
+                    Log(state, effect.Seat, woke > 0
+                        ? $"{sourceName} sets {woke} card(s) as active."
+                        : $"{sourceName}: nothing was rested to set active.");
+                    return EffectResolution.Resolved;
+                }
             }
 
             // ---- "take an extra turn after this one." (OP05-119 Doflamingo DON!! −10 finisher.) Flag an extra
@@ -14915,24 +15266,31 @@ namespace OnePieceTcg.Engine
 
             // ---- "Look at N cards from the top of your deck (and|;) play up to N <filter>.
             // Then, place the rest at the bottom / trash the rest." → deck look in PLAY mode. --
-            if (ContainsAll(text, "Look at") && ContainsAll(text, "from the top of your deck")
-                && ContainsAll(text, "play up to"))
+            // Scoped to the LOOK'S OWN clause. Matching on the whole text let a ". Then, play up to 1
+            // Character card … from your hand" rider hijack the look into PLAY mode and donate its
+            // "cost of 2" as the look's filter (OP16-026 Ivankov — see LeadClause). The extra
+            // "from your hand" guard is the direct statement of the rule: a look holds DECK cards, so
+            // a play whose SOURCE is the hand is never this handler's job. The rider is not lost —
+            // ExtractPostLookTail stashes it and it fires against the hand once the look completes.
+            string lookClause = LeadClause(text);
+            if (ContainsAll(lookClause, "Look at") && ContainsAll(lookClause, "from the top of your deck")
+                && ContainsAll(lookClause, "play up to") && !ContainsAll(lookClause, "from your hand"))
             {
-                int lpN = ParseLookCount(text);
-                int lpCost = ParseLimit(text, @"cost of (\d+)(?: or less)?");
-                int lpPower = ParseLimit(text, @"(\d{1,5}) power or less");
-                string lpFeat = ParseCurlyBraceTag(text);
-                var lpIncl = System.Text.RegularExpressions.Regex.Match(text, @"type including ""([^""]+)""");
+                int lpN = ParseLookCount(lookClause);
+                int lpCost = ParseLimit(lookClause, @"cost of (\d+)(?: or less)?");
+                int lpPower = ParseLimit(lookClause, @"(\d{1,5}) power or less");
+                string lpFeat = ParseCurlyBraceTag(lookClause);
+                var lpIncl = System.Text.RegularExpressions.Regex.Match(lookClause, @"type including ""([^""]+)""");
                 if (lpIncl.Success && string.IsNullOrEmpty(lpFeat)) lpFeat = lpIncl.Groups[1].Value.Trim();
                 var lpSrc = FindCardInstance(state, effect.SourceInstanceId) ?? owner.Leader;
                 if (lpSrc != null)
                 {
                     StartDeckLook(state, effect.Seat, lpSrc, lpFeat, lpN, null, "character",
-                        ContainsAll(text, "trash the rest"), true, ContainsAll(text, "play") && ContainsAll(text, "rested"),
+                        ContainsAll(lookClause, "trash the rest"), true, ContainsAll(lookClause, "play") && ContainsAll(lookClause, "rested"),
                         lpCost, lpPower);
                     // "other than [Name]" exclusion (EB02-056 "…{Scientist}…other than [Vegapunk]", OP04-084) — was
                     // dropped in the play path (only the reveal-add path parsed it), so the excluded card was playable.
-                    var lpExcl = System.Text.RegularExpressions.Regex.Match(text, @"other than \[([^\]]+)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    var lpExcl = System.Text.RegularExpressions.Regex.Match(lookClause, @"other than \[([^\]]+)\]", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                     if (lpExcl.Success && state.DeckLook != null) state.DeckLook.ExcludeName = lpExcl.Groups[1].Value.Trim();
                 }
                 return EffectResolution.Resolved;
@@ -18820,6 +19178,13 @@ namespace OnePieceTcg.Engine
             card.Zone = "trash";
             card.FaceUp = false;
             p.Trash.Add(card);
+            // Presentation signal only (see GameState.ActivatedTriggerIds). Recorded HERE because
+            // this is the single chokepoint every "the trigger was used, so the card is spent"
+            // path funnels through — including the ones that route via a PendingEffect and only
+            // land in the trash a resolution later. The early return above means a trigger that
+            // PLAYS its card (character to the board) is correctly never marked.
+            if (!state.ActivatedTriggerIds.Contains(card.InstanceId))
+                state.ActivatedTriggerIds.Add(card.InstanceId);
         }
 
         // Fire [On KO] effects for a character being sent to trash from the field.
@@ -18984,8 +19349,54 @@ namespace OnePieceTcg.Engine
             if (state.ActiveModifiers.Any(m => m.ModifierType == "returnDonToParityAtEndOfTurn" && m.OwnerSeat == seat))
                 ReturnDonToParity(state, seat);
             state.ActiveModifiers.RemoveAll(m => m.ModifierType == "returnDonToParityAtEndOfTurn");
-            ApplyEndOfTurnEffects(state, seat);
-            ApplyEndOfOpponentTurnEffects(state, OtherSeat(seat));
+            // Enter the STAGED end-of-turn sequence instead of running both scanners and handing the
+            // turn over unconditionally. See GameState.EndTurnStage for why.
+            state.EndTurnSeat = seat;
+            state.EndTurnStage = "eoyt";
+            AdvanceEndOfTurn(state);
+        }
+
+        /// <summary>Walks the end-of-turn sequence "eoyt" → "eoot" → "handover", stopping as soon as a
+        /// stage leaves an unanswered effect in the queue. Re-entered from the ApplyCommand tail every
+        /// time a command resolves, so the sequence continues the moment the queue drains.
+        ///
+        /// Each stage is advanced BEFORE its scanner runs, so a scanner that queues cannot be run twice
+        /// when the sequence resumes. Ordering "eoyt" strictly before "eoot" is rule 6-6-1-1-2.</summary>
+        private static void AdvanceEndOfTurn(GameState state)
+        {
+            if (state == null) return;
+            // Bounded: 3 stages, and each iteration either advances the stage or returns.
+            for (int guard = 0; guard < 8; guard++)
+            {
+                if (state.EndTurnStage == null || state.EndTurnSeat == null) return;
+                if (state.Status == "finished") { state.EndTurnStage = null; state.EndTurnSeat = null; return; }
+                // A stage's effect is still waiting on its owner — the turn stays put. Unresolvable
+                // effects are retired by the sweep that runs just before this, so this cannot wedge.
+                if (state.PendingEffects.Count > 0) return;
+                string seat = state.EndTurnSeat;
+                switch (state.EndTurnStage)
+                {
+                    case "eoyt":
+                        state.EndTurnStage = "eoot";
+                        ApplyEndOfTurnEffects(state, seat);
+                        break;
+                    case "eoot":
+                        state.EndTurnStage = "handover";
+                        ApplyEndOfOpponentTurnEffects(state, OtherSeat(seat));
+                        break;
+                    default:
+                        state.EndTurnStage = null;
+                        state.EndTurnSeat = null;
+                        FinishTurnHandover(state, seat);
+                        return;
+                }
+            }
+        }
+
+        /// <summary>The actual turn hand-over, split out of EndTurn so it can run later than the
+        /// end-of-turn effects that must precede it.</summary>
+        private static void FinishTurnHandover(GameState state, string seat)
+        {
             state.Selected = null;
             state.Battle = null;
             // Extra turn (OP05-119): keep the turn with the current player instead of passing it. Consume the flag.
@@ -19076,10 +19487,13 @@ namespace OnePieceTcg.Engine
                 }
 
                 // "[If <cond>,] K.O. up to N of your opponent's RESTED Characters [with a cost of M or less]"
-                // (OP04-034 Lao.G). Resolve INLINE now — before ApplyStartOfTurn refreshes the opponent and clears
-                // their rested state. A deferred player pick would resolve during the opponent's turn, by which
-                // point the rested targets are gone and the K.O. always fizzled. Auto-pick the highest-cost valid
-                // rested target (a sensible default for this niche end-of-turn removal).
+                // (OP04-034 Lao.G). This used to AUTO-PICK the highest-cost valid rested target and take the
+                // full N, because a queued pick would previously have resolved during the opponent's turn —
+                // after their Refresh Phase had cleared the rested state — so the K.O. always fizzled. The
+                // staged end-of-turn (see AdvanceEndOfTurn) now holds the hand-over until this pick is
+                // answered, so the rested targets are still there and "up to N" can be what the rules say it
+                // is: the controller's choice, including choosing fewer or none. Only the leading condition
+                // is settled here; target selection falls through to the generic queue below.
                 if (ContainsAll(eoyClause, "K.O. up to") && ContainsAll(eoyClause, "opponent") && ContainsAll(eoyClause, "rested"))
                 {
                     var eotCondM = System.Text.RegularExpressions.Regex.Match(eoyClause, @"^If ([^,]+),",
@@ -19089,26 +19503,17 @@ namespace OnePieceTcg.Engine
                         Log(state, seat, $"{NameId(def)}: [End of Your Turn] condition not met — skipped.");
                         continue;
                     }
-                    int eotN = ParseLimit(eoyClause, @"K\.O\. up to (\d+)"); if (eotN < 1) eotN = 1;
-                    int eotCap = ParseCostFilter(eoyClause);
-                    var eotOpp = Player(state, OtherSeat(seat));
-                    var eotTargets = eotOpp.CharacterArea.Where(x => x != null && x.Rested
-                            && (eotCap < 0 || GetCost(state, x) <= eotCap) && !CannotBeKoedByEffect(state, x))
-                        .OrderByDescending(x => GetCost(state, x)).Take(eotN).ToList();
-                    foreach (var t in eotTargets)
-                    {
-                        if (TryRemovalReplacement(state, OtherSeat(seat), t, promptAs: DeferredRemovalKind.Ko)) continue;
-                        MoveToTrash(state, OtherSeat(seat), t.InstanceId);
-                        Log(state, seat, $"{NameId(def)} [End of Your Turn] K.O.s {NameId(GetCard(t))}.");
-                    }
-                    continue;
+                    // deliberately NO continue — fall through to QueueAndAutoResolve at the end of the loop.
                 }
 
                 // "[If <cond>,] Set up to N of your ({tag} type )?Character(s) [with a cost of M or less] as active."
-                // (OP07-117 {Egghead}, EB03-061 {FILM}, …) — a TARGETED restand of your own Characters. Resolve
-                // INLINE: end-of-turn fires with no player interaction, so a queued "up to N" pick just STALLS
-                // pending and the restand never happens (the effect was left un-resolved as the turn passed). Gate
-                // on the leading If, auto-pick valid rested targets honoring the {tag}/cost filter and freeze (#291).
+                // (OP07-117 {Egghead}, EB03-061 {FILM}, …) — a TARGETED restand of your own Characters. This
+                // used to auto-pick the first N valid rested Characters in BOARD ORDER, because a queued
+                // "up to N" pick would previously just STALL pending and the restand never happened (the
+                // effect was left un-resolved as the turn passed). The staged end-of-turn (see
+                // AdvanceEndOfTurn) now holds the hand-over until the pick is answered, so which Characters
+                // to restand — and how many, including none — is the controller's choice again. Only the
+                // leading condition is settled here; selection falls through to the generic queue below.
                 // Excludes "DON!!" (those auto-resolve via IsAutomatedEffectPattern) and the self "Set this …" form.
                 if (System.Text.RegularExpressions.Regex.IsMatch(eoyClause, @"[Ss]et up to \d+ (?:of your )?(?:\{[^}]+\} type )?Characters?\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase)
                     && ContainsAll(eoyClause, "as active") && !ContainsAll(eoyClause, "DON!!")
@@ -19121,20 +19526,7 @@ namespace OnePieceTcg.Engine
                         Log(state, seat, $"{NameId(def)}: [End of Your Turn] condition not met — no restand.");
                         continue;
                     }
-                    int saN = ParseLimit(eoyClause, @"[Ss]et up to (\d+)"); if (saN < 1) saN = 1;
-                    int saCap = ParseCostFilter(eoyClause);
-                    string saTag = ParseCurlyBraceTag(eoyClause);
-                    int saSet = 0;
-                    foreach (var t in Player(state, seat).CharacterArea)
-                    {
-                        if (saSet >= saN) break;
-                        if (t == null || !t.Rested || HasModifier(state, t, "freeze")) continue;
-                        if (!string.IsNullOrEmpty(saTag) && !GetCard(t).HasFeature(saTag)) continue;
-                        if (saCap >= 0 && GetCost(state, t) > saCap) continue;
-                        t.Rested = false; saSet++;
-                        Log(state, seat, $"{NameId(def)} [End of Your Turn] sets {NameId(GetCard(t))} as active.");
-                    }
-                    continue;
+                    // deliberately NO continue — fall through to QueueAndAutoResolve at the end of the loop.
                 }
 
                 // Unknown [End of Your Turn] patterns — queue for manual resolution.
@@ -19194,6 +19586,10 @@ namespace OnePieceTcg.Engine
             state.Phase = "finished";
             state.Battle = null;
             state.PendingEffects.Clear();
+            // Abandon any staged end-of-turn: the match is over, nothing may hand the turn over now.
+            state.EndTurnStage = null;
+            state.EndTurnSeat = null;
+            state.BattleReactionSeat = null;   // match over: no reaction may still stage in
         }
 
         // A player surrenders: the match ends at once and the OTHER seat wins. The winner is read

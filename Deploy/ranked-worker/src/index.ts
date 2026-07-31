@@ -23,6 +23,7 @@ import {
 import {
   handleChatSend, handleChatHistory, handleChatRead, handleChatPoll,
   handleInviteSend, handleInvitePoll, handleInviteRespond, handleInviteStatus, handleInviteCancel,
+  sweepExpiredInvites,
 } from "./social";
 
 export interface Env {
@@ -196,6 +197,73 @@ async function handleReport(req: Request, env: Env): Promise<Response> {
   return json({ status: "settled", profile: publicProfile(playerId, p, username) });
 }
 
+// ── Forfeit sweep ────────────────────────────────────────────────────────────────────────────
+// /report needs BOTH halves to settle, which is deliberate anti-cheat: a lone client cannot
+// fabricate a win, and a contradiction is recorded as "disputed". The gap was that a MISSING
+// half never settled at all. A graceful leave concedes while still connected so both sides
+// report, but on a hard quit (Alt-F4, killed process, pulled cable) the leaver's client never
+// runs its concede path — so the survivor's report sat unmatched forever, no rating moved, the
+// quitter escaped the loss and the honest player was denied the win. Ranked rage-quit was free.
+//
+// This sweep settles a report whose counterpart never arrived. Abuse bounds, because a naive
+// "believe the reporter" would let a cheat claim a fake win and wait out the timer:
+//   * a claimed LOSS is always safe to honour — nobody fabricates their own loss;
+//   * a claimed WIN is honoured only after the grace window AND only up to
+//     MAX_FORFEIT_WINS_PER_SWEEP per reporter, so a farm cannot mass-settle;
+//   * settled rows are marked "forfeit" (not "settled") so they stay auditable and revertible.
+const FORFEIT_GRACE_MS = 15 * 60 * 1000;
+const MAX_FORFEIT_WINS_PER_SWEEP = 3;
+
+export async function sweepForfeits(env: Env, nowMs: number): Promise<{ settled: number; skipped: number }> {
+  const cutoff = nowMs - FORFEIT_GRACE_MS;
+  // Reports past the grace window with no counterpart and no settled/disputed result yet.
+  const orphans = await env.DB.prepare(
+    `SELECT r.match_id, r.reporter_id, r.opponent_id, r.result, r.username, r.season_id
+       FROM match_reports r
+       LEFT JOIN match_reports o
+         ON o.match_id = r.match_id AND o.reporter_id = r.opponent_id
+       LEFT JOIN match_results res ON res.match_id = r.match_id
+      WHERE r.created_at < ? AND o.match_id IS NULL AND res.match_id IS NULL
+      ORDER BY r.created_at ASC
+      LIMIT 200`,
+  ).bind(cutoff).all<{
+    match_id: string; reporter_id: string; opponent_id: string;
+    result: string; username: string | null; season_id: number;
+  }>();
+
+  let settled = 0, skipped = 0;
+  const winsThisSweep = new Map<string, number>();
+
+  for (const row of orphans.results ?? []) {
+    if (row.result === "win") {
+      const used = winsThisSweep.get(row.reporter_id) ?? 0;
+      if (used >= MAX_FORFEIT_WINS_PER_SWEEP) { skipped++; continue; }
+      winsThisSweep.set(row.reporter_id, used + 1);
+    }
+    const winnerId = row.result === "win" ? row.reporter_id : row.opponent_id;
+    const loserId  = row.result === "win" ? row.opponent_id : row.reporter_id;
+
+    // Same exactly-once claim the dual-report path uses: the PK guard means only one writer computes.
+    const claim = await env.DB.prepare(
+      "INSERT OR IGNORE INTO match_results (match_id, winner_id, loser_id, status, settled_at) VALUES (?,?,?,?,?)",
+    ).bind(row.match_id, winnerId, loserId, "forfeit", nowMs).run();
+    if (claim.meta.changes !== 1) { skipped++; continue; }
+
+    const w = await loadProfile(env, winnerId);
+    const l = await loadProfile(env, loserId);
+    const wPreR = w.rating, wPreRd = w.rd, lPreR = l.rating, lPreRd = l.rd;
+    applyMatch(w, true, lPreR, lPreRd, row.season_id);
+    applyMatch(l, false, wPreR, wPreRd, row.season_id);
+    const reporterName = row.username ?? null;
+    await env.DB.batch([
+      upsertStmt(env, winnerId, w, winnerId === row.reporter_id ? reporterName : null, nowMs),
+      upsertStmt(env, loserId,  l, loserId  === row.reporter_id ? reporterName : null, nowMs),
+    ]);
+    settled++;
+  }
+  return { settled, skipped };
+}
+
 async function handleProfile(url: URL, env: Env): Promise<Response> {
   const playerId = url.searchParams.get("playerId")?.trim();
   if (!playerId) return json({ error: "playerId required" }, 400);
@@ -292,6 +360,24 @@ async function handleLeaderboard(url: URL, env: Env): Promise<Response> {
 }
 
 export default {
+  // Cron-driven forfeit settlement. Without this a hard quit (Alt-F4 / kill / pulled cable) left the
+  // survivor's report with no counterpart forever: no rating moved, the quitter escaped the loss and
+  // the winner was denied the win. Cadence is set by [triggers] crons in wrangler.toml.
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    // Housekeeping write moved off /invite/poll's read path (see social.ts). Independent of the
+    // forfeit sweep: its own waitUntil + catch, so a failure here can never stop forfeits settling.
+    ctx.waitUntil(
+      sweepExpiredInvites(env, Date.now())
+        .then((n) => console.log(`invite expiry sweep: expired=${n}`))
+        .catch((e) => console.log(`invite expiry sweep failed: ${e?.message ?? e}`)),
+    );
+    ctx.waitUntil(
+      sweepForfeits(env, Date.now())
+        .then((r) => console.log(`forfeit sweep: settled=${r.settled} skipped=${r.skipped}`))
+        .catch((e) => console.log(`forfeit sweep failed: ${e?.message ?? e}`)),
+    );
+  },
+
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
 

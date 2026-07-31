@@ -1461,18 +1461,36 @@ public partial class MainMenuManager
         Stretch(bLabel.rectTransform, new Vector2(0f, 0.62f), new Vector2(0.6f, 1f), new Vector2(16f, -12f), new Vector2(0f, -8f));
         var bVal = TextObject("BV", hero, RankedStore.FormatBerries(p.bounty), 30, Ink, TextAnchor.LowerLeft, monoFont);
         bVal.fontStyle = FontStyle.Bold;
-        Stretch(bVal.rectTransform, new Vector2(0f, 0.24f), new Vector2(0.64f, 0.66f), new Vector2(16f, 0f), Vector2.zero);
+        // Right edge pulled in to 0.60 because the tier CHIP below now paints a solid fill from 0.62.
+        // As bare text the two could visually interleave; as a filled panel the chip would cover the
+        // tail of a long bounty (FormatBerries goes into the billions), so they must not share space.
+        Stretch(bVal.rectTransform, new Vector2(0f, 0.24f), new Vector2(0.60f, 0.66f), new Vector2(16f, 0f), Vector2.zero);
         var bUnit = TextObject("BU", hero, "BERRIES", 9, Muted, TextAnchor.LowerLeft, monoFont);
         Stretch(bUnit.rectTransform, new Vector2(0f, 0f), new Vector2(0.6f, 0.24f), new Vector2(17f, 8f), Vector2.zero);
 
-        var badge = TextObject("TN", hero,
+        // Tier name as a real CHIP rather than bare coloured text. The tier colour is the only thing
+        // distinguishing it, and several tier colours sit close in value to the panel fill, so the name
+        // read as part of the background. Giving it its own darker surface plus a tier-coloured ring
+        // means it reads at any tier — the colour still carries the identity, but legibility no longer
+        // depends on it.
+        var badgeChip = PanelObject("Tier Chip", hero, new Color32(9, 20, 31, 235));
+        Stretch(badgeChip, new Vector2(0.62f, 0.42f), new Vector2(1f, 0.9f), new Vector2(0f, 2f), new Vector2(-14f, -2f));
+        Round(badgeChip);
+        AddRoundedCardBorder(badgeChip, tierColor, 1.4f);
+
+        var badge = TextObject("TN", badgeChip,
             tier.Name.ToUpperInvariant() + (string.IsNullOrEmpty(division) ? "" : "  " + division),
-            17, tierColor, TextAnchor.MiddleRight, monoFont);
+            17, tierColor, TextAnchor.MiddleCenter, monoFont);
         badge.fontStyle = FontStyle.Bold;
-        Stretch(badge.rectTransform, new Vector2(0.55f, 0.42f), new Vector2(1f, 0.9f), Vector2.zero, new Vector2(-16f, 0f));
+        Stretch(badge.rectTransform, Vector2.zero, Vector2.one, new Vector2(8f, 0f), new Vector2(-8f, 0f));
+        // Outline pins the glyphs to the chip even when a bright tier colour sits on the dark fill.
+        var badgeOutline = badge.gameObject.AddComponent<Outline>();
+        badgeOutline.effectColor = new Color(0f, 0f, 0f, 0.75f);
+        badgeOutline.effectDistance = new Vector2(1f, -1f);
+
         var badgeSub = TextObject("TS", hero, isKing ? "THE THRONE" : $"TIER {tIndex + 1} OF 9",
             9, Muted, TextAnchor.MiddleRight, monoFont);
-        Stretch(badgeSub.rectTransform, new Vector2(0.55f, 0.14f), new Vector2(1f, 0.42f), Vector2.zero, new Vector2(-16f, 0f));
+        Stretch(badgeSub.rectTransform, new Vector2(0.62f, 0.14f), new Vector2(1f, 0.42f), Vector2.zero, new Vector2(-16f, 0f));
 
         // Last-match feedback chip.
         if (p.lastVivreSaved || p.lastDeltaBounty != 0)

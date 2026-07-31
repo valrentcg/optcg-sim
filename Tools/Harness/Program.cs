@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using OnePieceTcg.Engine;
 using OnePieceTcg.Engine.Bot;
@@ -61,6 +62,27 @@ class Program
         // koreptest — verifies OP05-030 Rosinante's "[Opponent's Turn] if your RESTED Character would
         // be K.O.'d, trash this instead": protects a RESTED victim but not an ACTIVE one.
         if (args.Length > 0 && args[0] == "koreptest") { KoRepTest(); return 0; }
+        if (args.Length > 0 && args[0] == "st09010test") { St09010Test(); return 0; }
+        if (args.Length > 0 && args[0] == "blockstepreacttest") { BlockStepReactTest(); return 0; }
+        if (args.Length > 0 && args[0] == "eotpicktest") { EotPickTest(); return 0; }
+        if (args.Length > 0 && args[0] == "triggerduptest") { TriggerDupTest(); return 0; }
+        if (args.Length > 0 && args[0] == "turnplayerfirsttest") { TurnPlayerFirstTest(); return 0; }
+        if (args.Length > 0 && args[0] == "thenriderretiretest") { ThenRiderRetireTest(); return 0; }
+        if (args.Length > 0 && args[0] == "aurafiltertest") { AuraFilterTest(); return 0; }
+        if (args.Length > 0 && args[0] == "durationcardtest") { DurationCardTest(); return 0; }
+        if (args.Length > 0 && args[0] == "masskotest") { MassKoTest(); return 0; }
+        if (args.Length > 0 && args[0] == "deckvalidtest") { DeckValidTest(); return 0; }
+        if (args.Length > 0 && args[0] == "safefiletest") { SafeFileTest(); return 0; }
+        if (args.Length > 0 && args[0] == "cardtypereftest") { CardTypeRefTest(); return 0; }
+        if (args.Length > 0 && args[0] == "deckimporttest") { DeckImportTest(); return 0; }
+        if (args.Length > 0 && args[0] == "searchtest") { SearchTest(); return 0; }
+        if (args.Length > 0 && args[0] == "turnbannertest") { TurnBannerTest(); return 0; }
+        if (args.Length > 0 && args[0] == "triggerburntest") { TriggerBurnTest(); return 0; }
+        if (args.Length > 0 && args[0] == "triggerlimbotest") { TriggerLimboTest(); return 0; }
+        if (args.Length > 0 && args[0] == "triggerprivacytest") { TriggerPrivacyTest(); return 0; }
+        if (args.Length > 0 && args[0] == "lifefaceupcosttest") { LifeFaceUpCostTest(); return 0; }
+        if (args.Length > 0 && args[0] == "flipcuetest") { FlipCueTest(); return 0; }
+        if (args.Length > 0 && args[0] == "triggerdupdiag") { TriggerDupDiag(args[1], args[2], args[3]); return 0; }
         // koreptest2 <guardId> <victimId> [trashFuel] — generic removal-replacement test: places guardId
         // + victimId on south, seeds south's trash with trashFuel cards, has north K.O. the victim with
         // EB01-049 (K.O. up to 1 opp Character cost ≤ 2), and reports whether the victim was saved.
@@ -13159,6 +13181,1404 @@ class Program
         bool guardAlive = S.CharacterArea.Any(c => c != null && c.InstanceId == "GUARD");
         Console.WriteLine($"guardAlive={guardAlive}  (Navy leader → expect SAVED; non-Navy → expect K.O.'d)");
         foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 5))) Console.WriteLine("   " + l.Message);
+    }
+
+    // Decklist import must produce the RIGHT NUMBERS across every shape people actually paste.
+    //
+    // Reported symptom: a friend imported a list from the EGMan builder and "the numbers didn't match
+    // up". Cause: the old parser required the quantity to sit immediately before the code, so a line
+    // like "4x Nami (OP01-016)" matched nothing; with no quantity token anywhere it fell back to
+    // counting each bare code once and produced one-of-everything. A wrong-but-plausible deck is worse
+    // than a refused one, so every shape below asserts the exact total.
+    static void DeckImportTest()
+    {
+        Console.WriteLine("=== DECKIMPORTTEST — decklist shapes must import with correct counts ===");
+        int pass = 0, fail = 0;
+
+        // Real ids so resolution is exercised: OP01-001 is a Leader; the rest are main-deck cards.
+        string leader = "OP01-001";
+        string[] c = { "OP01-016", "OP01-024", "OP01-025" };
+
+        void Check(string label, string text, int wantTotal, string wantLeader, params int[] wantCounts)
+        {
+            var r = DeckListParser.Parse(text);
+            bool ok = r.Total == wantTotal
+                      && (wantLeader == null || r.LeaderId == wantLeader)
+                      && wantCounts.Length == r.Cards.Count
+                      && !wantCounts.Where((w, i) => r.Cards[i].Value != w).Any();
+            string got = string.Join(",", r.Cards.Select(kv => kv.Value));
+            Console.WriteLine($"  {label,-40} total={r.Total,-3} leader={(r.LeaderId ?? "-"),-9} counts=[{got}]  " + (ok ? "PASS" : "FAIL"));
+            if (!ok) Console.WriteLine($"     wanted total={wantTotal} leader={wantLeader ?? "-"} counts=[{string.Join(",", wantCounts)}]");
+            if (ok) pass++; else fail++;
+        }
+
+        // 1. OPTCGSim / Batsu native: "NxCODE", leader as its own 1x line.
+        Check("NxCODE (OPTCGSim native)",
+            $"1x{leader}\n4x{c[0]}\n4x{c[1]}\n2x{c[2]}", 10, leader, 4, 4, 2);
+
+        // 2. Space separated, no 'x'.
+        Check("'4 CODE' (space separated)",
+            $"1 {leader}\n4 {c[0]}\n3 {c[1]}", 7, leader, 4, 3);
+
+        // 3. THE REPORTED BREAK: name sits between the quantity and the code.
+        Check("'4x Name (CODE)' — the reported bug",
+            $"1x Monkey.D.Luffy ({leader})\n4x Nami ({c[0]})\n4x Sanji ({c[1]})\n2x Zoro ({c[2]})", 10, leader, 4, 4, 2);
+
+        // 4. Quantity AFTER the code.
+        Check("'CODE x4' (trailing quantity)",
+            $"{leader} x1\n{c[0]} x4\n{c[1]} x2", 6, leader, 4, 2);
+
+        // 5. Bare codes, one copy per line (OnePieceTopDecks style).
+        Check("bare codes, one per line",
+            $"{leader}\n{c[0]}\n{c[0]}\n{c[0]}\n{c[1]}", 4, leader, 3, 1);
+
+        // 6. JSON array export — every copy listed separately.
+        Check("JSON array export",
+            $"[\"Exported\",\"{leader}\",\"{c[0]}\",\"{c[0]}\",\"{c[1]}\"]", 3, leader, 2, 1);
+
+        // 7. Headers and totals must NOT become quantities — the old whole-text regex would pair a
+        //    header's number with the following code.
+        Check("headers/totals are ignored",
+            $"My Deck (50 cards)\nTotal: 50\nLeader:\n1x{leader}\n4x{c[0]}", 4, leader, 4);
+
+        // 8. Duplicate entries for the same card accumulate rather than overwrite.
+        Check("duplicate lines accumulate",
+            $"1x{leader}\n2x{c[0]}\n2x{c[0]}", 4, leader, 4);
+
+        // 9. Alt-art suffix resolves to the base card.
+        Check("alt-art suffix resolves",
+            $"1x{leader}\n4x{c[0]}-1", 4, leader, 4);
+
+        // 10. Unknown codes are reported, not silently folded into the counts.
+        {
+            var r = DeckListParser.Parse($"1x{leader}\n4x{c[0]}\n4xZZ99-999");
+            bool ok = r.Total == 4 && r.Unknown.Count == 1 && r.Unknown[0] == "ZZ99-999";
+            Console.WriteLine($"  {"unknown codes reported separately",-40} total={r.Total,-3} unknown=[{string.Join(",", r.Unknown)}]  " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+
+        Console.WriteLine($"\nDECKIMPORTTEST: {pass} passed, {fail} failed");
+    }
+
+    // Search must forgive how people actually type. Asserted against REAL cards from the library, so
+    // it fails if the data changes shape rather than passing on invented strings.
+    // The turn banner's headline is built from an arbitrary player-chosen name on EVERY
+    // turn of EVERY match, so a bad string rule is maximally visible. Gated here because
+    // TurnBannerText is deliberately UnityEngine-free.
+    static void TurnBannerTest()
+    {
+        Console.WriteLine("=== TURNBANNERTEST — turn-banner headline from display names ===");
+        int pass = 0, fail = 0;
+        void Check(string label, string got, string want)
+        {
+            bool ok = got == want;
+            Console.WriteLine($"  {label,-40} {got,-30} " + (ok ? "PASS" : "FAIL  want: " + want));
+            if (ok) pass++; else fail++;
+        }
+
+        // A real name becomes a possessive headline.
+        Check("real name (local)",    TurnBannerText.Label("Valren", true),      "VALREN'S TURN");
+        Check("real name (opponent)", TurnBannerText.Label("TheReaper", false),  "THEREAPER'S TURN");
+        Check("bot name",             TurnBannerText.Label("Advanced Bot", false), "ADVANCED BOT'S TURN");
+        Check("name is lowercased",   TurnBannerText.Label("valren", true),      "VALREN'S TURN");
+        Check("surrounding space",    TurnBannerText.Label("  Valren  ", true),  "VALREN'S TURN");
+
+        // Role words are NOT names — these would otherwise build "YOU'S TURN".
+        Check("literal You",          TurnBannerText.Label("You", true),         "YOUR TURN");
+        Check("literal you (case)",   TurnBannerText.Label("you", true),         "YOUR TURN");
+        Check("literal Opponent",     TurnBannerText.Label("Opponent", false),   "OPPONENT'S TURN");
+
+        // Placeholders fall back to the role, which says more than the placeholder does.
+        Check("Player 1 placeholder", TurnBannerText.Label("Player 1", true),    "YOUR TURN");
+        Check("Player 2 placeholder", TurnBannerText.Label("Player 2", false),   "OPPONENT'S TURN");
+        Check("null name",            TurnBannerText.Label(null, true),          "YOUR TURN");
+        Check("empty name",           TurnBannerText.Label("", false),           "OPPONENT'S TURN");
+        Check("whitespace name",      TurnBannerText.Label("   ", true),         "YOUR TURN");
+
+        // Engine seat identifiers must never reach the UI.
+        Check("engine seat south",    TurnBannerText.Label("South", true),       "YOUR TURN");
+        Check("engine seat north",    TurnBannerText.Label("north", false),      "OPPONENT'S TURN");
+
+        // Length is not ours to control.
+        Check("20 chars kept whole",  TurnBannerText.Label("CaptainKuroPlansXyz", false),
+                                      "CAPTAINKUROPLANSXYZ'S TURN");
+        Check("over-long truncated",  TurnBannerText.Label("CaptainKuroOfAThousandPlans", false),
+                                      "CAPTAINKUROOFATHOUS...'S TURN");
+
+        // A name that merely CONTAINS a role word is still a name.
+        Check("contains role word",   TurnBannerText.Label("YouKnowWho", true),  "YOUKNOWWHO'S TURN");
+        Check("name ending in s",     TurnBannerText.Label("Ross", true),        "ROSS'S TURN");
+
+        Console.WriteLine($"turnbannertest: {pass} passed, {fail} failed");
+        if (fail > 0) Environment.Exit(1);
+    }
+
+    static void SearchTest()
+    {
+        Console.WriteLine("=== SEARCHTEST — punctuation/accent-insensitive, multi-term search ===");
+        int pass = 0, fail = 0;
+        void Check(string label, bool ok, string detail)
+        {
+            Console.WriteLine($"  {label,-52} {detail,-30} " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+        bool Find(string query, string cardId)
+        {
+            var c = CardData.GetCard(cardId);
+            return SearchText.Matches(query, c.Name, c.Effect, c.Id, string.Join("/", c.Features ?? new List<string>()));
+        }
+
+        // Punctuation inside official card names is the big one: "Monkey.D.Luffy" has no spaces, so
+        // nobody types it correctly.
+        Check("'monkey d luffy' finds Monkey.D.Luffy", Find("monkey d luffy", "OP01-003"), CardData.GetCard("OP01-003").Name);
+        Check("'monkeydluffy' (no spaces) finds it",   Find("monkeydluffy", "OP01-003"), "run-together");
+        Check("'MONKEY.D.LUFFY' exact still finds it", Find("MONKEY.D.LUFFY", "OP01-003"), "case/punct");
+
+        // Apostrophes — the reported "youre" case.
+        Check("'youre' matches text containing \"you're\"", SearchText.Matches("youre", "You're finished!"), "apostrophe folded");
+        Check("'dont' matches \"don't\"",                   SearchText.Matches("dont", "You may not; don't."), "apostrophe folded");
+
+        // Spaces inside feature tags.
+        Check("'strawhat' finds {Straw Hat Crew}",  SearchText.Matches("strawhat", "Straw Hat Crew"), "space folded");
+        Check("'seven warlords' finds the tag",     SearchText.Matches("seven warlords", "The Seven Warlords of the Sea"), "multi-term");
+
+        // Multi-term is AND, and terms may hit DIFFERENT fields.
+        Check("multi-term ANDs across fields",
+              SearchText.Matches("luffy blocker", "Monkey.D.Luffy", "[Blocker] This Character..."), "name + effect");
+        Check("multi-term rejects when one term misses",
+              !SearchText.Matches("luffy zzzmissing", "Monkey.D.Luffy", "[Blocker]"), "AND not OR");
+
+        // Accents fold (card text uses ＜Slash＞-style and accented names in places).
+        Check("accent-insensitive", SearchText.Matches("zoro", "Zorō"), "combining marks stripped");
+
+        // Card id search still works, and empty query matches everything (no accidental filter).
+        Check("id search still works", Find("op01-003", "OP01-003"), "by code");
+        Check("empty query matches", SearchText.Matches("", "anything"), "no filter");
+
+        Console.WriteLine($"\nSEARCHTEST: {pass} passed, {fail} failed");
+    }
+
+    // Card-data integrity: every {Type} named in card TEXT must exist as a real feature tag.
+    //
+    // A mismatch is invisible to every other gate. The card resolves, the effect "works", and the
+    // filter simply never matches anything — a dead aura or a dead search with no error, no STUCK, no
+    // crash. Only a cross-check of the two vocabularies can see it.
+    //
+    // Worth having as a standing gate rather than a one-off because it fails exactly when new card
+    // data lands (OP17 / ST31-36 are still missing), which is precisely when a typo'd or renamed type
+    // tag would slip in.
+    static void CardTypeRefTest()
+    {
+        Console.WriteLine("=== CARDTYPEREFTEST — every {Type} in card text resolves to a real feature tag ===");
+        var feats = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var c in CardData.Library.Values)
+        {
+            if (c == null || string.IsNullOrEmpty(c.Id) || !seen.Add(c.Id)) continue;
+            if (c.Features == null) continue;
+            foreach (var f in c.Features)
+                if (!string.IsNullOrWhiteSpace(f)) feats.Add(f.Trim());
+        }
+
+        // {...} in card text is the type-tag syntax. Skip the reminder-text braces that are not tags
+        // by requiring the content to look like a tag (no sentence punctuation).
+        var rx = new System.Text.RegularExpressions.Regex(@"\{([^}]{2,40})\}");
+        var bad = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        int refs = 0;
+        foreach (var c in CardData.Library.Values)
+        {
+            if (c == null) continue;
+            string text = (c.Effect ?? "") + " " + (c.Trigger ?? "");
+            foreach (System.Text.RegularExpressions.Match m in rx.Matches(text))
+            {
+                string tag = m.Groups[1].Value.Trim();
+                if (tag.Length == 0 || tag.Contains(".") || tag.Contains(":")) continue;
+                refs++;
+                if (!feats.Contains(tag))
+                {
+                    bad.TryGetValue(tag, out int n);
+                    bad[tag] = n + 1;
+                }
+            }
+        }
+
+        Console.WriteLine($"  feature tags: {feats.Count}   {{Type}} references scanned: {refs}");
+        if (bad.Count == 0) Console.WriteLine("  every reference resolves to a real tag.");
+        else
+            foreach (var kv in bad)
+                Console.WriteLine($"  UNRESOLVED  {{{kv.Key}}}  referenced {kv.Value}x but no card carries that feature");
+        Console.WriteLine($"\nCARDTYPEREFTEST: {(bad.Count == 0 ? "PASS" : $"FAIL — {bad.Count} unresolved tag(s)")}");
+    }
+
+    // SafeFile: crash-safe writes + never turning a failed read into a destructive write.
+    //
+    // This exists because the bug it fixes was the most damaging one found: DeckStore turned a corrupt
+    // decks.json into an EMPTY in-memory list, and the next save wrote that empty list straight over
+    // the file — destroying every deck the player owned. The non-atomic write also CREATED the
+    // truncation in the first place, so the two halves fed each other.
+    //
+    // It was originally written against UnityEngine and therefore could not be exercised here at all,
+    // which left the batch's most destructive fix as its only untested one. Moving it engine-side
+    // (SafeFile.Warn is an injectable sink) makes it assertable against the real filesystem.
+    static void SafeFileTest()
+    {
+        Console.WriteLine("=== SAFEFILETEST — atomic write, backup recovery, corrupt-read detection ===");
+        int pass = 0, fail = 0;
+        void Check(string label, bool ok, string detail)
+        {
+            Console.WriteLine($"  {label,-48} {detail,-34} " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+
+        string root = Path.Combine(Path.GetTempPath(), "optcg_safefile_" + Guid.NewGuid().ToString("N").Substring(0, 8));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string f = Path.Combine(root, "decks.json");
+
+            // 1. First write: file appears, no stray .tmp left behind.
+            OnePieceTcg.Engine.SafeFile.WriteAtomic(f, "V1");
+            Check("first write lands", File.Exists(f) && File.ReadAllText(f) == "V1", File.Exists(f) ? "V1" : "missing");
+            Check("no .tmp left behind", !File.Exists(f + ".tmp"), File.Exists(f + ".tmp") ? "tmp present" : "clean");
+
+            // 2. Second write: content replaced AND the previous good copy kept as .bak.
+            OnePieceTcg.Engine.SafeFile.WriteAtomic(f, "V2");
+            Check("second write replaces content", File.ReadAllText(f) == "V2", File.ReadAllText(f));
+            Check("previous copy kept as .bak", File.Exists(f + ".bak") && File.ReadAllText(f + ".bak") == "V1",
+                  File.Exists(f + ".bak") ? File.ReadAllText(f + ".bak") : "no .bak");
+
+            // 3. Healthy read: primary wins, nothing flagged.
+            string got = OnePieceTcg.Engine.SafeFile.ReadWithRecovery(f, out bool rec, out bool failed);
+            Check("healthy read returns primary", got == "V2" && !rec && !failed, $"got={got} recovered={rec} failed={failed}");
+
+            // 4. Primary corrupted to EMPTY (what a truncating write leaves behind) → recover from .bak.
+            File.WriteAllText(f, "");
+            got = OnePieceTcg.Engine.SafeFile.ReadWithRecovery(f, out rec, out failed);
+            Check("truncated primary recovers from .bak", got == "V1" && rec && !failed, $"got={got} recovered={rec}");
+
+            // 5. BOTH gone bad → failed=true. This is the signal DeckStore/SealedStore use to refuse to
+            //    save; without it an unreadable file gets overwritten with an empty one.
+            File.WriteAllText(f, "");
+            File.WriteAllText(f + ".bak", "");
+            got = OnePieceTcg.Engine.SafeFile.ReadWithRecovery(f, out rec, out failed);
+            Check("both unreadable reports failed=true", got == null && failed, $"got={got ?? "null"} failed={failed}");
+
+            // 6. A genuinely absent file is a FIRST RUN, not corruption — must NOT report failed,
+            //    or a new player would be locked out of ever saving.
+            string fresh = Path.Combine(root, "brand_new.json");
+            got = OnePieceTcg.Engine.SafeFile.ReadWithRecovery(fresh, out rec, out failed);
+            Check("missing file is first-run, not failure", got == null && !failed, $"failed={failed}");
+
+            // 7. The original bug's shape: a write that cannot complete must leave the existing file
+            //    intact rather than truncating it. Simulate by making the destination a DIRECTORY.
+            string blocked = Path.Combine(root, "blocked.json");
+            Directory.CreateDirectory(blocked);
+            bool wrote = OnePieceTcg.Engine.SafeFile.WriteAtomic(blocked, "SHOULD NOT LAND");
+            Check("failed write reports false", !wrote, $"returned {wrote}");
+            Check("failed write leaves no .tmp", !File.Exists(blocked + ".tmp"), File.Exists(blocked + ".tmp") ? "tmp leaked" : "clean");
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch { /* temp dir best effort */ }
+        }
+        Console.WriteLine($"\nSAFEFILETEST: {pass} passed, {fail} failed");
+    }
+
+    // Deck CONSTRUCTION legality must actually REFUSE illegal decks.
+    //
+    // The rules were implemented correctly inside DeckBuilderManager.Validate, but its result was used
+    // only to tint a badge — nothing gated saving or match entry, so a 40-card / 8-copies / off-colour
+    // deck was playable in solo, custom, casual and ranked. (The casual/ranked grey-out is FORMAT
+    // legality — Standard/Extra + ban list — a different axis.) The rule set now lives in
+    // Engine/DeckConstructionLegality (one copy; DeckBuilderManager delegates to it) and
+    // MainMenuManager.ResolveMenuDeck refuses an illegal deck.
+    //
+    // Baseline is a real starter deck, which must be legal; each case then breaks exactly one rule.
+    static void DeckValidTest()
+    {
+        Console.WriteLine("=== DECKVALIDTEST — construction legality refuses illegal decks ===");
+        int pass = 0, fail = 0;
+        void Check(string label, bool ok, string detail)
+        {
+            Console.WriteLine($"  {label,-46} {detail,-40} " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+
+        var deckId = CardData.StarterDecks.Keys.OrderBy(k => k).First();
+        var def = CardData.StarterDecks[deckId];
+        List<(string id, int count)> Base() => def.List.Select(e => (e.cardId, e.qty)).ToList();
+
+        int baseTotal = Base().Sum(e => e.count);
+        var legal = DeckConstructionLegality.Problems(def.Leader, Base());
+        Check($"baseline starter deck '{deckId}' is legal", legal.Count == 0,
+              $"{baseTotal} cards, {legal.Count} problem(s)" + (legal.Count > 0 ? ": " + legal[0] : ""));
+
+        // 1. wrong size — drop one copy, and add one over
+        var short1 = Base(); short1[0] = (short1[0].id, short1[0].count - 1);
+        Check("49 cards is rejected", DeckConstructionLegality.Problems(def.Leader, short1)
+              .Any(m => m.Contains("Main deck is")), "expects 'Main deck is 49/50'");
+        var over1 = Base(); over1[0] = (over1[0].id, over1[0].count + 1);
+        Check("51 cards is rejected", DeckConstructionLegality.Problems(def.Leader, over1)
+              .Any(m => m.Contains("Main deck is")), "expects 'Main deck is 51/50'");
+
+        // 2. copy limit — 8 of one card, size kept at 50 by removing others
+        var copies = Base();
+        string dupId = copies[0].id;
+        int need = 8 - copies[0].count;
+        copies[0] = (dupId, 8);
+        for (int i = 1; i < copies.Count && need > 0; i++)
+        {
+            int take = Math.Min(need, copies[i].count);
+            copies[i] = (copies[i].id, copies[i].count - take); need -= take;
+        }
+        var copyProblems = DeckConstructionLegality.Problems(def.Leader, copies);
+        Check("8 copies of one card is rejected",
+              copyProblems.Any(m => m.Contains("copies (max")) && copies.Sum(e => e.count) == 50,
+              $"total={copies.Sum(e => e.count)} {(copyProblems.FirstOrDefault(m => m.Contains("copies (max")) ?? "<no copy problem>")}");
+
+        // 3. duplicate ENTRIES for the same id must not bypass the cap (4+4 = 8)
+        var split = Base();
+        split[0] = (dupId, 4);
+        split.Add((dupId, 4));
+        Check("4+4 split entries still hit the cap",
+              DeckConstructionLegality.Problems(def.Leader, split).Any(m => m.Contains("copies (max")),
+              "grouped by id before counting");
+
+        // 4. no leader
+        Check("missing leader is rejected",
+              DeckConstructionLegality.Problems(null, Base()).Any(m => m.Contains("No leader")), "expects 'No leader selected'");
+
+        // 5. a Leader card sitting in the main deck
+        var withLeader = Base();
+        withLeader[0] = (def.Leader, withLeader[0].count);
+        Check("leader card in main deck is rejected",
+              DeckConstructionLegality.Problems(def.Leader, withLeader).Any(m => m.Contains("is a leader, not a deck card")),
+              "expects 'is a leader, not a deck card'");
+
+        // 6. off-colour: find a card sharing no colour with this leader
+        var leadDef = CardData.GetCard(def.Leader);
+        var leadColors = (leadDef?.Color ?? "").Split('/').Select(c => c.Trim()).Where(c => c.Length > 0).ToList();
+        string offColour = CardData.Library.Values
+            .FirstOrDefault(c => c != null && c.Type == "character" && !string.IsNullOrEmpty(c.Color)
+                                 && !c.Color.Split('/').Select(x => x.Trim()).Any(x => leadColors.Contains(x)))?.Id;
+        if (offColour != null)
+        {
+            var off = Base(); off[0] = (offColour, off[0].count);
+            Check("off-colour card is rejected",
+                  DeckConstructionLegality.Problems(def.Leader, off).Any(m => m.Contains("off-colour")),
+                  $"{offColour} vs leader {string.Join("/", leadColors)}");
+        }
+        else Check("off-colour card is rejected", false, "could not find an off-colour card to test with");
+
+        Console.WriteLine($"\nDECKVALIDTEST: {pass} passed, {fail} failed");
+    }
+
+    // Simultaneous mass K.O. must fire EVERY victim's [On K.O.], not just the first.
+    //
+    // Found by diffing Batsu's RPC surface: they run separate per-player K.O. queues with a completion
+    // barrier (QueueCurrentPlayerKOQueue / QueueOpponentPlayerKOQueue / StartOnKOActions /
+    // AllOnKOResolved). That machinery only exists because simultaneous removal is easy to get wrong —
+    // a mass K.O. that resolves victims in a loop can drop later victims' [On K.O.] effects, or mutate
+    // the CharacterArea it is iterating.
+    //
+    // Fixture: 2x OP04-049 Jack (cost 2, "[On K.O.] Draw 1 card.") on the opponent's board, plus a
+    // cost-5 body that must NOT be hit by a "cost 2 or less" mass K.O. Both Jacks dying must draw the
+    // victim's controller exactly 2 cards.
+    static void MassKoTest()
+    {
+        Console.WriteLine("=== MASSKOTEST — every victim of a simultaneous K.O. fires its [On K.O.] ===");
+        Console.WriteLine(CardData.GetCard("OP04-049")?.Effect + "\n");
+        int pass = 0, fail = 0;
+        void Check(string label, bool ok, string detail)
+        {
+            Console.WriteLine($"  {label,-44} {detail,-30} " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "masko" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 3; N.TurnsStarted = 3;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        N.CharacterArea[0] = new CardInstance { InstanceId = "J1", CardId = "OP04-049", Owner = "north", Zone = "character" };
+        N.CharacterArea[1] = new CardInstance { InstanceId = "J2", CardId = "OP04-049", Owner = "north", Zone = "character" };
+        N.CharacterArea[2] = new CardInstance { InstanceId = "BIG", CardId = "EB01-025", Owner = "north", Zone = "character" }; // cost 3 body, base 5000
+        int nDeckBefore = N.Deck.Count, nHandBefore = N.Hand.Count, nTrashBefore = N.Trash.Count;
+
+        // Resolve a mass-K.O. clause directly: this is the RESOLUTION layer, which is exactly where the
+        // multi-victim fan-out happens.
+        st.PendingEffects.Add(new PendingEffect
+        { EffectId = "E", Seat = "south", SourceInstanceId = S.Leader.InstanceId, Text = "K.O. all of your opponent's Characters with a cost of 2 or less." });
+        GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = "E", Target = null });
+        // Drain any queued [On K.O.] effects for either seat.
+        for (int g = 0; g < 12; g++)
+        {
+            var pe = st.PendingEffects.FirstOrDefault();
+            if (pe == null) break;
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId, Target = null });
+            if (st.PendingEffects.Any(x => x.EffectId == pe.EffectId))
+                GameEngine.ApplyCommand(st, new GameCommand { Type = "passEffect", Seat = pe.Seat, EffectId = pe.EffectId });
+        }
+
+        bool j1Gone = !N.CharacterArea.Any(c => c != null && c.InstanceId == "J1");
+        bool j2Gone = !N.CharacterArea.Any(c => c != null && c.InstanceId == "J2");
+        bool bigAlive = N.CharacterArea.Any(c => c != null && c.InstanceId == "BIG");
+        int drew = nDeckBefore - N.Deck.Count;
+        Check("both cost-2 victims K.O.'d", j1Gone && j2Gone, $"J1gone={j1Gone} J2gone={j2Gone}");
+        Check("cost-3 body survives the cost<=2 filter", bigAlive, $"alive={bigAlive}");
+        Check("BOTH [On K.O.] fired (drew 2)", drew == 2, $"deck {nDeckBefore}->{N.Deck.Count} (drew {drew})");
+        Check("victims reached the trash", N.Trash.Count - nTrashBefore >= 2, $"trash +{N.Trash.Count - nTrashBefore}");
+
+        Console.WriteLine($"\nMASSKOTEST: {pass} passed, {fail} failed");
+    }
+
+    // Buff DURATION boundary: "until the end of your opponent's next turn" (43 cards) must outlive the
+    // opponent's whole turn and expire only when the CONTROLLER's next turn begins.
+    //
+    // Found by diffing Batsu's RPC surface: they replicate five distinct buff lifetimes
+    // (BuffCardCombat / BuffCardPower / BuffCardToOppEnd / BuffCardToOwnersEnd / BuffCardToStart),
+    // which is a taxonomy worth checking against ours. Our engine models it as Duration
+    // "untilNextTurn", cleared in ApplyStartOfTurn for the owning seat — correct by construction, but
+    // NOTHING gated it. Collapsing it to "thisTurn" is the natural bug and checkpoint 2 is the only
+    // thing that distinguishes the two.
+    //
+    // OP09-013 Yasopp: "[On Play] Up to 1 of your Leader gains +1000 power until the end of your
+    // opponent's next turn." Base Leader power 5000 -> 6000.
+    static void DurationCardTest()
+    {
+        Console.WriteLine("=== DURATIONCARDTEST — real card text -> untilNextTurn (parse path) ===");
+        Console.WriteLine(CardData.GetCard("OP09-013")?.Effect?.Split('\n')[0] + "\n");
+        int pass = 0, fail = 0;
+        void Check(string label, bool ok, string detail)
+        {
+            Console.WriteLine($"  {label,-46} {detail,-22} " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "duration" });
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 3; N.TurnsStarted = 3;
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sd{i}", Rested = false });
+        for (int i = 0; i < 10; i++) N.CostArea.Add(new DonInstance { InstanceId = $"nd{i}", Rested = false });
+        int basePower = GameEngine.GetPower(st, S.Leader);
+
+        S.Hand.Add(new CardInstance { InstanceId = "YASOPP", CardId = "OP09-013", Owner = "south", Zone = "hand" });
+        GameEngine.ApplyCommand(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = "YASOPP", SlotIndex = 0 });
+        for (int g = 0; g < 6; g++)
+        {
+            var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            if (pe == null) break;
+            GameEngine.ApplyCommand(st, new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = S.Leader.InstanceId });
+        }
+        Check("1. buffed on the controller's own turn", GameEngine.GetPower(st, S.Leader) == basePower + 1000,
+              $"{basePower} -> {GameEngine.GetPower(st, S.Leader)}");
+
+        // Hand over to the opponent — the buff MUST survive their entire turn.
+        GameEngine.ApplyCommand(st, new GameCommand { Type = "endTurn", Seat = "south" });
+        Check("2. SURVIVES the opponent's turn (vs thisTurn)", GameEngine.GetPower(st, S.Leader) == basePower + 1000,
+              $"seat={st.ActiveSeat} pow={GameEngine.GetPower(st, S.Leader)}");
+
+        // Back to the controller — now it must be gone.
+        GameEngine.ApplyCommand(st, new GameCommand { Type = "endTurn", Seat = "north" });
+        Check("3. EXPIRES when controller's turn begins", GameEngine.GetPower(st, S.Leader) == basePower,
+              $"seat={st.ActiveSeat} pow={GameEngine.GetPower(st, S.Leader)}");
+
+        Console.WriteLine($"\nDURATIONCARDTEST: {pass} passed, {fail} failed");
+    }
+
+    // Passive power auras. Tools/Sim `auraaudit` reports "AURA-LEAK 0 / AURA-DEAD 0" but tests exactly
+    // ONE aura ("1 skipped: no {type} filter, or opponent-side") out of the 19 passive auras that buff
+    // OTHER cards — a clean bill of health over 1.6% of the population. These two carry the sharpest
+    // failure modes in that set:
+    //
+    //  OP04-012 Nefeltari Cobra — "[Your Turn] All of your {Alabasta} type Characters OTHER THAN THIS
+    //    CHARACTER gain +1000 power." The exclusion is the classic off-by-one: does Cobra buff itself?
+    //  P-027 General Franky — "[Opponent's Turn] All of your Characters with 3000 BASE power or less
+    //    gain +1000 power." Filtering on CURRENT instead of BASE power is the classic confusion: a
+    //    5000-base body must never qualify, and a 3000-base body must stay buffed even though the buff
+    //    lifts its current power to 4000 (otherwise the aura would flicker off its own recipient).
+    static void AuraFilterTest()
+    {
+        Console.WriteLine("=== AURAFILTERTEST — passive aura filters (exclusion clause + base-power filter) ===");
+        int pass = 0, fail = 0;
+
+        void Check(string label, bool ok, string detail)
+        {
+            Console.WriteLine($"  {label,-52} {detail,-34} " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+
+        // ---- OP04-012 Cobra: {Alabasta} aura that must EXCLUDE itself ----
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "aura1" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"];
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; }
+            var cobra = new CardInstance { InstanceId = "COBRA", CardId = "OP04-012", Owner = "south", Zone = "character" };
+            var ally  = new CardInstance { InstanceId = "ALLY",  CardId = "OP13-011", Owner = "south", Zone = "character" }; // {Alabasta}, base 6000
+            var other = new CardInstance { InstanceId = "OTHER", CardId = "EB01-005", Owner = "south", Zone = "character" }; // non-Alabasta, base 3000
+            S.CharacterArea[0] = cobra; S.CharacterArea[1] = ally; S.CharacterArea[2] = other;
+            int pCobra = GameEngine.GetPower(st, cobra), pAlly = GameEngine.GetPower(st, ally), pOther = GameEngine.GetPower(st, other);
+            Check("Cobra: {Alabasta} ally gains +1000", pAlly == 7000, $"6000 -> {pAlly}");
+            Check("Cobra: EXCLUDES itself ('other than this')", pCobra == 0, $"base 0 -> {pCobra}");
+            Check("Cobra: non-{Alabasta} unaffected", pOther == 3000, $"3000 -> {pOther}");
+        }
+
+        // ---- P-027 General Franky: BASE-power-filtered aura, on the OPPONENT'S turn ----
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "aura2" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 6;  // [Opponent's Turn] for south
+            var S = st.Players["south"];
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; }
+            var franky = new CardInstance { InstanceId = "FRANKY", CardId = "P-027",    Owner = "south", Zone = "character" }; // base 4000
+            var small  = new CardInstance { InstanceId = "SMALL",  CardId = "EB01-005", Owner = "south", Zone = "character" }; // base 3000 -> qualifies
+            var big    = new CardInstance { InstanceId = "BIG",    CardId = "EB01-025", Owner = "south", Zone = "character" }; // base 5000 -> must not
+            S.CharacterArea[0] = franky; S.CharacterArea[1] = small; S.CharacterArea[2] = big;
+            int pSmall = GameEngine.GetPower(st, small), pBig = GameEngine.GetPower(st, big), pFranky = GameEngine.GetPower(st, franky);
+            Check("Franky: base-3000 body gains +1000", pSmall == 4000, $"3000 -> {pSmall}");
+            Check("Franky: base-5000 body unaffected", pBig == 5000, $"5000 -> {pBig}");
+            Check("Franky: base-4000 self unaffected", pFranky == 4000, $"4000 -> {pFranky}");
+
+            // Turn gate: on SOUTH's own turn the [Opponent's Turn] aura must be OFF.
+            st.ActiveSeat = "south";
+            int pSmallOwn = GameEngine.GetPower(st, small);
+            Check("Franky: [Opponent's Turn] gate off on own turn", pSmallOwn == 3000, $"3000 -> {pSmallOwn}");
+        }
+        // ---- EB01-024 Hamlet: hand-size CONDITION, and NO self-exclusion (it is {SMILE} itself) ----
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "aura3" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"];
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; }
+            var hamlet = new CardInstance { InstanceId = "HAMLET", CardId = "EB01-024", Owner = "south", Zone = "character" }; // {SMILE}, base 4000
+            var smile  = new CardInstance { InstanceId = "SMILE",  CardId = "OP01-104", Owner = "south", Zone = "character" }; // {SMILE}, base 3000
+            var plain  = new CardInstance { InstanceId = "PLAIN",  CardId = "EB01-005", Owner = "south", Zone = "character" }; // non-SMILE, base 3000
+            S.CharacterArea[0] = hamlet; S.CharacterArea[1] = smile; S.CharacterArea[2] = plain;
+
+            S.Hand.Clear();   // 0 cards => "4 or less" satisfied => aura ON
+            int onSmile = GameEngine.GetPower(st, smile), onSelf = GameEngine.GetPower(st, hamlet), onPlain = GameEngine.GetPower(st, plain);
+            Check("Hamlet(hand 0): {SMILE} ally +1000", onSmile == 4000, $"3000 -> {onSmile}");
+            Check("Hamlet(hand 0): buffs ITSELF (no exclusion)", onSelf == 5000, $"4000 -> {onSelf}");
+            Check("Hamlet(hand 0): non-{SMILE} unaffected", onPlain == 3000, $"3000 -> {onPlain}");
+
+            for (int i = 0; i < 5; i++)   // 5 cards => condition FAILS => aura OFF
+                S.Hand.Add(new CardInstance { InstanceId = $"h{i}", CardId = "EB01-005", Owner = "south", Zone = "hand" });
+            int offSmile = GameEngine.GetPower(st, smile), offSelf = GameEngine.GetPower(st, hamlet);
+            Check("Hamlet(hand 5): aura OFF for ally", offSmile == 3000, $"3000 -> {offSmile}");
+            Check("Hamlet(hand 5): aura OFF for self", offSelf == 4000, $"4000 -> {offSelf}");
+        }
+
+        // ---- ST30-001 Luffy & Ace (LEADER): name-list aura on the opponent's turn ----
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "aura4" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 6;  // [Opponent's Turn] for south
+            var S = st.Players["south"];
+            S.Leader.CardId = "ST30-001";
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; }
+            var luffy = new CardInstance { InstanceId = "LUFFY", CardId = "P-022",    Owner = "south", Zone = "character" }; // named Monkey.D.Luffy, base 6000
+            var nobody = new CardInstance { InstanceId = "NOBODY", CardId = "EB01-005", Owner = "south", Zone = "character" }; // base 3000, other name
+            S.CharacterArea[0] = luffy; S.CharacterArea[1] = nobody;
+            int pLuffy = GameEngine.GetPower(st, luffy), pNobody = GameEngine.GetPower(st, nobody);
+            Check("Luffy&Ace: named [Monkey.D.Luffy] +3000", pLuffy == 9000, $"6000 -> {pLuffy}");
+            Check("Luffy&Ace: unnamed body unaffected", pNobody == 3000, $"3000 -> {pNobody}");
+            st.ActiveSeat = "south";
+            int ownTurn = GameEngine.GetPower(st, luffy);
+            Check("Luffy&Ace: gate off on own turn", ownTurn == 6000, $"6000 -> {ownTurn}");
+        }
+        Console.WriteLine($"\nAURAFILTERTEST: {pass} passed, {fail} failed");
+    }
+
+    // Rule 1-3-2 says only "that part" of an effect with no legal target is not carried out — a rider
+    // that cannot resolve must NOT cancel a mandatory lead clause.
+    //
+    // OP15-077 Lightning Dragon: "[Main] DON!! −1: Draw 1 card. Then, up to 1 of your opponent's rested
+    // Characters with 6000 power or less will not become active in your opponent's next Refresh Phase."
+    // The no-legal-target sweep (ClauseHasNoLegalCharacterTarget) is evaluated against the WHOLE pending
+    // text, and the ". Then," split only happens later during resolution — so when the opponent has no
+    // RESTED Character the sweep retires the entire effect and the guaranteed "Draw 1 card" is lost.
+    //
+    // rested=true  → rider has a legal target: draw happens AND the freeze lands.
+    // rested=false → rider has none: the draw must STILL happen (only the rider is skipped).
+    static void ThenRiderRetireTest()
+    {
+        Console.WriteLine("=== THENRIDERRETIRETEST — a dead rider must not cancel a mandatory lead clause ===");
+        Console.WriteLine(CardData.GetCard("OP15-077")?.Effect + "\n");
+        int pass = 0, fail = 0;
+        foreach (bool rested in new[] { true, false })
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "thenrider" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.TurnsStarted = 3; N.TurnsStarted = 3;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            // Opponent body: ST01-008 Nico Robin (5000 power, so <=6000). Rested or not per case.
+            N.CharacterArea[0] = new CardInstance { InstanceId = "OPP", CardId = "ST01-008", Owner = "north", Zone = "character", Rested = rested };
+            // DON!! so the DON!! -1 cost is payable, plus enough to play a cost-0 Event.
+            for (int i = 0; i < 5; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sd{i}", Rested = false });
+            var ev = new CardInstance { InstanceId = "EV", CardId = "OP15-077", Owner = "south", Zone = "hand" };
+            S.Hand.Add(ev);
+            int handBefore = S.Hand.Count, deckBefore = S.Deck.Count;
+
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = "EV" });
+            // Drive every prompt ADAPTIVELY rather than guessing which target a step wants: try each
+            // candidate until the state actually moves. Guessing from the clause text silently leaves the
+            // DON!! -1 cost unpaid, and then the test reports "broken" for "still waiting".
+            for (int g = 0; g < 12; g++)
+            {
+                var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+                if (pe == null) break;
+                string sig = pe.EffectId + "|" + pe.Text + "|" + st.EventLog.Count + "|" + S.Deck.Count;
+                bool moved = false;
+                foreach (var tgt in new[] { "sd0", "sd1", "OPP", null })
+                {
+                    GameEngine.ApplyCommand(st, new GameCommand
+                    { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = tgt });
+                    var now = st.PendingEffects.FirstOrDefault(e => e.EffectId == pe.EffectId);
+                    string sig2 = now == null ? "gone" : now.EffectId + "|" + now.Text + "|" + st.EventLog.Count + "|" + S.Deck.Count;
+                    if (sig2 != sig) { moved = true; break; }
+                }
+                if (!moved) break;   // genuinely stuck, not merely waiting on a different target
+            }
+            // Event left hand (-1) and the draw added one (+1) => net 0 vs handBefore.
+            int drew = deckBefore - S.Deck.Count;
+            bool ok = drew == 1;
+            Console.WriteLine($"  oppRested={rested,-5} drew={drew}  hand {handBefore}->{S.Hand.Count}  deck {deckBefore}->{S.Deck.Count}  " + (ok ? "PASS" : "FAIL"));
+            if (!ok)
+            {
+                Console.WriteLine("     expected: drew=1 — the mandatory 'Draw 1 card' must happen regardless of the rider");
+                foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 7))) Console.WriteLine("        " + l.Message);
+            }
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine($"\nTHENRIDERRETIRETEST: {pass} passed, {fail} failed");
+    }
+
+    // Rule 8-6-1 / 1-3-10: when both players' activation timings are fulfilled at the same time, the
+    // TURN PLAYER resolves first. DeclareAttack queues the attacker's [When Attacking] (OP12-090 Belo
+    // Betty) and the defender's [On Your Opponent's Attack] (OP04-071 Mr.4(Babe)) together, so the
+    // defender's are STAGED in BattleReactionSeat until the turn player's queue drains.
+    //
+    // Implemented by staging rather than by REFUSING a resolve: an earlier refusal-based attempt hung 5
+    // games in the full sweep (the refused side retried forever). A staged reaction cannot be spun on
+    // because it does not exist yet — which is the whole point of doing it this way.
+    //
+    // contested=true  → right after declaration ONLY north has an effect and south's is staged; south's
+    //                   appears once north's is answered.
+    // contested=false → nothing to yield to, so south's reaction queues immediately (proves the staging
+    //                   is not just a blanket delay of the defender).
+    static void TurnPlayerFirstTest()
+    {
+        Console.WriteLine("=== TURNPLAYERFIRSTTEST — rule 8-6-1 turn player has the floor first ===");
+        int pass = 0, fail = 0;
+        foreach (bool contested in new[] { true, false })
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "tpfirst" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.TurnsStarted = 3; N.TurnsStarted = 3;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            S.CharacterArea[0] = new CardInstance { InstanceId = "DEF", CardId = "OP04-071", Owner = "south", Zone = "character", Rested = false };
+            for (int i = 0; i < 4; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sd{i}", Rested = false });
+            N.CharacterArea[0] = new CardInstance
+            { InstanceId = "ATK", CardId = contested ? "OP12-090" : "ST01-008", Owner = "north", Zone = "character", Rested = false };
+            for (int i = 0; i < 6; i++) N.CostArea.Add(new DonInstance { InstanceId = $"nd{i}", Rested = false });
+
+            GameEngine.ApplyCommand(st, new GameCommand
+            { Type = "declareAttack", Seat = "north", Attacker = "ATK", Target = S.Leader?.InstanceId });
+
+            bool northHas = st.PendingEffects.Any(e => e.Seat == "north");
+            bool southHasAtDeclare = st.PendingEffects.Any(e => e.Seat == "south");
+            bool staged = st.BattleReactionSeat == "south";
+
+            // Turn player answers theirs; the defender's reaction should then stage in.
+            var npe = st.PendingEffects.FirstOrDefault(e => e.Seat == "north");
+            if (npe != null)
+                GameEngine.ApplyCommand(st, new GameCommand { Type = "passEffect", Seat = "north", EffectId = npe.EffectId });
+            bool southHasAfter = st.PendingEffects.Any(e => e.Seat == "south");
+
+            bool ok = contested
+                ? (northHas && !southHasAtDeclare && staged && southHasAfter)
+                : (!northHas && southHasAtDeclare && st.BattleReactionSeat == null);
+            Console.WriteLine($"  contested={contested,-5} northHas={northHas,-5} southAtDeclare={southHasAtDeclare,-5} " +
+                              $"staged={staged,-5} southAfter={southHasAfter,-5}  " + (ok ? "PASS" : "FAIL"));
+            if (!ok)
+            {
+                Console.WriteLine(contested
+                    ? "     expected: northHas=True southAtDeclare=False staged=True southAfter=True"
+                    : "     expected: northHas=False southAtDeclare=True staged(BattleReactionSeat)=null");
+                foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 6))) Console.WriteLine("        " + l.Message);
+            }
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine($"\nTURNPLAYERFIRSTTEST: {pass} passed, {fail} failed");
+    }
+
+    // Regression guard for the [Trigger] double-activation that duplicated a card across hand+trash.
+    //
+    // Cause: the removalChoice branches of ResolveEffect/PassEffect RETURN early, so they skipped the
+    // TryFinalizeDeferredActivatedTrigger call at the end of those methods. A [Trigger] whose effect
+    // K.O.'d something ran into a removal PROTECTION, the K.O. deferred into a removalChoice, the
+    // activated trigger parked in DeferredActivatedTriggerSeat — and answering the prompt never un-parked
+    // it. Battle.Step stayed "trigger" with RevealedLife still set, so the SAME [Trigger] was activated a
+    // second time: one activation trashed the Event, the other routed it to hand.
+    //
+    // These 8 (south, north, seed) triples are exactly the games the full sweep flagged. They are
+    // deterministic, so replaying them and asserting zero violations pins the fix precisely.
+    // ActivatedTriggerIds drives the incinerate showcase for a USED [Trigger]. It is presentation
+    // state, but a wrong entry is a visible lie: burning a card that actually went to hand, or a
+    // Life card taken as ordinary damage. So assert the CORRESPONDENCE — every id the engine
+    // flagged must really be sitting in that seat's trash and nowhere else.
+    // The VIEW depends on a fact about engine state that nothing else asserts: while the Trigger
+    // step is open, the revealed Life card has been popped out of Life and lives ONLY in
+    // Battle.RevealedLife -- it is in no zone list at all. GameManager's pose builder walks the
+    // zone lists, so such a card has no pose unless it is added explicitly, and a card with no
+    // pose reads as "brand new" when it lands and loses every diff-driven animation, the trigger
+    // burn included. That is a UI bug with an ENGINE precondition, and this is the half of it
+    // that can be gated headlessly: prove the limbo window is real and that the card is exactly
+    // where the view expects to find it.
+    // PRIVACY. The incinerate showcase reveals the Life card's face to BOTH players, so it must be
+    // impossible for it to fire on a card whose owner DECLINED the trigger -- that would hand the
+    // attacker the identity of a card that was taken quietly to hand, which is exactly the class of
+    // leak the always-enter-the-Trigger-step rule exists to prevent.
+    // The burn keys off ActivatedTriggerIds, so the property to prove is: a card the player passed
+    // on is NEVER in that list.
+    static void TriggerPrivacyTest()
+    {
+        Console.WriteLine("=== TRIGGERPRIVACYTEST — a DECLINED trigger must never be marked for the burn ===");
+        var cases = new[]
+        {
+            ("lt01luffy", "st29", "2"), ("lt01zoro", "st29", "2"), ("st09", "st30", "2"),
+            ("st19", "lt01zoro", "0"),  ("st20", "lt01zoro", "1"), ("st30", "st09", "2"),
+            ("st01", "st02", "5"),      ("st03", "st04", "7"),
+        };
+        int pass = 0, fail = 0, totalDeclined = 0, totalUsed = 0;
+        foreach (var (sd, nd, seed) in cases)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = sd, NorthDeck = nd, Seed = sd + ":" + nd + ":" + seed });
+            var declined = new HashSet<string>();
+            var used = new HashSet<string>();
+            string err = null;
+
+            Action<string, GameCommand> observe = (pendingId, cmd) =>
+            {
+                if (pendingId == null || cmd == null) return;
+                if (cmd.Type == "passTrigger") declined.Add(pendingId);
+                else if (cmd.Type == "useTrigger") used.Add(pendingId);
+            };
+
+            int total = 0;
+            try
+            {
+                while (st.Status != "finished" && total < 20000)
+                {
+                    int appliedThisRound = 0;
+                    foreach (var seat in new[] { "south", "north" })
+                    {
+                        var blacklist = new HashSet<string>();
+                        for (int i = 0; i < 20000 - total; i++)
+                        {
+                            string pendingId = (st.Battle != null && st.Battle.Step == "trigger" && st.Battle.RevealedLife != null)
+                                ? st.Battle.RevealedLife.InstanceId : null;
+                            var cmd = IntermediateBot.DecideOneCommand(st, seat, blacklist);
+                            if (cmd == null) break;
+                            object before = IntermediateBot.SnapshotFor(st, cmd);
+                            GameEngine.ApplyCommand(st, cmd);
+                            observe(pendingId, cmd);
+                            total++; appliedThisRound++;
+                            if (!IntermediateBot.Succeeded(st, cmd, before))
+                                blacklist.Add(IntermediateBot.Signature(cmd));
+                        }
+                    }
+                    if (appliedThisRound == 0) break;
+                }
+            }
+            catch (Exception ex) { err = "CRASH " + ex.GetType().Name + ": " + ex.Message; }
+
+            if (err == null)
+                foreach (var id in declined)
+                    if (st.ActivatedTriggerIds.Contains(id))
+                    { err = "DECLINED trigger is marked for the burn — would reveal a card taken quietly to hand: " + id; break; }
+
+            totalDeclined += declined.Count;
+            totalUsed += used.Count;
+            bool ok = err == null;
+            Console.WriteLine($"  {sd,-10} vs {nd,-10} #{seed}  declined={declined.Count,-3} used={used.Count,-3} " + (ok ? "PASS" : "FAIL  " + err));
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine();
+        Console.WriteLine($"  triggers DECLINED across sweep: {totalDeclined}   USED: {totalUsed}");
+        if (totalDeclined == 0)
+        {
+            Console.WriteLine("  VACUOUS — no trigger was ever declined, so the privacy rule was never exercised.");
+            fail++;
+        }
+        Console.WriteLine($"TRIGGERPRIVACYTEST: {pass} passed, {fail} failed");
+        if (fail > 0) Environment.Exit(1);
+    }
+
+    // StepSeat, but with a hook run BEFORE each command -- i.e. at exactly the moments the view
+    // would render. Per-seat blacklist, same as the original: sharing one across both seats stalls
+    // the game long before any battle happens.
+    static (int applied, string violation) StepSeatWithHook(GameState state, string seat, int maxCommands, Func<string> hook)
+    {
+        int applied = 0;
+        var blacklist = new HashSet<string>();
+        for (int i = 0; i < maxCommands; i++)
+        {
+            var v = hook(); if (v != null) return (applied, v);
+            var cmd = IntermediateBot.DecideOneCommand(state, seat, blacklist);
+            if (cmd == null) break;
+            object before = IntermediateBot.SnapshotFor(state, cmd);
+            GameEngine.ApplyCommand(state, cmd);
+            applied++;
+            if (!IntermediateBot.Succeeded(state, cmd, before))
+                blacklist.Add(IntermediateBot.Signature(cmd));
+        }
+        var last = hook();
+        return (applied, last);
+    }
+
+    // The VIEW depends on a fact about engine state that nothing else asserts: while the Trigger
+    // step is open, the revealed Life card has been popped out of Life and lives ONLY in
+    // Battle.RevealedLife -- it is in no zone list at all. GameManager's pose builder walks the
+    // zone lists, so such a card has no pose unless added explicitly, and a card with no pose
+    // reads as "brand new" when it lands and loses every diff-driven animation, the trigger burn
+    // included. This is the half of that UI bug which CAN be gated headlessly: prove the limbo
+    // window is real, and that the card is exactly where the view now expects to find it.
+    static void TriggerLimboTest()
+    {
+        Console.WriteLine("=== TRIGGERLIMBOTEST — revealed Life card is in NO zone list during the Trigger step ===");
+        var cases = new[]
+        {
+            ("lt01luffy", "st29", "2"), ("lt01zoro", "st29", "2"), ("st09", "st30", "2"),
+            ("st19", "lt01zoro", "0"),  ("st20", "lt01zoro", "1"), ("st30", "st09", "2"),
+        };
+        int pass = 0, fail = 0, observed = 0, totalLimbo = 0;
+        foreach (var (sd, nd, seed) in cases)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = sd, NorthDeck = nd, Seed = sd + ":" + nd + ":" + seed });
+            int distinct = 0, limbo = 0, settled = 0;
+            string lastSeenId = null;
+            Func<string> hook = () =>
+            {
+                if (st.Battle == null || st.Battle.Step != "trigger" || st.Battle.RevealedLife == null) return null;
+                var rl = st.Battle.RevealedLife;
+                if (rl.InstanceId != lastSeenId) { distinct++; lastSeenId = rl.InstanceId; }
+                bool inAZone = st.Players.Values.Any(p =>
+                       p.Life.Any(c => c != null && c.InstanceId == rl.InstanceId)
+                    || p.Hand.Any(c => c != null && c.InstanceId == rl.InstanceId)
+                    || p.Trash.Any(c => c != null && c.InstanceId == rl.InstanceId)
+                    || p.Deck.Any(c => c != null && c.InstanceId == rl.InstanceId)
+                    || (p.CharacterArea != null && p.CharacterArea.Any(c => c != null && c.InstanceId == rl.InstanceId))
+                    || (p.Stage != null && p.Stage.InstanceId == rl.InstanceId));
+                // BOTH states are legitimate and the view must handle both:
+                //   limbo   -> popped out of Life, in no list. Needs the explicit pose, or the card
+                //              has none at all and every diff-driven animation for it is skipped.
+                //   settled -> already moved on (typically into the trash once the trigger resolved,
+                //              while the step is still open). The pose builder covers it via the
+                //              normal zone walk, so the explicit block MUST stand down -- which is
+                //              what its !now.ContainsKey(...) guard is for. Posing it twice would
+                //              overwrite the real trash pose with a life one and break the diff.
+                if (inAZone) settled++; else limbo++;
+                if (string.IsNullOrEmpty(st.Battle.TargetSeat))
+                    return "Battle.TargetSeat is empty, so the view cannot tell whose Life stack to pose it at";
+                return null;
+            };
+
+            string err = null;
+            int total = 0;
+            try
+            {
+                while (st.Status != "finished" && total < 20000 && err == null)
+                {
+                    var (aS, vS) = StepSeatWithHook(st, "south", 20000 - total, hook); total += aS; if (vS != null) { err = vS; break; }
+                    var (aN, vN) = StepSeatWithHook(st, "north", 20000 - total, hook); total += aN; if (vN != null) { err = vN; break; }
+                    if (aS == 0 && aN == 0) break;
+                }
+            }
+            catch (Exception ex) { err = "CRASH " + ex.GetType().Name + ": " + ex.Message; }
+
+            observed += distinct;
+            totalLimbo += limbo;
+            bool ok = err == null;
+            Console.WriteLine($"  {sd,-10} vs {nd,-10} #{seed}  steps={distinct,-3} limbo={limbo,-4} settled={settled,-4} " + (ok ? "PASS" : "FAIL  " + err));
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine();
+        Console.WriteLine($"  distinct trigger steps: {observed}   renders with the card in LIMBO: {totalLimbo}");
+        if (observed == 0)
+        {
+            Console.WriteLine("  VACUOUS — the Trigger step never opened, so nothing was inspected.");
+            fail++;
+        }
+        else if (totalLimbo == 0)
+        {
+            Console.WriteLine("  The limbo window does not exist — GameManager's explicit RevealedLife pose is then");
+            Console.WriteLine("  dead code, and the trigger burn is firing (or not) for some OTHER reason.");
+            fail++;
+        }
+        Console.WriteLine($"TRIGGERLIMBOTEST: {pass} passed, {fail} failed");
+        if (fail > 0) Environment.Exit(1);
+    }
+
+    // "You may turn N cards from the top of your Life cards face-up:" is a COST component
+    // (OP15-114 Wyper). The engine DOES implement it (GameEngine ~9146, which spells the facing
+    // as face-(up|down) — easy to miss when grepping for a literal "face-up").
+    // Written while chasing "flipping life up with Wyper didn't play sfx". The cause turned out to
+    // be view-side only: the flip happens, but the sound keyed off Battle.RevealedLife and so
+    // never saw an in-place facing change. Kept as a regression gate because the engine half is
+    // load-bearing for that sound — if this cost ever stops paying, the card silently does
+    // nothing and the missing sound is the only symptom a player can report.
+    // The flip-sound cue. Shipped broken twice inside the MonoBehaviour where nothing gated it:
+    // first it only watched the Trigger-step reveal, then an early return made the in-place scan
+    // unreachable whenever there was NO battle — which is precisely when OP11-022 Shirahoshi and
+    // OP15-114 Wyper turn a Life card face-up. Both reported from play as "no sfx".
+    // The first case below is the one that matters: a flip with revealedId = null.
+    static void FlipCueTest()
+    {
+        Console.WriteLine("=== FLIPCUETEST — the card-flip sound cue ===");
+        int pass = 0, fail = 0;
+        void Check(string label, int got, int want)
+        {
+            bool ok = got == want;
+            Console.WriteLine($"  {label,-56} cues={got} want={want}  " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+        string[] none = new string[0];
+
+        // ── Wyper / Shirahoshi: in-place flip, NO battle anywhere in sight ──
+        var c = new CardFlipCue();
+        Check("prime is silent (already face-up on load)", c.Observe(new[] { "L1" }, null), 0);
+        Check("WYPER: turn a Life card face-up, no battle", c.Observe(new[] { "L1", "L2" }, null), 1);
+        Check("...and does not repeat on the next render", c.Observe(new[] { "L1", "L2" }, null), 0);
+        Check("a second card flipped later", c.Observe(new[] { "L1", "L2", "L3" }, null), 1);
+        Check("two flipped in one tick", c.Observe(new[] { "L1", "L2", "L3", "L4", "L5" }, null), 2);
+
+        // ── turned back face-down, then up again ──
+        var d = new CardFlipCue();
+        d.Observe(none, null);                                     // prime
+        Check("flip up", d.Observe(new[] { "A" }, null), 1);
+        Check("turned back down (no cue)", d.Observe(none, null), 0);
+        Check("flipped up AGAIN sounds again", d.Observe(new[] { "A" }, null), 1);
+
+        // ── Trigger step ──
+        var e = new CardFlipCue();
+        e.Observe(none, null);                                     // prime
+        Check("trigger reveal", e.Observe(none, "R1"), 1);
+        Check("repaint during the step does not repeat", e.Observe(none, "R1"), 0);
+        Check("Double Attack reveals a 2nd card", e.Observe(none, "R2"), 1);
+        Check("step closes", e.Observe(none, null), 0);
+        Check("revealed card LEAVING life does not double-sound",
+              e.ShouldSoundLeavingLife("R2") ? 1 : 0, 0);
+        Check("an unrelated card leaving life does sound",
+              e.ShouldSoundLeavingLife("X9") ? 1 : 0, 1);
+        Check("...but only once", e.ShouldSoundLeavingLife("X9") ? 1 : 0, 0);
+
+        // ── reset ──
+        var f = new CardFlipCue();
+        f.Observe(new[] { "Z" }, null);                             // prime with Z face-up
+        f.Reset();
+        Check("after Reset the next tick primes silently again", f.Observe(new[] { "Z" }, null), 0);
+
+        Console.WriteLine($"FLIPCUETEST: {pass} passed, {fail} failed");
+        if (fail > 0) Environment.Exit(1);
+    }
+
+    static void LifeFaceUpCostTest()
+    {
+        Console.WriteLine("=== LIFEFACEUPCOSTTEST — 'turn N Life face-up' must be a payable cost ===");
+        int pass = 0, fail = 0;
+        void Check(string label, bool ok, string detail)
+        {
+            Console.WriteLine($"  {label,-46} {detail,-34} " + (ok ? "PASS" : "FAIL"));
+            if (ok) pass++; else fail++;
+        }
+
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "wyper" });
+        // Same preamble AuditRange uses. Setting Phase/ActiveSeat alone is NOT enough — without
+        // Status/TurnNumber/TurnsStarted the match is still in coin-flip/mulligan and playCard is
+        // rejected, so the fixture never reaches the code it claims to test.
+        st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 5;
+        var S = st.Players["south"]; var N = st.Players["north"];
+        S.TurnsStarted = 3; N.TurnsStarted = 3; S.Hand.Clear();
+        for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+        S.CostArea.Clear();
+        for (int i = 0; i < 10; i++) S.CostArea.Add(new DonInstance { InstanceId = $"d{i}", Rested = false });
+        // CreateMatch does NOT deal Life — stage it explicitly, all face-DOWN.
+        for (int i = 0; i < 4; i++)
+        {
+            S.Life.Add(new CardInstance { InstanceId = $"sl{i}", CardId = "ST01-006", Owner = "south", Zone = "life", FaceUp = false });
+            N.Life.Add(new CardInstance { InstanceId = $"nl{i}", CardId = "ST01-006", Owner = "north", Zone = "life", FaceUp = false });
+        }
+        // Something for the effect body to act on, so the clause is worth paying for.
+        N.CharacterArea[0] = new CardInstance { InstanceId = "na", CardId = "ST01-006", Owner = "north", Zone = "character" };
+
+        int faceUpBefore = S.Life.Count(c => c != null && c.FaceUp);
+        Check("no Life card starts face-up", faceUpBefore == 0, $"faceUp={faceUpBefore}");
+
+        var src = new CardInstance { InstanceId = "SRC", CardId = "OP15-114", Owner = "south", Zone = "hand" };
+        S.Hand.Add(src);
+        try { GameEngine.ApplyCommand(st, new GameCommand { Type = "playCard", Seat = "south", InstanceId = "SRC", SlotIndex = 0 }); }
+        catch (Exception ex) { Check("playCard did not throw", false, ex.GetType().Name); }
+
+        // Generic resolve loop — accept every optional prompt so the cost actually gets paid.
+        int guard = 0;
+        while (guard++ < 30)
+        {
+            if (st.ActiveChoice != null && st.ActiveChoice.Seat == "south")
+            { GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveChoice", Seat = "south", Target = "A" }); continue; }
+            var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            if (pe != null)
+            {
+                var before = st.PendingEffects.Count;
+                try { GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveEffect", Seat = "south", Target = pe.EffectId }); }
+                catch { }
+                if (st.PendingEffects.Count == before)
+                {
+                    try { GameEngine.ApplyCommand(st, new GameCommand { Type = "passEffect", Seat = "south", Target = pe.EffectId }); }
+                    catch { break; }
+                }
+                continue;
+            }
+            break;
+        }
+
+        int faceUpAfter = S.Life.Count(c => c != null && c.FaceUp);
+        Check("a Life card ended face-up", faceUpAfter >= 1, $"faceUp={faceUpAfter}");
+        Check("exactly one was flipped", faceUpAfter == 1, $"faceUp={faceUpAfter}");
+        // Top of Life is the END of the list; the cost must flip from the top, not the bottom.
+        Check("the TOP Life card is the flipped one",
+              S.Life.Count > 0 && S.Life[S.Life.Count - 1] != null && S.Life[S.Life.Count - 1].FaceUp,
+              S.Life.Count > 0 ? "top.FaceUp=" + (S.Life[S.Life.Count - 1]?.FaceUp) : "no life");
+
+        if (fail > 0)
+        {
+            Console.WriteLine("  ---- diagnostics ----");
+            Console.WriteLine($"  SRC zone      : {(S.CharacterArea.Any(c => c != null && c.InstanceId == "SRC") ? "character" : S.Hand.Any(c => c.InstanceId == "SRC") ? "still in HAND" : "elsewhere")}");
+            Console.WriteLine($"  PendingEffects: {st.PendingEffects.Count}");
+            foreach (var e in st.PendingEffects)
+                Console.WriteLine($"    [{e.EffectId}] seat={e.Seat} timing={e.Timing} opt={e.Optional} text={(e.Text ?? "").Replace('\n', '|')}");
+            Console.WriteLine($"  ActiveChoice  : {(st.ActiveChoice == null ? "none" : st.ActiveChoice.OptionA)}");
+            Console.WriteLine("  ---- last 14 log lines ----");
+            foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 14))) Console.WriteLine("    " + l.Message);
+        }
+        Console.WriteLine($"LIFEFACEUPCOSTTEST: {pass} passed, {fail} failed");
+        if (fail > 0) Environment.Exit(1);
+    }
+
+    static void TriggerBurnTest()
+    {
+        Console.WriteLine("=== TRIGGERBURNTEST — ActivatedTriggerIds must match cards actually spent to trash ===");
+        var cases = new[]
+        {
+            ("lt01luffy", "st29", "2"), ("lt01zoro", "st29", "2"), ("st09", "st30", "2"),
+            ("st19", "lt01zoro", "0"),  ("st20", "lt01zoro", "1"), ("st20", "lt01zoro", "2"),
+            ("st30", "st09", "2"),      ("st30", "st19", "2"),     ("st01", "st02", "5"),
+            ("st03", "st04", "7"),      ("st05", "st06", "3"),     ("st07", "st08", "9"),
+        };
+        int pass = 0, fail = 0, totalFlagged = 0;
+        foreach (var (sd, nd, seed) in cases)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = sd, NorthDeck = nd, Seed = sd + ":" + nd + ":" + seed });
+            string err = null;
+            try { PlayWithInvariantChecks(st, 20000); }
+            catch (Exception ex) { err = "CRASH " + ex.GetType().Name + ": " + ex.Message; }
+
+            int flagged = st.ActivatedTriggerIds.Count;
+            totalFlagged += flagged;
+            if (err == null)
+            {
+                foreach (var id in st.ActivatedTriggerIds)
+                {
+                    bool inTrash = st.Players.Values.Any(p => p.Trash.Any(c => c != null && c.InstanceId == id));
+                    bool inHand  = st.Players.Values.Any(p => p.Hand.Any(c => c != null && c.InstanceId == id));
+                    bool inLife  = st.Players.Values.Any(p => p.Life.Any(c => c != null && c.InstanceId == id));
+                    bool onBoard = st.Players.Values.Any(p =>
+                          (p.CharacterArea != null && p.CharacterArea.Any(c => c != null && c.InstanceId == id))
+                        || (p.Stage != null && p.Stage.InstanceId == id));
+                    if (!inTrash) { err = "flagged id not in any trash: " + id; break; }
+                    if (inHand)   { err = "flagged id ALSO in hand (would burn a card taken as damage): " + id; break; }
+                    if (inLife)   { err = "flagged id ALSO in life: " + id; break; }
+                    if (onBoard)  { err = "flagged id ALSO on board (trigger PLAYED it — must not burn): " + id; break; }
+                }
+            }
+            bool ok = err == null;
+            Console.WriteLine($"  {sd,-10} vs {nd,-10} #{seed}  flagged={flagged,-3} " + (ok ? "PASS" : "FAIL  " + err));
+            if (ok) pass++; else fail++;
+        }
+
+        // Positive control. Every assertion above passes trivially on an empty list, so a sweep that
+        // never fires a trigger would report a clean run while proving nothing at all.
+        Console.WriteLine();
+        Console.WriteLine($"  total triggers flagged across sweep: {totalFlagged}");
+        if (totalFlagged == 0)
+        {
+            Console.WriteLine("  VACUOUS — no trigger was activated in any game, so nothing was actually tested.");
+            fail++;
+        }
+        Console.WriteLine($"TRIGGERBURNTEST: {pass} passed, {fail} failed");
+        if (fail > 0) Environment.Exit(1);
+    }
+
+    static void TriggerDupTest()
+    {
+        Console.WriteLine("=== TRIGGERDUPTEST — [Trigger] must not activate twice via a deferred removal ===");
+        var cases = new[]
+        {
+            ("lt01luffy", "st29", "2"), ("lt01zoro", "st29", "2"),
+            ("st09", "st30", "2"),      ("st19", "lt01zoro", "0"),
+            ("st20", "lt01zoro", "1"),  ("st20", "lt01zoro", "2"),
+            ("st30", "st09", "2"),      ("st30", "st19", "2"),
+        };
+        int pass = 0, fail = 0;
+        foreach (var (sd, nd, seed) in cases)
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = sd, NorthDeck = nd, Seed = sd + ":" + nd + ":" + seed });
+            string viol;
+            try { viol = PlayWithInvariantChecks(st, 20000); }
+            catch (Exception ex) { viol = "CRASH " + ex.GetType().Name + ": " + ex.Message; }
+            bool ok = viol == null;
+            Console.WriteLine($"  {sd,-10} vs {nd,-10} #{seed}  " + (ok ? "PASS" : "FAIL  " + viol));
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine($"\nTRIGGERDUPTEST: {pass} passed, {fail} failed");
+    }
+
+    // Diagnostic: replay the exact game the invariant sweep flags (its seed is "{south}:{north}:{n}")
+    // and dump the tail of the event log, so the sequence that duplicates a [Trigger] card across
+    // hand+trash is visible instead of inferred.
+    static void TriggerDupDiag(string sd, string nd, string seed)
+    {
+        var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = sd, NorthDeck = nd, Seed = sd + ":" + nd + ":" + seed });
+        string viol;
+        try { viol = PlayWithInvariantChecks(st, 20000); }
+        catch (Exception ex) { viol = "CRASH " + ex.GetType().Name + ": " + ex.Message; }
+        Console.WriteLine("violation: " + (viol ?? "<none>"));
+        Console.WriteLine("---- last 26 log lines ----");
+        foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 26))) Console.WriteLine("  " + l.Message);
+    }
+
+    // Staged end-of-turn: an [End of Your Turn] "up to N" pick must HOLD the turn hand-over, be a real
+    // player choice, and then let the turn pass.
+    //
+    // OP04-034 Lao.G: "[End of Your Turn] If you have 3 or more active DON!! cards, K.O. up to 1 of your
+    // opponent's rested Characters with a cost of 3 or less."
+    //
+    // Before: EndTurn ran the end-of-turn scanners and then advanced the turn UNCONDITIONALLY, so a
+    // queued pick survived into the opponent's turn and resolved after their Refresh Phase had cleared
+    // the rested state. The engine worked around that by AUTO-PICKING the highest-cost target and always
+    // taking the full N — deleting the controller's choice (rule-wise "up to N" includes choosing none).
+    // Now AdvanceEndOfTurn holds at stage "eoot"/"handover" until the queue drains.
+    //
+    // choose=true  → answer the pick: the rested target IS K.O.'d, then the turn hands over.
+    // choose=false → Skip it (the zero-pick the rules allow): target SURVIVES, turn still hands over.
+    static void EotPickTest()
+    {
+        Console.WriteLine("=== EOTPICKTEST — staged end-of-turn 'up to N' pick ===");
+        Console.WriteLine(CardData.GetCard("OP04-034")?.Effect + "\n");
+        int pass = 0, fail = 0;
+        foreach (bool choose in new[] { true, false })
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "eotpick" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "south"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.TurnsStarted = 3; N.TurnsStarted = 3;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            S.CharacterArea[0] = new CardInstance { InstanceId = "LAOG", CardId = "OP04-034", Owner = "south", Zone = "character", Rested = false };
+            // Condition: 3+ ACTIVE DON!! on south's field.
+            for (int i = 0; i < 4; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sd{i}", Rested = false });
+            // Legal target: opponent's RESTED Character with cost <= 3 (ST01-003 Karoo, cost 1).
+            N.CharacterArea[0] = new CardInstance { InstanceId = "VICT", CardId = "ST01-003", Owner = "north", Zone = "character", Rested = true };
+
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "endTurn", Seat = "south" });
+
+            // The turn must NOT have handed over while the pick is unanswered.
+            bool heldTurn = st.ActiveSeat == "south" && st.EndTurnStage != null;
+            var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            bool prompted = pe != null;
+
+            if (pe != null)
+            {
+                if (choose)
+                    GameEngine.ApplyCommand(st, new GameCommand
+                    { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = "VICT" });
+                else
+                    GameEngine.ApplyCommand(st, new GameCommand
+                    { Type = "passEffect", Seat = "south", EffectId = pe.EffectId });
+            }
+
+            bool victAlive = N.CharacterArea.Any(c => c != null && c.InstanceId == "VICT");
+            bool handedOver = st.ActiveSeat == "north" && st.EndTurnStage == null;
+
+            bool ok = heldTurn && prompted && handedOver && (choose ? !victAlive : victAlive);
+            Console.WriteLine($"  choose={choose,-5} heldTurn={heldTurn,-5} prompted={prompted,-5} " +
+                              $"victimAlive={victAlive,-5} handedOver={handedOver,-5}  " + (ok ? "PASS" : "FAIL"));
+            if (!ok)
+            {
+                Console.WriteLine("     expected: heldTurn=True prompted=True handedOver=True victimAlive=" + (!choose));
+                Console.WriteLine($"     (ActiveSeat={st.ActiveSeat} EndTurnStage={st.EndTurnStage ?? "<null>"} pending={st.PendingEffects.Count})");
+                foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 8))) Console.WriteLine("        " + l.Message);
+            }
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine($"\nEOTPICKTEST: {pass} passed, {fail} failed");
+    }
+
+    // Block step must survive a defender reaction that is about to CREATE the blocker.
+    //
+    // DeclareAttack QUEUES the defender's [On Your Opponent's Attack] effects and then called
+    // MaybeAutoPassBlock immediately. OP04-071 Mr.4(Babe) has no printed [Blocker] — it GAINS one
+    // from that reaction — so the early check saw no legal blocker, logged "no available Blocker",
+    // and set Step = "counter". Because Step = "block" is assigned in exactly one place (battle
+    // creation) it could never be re-entered, so the defender lost the ability to block outright.
+    //
+    // Case reaction=true  : Step stays "block" while the reaction is pending, and after it resolves
+    //                       the defender can actually block with the newly-granted [Blocker].
+    // Case reaction=false : the legitimate auto-pass still happens (no blocker anywhere → "counter"),
+    //                       so the fix does not simply disable the optimisation.
+    static void BlockStepReactTest()
+    {
+        Console.WriteLine("=== BLOCKSTEPREACTTEST — block step vs [On Your Opponent's Attack] blocker grant ===");
+        Console.WriteLine(CardData.GetCard("OP04-071")?.Effect + "\n");
+        int pass = 0, fail = 0;
+        foreach (bool reaction in new[] { true, false })
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "blockreact" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.TurnsStarted = 3; N.TurnsStarted = 3;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            // Defender: the reaction card (gains [Blocker]) or an inert body with no [Blocker] at all.
+            // ST01-008 Nico Robin is the control body: no keywords, no effect text — genuinely
+            // unable to block. (ST01-006 Chopper is NOT usable here: it HAS [Blocker], so the
+            // control case would block and the legitimate auto-pass would never be exercised.)
+            S.CharacterArea[0] = new CardInstance
+            {
+                InstanceId = "DEF", CardId = reaction ? "OP04-071" : "ST01-008",
+                Owner = "south", Zone = "character", Rested = false
+            };
+            // DON!! on south's field so the reaction's "DON!! −1" is payable.
+            for (int i = 0; i < 4; i++) S.CostArea.Add(new DonInstance { InstanceId = $"sd{i}", Rested = false });
+            // Attacker.
+            var atk = new CardInstance { InstanceId = "ATK", CardId = "ST01-008", Owner = "north", Zone = "character", Rested = false };
+            N.CharacterArea[0] = atk;
+            for (int i = 0; i < 6; i++) N.CostArea.Add(new DonInstance { InstanceId = $"nd{i}", Rested = false });
+
+            GameEngine.ApplyCommand(st, new GameCommand
+            { Type = "declareAttack", Seat = "north", Attacker = "ATK", Target = S.Leader?.InstanceId });
+
+            string stepAtDeclare = st.Battle?.Step ?? "<no battle>";
+            int pendingAtDeclare = st.PendingEffects.Count;
+
+            // Resolve whatever the defender was offered (the DON!! −1 blocker grant). The cost step
+            // asks for a DON!! card, not a Character — answering every prompt with "DEF" leaves the
+            // cost unpaid, the [Blocker] ungranted, and the test reporting "broken" for "waiting".
+            int donAnswered = 0;
+            for (int g = 0; g < 8; g++)
+            {
+                var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+                if (pe == null) break;
+                bool wantsDon = (pe.Text ?? "").IndexOf("DON!!", StringComparison.OrdinalIgnoreCase) >= 0
+                                && (pe.Text ?? "").IndexOf("return", StringComparison.OrdinalIgnoreCase) >= 0;
+                string tgt = wantsDon ? $"sd{donAnswered++}" : "DEF";
+                GameEngine.ApplyCommand(st, new GameCommand
+                { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = tgt });
+            }
+
+            string stepAfter = st.Battle?.Step ?? "<no battle>";
+            // Now try to actually block.
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "blockAttack", Seat = "south", Blocker = "DEF" });
+            bool blocked = st.Battle?.Blocked == true && st.Battle?.TargetId == "DEF";
+
+            bool ok = reaction
+                ? (stepAtDeclare == "block" && stepAfter == "block" && blocked)
+                : (stepAtDeclare == "counter" && !blocked);
+            Console.WriteLine($"  reaction={reaction,-5} stepAtDeclare={stepAtDeclare,-8} pending={pendingAtDeclare} " +
+                              $"stepAfter={stepAfter,-8} blocked={blocked,-5}  " + (ok ? "PASS" : "FAIL"));
+            if (!ok)
+            {
+                Console.WriteLine(reaction
+                    ? "     expected: stepAtDeclare=block, stepAfter=block, blocked=True"
+                    : "     expected: stepAtDeclare=counter (legitimate auto-pass), blocked=False");
+                foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 7))) Console.WriteLine("        " + l.Message);
+            }
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine($"\nBLOCKSTEPREACTTEST: {pass} passed, {fail} failed");
+    }
+
+    // ST09-010 Portgas.D.Ace: "[Once Per Turn] If this Character would be K.O.'d, you may trash 1
+    // card from the top or bottom of your Life cards instead."
+    //
+    // Regression guard. The payment branch in TryRemovalReplacement matched only the literal
+    // "from the top of your Life cards instead" (written for OP05-100 Enel). Ace's wording says
+    // "from the top OR BOTTOM of …", which does not contain that substring, so it matched NO
+    // payment branch. Because the Use/Skip prompt is raised UPSTREAM of the payment, the observable
+    // bug was: the protection was offered, the player accepted it, no Life was trashed, and Ace was
+    // K.O.'d anyway. Both cases below are asserted so a future rewording cannot silently regress
+    // either the pay path or the unpayable path.
+    static void St09010Test()
+    {
+        Console.WriteLine("=== ST09010TEST — Ace 'trash 1 from the top or bottom of your Life instead' ===");
+        Console.WriteLine(CardData.GetCard("ST09-010")?.Effect + "\n");
+        int pass = 0, fail = 0;
+        // hasLife=true  → cost payable  → Ace SURVIVES and exactly 1 Life card is trashed.
+        // hasLife=false → cost unpayable → Ace is K.O.'d and nothing is trashed from Life.
+        foreach (bool hasLife in new[] { true, false })
+        {
+            var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st01", Seed = "st09010" });
+            st.Status = "active"; st.Phase = "main"; st.ActiveSeat = "north"; st.TurnNumber = 6;
+            var S = st.Players["south"]; var N = st.Players["north"];
+            S.TurnsStarted = 3; N.TurnsStarted = 3;
+            for (int i = 0; i < 5; i++) { S.CharacterArea[i] = null; N.CharacterArea[i] = null; }
+            S.CharacterArea[0] = new CardInstance { InstanceId = "ACE", CardId = "ST09-010", Owner = "south", Zone = "character", Rested = false };
+            // CreateMatch does NOT deal Life onto a hand-built board, so seed it explicitly —
+            // otherwise BOTH cases run with 0 Life and the unpayable case passes for the wrong reason.
+            S.Life.Clear();
+            if (hasLife)
+                for (int i = 0; i < 3; i++)
+                    S.Life.Add(new CardInstance { InstanceId = $"slife{i}", CardId = "ST01-006", Owner = "south", Zone = "life", FaceUp = false });
+            int lifeBefore = S.Life.Count, trashBefore = S.Trash.Count;
+
+            // North's uncapped K.O. (OP07-085 Stussy: "trash 1 of your Characters: K.O. up to 1 opp
+            // Character") — Ace is cost 6 / 7000 power, so a cost- or power-capped removal cannot reach it.
+            N.CharacterArea[0] = new CardInstance { InstanceId = "nfodder", CardId = "ST01-006", Owner = "north", Zone = "character", Rested = false };
+            N.Hand.Add(new CardInstance { InstanceId = "STU", CardId = "OP07-085", Owner = "north", Zone = "hand" });
+            for (int i = 0; i < 10; i++) N.CostArea.Add(new DonInstance { InstanceId = $"nd{i}", Rested = false });
+            GameEngine.ApplyCommand(st, new GameCommand { Type = "playCard", Seat = "north", InstanceId = "STU", SlotIndex = 1 });
+            for (int g = 0; g < 6; g++)
+            {
+                var pe = st.PendingEffects.FirstOrDefault(e => e.Seat == "north");
+                if (pe == null) break;
+                string tgt = (pe.Text ?? "").IndexOf("trash 1 of your", StringComparison.OrdinalIgnoreCase) >= 0 ? "nfodder" : "ACE";
+                GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveEffect", Seat = "north", EffectId = pe.EffectId, Target = tgt });
+            }
+            // Answer SOUTH's removal-replacement prompt with Use. The Life payment needs no target.
+            var ask = st.PendingEffects.FirstOrDefault(e => e.Seat == "south");
+            if (ask != null)
+                GameEngine.ApplyCommand(st, new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = ask.EffectId });
+
+            bool aceAlive = S.CharacterArea.Any(c => c != null && c.InstanceId == "ACE");
+            int lifeSpent = lifeBefore - S.Life.Count, trashGain = S.Trash.Count - trashBefore;
+            bool ok = hasLife
+                ? (aceAlive && lifeSpent == 1)
+                : (!aceAlive && lifeSpent == 0);
+            Console.WriteLine($"  hasLife={hasLife,-5} prompted={ask != null,-5} aceAlive={aceAlive,-5} " +
+                              $"life {lifeBefore}->{S.Life.Count} (spent {lifeSpent}) trash+{trashGain}  " +
+                              (ok ? "PASS" : "FAIL"));
+            if (!ok)
+            {
+                Console.WriteLine(hasLife
+                    ? "     expected: Ace SURVIVES and exactly 1 Life card trashed"
+                    : "     expected: Ace K.O.'d (cost unpayable) and 0 Life spent");
+                foreach (var l in st.EventLog.Skip(Math.Max(0, st.EventLog.Count - 6))) Console.WriteLine("        " + l.Message);
+            }
+            if (ok) pass++; else fail++;
+        }
+        Console.WriteLine($"\nST09010TEST: {pass} passed, {fail} failed");
     }
 
     static void KoRepTest2(string guardId, string victimId, int trashFuel)

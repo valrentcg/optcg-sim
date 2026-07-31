@@ -142,17 +142,29 @@ public static class DeckStore
         if (_cacheIdentity != null && _cacheIdentity != ident) ActiveDeckId = null;
         _cacheIdentity = ident;
         _cache = new List<DeckData>();
+        _loadFailed = false;
         MigrateLegacyIfNeeded(ident);
         try
         {
-            if (File.Exists(File_))
+            string json = OnePieceTcg.Engine.SafeFile.ReadWithRecovery(File_, out _, out bool failed);
+            if (json != null)
             {
-                var json = File.ReadAllText(File_);
                 var wrap = JsonUtility.FromJson<DeckListFile>(json);
+                // FromJson returns NULL for malformed input rather than throwing, so an unparseable
+                // file lands here silently. Treat it as a failed load, not as "no decks".
                 if (wrap?.decks != null) _cache = wrap.decks;
+                else _loadFailed = true;
             }
+            else _loadFailed = failed;
         }
-        catch (Exception e) { Debug.LogWarning("DeckStore load failed: " + e.Message); }
+        catch (Exception e)
+        {
+            _loadFailed = true;
+            Debug.LogWarning("DeckStore load failed: " + e.Message);
+        }
+        if (_loadFailed)
+            Debug.LogError("DeckStore: deck file present but unreadable — saving is disabled this session "
+                         + "so the file is not overwritten. Recover " + File_ + " (or its .bak) manually.");
         NormalizeSlots();
         return _cache;
     }
@@ -201,15 +213,28 @@ public static class DeckStore
         Flush();
     }
 
+    /// Set when a deck file EXISTS but could not be read. While it is set, Flush() refuses to write.
+    ///
+    /// This is the important half. Previously a corrupt or truncated decks.json produced an empty
+    /// _cache and the very next Flush() — creating a deck, reordering slots, toggling a favourite —
+    /// wrote that empty list straight over the file, turning a possibly-recoverable file into
+    /// permanent loss of every deck the player owned. And because the write itself was not atomic, a
+    /// crash mid-write CREATED exactly the truncated file that triggered it, so the two defects fed
+    /// each other.
+    private static bool _loadFailed;
+
     private static void Flush()
     {
-        try
+        if (_loadFailed)
         {
-            Directory.CreateDirectory(Dir);
-            var wrap = new DeckListFile { decks = _cache ?? new List<DeckData>() };
-            File.WriteAllText(File_, JsonUtility.ToJson(wrap, true));
+            Debug.LogError("DeckStore: refusing to save over an unreadable deck file (would destroy the "
+                         + "existing decks). Restart after recovering " + File_ + " or its .bak.");
+            return;
         }
-        catch (Exception e) { Debug.LogWarning("DeckStore save failed: " + e.Message); }
+        var wrap = new DeckListFile { decks = _cache ?? new List<DeckData>() };
+        // Atomic: writes a .tmp and swaps it in, keeping the previous good copy as .bak. The old
+        // File.WriteAllText truncated the live file first, so any interruption left a half-written one.
+        OnePieceTcg.Engine.SafeFile.WriteAtomic(File_, JsonUtility.ToJson(wrap, true));
     }
 
     public static bool CanAddNew() => All().Count < MaxDecks;
@@ -472,6 +497,9 @@ public partial class DeckBuilderManager : MonoBehaviour
         public Image art;
         public Text cost, label;
         public RectTransform badge;
+        /// Drop shadow behind the count bubble. A SIBLING, not a child: a UI child always draws on top
+        /// of its parent, so it has to live beside the badge and be shown/hidden alongside it.
+        public RectTransform badgeShadow;
         public Text badgeText;
         public RectTransform formatFlag;   // legality flag, shown only on BANNED / EXTRA-only cards
         public Text formatText;
@@ -3716,10 +3744,11 @@ public partial class DeckBuilderManager : MonoBehaviour
             if (filterBlock.Length > 0 && (OnePieceTcg.Engine.CardData.GetCard(c.id)?.Block ?? "") != filterBlock) continue;
             if (txt.Length > 0)
             {
-                bool hit = (c.name ?? "").ToLowerInvariant().Contains(txt)
-                        || (c.effect ?? "").ToLowerInvariant().Contains(txt)
-                        || (c.id ?? "").ToLowerInvariant().Contains(txt)
-                        || (c.feature ?? "").ToLowerInvariant().Contains(txt);
+                // Punctuation/accent-insensitive, multi-term AND. A raw Contains meant "youre" missed
+                // "You're", "monkey d luffy" missed "Monkey.D.Luffy" and "strawhat" missed "Straw Hat" —
+                // the card simply looked absent. Terms may land in different fields, so "luffy blocker"
+                // finds a Luffy whose text grants [Blocker].
+                bool hit = OnePieceTcg.Engine.SearchText.Matches(txt, c.name, c.effect, c.id, c.feature);
                 if (!hit) continue;
             }
             yield return c;
@@ -3796,13 +3825,26 @@ public partial class DeckBuilderManager : MonoBehaviour
         label.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(label.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(2f, 2f), new Vector2(-2f, 24f));
 
+        // In-deck count bubble. This sits on top of CARD ART, which is arbitrarily light, dark or busy,
+        // so it cannot rely on the fill colour alone to separate — a cyan chip vanishes over pale art
+        // and a thin number reads as part of the illustration. Three things make it legible over
+        // anything: a solid high-contrast fill, a dark RING so the silhouette is defined against light
+        // art, and a drop shadow so it lifts off dark art too.
+        var badgeShadow = Panel("InDeckShadow", tile, new Color(0f, 0f, 0f, 0.45f));
+        badgeShadow.anchorMin = badgeShadow.anchorMax = new Vector2(1f, 1f);
+        badgeShadow.pivot = new Vector2(1f, 1f);
+        badgeShadow.sizeDelta = new Vector2(30f, 30f);
+        badgeShadow.anchoredPosition = new Vector2(-3f, -3f);
+        RoundCircle(badgeShadow);
+
         var badge = Panel("InDeck", tile, Accent);
         badge.anchorMin = badge.anchorMax = new Vector2(1f, 1f);
         badge.pivot = new Vector2(1f, 1f);
-        badge.sizeDelta = new Vector2(26f, 22f);
+        badge.sizeDelta = new Vector2(30f, 30f);
         badge.anchoredPosition = new Vector2(-4f, -2f);
-        Round(badge);
-        var badgeText = Text_("b", badge, "", 10, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        RoundCircle(badge);
+        AddBorder(badge, BadgeInk, 2f);
+        var badgeText = Text_("b", badge, "", 13, BadgeInk, TextAnchor.MiddleCenter, monoFont);
         badgeText.fontStyle = FontStyle.Bold;
         Stretch(badgeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
@@ -3819,7 +3861,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         fflag.gameObject.SetActive(false);
 
         var tv = new TileView { root = tile, art = artImg, cost = costText, label = label,
-                                badge = badge, badgeText = badgeText, formatFlag = fflag, formatText = fftext };
+                                badge = badge, badgeShadow = badgeShadow, badgeText = badgeText, formatFlag = fflag, formatText = fftext };
         var btn = tile.gameObject.AddComponent<Button>();
         btn.onClick.AddListener(() => OnTileClick(tv));
         // Hovering the tile pops the big right-side preview (reads the tile's live
@@ -3885,6 +3927,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         int n = pickingLeader ? 0 : editing.CountOf(c.id);
         if (n > 0) { tv.badge.gameObject.SetActive(true); tv.badgeText.text = "×" + n; }
         else tv.badge.gameObject.SetActive(false);
+        if (tv.badgeShadow != null) tv.badgeShadow.gameObject.SetActive(n > 0);
     }
 
     private void ApplyArt(TileView tv, Sprite sp)
@@ -3911,6 +3954,7 @@ public partial class DeckBuilderManager : MonoBehaviour
             int n = pickingLeader ? 0 : editing.CountOf(tv.boundId);
             if (n > 0) { tv.badge.gameObject.SetActive(true); tv.badgeText.text = "×" + n; }
             else tv.badge.gameObject.SetActive(false);
+            if (tv.badgeShadow != null) tv.badgeShadow.gameObject.SetActive(n > 0);
         }
     }
 
@@ -4404,43 +4448,19 @@ public partial class DeckBuilderManager : MonoBehaviour
     }
 
     // (ok, total, messages)
+    //
+    // Delegates to Engine/DeckConstructionLegality so the rule set has exactly ONE implementation. It
+    // used to live here in full, which meant nothing outside this MonoBehaviour could reach it — the
+    // result was used only to colour a badge, and an illegal deck could still be saved and played
+    // (see MainMenuManager.ResolveMenuDeck, which now refuses one).
     private (bool, int, List<string>) Validate(DeckData d)
     {
-        var msgs = new List<string>();
-        var lead = Card(d.leaderId);
         int total = d.MainCount();
-
-        if (lead == null) msgs.Add("• No leader selected");
-        if (total != 50)  msgs.Add($"• Main deck is {total}/50");
-
-        string[] leadColors = lead != null ? lead.Colors() : new string[0];
-        var costCeiling = d.leaderId != null ? DeckCostCeilingFor(d.leaderId) : null;
-        string deckFeatureLock = d.leaderId != null ? DeckFeatureRestrictionFor(d.leaderId) : null;
-        foreach (var e in d.cards)
-        {
-            var rec = Card(e.id);
-            if (rec == null) { msgs.Add("• Unknown card " + e.id); continue; }
-            int maxCopies = MaxCopiesFor(e.id);
-            if (e.count > maxCopies) msgs.Add($"• {rec.name}: {e.count} copies (max {maxCopies})");
-            if ((rec.type ?? "").ToLower() == "leader") msgs.Add($"• {rec.name} is a leader, not a deck card");
-            if (lead != null && leadColors.Length > 0 &&
-                !rec.Colors().Any(c => leadColors.Contains(c)))
-                msgs.Add($"• {rec.name} ({rec.color}) is off-colour");
-            if (costCeiling.HasValue)
-            {
-                var (restrictedType, ceiling) = costCeiling.Value;
-                string ct = (rec.type ?? "").ToLowerInvariant();
-                if ((restrictedType == null || ct == restrictedType) && rec.cost >= ceiling)
-                {
-                    string scope = restrictedType != null ? $" for {restrictedType}s" : "";
-                    msgs.Add($"• {rec.name}: cost {rec.cost} exceeds {lead.name}'s deck-building limit (max {ceiling - 1}{scope})");
-                }
-            }
-            if (!string.IsNullOrEmpty(deckFeatureLock) && !rec.Features().Contains(deckFeatureLock))
-                msgs.Add($"• {rec.name}: {lead.name} can only include {{{deckFeatureLock}}} type cards");
-        }
-        bool ok = msgs.Count == 0 && lead != null && total == 50;
-        return (ok, total, msgs);
+        var msgs = OnePieceTcg.Engine.DeckConstructionLegality
+            .Problems(d.leaderId, d.cards.Select(e => (e.id, e.count)))
+            .Select(m => "• " + m)
+            .ToList();
+        return (msgs.Count == 0, total, msgs);
     }
 
     private void RefreshValidity()
@@ -4641,45 +4661,14 @@ public partial class DeckBuilderManager : MonoBehaviour
         if (editing == null) { CloseImportModal(); return; }
         if (string.IsNullOrWhiteSpace(raw)) { CloseImportModal(); return; }
 
-        string newLeaderId = null;
-        var counts = new Dictionary<string, int>();
-        var unknown = new List<string>();
-
-        // Resolve a code to a card (retrying without a trailing alt-art suffix, e.g. "OP09-004-1" →
-        // "OP09-004"), then route it to the leader slot or add `qty` copies to the main-deck counts.
-        // Shared by both parse paths so the quantity and bare-code styles behave identically.
-        void Take(string rawCode, int qty)
-        {
-            string code = rawCode.ToUpperInvariant();
-            var rec = Card(code);
-            if (rec == null)
-            {
-                int lastDash = code.LastIndexOf('-');
-                int firstDash = code.IndexOf('-');
-                if (lastDash > firstDash && firstDash > 0)
-                {
-                    string stripped = code.Substring(0, lastDash);
-                    var strippedRec = Card(stripped);
-                    if (strippedRec != null) { rec = strippedRec; code = stripped; }
-                }
-            }
-            if (rec == null) { unknown.Add(code); return; }
-            if ((rec.type ?? "").ToLower() == "leader") { newLeaderId = code; return; }  // last leader wins
-            counts.TryGetValue(code, out int cur);
-            counts[code] = cur + qty;
-        }
-
-        // Two decklist families: (a) QUANTITY style — "4xOP05-069" / "4 OP05-069" (OPTCGSim, EGMan,
-        // tournament text); (b) BARE-CODE style — every copy is its own token with no quantity, e.g.
-        // OnePieceTopDecks' JSON-array export or a plain one-code-per-line list. A JSON array always
-        // lists each copy, so force the bare-code path for it; otherwise prefer quantity tokens when
-        // present, else fall back to counting bare codes.
-        bool looksJsonArray = raw.TrimStart().StartsWith("[");
-        var qtyMatches = looksJsonArray ? null : ImportTokenRegex.Matches(raw);
-        if (qtyMatches != null && qtyMatches.Count > 0)
-            foreach (Match m in qtyMatches) Take(m.Groups["code"].Value, int.Parse(m.Groups["qty"].Value));
-        else
-            foreach (Match m in ImportBareCodeRegex.Matches(raw)) Take(m.Value, 1);
+        // Parsing lives in Engine/DeckListParser so it can be gated headlessly against the real
+        // decklist shapes people paste (deckimporttest). The old inline regex required the quantity to
+        // sit immediately before the code, so "4x Nami (OP01-016)" — what EGMan-style and hand-written
+        // lists look like — matched nothing and the whole list fell back to one-copy-per-code.
+        var parsed = OnePieceTcg.Engine.DeckListParser.Parse(raw);
+        string newLeaderId = parsed.LeaderId;
+        var counts = parsed.Cards.ToDictionary(kv => kv.Key, kv => kv.Value);
+        var unknown = parsed.Unknown;
 
         if (newLeaderId == null && counts.Count == 0)
         {

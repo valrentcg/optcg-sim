@@ -40,7 +40,12 @@ public static class UpdateChecker
 
     // Bump this every release. Must match "buildNumber" in the deployed
     // version.json for that release.
-    public const int CurrentBuildNumber = 27;
+    // 28: engine fixes of 2026-07-30 are REPLAY-AFFECTING (staged end-of-turn / staged battle
+    // reactions change WHEN effects queue). Both clients replay the same GameCommand log, so a 27
+    // client paired with a patched-27 client would silently desync — the exact failure
+    // MatchStartPayload.build exists to prevent. Bumping is mandatory for any engine change, not
+    // cosmetic. Keep Deploy/version.json's "buildNumber" equal to this.
+    public const int CurrentBuildNumber = 29;
     // -----------------------------------------------------------------------
 
     [Serializable]

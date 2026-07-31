@@ -90,8 +90,14 @@ public static class AccountManager
     // Stable key for scoping LOCAL storage (decks, replays) to whoever is using
     // the game right now, so accounts and guests on the same machine never see
     // each other's data. Signed-in accounts use their UGS player id; guests get
-    // a key derived from their guest name; "local" is the brief pre-sign-in
-    // window at boot (nothing user-visible loads that early in practice).
+    // a key built from their RANDOM GuestId (NOT their guest name — see GuestId, which is a fresh
+    // Guid per "Continue as guest"); "local" is the brief pre-sign-in window at boot (nothing
+    // user-visible loads that early in practice).
+    //
+    // This value is used as a PATH SEGMENT (DeckStore.Dir, ReplayStore scoping), so it must never
+    // contain user-typed text: every branch here is either a UGS-issued PlayerId, "guest_" + 12 hex
+    // chars, or the literal "local". Deck NAMES are likewise never filenames — decks live in a single
+    // decks.json per identity — which is why no name sanitising is needed on our side.
     public static string CurrentIdentityKey
     {
         get

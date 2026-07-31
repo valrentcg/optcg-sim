@@ -22,24 +22,63 @@ public static class DonDeckSettings
     /// unused, so switching leaders never truncates a saved layout.</summary>
     public const int MaxSlots = 10;
 
-    private const string KeyMode = "optcg.don.mode";
-    private const string KeyUniform = "optcg.don.uniform";
-    private const string KeySlots = "optcg.don.slots";
+    // SCOPED PER ACCOUNT. These keys used to be global ("optcg.don.mode"), so on a shared machine
+    // the DON art one account chose showed up on every other account on the same PC — reported as
+    // "looks like my don deck saved across accounts for some reason". The scope is
+    // CurrentIdentityKey (a UGS PlayerId / "guest_…" / "local"), the same identity DeckStore and
+    // ReplayStore partition by — NOT the display name, which the player can change at will.
+    private static string Scope => AccountManager.CurrentIdentityKey;
+    private static string KeyMode => "optcg.don.mode." + Scope;
+    private static string KeyUniform => "optcg.don.uniform." + Scope;
+    private static string KeySlots => "optcg.don.slots." + Scope;
+
+    private const string LegacyKeyMode = "optcg.don.mode";
+    private const string LegacyKeyUniform = "optcg.don.uniform";
+    private const string LegacyKeySlots = "optcg.don.slots";
+    private static bool legacyChecked;
+
+    /// <summary>One-time adoption of the pre-scoping global keys, so a DON deck the player already
+    /// built follows them into their own scope instead of silently resetting to stock. It lands in
+    /// whichever account reads first after the update — there is no record of who authored it — and
+    /// the globals are then removed, which is what stops the leak recurring.</summary>
+    private static void EnsureMigrated()
+    {
+        if (legacyChecked) return;
+        legacyChecked = true;
+        bool hasLegacy = PlayerPrefs.HasKey(LegacyKeyMode)
+                      || PlayerPrefs.HasKey(LegacyKeyUniform)
+                      || PlayerPrefs.HasKey(LegacyKeySlots);
+        if (!hasLegacy) return;
+        if (!PlayerPrefs.HasKey(KeyMode))   // never overwrite a scoped config that already exists
+        {
+            if (PlayerPrefs.HasKey(LegacyKeyMode))
+                PlayerPrefs.SetInt(KeyMode, PlayerPrefs.GetInt(LegacyKeyMode, 0));
+            if (PlayerPrefs.HasKey(LegacyKeyUniform))
+                PlayerPrefs.SetString(KeyUniform, PlayerPrefs.GetString(LegacyKeyUniform, ""));
+            if (PlayerPrefs.HasKey(LegacyKeySlots))
+                PlayerPrefs.SetString(KeySlots, PlayerPrefs.GetString(LegacyKeySlots, ""));
+        }
+        PlayerPrefs.DeleteKey(LegacyKeyMode);
+        PlayerPrefs.DeleteKey(LegacyKeyUniform);
+        PlayerPrefs.DeleteKey(LegacyKeySlots);
+        PlayerPrefs.Save();
+    }
 
     public static Mode CurrentMode
     {
-        get => (Mode)Mathf.Clamp(PlayerPrefs.GetInt(KeyMode, 0), 0, 2);
-        set { PlayerPrefs.SetInt(KeyMode, (int)value); PlayerPrefs.Save(); }
+        get { EnsureMigrated(); return (Mode)Mathf.Clamp(PlayerPrefs.GetInt(KeyMode, 0), 0, 2); }
+        set { EnsureMigrated(); PlayerPrefs.SetInt(KeyMode, (int)value); PlayerPrefs.Save(); }
     }
 
     public static string UniformArt
     {
         get
         {
+            EnsureMigrated();
             var id = PlayerPrefs.GetString(KeyUniform, DonArtCatalog.DefaultId);
             return string.IsNullOrEmpty(id) ? DonArtCatalog.DefaultId : id;
         }
-        set { PlayerPrefs.SetString(KeyUniform, value ?? DonArtCatalog.DefaultId); PlayerPrefs.Save(); }
+        set { EnsureMigrated(); PlayerPrefs.SetString(KeyUniform, value ?? DonArtCatalog.DefaultId); PlayerPrefs.Save(); }
     }
 
     /// <summary>Per-slot art ids, always MaxSlots long.</summary>
@@ -47,6 +86,7 @@ public static class DonDeckSettings
     {
         get
         {
+            EnsureMigrated();
             var raw = PlayerPrefs.GetString(KeySlots, "");
             var parts = string.IsNullOrEmpty(raw)
                 ? new string[0]
@@ -59,6 +99,7 @@ public static class DonDeckSettings
         }
         set
         {
+            EnsureMigrated();
             var ids = new string[MaxSlots];
             for (int i = 0; i < MaxSlots; i++)
                 ids[i] = value != null && i < value.Length && !string.IsNullOrWhiteSpace(value[i])

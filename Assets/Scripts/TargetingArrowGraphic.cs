@@ -177,7 +177,12 @@ public class TargetingArrowGraphic : MaskableGraphic
         Shader shader = Shader.Find("Spellbind/ArrowBeam");
         if (shader == null)
         {
-            Debug.LogWarning("[TargetingArrow] Spellbind/ArrowBeam not found - arrow disabled.");
+            // See the note in TargetingArrowEclipse.Awake: runtime-only Shader.Find means build
+            // stripping removes this unless it is in Always Included Shaders, and the failure is
+            // invisible outside a player build.
+            Debug.LogError("[TargetingArrow] Shader 'Spellbind/ArrowBeam' not found - ALL targeting "
+                         + "arrows are disabled. Add Assets/ArrowBeam.shader to Project Settings -> "
+                         + "Graphics -> Always Included Shaders (it is only ever loaded via Shader.Find).");
             enabled = false;
             return;
         }

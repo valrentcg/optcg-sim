@@ -87,6 +87,9 @@ if (args.Contains("--sick-aware"))
 
 switch (mode)
 {
+    case "reportedcards":
+        return OnePieceTcg.Sim.ReportedCardsProbe.Run();
+
     case "keywordrulescheck":
         return OnePieceTcg.Sim.KeywordRulesTest.Run();
 
@@ -209,6 +212,8 @@ switch (mode)
         return OnePieceTcg.Sim.AlternativeCostTest.Run();
     case "seatauthority":
         return OnePieceTcg.Sim.SeatAuthorityTest.Run();
+    case "dongate":
+        return OnePieceTcg.Sim.DonGateOfferTest.Run();
     case "namedcards":
         return OnePieceTcg.Sim.NamedCardsTest.Run();
     case "crossglow":

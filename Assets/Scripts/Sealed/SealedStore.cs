@@ -65,28 +65,43 @@ namespace OnePieceTcg.Sealed
         private static void Load()
         {
             if (cache != null) return;
+            loadFailed = false;
             try
             {
-                if (File.Exists(FilePath))
-                    cache = JsonUtility.FromJson<SealedRunFile>(File.ReadAllText(FilePath)) ?? new SealedRunFile();
-                else cache = new SealedRunFile();
+                string json = OnePieceTcg.Engine.SafeFile.ReadWithRecovery(FilePath, out _, out bool failed);
+                if (json != null)
+                {
+                    cache = JsonUtility.FromJson<SealedRunFile>(json);
+                    // FromJson yields null for malformed input WITHOUT throwing, so an unparseable
+                    // file would otherwise look like "no runs" and get overwritten by the next save.
+                    if (cache == null) { cache = new SealedRunFile(); loadFailed = true; }
+                }
+                else { cache = new SealedRunFile(); loadFailed = failed; }
             }
             catch (Exception e)
             {
                 Debug.LogWarning($"[SealedStore] Could not read runs: {e.Message}");
                 cache = new SealedRunFile();
+                loadFailed = true;
             }
             cache.runs ??= new List<SealedRunRecord>();
         }
 
+        /// Set when a runs file EXISTS but could not be read; Flush() then refuses to write, so a
+        /// corrupt file is never overwritten with an empty one. Same aggregate-file hazard as
+        /// DeckStore: everything lives in a single JSON, so one bad save costs every saved run.
+        private static bool loadFailed;
+
         private static void Flush()
         {
-            try
+            if (loadFailed)
             {
-                Directory.CreateDirectory(Dir);
-                File.WriteAllText(FilePath, JsonUtility.ToJson(cache, true));
+                Debug.LogError("[SealedStore] Refusing to save over an unreadable runs file "
+                             + $"(would destroy existing runs). Recover {FilePath} or its .bak.");
+                return;
             }
-            catch (Exception e) { Debug.LogWarning($"[SealedStore] Could not save runs: {e.Message}"); }
+            // Atomic swap + .bak, instead of truncating the live file in place.
+            OnePieceTcg.Engine.SafeFile.WriteAtomic(FilePath, JsonUtility.ToJson(cache, true));
         }
 
         /// <summary>Capture a pool as a record. The packs are NOT stored — they regenerate from the

@@ -89,8 +89,16 @@ public partial class GameManager
         {
             state = GameEngine.CreateMatch(config);
             if (pc.commands != null)
+            {
+                // Bounded replay. The list arrives from an untrusted code and each ApplyCommand runs
+                // synchronously on the main thread, so an unbounded list is an indefinite freeze rather
+                // than an error. A full real game is a few hundred commands.
+                if (pc.commands.Count > RestoreMaxCommands)
+                    throw new InvalidOperationException(
+                        $"code contains {pc.commands.Count} commands (limit {RestoreMaxCommands}).");
                 foreach (var sc in pc.commands)
                     state = GameEngine.ApplyCommand(state, sc.ToCommand());
+            }
         }
         catch (Exception ex)
         {
@@ -239,16 +247,37 @@ public partial class GameManager
         return PositionCodePrefix + Convert.ToBase64String(ms.ToArray());
     }
 
+    // Position codes are UNTRUSTED: they exist to be shared (export/import, and the bug-report repro
+    // carries Seed + deckIds + CommandHistory). So every step below is bounded. A real code for a full
+    // game is a few KB and a few hundred commands; these caps are orders of magnitude above that and
+    // exist only to stop a crafted code from taking the client down.
+    private const int RestoreMaxCodeChars         = 512 * 1024;        // base64 input
+    private const int RestoreMaxDecompressedBytes = 2 * 1024 * 1024;   // gzip output
+    internal const int RestoreMaxCommands         = 20000;             // replayed commands
+
     private static PositionCode DecodePositionCode(string code)
     {
         if (string.IsNullOrWhiteSpace(code)) return null;
         code = code.Trim();
         if (code.StartsWith(PositionCodePrefix)) code = code.Substring(PositionCodePrefix.Length);
+        if (code.Length > RestoreMaxCodeChars)
+            throw new InvalidOperationException($"code is too long ({code.Length} chars, limit {RestoreMaxCodeChars}).");
         var comp = Convert.FromBase64String(code);
         using var ms = new MemoryStream(comp);
         using var gz = new GZipStream(ms, CompressionMode.Decompress);
         using var outMs = new MemoryStream();
-        gz.CopyTo(outMs);
+        // Bounded read instead of gz.CopyTo: CopyTo is unbounded, so ~1KB of base64 could expand to
+        // hundreds of MB and OOM the process before the caller's catch could do anything useful.
+        var buf = new byte[64 * 1024];
+        int read, total = 0;
+        while ((read = gz.Read(buf, 0, buf.Length)) > 0)
+        {
+            total += read;
+            if (total > RestoreMaxDecompressedBytes)
+                throw new InvalidOperationException(
+                    $"code expands past {RestoreMaxDecompressedBytes / 1024} KB — refusing to decode.");
+            outMs.Write(buf, 0, read);
+        }
         string json = Encoding.UTF8.GetString(outMs.ToArray());
         return JsonUtility.FromJson<PositionCode>(json);
     }

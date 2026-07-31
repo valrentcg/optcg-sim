@@ -808,7 +808,11 @@ namespace OnePieceTcg.Engine.Bot
                 return false;
             else if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !def.Type.Equals(dl.CardTypeFilter, StringComparison.OrdinalIgnoreCase))
                 return false;
-            if (!string.IsNullOrEmpty(dl.FeatureFilter) && !def.HasFeature(dl.FeatureFilter)) return false;
+            // Same rule as the resolver and the UI glow: the filter may be an "A|B" disjunction, and
+            // HasFeature would match a literal piped feature — i.e. nothing — so the bot would judge
+            // EVERY card in the look ineligible and pick none. A bot that can never pick is a silent
+            // no-op, which never shows up as a loss.
+            if (!GameEngine.FeatureMatches(def, dl.FeatureFilter)) return false;
             if (dl.MaxCost >= 0 && def.Cost > dl.MaxCost) return false;
             if (dl.MinCost >= 0 && def.Cost < dl.MinCost) return false;
             if (dl.MaxPower >= 0 && def.Power > dl.MaxPower) return false;

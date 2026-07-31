@@ -33,6 +33,7 @@ namespace OnePieceTcg.Sim
             DecliningLeavesHandAndPowerAlone();
             PayingGrantsTheBoost();
             PlainCounterStillAppliesItsFlatBoost();
+            ChosenRecipientCounterIsOfferedNotAutoApplied();
             EveryCostPrefixedCounterIsAnEvent();
             Console.WriteLine($"countercost: {passed}/{passed + failed} passed ({failed} failed)");
             return failed == 0 ? 0 : 1;
@@ -132,18 +133,55 @@ namespace OnePieceTcg.Sim
             // Negative control for the fix: a [Counter] with NO cost prefix must keep working exactly
             // as before, applied flat at counter time. Without this, "return 0 for cost-prefixed" could
             // silently widen and break every ordinary counter in the game.
+            // FIXED recipient ("Your Leader gains …"), so there is nothing to choose and the boost is
+            // applied flat at counter time. This used to use EB01-019 Off-White — but Off-White reads
+            // "Up to 1 of YOUR Leader or Character cards gains +4000", i.e. the player picks, so it was
+            // never a valid fixture for "applied flat" and only passed because the engine wrongly
+            // auto-granted chosen-recipient boosts to whatever was in the battle (OP15-078 Mamaragan:
+            // "Automatically gave the +1k to Kizaru, didn't have me select"). The chosen-recipient case
+            // is asserted separately below.
             var b = new Board();
-            var plain = b.Hand("EB01-019");               // "[Counter] Up to 1 of your Leader or Character
-                                              // cards gains +4000 power during this battle." - a
-                                              // plain [Counter] tag, no cost prefix, counter 0.
+            var plain = b.Hand("EB03-038");               // "[Counter] Your Leader gains +3000 power
+                                                          // during this battle." No cost, no choice.
             b.OpponentAttacks();
             b.Apply(new GameCommand
             { Type = "counterWithCard", Seat = "south", InstanceId = plain.InstanceId, Target = b.S.Leader?.InstanceId });
             Console.WriteLine($"      [diag] battle={(b.St.Battle == null ? "null" : b.St.Battle.Step)} counterPower={b.St.Battle?.CounterPower} pending={b.St.PendingEffects.Count} hand={b.S.Hand.Count}");
             foreach (var l in b.St.EventLog.TakeLast(5)) Console.WriteLine("      [log] " + l.Message);
-            Check("a plain [Counter] with no cost still applies its boost immediately",
+            Check("a plain [Counter] with a FIXED recipient still applies its boost immediately",
                   TotalBoost(b) > 0,
                   $"boost={TotalBoost(b)} (want > 0)");
+        }
+
+        /// <summary>The other half of the same rule: when the [Counter] lets the player CHOOSE who gains
+        /// the power ("Up to 1 of your Leader or Character cards"), nothing may be granted automatically
+        /// — the boost has to be offered. "Up to 1" also permits choosing ZERO (Comprehensive 8-4-4-1),
+        /// so this stays a decision even when only one card could receive it: a player may decline and
+        /// let the damage through on purpose.</summary>
+        private static void ChosenRecipientCounterIsOfferedNotAutoApplied()
+        {
+            var b = new Board();
+            var chosen = b.Hand("EB01-019");   // "[Counter] Up to 1 of your Leader or Character cards gains +4000"
+            b.OpponentAttacks();
+            b.Apply(new GameCommand
+            { Type = "counterWithCard", Seat = "south", InstanceId = chosen.InstanceId });
+            int boostBefore = TotalBoost(b);
+            var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+            Console.WriteLine($"      [diag] counterPower={b.St.Battle?.CounterPower} pending={b.St.PendingEffects.Count} boost={boostBefore}");
+            Check("a CHOSEN-recipient [Counter] grants nothing until the player picks",
+                  boostBefore == 0 && pe != null,
+                  $"boost={boostBefore} (want 0), pending={(pe == null ? "none" : "queued")}");
+            if (pe == null) return;
+            // Measured with GetPower, not TotalBoost: the pick applies the buff as a power MODIFIER on
+            // the chosen card, which TotalBoost (CounterPower + BattlePowerBonus + TemporaryPowerBonus)
+            // does not see. Reading the card's actual power is what "the boost landed" means.
+            int powerBefore = GameEngine.GetPower(b.St, b.S.Leader);
+            b.Apply(new GameCommand
+            { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = b.S.Leader?.InstanceId });
+            int powerAfter = GameEngine.GetPower(b.St, b.S.Leader);
+            Check("…and picking a recipient then applies it",
+                  powerAfter > powerBefore,
+                  $"leader power {powerBefore} -> {powerAfter} (want an increase)");
         }
 
         /// <summary>A latent trap left by the counter-cost split, found by auditing its call sites

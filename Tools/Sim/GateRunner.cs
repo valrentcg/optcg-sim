@@ -112,6 +112,10 @@ namespace OnePieceTcg.Sim
             // opponentdecides guards ActiveChoice against the wrong seat. These are the other three
             // decision surfaces — the Use half, the Skip half, and the Life look.
             ("seatauthority",         SeatAuthorityTest.Run),
+
+            // The [DON!! xN] population healsweep structurally cannot reach, driven at the OFFER
+            // layer through activateMain instead of by force-queuing a clause.
+            ("dongate",               DonGateOfferTest.Run),
             // 42 "you may" clauses live in the `trigger` DATA FIELD, which no pool sweep here reads
             // — they all enumerate `effect`. This is also where the brief's two halves meet: a
             // [Trigger] only fires when a Life card is dealt as damage.

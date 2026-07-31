@@ -35,6 +35,9 @@ namespace OnePieceTcg.Sim.Search
             {
                 Version = s.Version, Seed = s.Seed, FirstPlayer = s.FirstPlayer, CoinFlipWinner = s.CoinFlipWinner,
                 Status = s.Status, ActiveSeat = s.ActiveSeat, Phase = s.Phase, TurnNumber = s.TurnNumber,
+                EndTurnStage = s.EndTurnStage, EndTurnSeat = s.EndTurnSeat,
+                CommandBatch = s.CommandBatch,
+                BattleReactionSeat = s.BattleReactionSeat,
                 EffectSequence = s.EffectSequence, LogSequence = s.LogSequence, BattleSequence = s.BattleSequence,
                 Selected = s.Selected == null ? null : new SelectionRef { InstanceId = s.Selected.InstanceId, Seat = s.Selected.Seat },
                 Battle = CloneBattle(s.Battle),
@@ -71,6 +74,7 @@ namespace OnePieceTcg.Sim.Search
                 GuardInstanceId = d.GuardInstanceId, Kind = d.Kind, ByBattleKo = d.ByBattleKo,
             }).ToList();
             g.ActivatedEventIds = new List<string>(s.ActivatedEventIds);
+            g.ActivatedTriggerIds = new List<string>(s.ActivatedTriggerIds);
             g.NoPlayCharBaseCostAtLeast = new Dictionary<string, int>(s.NoPlayCharBaseCostAtLeast);
             g.CharRestedByEffectThisTurn = new HashSet<string>(s.CharRestedByEffectThisTurn);
             g.StartStageDoneSeats = new HashSet<string>(s.StartStageDoneSeats);
@@ -124,7 +128,7 @@ namespace OnePieceTcg.Sim.Search
 
         private static PendingEffect ClonePE(PendingEffect e) => new PendingEffect
         {
-            EffectId = e.EffectId, Seat = e.Seat, SourceInstanceId = e.SourceInstanceId, SourceCardId = e.SourceCardId,
+            EffectId = e.EffectId, Seat = e.Seat, QueuedBatch = e.QueuedBatch, SourceInstanceId = e.SourceInstanceId, SourceCardId = e.SourceCardId,
             Timing = e.Timing, Text = e.Text, Optional = e.Optional, Scope = e.Scope, TargetZone = e.TargetZone,
             DonPaymentRemaining = e.DonPaymentRemaining, SelectionsRemaining = e.SelectionsRemaining,
             PlayedPickIds = e.PlayedPickIds == null ? null : new List<string>(e.PlayedPickIds),

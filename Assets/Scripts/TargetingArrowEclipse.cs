@@ -109,7 +109,16 @@ public class TargetingArrowEclipse : MaskableGraphic
         Shader sh = Shader.Find("Spellbind/ArrowEclipse");
         if (sh == null)
         {
-            Debug.LogWarning("[ArrowEclipse] Spellbind/ArrowEclipse not found - arrow disabled.");
+            // The material is built here at RUNTIME, so no asset ever references this shader and
+            // Unity's build-time stripping drops it unless it is listed in Graphics settings ->
+            // Always Included Shaders. That fails ONLY in a player build (the Editor always finds
+            // it), and it silently killed every targeting arrow in the game in v1.0.30 - drag,
+            // hover and the resolved-battle arrow alike - because this path just disables itself.
+            // LogError, not LogWarning: this is never a cosmetic degrade, it is total loss of the
+            // targeting UI, and it must be impossible to miss in a build log.
+            Debug.LogError("[ArrowEclipse] Shader 'Spellbind/ArrowEclipse' not found - ALL targeting "
+                         + "arrows are disabled. Add Assets/ArrowEclipse.shader to Project Settings -> "
+                         + "Graphics -> Always Included Shaders (it is only ever loaded via Shader.Find).");
             enabled = false;
             return;
         }

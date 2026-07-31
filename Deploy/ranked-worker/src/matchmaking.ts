@@ -153,8 +153,19 @@ async function tryPair(env: Env, me: string, myMmr: number, myEnqueuedAt: number
   ).bind(id, me, opp.player_id, host, now).run();
 
   // Claim both queue rows only if still unproposed (guards a double-pair race).
-  const r1 = await env.DB.prepare("UPDATE queue SET proposal_id = ? WHERE player_id = ? AND proposal_id IS NULL").bind(id, me).run();
-  const r2 = await env.DB.prepare("UPDATE queue SET proposal_id = ? WHERE player_id = ? AND proposal_id IS NULL").bind(id, opp.player_id).run();
+  //
+  // Claimed in a FIXED order — lexicographically smaller player_id first, which is `host` — not
+  // in "me, them" order. Both players poll and both run this against each other, so with
+  // self-relative order they can interleave as: A claims A, B claims B, A fails on B, B fails on
+  // A, and BOTH roll back. Nobody gets matched even though two willing players are sitting in
+  // the queue. It self-heals on the next poll, so it shows up as occasional slow matchmaking
+  // rather than a hang, which is exactly why it would never get reported clearly.
+  // With a fixed order both racers contend for the SAME row first, so one wins outright and the
+  // loser rolls back having claimed nothing. Standard lock ordering.
+  const firstId  = host;
+  const secondId = host === me ? opp.player_id : me;
+  const r1 = await env.DB.prepare("UPDATE queue SET proposal_id = ? WHERE player_id = ? AND proposal_id IS NULL").bind(id, firstId).run();
+  const r2 = await env.DB.prepare("UPDATE queue SET proposal_id = ? WHERE player_id = ? AND proposal_id IS NULL").bind(id, secondId).run();
   if (r1.meta.changes !== 1 || r2.meta.changes !== 1) {
     await env.DB.prepare("UPDATE queue SET proposal_id = NULL WHERE proposal_id = ?").bind(id).run();
     await env.DB.prepare("DELETE FROM proposals WHERE id = ?").bind(id).run();

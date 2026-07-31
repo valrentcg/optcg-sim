@@ -11,7 +11,7 @@
 interface Env { DB: D1Database; }
 
 const MAX_MSG_LEN = 1000;      // per-message body cap
-const INVITE_TTL_MS = 60_000;  // a pending invite auto-expires after this
+export const INVITE_TTL_MS = 60_000;  // a pending invite auto-expires after this
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
@@ -97,16 +97,24 @@ export async function handleInviteSend(env: Env, me: string, body: any): Promise
   return { ok: true, inviteId: id };
 }
 
-/// GET /invite/poll → my pending (unexpired) invites. Lazily expires stale ones first.
+/// GET /invite/poll → my pending (unexpired) invites.
+///
+/// READ-ONLY on purpose. This used to run a table-wide
+/// `UPDATE game_invites SET status='expired' ...` before the read, i.e. a D1 WRITE on every
+/// poll — and every signed-in client in the menu polls this every 3 seconds (MainMenuManager's
+/// social loop), so it was ~20 writes/minute per idle client purely for housekeeping. That is
+/// write amplification on a read path, and a real client log shows this endpoint returning
+/// HTTP 500 while the read-only /chat/poll beside it only ever timed out.
+/// Expiry is now (a) enforced on READ by the age predicate below, so behaviour is identical and
+/// an expired invite is never returned, and (b) actually written back by the scheduled sweep in
+/// index.ts, which already runs for forfeits. Correctness does not depend on the write landing.
 export async function handleInvitePoll(env: Env, me: string): Promise<any> {
   const now = Date.now();
-  await env.DB.prepare(
-    "UPDATE game_invites SET status = 'expired' WHERE status = 'pending' AND created_at < ?",
-  ).bind(now - INVITE_TTL_MS).run();
   const rows = await env.DB.prepare(
     `SELECT id, from_id, from_name, session_id, lobby_name, created_at FROM game_invites
-      WHERE to_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 5`,
-  ).bind(me).all<any>();
+      WHERE to_id = ? AND status = 'pending' AND created_at >= ?
+      ORDER BY created_at DESC LIMIT 5`,
+  ).bind(me, now - INVITE_TTL_MS).all<any>();
   const invites = (rows.results ?? []).map((r: any) => ({
     id: r.id, fromId: r.from_id, fromName: r.from_name,
     sessionId: r.session_id, lobbyName: r.lobby_name, createdAt: r.created_at,
@@ -149,4 +157,14 @@ export async function handleInviteCancel(env: Env, me: string, body: any): Promi
     "UPDATE game_invites SET status = 'cancelled' WHERE id = ? AND from_id = ? AND status = 'pending'",
   ).bind(inviteId, me).run();
   return { ok: true };
+}
+
+/// Housekeeping write for expired invites, moved OFF the /invite/poll read path (see the note
+/// there). Called from the scheduled sweep. Purely cosmetic for correctness — the poll already
+/// filters by age — so a failure here must never take the cron down with it.
+export async function sweepExpiredInvites(env: Env, nowMs: number): Promise<number> {
+  const res = await env.DB.prepare(
+    "UPDATE game_invites SET status = 'expired' WHERE status = 'pending' AND created_at < ?",
+  ).bind(nowMs - INVITE_TTL_MS).run();
+  return (res as any)?.meta?.changes ?? 0;
 }

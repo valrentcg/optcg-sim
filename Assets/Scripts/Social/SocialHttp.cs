@@ -17,6 +17,15 @@ public static class SocialHttp
     // social endpoints ship and authenticate identically to ranked with zero extra config.
     public static bool Available => RankedStore.IsConfigured && !AccountManager.IsGuest;
 
+    /// <summary>Monotonic count of requests that actually reached the network and did not
+    /// succeed (non-2xx, timeout, exception). Callers cannot detect this any other way: every
+    /// failure path here returns NULL, and both poll stores turn null into an EMPTY result
+    /// rather than throwing — so a try/catch around them never fires on a 500, and anything
+    /// built on that would be dead code. Compare the value before and after a batch of calls to
+    /// tell "nothing happened" from "the backend is failing". Not incremented when the layer
+    /// no-ops (guest / not configured), which is not a failure.</summary>
+    public static int FailureCount { get; private set; }
+
     /// <summary>Authenticated request to the worker. `path` may include a query string
     /// for GETs. `jsonBody` is null for GET / empty-body POSTs. Returns the raw response
     /// text on HTTP success, else null (offline, not configured, guest, non-2xx, timeout).</summary>
@@ -42,9 +51,10 @@ public static class SocialHttp
             while (!op.isDone) await Task.Yield();
 
             if (req.result == UnityWebRequest.Result.Success) return req.downloadHandler.text;
+            FailureCount++;
             Debug.LogWarning($"Social {method} {path} failed: {req.error}");
         }
-        catch (Exception ex) { Debug.LogWarning($"Social {method} {path} exception: {ex.Message}"); }
+        catch (Exception ex) { FailureCount++; Debug.LogWarning($"Social {method} {path} exception: {ex.Message}"); }
         return null;
     }
 

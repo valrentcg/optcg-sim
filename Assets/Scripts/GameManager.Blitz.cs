@@ -148,6 +148,13 @@ public partial class GameManager
         BlitzTickClock(owner, dt);
         float after = BlitzClockFor(owner);
 
+        // Opponent-side watchdog. Both clients tick both clocks from the same deterministic increments,
+        // so the non-owner can see the owner's clock hit zero. Accumulate how long it stays there; once
+        // past the grace window BlitzFlagFall claims it, so a suspended/hung/frozen owner can no longer
+        // stall the match forever (it never runs its own timer, so it never flags).
+        if (isNetworked && owner != localSeat && after <= 0f) blitzOppZeroSeconds += dt;
+        else if (owner != localSeat) blitzOppZeroSeconds = 0f;
+
         // Optional turn wall-cap (§4.2): drains while the active player is on the clock.
         if (blitzConfig.turnCapSeconds > 0 && owner == state.ActiveSeat)
         {
@@ -247,16 +254,43 @@ public partial class GameManager
         BlitzFlagFall(owner);
     }
 
+    // How long past zero the NON-owner waits before claiming the opponent's flag-fall itself. Absorbs
+    // ordinary latency and the small drift between the two clients' clocks, so a player who really is
+    // about to move is not flagged by their opponent's slightly-faster view.
+    private const float BlitzOpponentFlagGraceSeconds = 5f;
+
     // Flag-fall: the owner loses on time. Concede(owner) makes them lose while keeping the engine
-    // time-agnostic. Networked: only the local owner declares its own flag-fall (authoritative).
+    // time-agnostic.
+    //
+    // The owner's own client declares it first — that is the authoritative path and keeps the common
+    // case free of latency arguments. But it CANNOT be the only path: a client that is suspended, hung,
+    // OS-throttled in the background, or deliberately frozen never runs its timer, so it never flags.
+    // With no other route the opponent — who can see the clock sitting at zero, because both clients
+    // tick both clocks from the same deterministic increments — waited forever. That made stalling a
+    // winning move, and there was no Blitz message on the wire at all to notice it.
+    // So after a grace window the NON-owner claims it too. `concede` is seat-addressed and the engine
+    // is time-agnostic, so whichever client sends it produces the same result.
     private void BlitzFlagFall(string owner)
     {
         if (blitzFlagged || state == null || state.Status == "finished") return;
-        if (isNetworked && owner != localSeat) return;   // trust the owner's own client to flag
+        if (isNetworked && owner != localSeat)
+        {
+            // Not ours to declare yet — let the owner do it. Claim only once the clock has been at zero
+            // for the grace window, which BlitzTick accumulates in blitzOppZeroSeconds.
+            if (blitzOppZeroSeconds < BlitzOpponentFlagGraceSeconds) return;
+            SandboxSafeLog($"{DisplayName(owner)} ran out of time (claimed after {BlitzOpponentFlagGraceSeconds:0}s with no response).");
+            blitzFlagged = true;
+            Dispatch(new GameCommand { Type = "concede", Seat = owner });
+            return;
+        }
         blitzFlagged = true;
         SandboxSafeLog($"{DisplayName(owner)} ran out of time.");
         Dispatch(new GameCommand { Type = "concede", Seat = owner });
     }
+
+    /// Seconds the OPPONENT's clock has been sitting at zero without them flagging. Only accumulates on
+    /// the non-owner's client; reset whenever their clock is above zero or the match is decided.
+    private float blitzOppZeroSeconds;
 
     // Overtime (§2): finish the current turn (Turn 0), then N more turns; a shared clock (if set)
     // caps the total. When it ends, the winner is decided by Life, then tiebreakers, then a draw.
@@ -452,9 +486,12 @@ public partial class GameManager
         Color border = isOwner ? (Color)Gold : (Color)new Color32(90, 100, 116, 110);
 
         // Parent the clock into the player's board half. Vertically it shares the exact centerline
-        // of the Leader card. Horizontally it uses the midpoint of the Leader-to-Life gap for the
-        // bottom player; the opponent's equivalent gap is reflected to the upper-left as requested
-        // (their mirrored Life stack itself lives on the right side of the current playmat).
+        // of the Leader card; horizontally it sits at the midpoint of that seat's OWN Leader-to-Life
+        // gap. Both seats use the same rule, so the two clocks are true mirrors of each other.
+        // The opponent used to be special-cased to the upper-LEFT instead. Their board is rotated
+        // 180°, so their Life stack is already on the right — reflecting on top of that pushed the
+        // clock back across to the same side as the player's, which read as both clocks crowding
+        // the left half while the opponent's own gap sat empty.
         RectTransform half = top ? northHalfRect : southHalfRect;
         var chip = PanelObject("Blitz Clock " + seat, half != null ? (Transform)half : blitzRoot.transform,
             isOwner ? (Color)new Color32(30, 40, 56, 250) : (Color)new Color32(16, 20, 28, 225));
@@ -469,8 +506,7 @@ public partial class GameManager
                     leaderRect.TransformPoint((Vector3)leaderRect.rect.center));
                 Vector2 lifeLocal = half.InverseTransformPoint(
                     lifeRect.TransformPoint((Vector3)lifeRect.rect.center));
-                float halfGap = Mathf.Abs(lifeLocal.x - leaderLocal.x) * 0.5f;
-                float clockX = top ? leaderLocal.x - halfGap : (leaderLocal.x + lifeLocal.x) * 0.5f;
+                float clockX = (leaderLocal.x + lifeLocal.x) * 0.5f;
                 chip.anchorMin = chip.anchorMax = new Vector2(0.5f, 0.5f);
                 chip.anchoredPosition = new Vector2(clockX, leaderLocal.y);
             }
@@ -478,7 +514,9 @@ public partial class GameManager
             {
                 // Geometry is normally always available; this preserves the same intended placement
                 // during a transient first-frame layout before the zone dictionaries are populated.
-                chip.anchorMin = chip.anchorMax = new Vector2(0.2925f, top ? 0.51f : 0.49f);
+                // Mirrored fallback: 0.2925 for the bottom seat, its reflection for the top, so a
+                // first-frame placement lands on the same side the real geometry will put it on.
+                chip.anchorMin = chip.anchorMax = new Vector2(top ? 0.7075f : 0.2925f, top ? 0.51f : 0.49f);
                 chip.anchoredPosition = Vector2.zero;
             }
             chip.SetAsLastSibling();   // above the zone cards

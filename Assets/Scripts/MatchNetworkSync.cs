@@ -80,6 +80,14 @@ public class MatchStartPayload
     // GameCommand log, so a version mismatch would silently desync into different boards. Absent
     // field (old client) deserializes to 0, which correctly mismatches any real build.
     public int build;
+    // Fingerprint of the host's loaded card library (GameManager.CardLibraryFingerprint). `build` alone
+    // is NOT sufficient: card data can be served from a versioned CDN (CardAssets.CdnRoot uses
+    // UpdateChecker.AssetsVersion, which is read from the REMOTE manifest at runtime and falls back to 1
+    // when that fetch fails). Two clients on the SAME build can therefore hold different card text, and
+    // the engine is a text-driven interpreter over it, so the shared GameCommand log would resolve
+    // differently on each side. Absent field (older client) deserializes to null, which is treated as
+    // "unknown" and does not abort — the build check already refuses those.
+    public string cards;
     // Each seat's personalised DON!! layout (DonDeckSettings.Serialize), so you see the opponent's
     // DON art the way they chose it. Purely cosmetic and never fed to the engine, so it cannot
     // desync. Absent on an older client → null → both sides render the stock art, and any art id

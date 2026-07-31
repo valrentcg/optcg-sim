@@ -163,6 +163,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private bool rematchLocalRequested;  // I clicked Rematch
     private bool rematchPeerRequested;   // opponent clicked Rematch
     private bool rematchStarting;        // seed agreed, restart under way (guards double-fire)
+    /// Mute for THIS match only, toggled from the chat panel. Separate from the persistent
+    /// MatchAutomationSettings.MuteMatchChat so a player can silence one opponent without turning
+    /// match chat off forever; either being set suppresses incoming messages.
+    private bool matchChatMuted;
+
     // ---- In-match chat (networked only; see DrawMatchChatPanel) ----
     private bool chatOpen;
     private bool chatUnread;
@@ -193,6 +198,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // only appear once it lands. Both reset when the coin-flip phase ends so the next match re-spins.
     private bool coinFlipRevealed;
     private bool coinFlipSpinStarted;
+    // Unscaled time the toss actually began, and a generation stamp for the coroutine driving it.
+    // Both exist because Render() destroys the coin mid-spin in NETWORKED play (see the note in
+    // DrawCoinFlipOverlay): the spin has to RESUME at the right phase on the rebuilt panel, and the
+    // orphaned coroutine must not be the one that reveals the winner.
+    private float coinFlipSpinStartedAt = -1f;
+    private int coinFlipSpinGeneration;
 
     // True while ANY animation a full Render() would destroy is playing: the coin-flip spin, an
     // opening/redraw hand deal, or in-flight zone ghosts (the opening life deal, turn draws, plays…).
@@ -336,6 +347,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private AudioSource burnSfxSource;
     private AudioClip burnClip;
     private AudioClip coinFlipClip;
+    private AudioClip cardFlipClip;
+    private AudioClip playCardClip;
+    // All "a life card flipped" decisions live in CardFlipCue (Engine/), which the harness gates.
+    // Kept out of here because this logic shipped broken twice inside the MonoBehaviour, where
+    // nothing could see it.
+    private readonly CardFlipCue flipCue = new CardFlipCue();
+    private readonly List<string> faceUpScratch = new List<string>();
     private bool sfxLoadStarted;
     public static float SfxVolume
     {
@@ -536,6 +554,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Blitz/timed match: drain the clock owner's clock + update the HUD digits every frame.
         if (BlitzActive) { BlitzTick(); BlitzHudTick(); }
 
+        // Player convenience automation (MatchAutomationSettings). Client-side ONLY: it dispatches the
+        // same commands the player would have clicked, so the opponent sees an ordinary action and the
+        // engine stays identical on both sides.
+        MatchAutomationTick();
+
         // Bot: one action per think-tick whenever any decision belongs to the AI seat
         // (turn actions, effect targets, choices, battle responses). Difficulty picks which
         // decision core drives that single action. Three tiers, produced by the out-of-ship
@@ -590,6 +613,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             ClearDonSelection();
     }
 
+    // FNV-1a over the raw library text. Not cryptographic — this only needs to differ when the card
+    // data differs, and it must be identical on every platform, so no framework hash dependency.
+    private static string ComputeLibraryFingerprint(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return "";
+        ulong h = 14695981039346656037UL;
+        for (int i = 0; i < json.Length; i++)
+        {
+            h ^= json[i];
+            h *= 1099511628211UL;
+        }
+        return json.Length.ToString("x") + "-" + h.ToString("x16");
+    }
+
     private void LoadOfficialCardLibrary()
     {
         if (CardAssets.UseCdn) { LoadOfficialCardLibraryAsync(); return; }
@@ -613,10 +650,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         _artRefreshQueued = true;
     }
 
+    /// Stable fingerprint of the card library this client actually loaded. Both load paths (in-build
+    /// StreamingAssets and the versioned CDN) funnel through ParseOfficialCardLibrary, so this is the
+    /// one place that sees the real bytes. Sent in MatchStartPayload so a card-data mismatch aborts the
+    /// match: the engine is a TEXT-DRIVEN interpreter over this library, so different card text at the
+    /// same build number makes the shared GameCommand log resolve differently on each client — a desync
+    /// the build check cannot see. A hash rather than assetsVersion on purpose: it also catches
+    /// in-build-vs-CDN at the same nominal version, and the `?? 1` fallback when the manifest fetch fails.
+    /// Empty until a library is loaded (older clients send null → treated as "unknown", see the guest check).
+    public static string CardLibraryFingerprint { get; private set; } = "";
+
     private void ParseOfficialCardLibrary(string json)
     {
         try
         {
+            CardLibraryFingerprint = ComputeLibraryFingerprint(json);
             var payload = JsonUtility.FromJson<OfficialCardPayload>("{\"cards\":" + json + "}");
             if (payload?.cards == null) return;
 
@@ -751,6 +799,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         replaySaved = false;
         matchStartRealtime = Time.realtimeSinceStartup;
         commandElapsedSeconds.Clear();
+        flipCue.Reset();
         var config = new MatchConfig { Seed = System.Guid.NewGuid().ToString("N") };
 
         // Sealed / Pre-Release practice match. The decks come from the sealed run itself (a 40-card
@@ -829,6 +878,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Networked match: block acting as the other seat (e.g. a stray click reaching a
         // handler before UI catches up) rather than auditing every call site individually.
         if (isNetworked && !string.IsNullOrEmpty(command.Seat) && command.Seat != localSeat) return;
+        // Any real action disarms a pending End Turn confirmation. Without this the arm would survive
+        // across unrelated plays and the NEXT End Turn click would commit with no confirmation at all —
+        // which is worse than having no confirmation, because the player has been taught to expect one.
+        endTurnArmed = false;
         // Sandbox: snapshot before each engine command so attacks/plays/end-turn are all undoable.
         if (isSandbox) PushUndo();
         state = GameEngine.ApplyCommand(state, command);
@@ -1170,6 +1223,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         replaySaved = false;
         matchStartRealtime = Time.realtimeSinceStartup;
         commandElapsedSeconds.Clear();
+        flipCue.Reset();
         isNetworked = true;
         isRankedMatch = PendingNetworkedRanked;   // only true for Ranked-queue matches
         PendingNetworkedRanked = false;
@@ -1249,10 +1303,54 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Render();
     }
 
+    /// End Turn has been clicked once and is waiting for the confirming second click. Cleared whenever
+    /// any OTHER command is dispatched or the turn changes, so an arm can never survive into a later
+    /// decision and end a turn the player had moved on from.
+    private bool endTurnArmed;
+
+    // ── Player convenience automation ────────────────────────────────────────────────────────────
+    // Answers a step for you that you had no real decision in, by dispatching the ORDINARY command.
+    // Never changes what the engine does — see the header on MatchAutomationSettings for why a local
+    // preference that altered engine behaviour would desync a networked match.
+    //
+    // Deliberately skipped while: the match isn't live, a replay is playing, it isn't our seat's
+    // decision, or a bot owns the seat (the bot has its own decision path and must not be raced).
+    private void MatchAutomationTick()
+    {
+        if (state == null || state.Status != "active" || isReplayMode) return;
+        if (string.IsNullOrEmpty(localSeat)) return;
+        if (!isNetworked && aiSeat == localSeat) return;   // solo: never act for the AI's seat
+
+        // Auto-draw: the turn draw is mandatory and carries no choice, so the click is ceremony.
+        if (MatchAutomationSettings.AutoDraw
+            && state.Phase == "draw" && state.ActiveSeat == localSeat && state.Battle == null
+            && state.PendingEffects.Count == 0)
+        {
+            Dispatch(new GameCommand { Type = "draw", Seat = localSeat });
+            return;   // one automated action per frame; re-evaluate next tick on fresh state
+        }
+
+        // Auto-pass the Trigger step when the revealed Life card has no [Trigger]. OFF by default:
+        // the engine always enters this step so the attacker cannot read "instant resolve" as "no
+        // Trigger", and enabling this trades that privacy back for a click. Only ever passes when
+        // there is genuinely nothing to use, so it can never skip a decision that mattered.
+        if (MatchAutomationSettings.AutoPassTriggerWhenNone
+            && state.Battle != null && state.Battle.Step == "trigger"
+            && state.Battle.TargetSeat == localSeat
+            && state.PendingEffects.Count == 0)
+        {
+            var revealed = state.Battle.RevealedLife;
+            if (revealed != null && string.IsNullOrWhiteSpace(GameEngine.GetCard(revealed)?.Trigger))
+                Dispatch(new GameCommand { Type = "passTrigger", Seat = localSeat });
+        }
+    }
+
     // Netcode client disconnect during a live networked match: if the match isn't already
-    // decided, the remaining player wins by forfeit. Purely a UI outcome — no command is
-    // dispatched and no state is mutated; the match record is deliberately NOT saved
-    // (SaveFinishedMatchRecords expects an engine-finished state).
+    // decided, the remaining player wins by forfeit — and it is RECORDED, not just shown. This
+    // dispatches a concede for the absent seat, mutates state, and calls SaveFinishedMatchRecords
+    // so the ranked report is filed. (An earlier version of this comment claimed the opposite —
+    // "purely a UI outcome, record deliberately NOT saved" — which stopped being true when the
+    // forfeit was made to count; see the body below and ReturnToMenu for the leaver's own half.)
     private void OnPeerDisconnected(ulong clientId)
     {
         if (!isNetworked || opponentLeft || isReplayMode) return;
@@ -1827,12 +1925,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             AddMysticalCardOutline(holder, true);
             AddOutline(holder.gameObject, new Color32(255, 214, 112, 230), 2.4f);
         }
-        else if (state != null && state.PendingEffects.Count > 0
-                 && state.PendingEffects[0].DonPaymentRemaining > 0
-                 && state.PendingEffects[0].Seat == seat)
+        else if (DonMinusPaymentActive(seat))
         {
-            // Valid pick for a pending DON!! -N payment — highlight green.
-            AddOutline(holder.gameObject, new Color32(96, 240, 150, 230), 2.6f);
+            // Valid pick for a pending DON!! −N payment. Uses the SAME green rim glow as every other
+            // valid target (and comes to the front), because it previously drew a thin 2.6px outline
+            // instead — and cost-area DON!! deliberately OVERLAP (donStep ≈ 34% of card width), so the
+            // outline was hidden behind the neighbouring DON!! and read as "not selectable at all".
+            // Reported on OP16-073 Borsalino: "end of turn isnt lighting up don green as selectable
+            // targets for his effect". Routed through DonMinusPaymentActive so it also honours the
+            // networked local-seat guard, which the inline PendingEffects[0] test was missing —
+            // without it the OPPONENT's DON!! lit up on your screen during their payment.
+            AddUsableGlow(holder);
+            holder.SetAsLastSibling();
         }
         else if (don.Rested && DonGivePickActive(seat))
         {
@@ -2216,6 +2320,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         leftRoot.gameObject.SetActive(!isReplayMode);
         sideRoot.gameObject.SetActive(!isReplayMode);
         if (isNetworked && !isReplayMode) DrawMatchChatPanel();
+        // In every live match, not just networked ones: auto-draw and confirm-end-turn matter in solo
+        // too. Hidden in replay, where none of it applies (playback dispatches nothing).
+        if (!isReplayMode) DrawMatchSettingsPanel();
         if (isReplayMode) DrawReplayControlBar();
         if (isReplayMode) DrawReplayActionPanel();
         if (opponentLeft) DrawOpponentLeftOverlay();
@@ -2242,6 +2349,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Snapshot positions and fly ghosts for any card whose zone changed this render.
         CaptureAndAnimateCardMoves();
         MaybeShowTurnBanner();
+        MaybePlayCardFlipSfx();
         // (Roaming rim sparkles removed — the push/pull bar's active-half glow is the turn cue now.)
     }
 
@@ -2425,9 +2533,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
     }
 
-    // MTG-Arena-style turn-transition banner: a glowing light streak sweeps across the
-    // middle of the screen with "YOUR TURN" / "OPPONENT'S TURN" (or the player's name in
-    // hotseat), gold for the bottom/local player and cool blue for the opponent.
+    // "Horizon Rise" turn-transition banner: a tide line lifts off the edge of the board
+    // belonging to whoever is taking the turn, the player's NAME is revealed in its wake,
+    // the line settles into a lane clear of the letters, then sinks back the way it came.
+    // Amber for the local player, violet for the opponent — but the ARRIVAL EDGE is what
+    // actually encodes whose turn it is, so the banner still reads for a colour-blind
+    // player, in a screenshot, or with the accent washed out by bright card art.
     private void MaybeShowTurnBanner()
     {
         if (state == null || state.Status != "active" || isReplayMode) return;
@@ -2442,17 +2553,22 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         phaseSeqCo = StartCoroutine(PhaseIntroSequence());
 
         bool mine = isNetworked ? state.ActiveSeat == localSeat : state.ActiveSeat == BottomSeat;
-        string label;
-        if (isNetworked) label = mine ? "YOUR TURN" : "OPPONENT'S TURN";
-        else
-        {
-            // Non-networked: use the human display name ("You"/"Advanced Bot"/…), never the
-            // engine seat identifier ("South"/"North").
-            label = DisplayName(state.ActiveSeat).ToUpperInvariant() + "'S TURN";
-        }
-        var accent = mine ? new Color(1f, 0.72f, 0.22f) : new Color(0.38f, 0.72f, 1f);
-        StartCoroutine(ShowTurnBanner(label, accent));
+        StartCoroutine(ShowTurnBanner(TurnBannerLabel(state.ActiveSeat, mine), mine, state.TurnNumber));
     }
+
+    /// <summary>
+    /// The banner names whoever is taking the turn, in every mode. Always the RENDER-layer
+    /// display name — never the engine seat identifier ("south"/"north"), which is an
+    /// internal id and must not leak into the UI.
+    /// Falls back to the role wording when no real name is known: "PLAYER 2'S TURN" tells
+    /// the player strictly less than "OPPONENT'S TURN" does.
+    /// </summary>
+    private string TurnBannerLabel(string seat, bool mine)
+        => TurnBannerText.Label(DisplayName(seat), mine);
+
+    private static float BannerSeg(float t, float a, float b) => Mathf.Clamp01((t - a) / (b - a));
+    private static float BannerOutQuint(float t) => 1f - Mathf.Pow(1f - t, 5f);
+    private static float BannerInCubic(float t) => t * t * t;
 
     // END (previous turn wrapping) → REFRESH → DRAW → DON, then hand back to the live
     // mapping (MAIN/ATTACK). Each step re-renders only the pill row via Render-free
@@ -2496,121 +2612,193 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         sideRoot.Find("Sound Menu")?.SetAsLastSibling();
     }
 
-    private IEnumerator ShowTurnBanner(string label, Color accent)
+    private IEnumerator ShowTurnBanner(string label, bool mine, int turnNumber)
     {
+        // "Amber & Violet". Hue is REINFORCEMENT only — the edge the tide lifts off is what
+        // carries whose turn it is, so nothing breaks if the accent is hard to tell apart.
+        Color accent = mine ? new Color(0.898f, 0.627f, 0.184f) : new Color(0.545f, 0.361f, 0.839f);
+        Color hot    = mine ? new Color(1.000f, 0.831f, 0.537f) : new Color(0.776f, 0.659f, 0.961f);
+        float dir = mine ? 1f : -1f;    // +1 = tide lifts off the BOTTOM (local player's edge)
+
         var root = new GameObject("Turn Banner").AddComponent<RectTransform>();
         root.SetParent(canvas.transform, false);
-        Stretch(root, new Vector2(0f, 0.34f), new Vector2(1f, 0.66f), Vector2.zero, Vector2.zero);
+        Stretch(root, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         root.SetAsLastSibling();
         var grp = root.gameObject.AddComponent<CanvasGroup>();
         grp.blocksRaycasts = false;
         grp.interactable = false;
-        grp.alpha = 0f;
+        grp.alpha = 1f;
 
-        float screenW = boardRoot != null && boardRoot.rect.width > 1f ? boardRoot.rect.width : 1600f;
+        float screenW = boardRoot != null && boardRoot.rect.width  > 1f ? boardRoot.rect.width  : 1600f;
+        float screenH = boardRoot != null && boardRoot.rect.height > 1f ? boardRoot.rect.height : 900f;
         var dot = GetSoftDotSprite();
 
-        // Dark vignette band for contrast (soft dot stretched to a wide pill).
-        var band = ImageObject("Banner Band", root, dot);
-        band.color = new Color(0f, 0f, 0f, 0.62f);
-        band.raycastTarget = false;
-        var bandRt = band.rectTransform;
-        bandRt.anchorMin = bandRt.anchorMax = new Vector2(0.5f, 0.5f);
-        bandRt.sizeDelta = new Vector2(screenW * 1.35f, 340f);
+        // Every dimension below is a RATIO of this, exactly as in the design study — nothing here
+        // is a hand-picked pixel count. The study derives its type size from the viewport, so the
+        // whole lockup rescales with resolution; hardcoding it (an earlier version of this method
+        // used a flat 58) reproduces the layout at one screen size and quietly drifts at every
+        // other one.
+        // The study's ratios (W*0.098 / H*0.150) at 0.53. The study was authored and judged in a
+        // phone-sized preview, where that proportion announces; at desktop resolution it shouts
+        // over the board instead. Tuned down in two passes against real screenshots.
+        // Scaling sizeRef alone rescales the WHOLE lockup — lane, chevrons, eyebrow, wash and
+        // scrim are all expressed as ratios of it, so the proportions survive the change.
+        float sizeRef = Mathf.Min(screenW * 0.052f, screenH * 0.079f);
+        float laneOff = sizeRef * 0.86f;             // the lane: clear of the letterforms
+        float edgeY   = dir * -(screenH * 0.55f);    // off-screen, on the owner's side
+        float laneY   = dir * -laneOff;              // rest position, owner's side of the word
+        float farY    = dir *  (sizeRef * 1.5f);     // the wake carries PAST the far side
+        float farEdge = dir * -(screenH * 1.2f);     // the reveal window's trailing edge
+        float outward = -dir;                        // further toward the owner's edge
 
-        // Main colored streak + hot white core.
-        var streak = ImageObject("Banner Streak", root, dot);
-        streak.color = new Color(accent.r, accent.g, accent.b, 0.85f);
-        streak.raycastTarget = false;
-        var streakRt = streak.rectTransform;
-        streakRt.anchorMin = streakRt.anchorMax = new Vector2(0.5f, 0.5f);
-        var hot = ImageObject("Banner Streak Hot", root, dot);
-        hot.color = new Color(1f, 0.99f, 0.94f, 0.9f);
-        hot.raycastTarget = false;
-        var hotRt = hot.rectTransform;
-        hotRt.anchorMin = hotRt.anchorMax = new Vector2(0.5f, 0.5f);
+        // Edgeless scrim. There is NO plate behind the name — legibility comes from the
+        // knockout outline plus this soft gradient, so the banner never reads as a box.
+        var scrim = ImageObject("Banner Scrim", root, dot);
+        scrim.raycastTarget = false;
+        var scrimRt = scrim.rectTransform;
+        scrimRt.anchorMin = scrimRt.anchorMax = new Vector2(0.5f, 0.5f);
+        scrimRt.sizeDelta = new Vector2(screenW, sizeRef * 3.0f);      // study: half-height size*1.5
 
-        // Sweeping light: a bright knot that races across the streak once.
-        var sweep = ImageObject("Banner Sweep", root, dot);
-        sweep.color = new Color(1f, 1f, 1f, 0f);
-        sweep.raycastTarget = false;
-        var sweepRt = sweep.rectTransform;
-        sweepRt.anchorMin = sweepRt.anchorMax = new Vector2(0.5f, 0.5f);
-        sweepRt.sizeDelta = new Vector2(260f, 120f);
+        // Wash trailing the rising line.
+        var wash = ImageObject("Banner Wash", root, dot);
+        wash.raycastTarget = false;
+        var washRt = wash.rectTransform;
+        washRt.anchorMin = washRt.anchorMax = new Vector2(0.5f, 0.5f);
+        washRt.sizeDelta = new Vector2(screenW, sizeRef * 2.2f);       // study: full width, size*2.2
 
-        // Drifting embers.
-        var embers = new List<RectTransform>();
-        var emberSeeds = new List<Vector3>();
-        for (int i = 0; i < 9; i++)
-        {
-            var e = ImageObject("Banner Ember", root, dot);
-            e.raycastTarget = false;
-            e.color = new Color(accent.r, Mathf.Min(1f, accent.g + 0.15f), accent.b, 0f);
-            var ert = e.rectTransform;
-            ert.anchorMin = ert.anchorMax = new Vector2(0.5f, 0.5f);
-            float ex = ((i * 73) % 100 / 100f - 0.5f) * screenW * 0.7f;
-            float ey = ((i * 37) % 100 / 100f - 0.5f) * 90f;
-            float esz = 6f + (i * 29) % 100 / 100f * 14f;
-            ert.sizeDelta = new Vector2(esz, esz);
-            ert.anchoredPosition = new Vector2(ex, ey);
-            embers.Add(ert);
-            emberSeeds.Add(new Vector3(ex, ey, 14f + (i * 53) % 100 / 100f * 30f));
-        }
+        // The tide line itself. It rests in the lane and never crosses the letters.
+        var line = ImageObject("Banner Tide", root, dot);
+        line.raycastTarget = false;
+        var lineRt = line.rectTransform;
+        lineRt.anchorMin = lineRt.anchorMax = new Vector2(0.5f, 0.5f);
+        lineRt.sizeDelta = new Vector2(screenW, sizeRef * 0.075f);     // study: full width, 3px hard-edged
 
-        // Text: dark drop layer + bright main layer.
-        var shadow = TextObject("Banner Text Shadow", root, label, 58, new Color(0f, 0f, 0f, 0.85f), TextAnchor.MiddleCenter, titleFont);
+        // Reveal window: a RectMask2D whose rect is the tide's WAKE. The name lives inside
+        // it and is counter-positioned so it stays pinned to screen centre while the window
+        // sweeps — that is what makes the tide look like it uncovers the name.
+        var win = new GameObject("Banner Reveal").AddComponent<RectTransform>();
+        win.SetParent(root, false);
+        win.anchorMin = win.anchorMax = new Vector2(0.5f, 0.5f);
+        win.gameObject.AddComponent<RectMask2D>();
+        // The outline sets useGraphicAlpha=false, so fading the Text's colour would leave the
+        // outline behind. A CanvasGroup fades glyph and outline together.
+        var wordGrp = win.gameObject.AddComponent<CanvasGroup>();
+
+        var shadow = TextObject("Banner Name Shadow", win, label, Mathf.RoundToInt(sizeRef),
+                                new Color(0f, 0f, 0f, 0.8f), TextAnchor.MiddleCenter, titleFont);
         shadow.fontStyle = FontStyle.Bold;
-        shadow.raycastTarget = false;
-        Stretch(shadow.rectTransform, Vector2.zero, Vector2.one, new Vector2(3f, -3f), new Vector2(3f, -3f));
-        var text = TextObject("Banner Text", root, label, 58, new Color(1f, 0.97f, 0.88f), TextAnchor.MiddleCenter, titleFont);
+        var text = TextObject("Banner Name", win, label, Mathf.RoundToInt(sizeRef),
+                              new Color(0.957f, 0.941f, 0.906f), TextAnchor.MiddleCenter, titleFont);
         text.fontStyle = FontStyle.Bold;
-        text.raycastTarget = false;
-        AddOutline(text.gameObject, new Color(accent.r * 0.8f, accent.g * 0.62f, accent.b * 0.4f, 1f), 2.6f);
-        Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        AddOutline(text.gameObject, new Color(0.008f, 0.027f, 0.047f, 0.95f), 3.2f);
 
-        const float inDur = 0.30f, hold = 1.05f, outDur = 0.45f;
-        float t = 0f;
-        while (t < inDur)
+        // Player names are arbitrary length and we do not control them, so the line
+        // auto-fits rather than overflowing. Both layers must share the settings or the
+        // shadow drifts out of register with the glyph.
+        foreach (var layer in new[] { shadow, text })
         {
-            t += Time.deltaTime;
-            float f = Mathf.Clamp01(t / inDur);
-            float e = SmoothStep(f);
-            // Ease-out-back overshoot for the text.
-            float back = 1f + 1.9f * Mathf.Pow(f - 1f, 3f) + 0.9f * Mathf.Pow(f - 1f, 2f);
-            grp.alpha = e;
-            streakRt.sizeDelta = new Vector2(Mathf.Lerp(screenW * 0.12f, screenW * 1.2f, e), Mathf.Lerp(230f, 120f, e));
-            hotRt.sizeDelta = new Vector2(Mathf.Lerp(screenW * 0.06f, screenW * 0.8f, e), Mathf.Lerp(120f, 40f, e));
-            text.rectTransform.localScale = shadow.rectTransform.localScale = Vector3.one * Mathf.Lerp(1.35f, 1f, back);
-            yield return null;
+            layer.resizeTextForBestFit = true;
+            layer.resizeTextMinSize = Mathf.Max(10, Mathf.RoundToInt(sizeRef * 0.38f));
+            layer.resizeTextMaxSize = Mathf.RoundToInt(sizeRef);
+            layer.horizontalOverflow = HorizontalWrapMode.Wrap;
+            layer.verticalOverflow = VerticalWrapMode.Truncate;
+            var lrt = layer.rectTransform;
+            lrt.anchorMin = lrt.anchorMax = new Vector2(0.5f, 0.5f);
+            lrt.sizeDelta = new Vector2(screenW * 0.80f, sizeRef * 1.8f);  // study fits type to W*0.80
         }
-        // Hold: embers drift up, the sweep knot races across once.
-        t = 0f;
-        while (t < hold && root != null)
+
+        // Turn number + chevrons share one alpha, so they share a container.
+        var marks = new GameObject("Banner Marks").AddComponent<RectTransform>();
+        marks.SetParent(root, false);
+        Stretch(marks, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var marksGrp = marks.gameObject.AddComponent<CanvasGroup>();
+        marksGrp.alpha = 0f;
+
+        // The turn number sits on the QUIET side — opposite the tide — so it never lands on
+        // top of the line or the chevrons the way a fixed position would on one of the turns.
+        var eyebrow = TextObject("Banner Turn", marks, "TURN " + Mathf.Max(1, turnNumber),
+                                 Mathf.Max(9, Mathf.RoundToInt(sizeRef * 0.29f)), new Color(0.957f, 0.941f, 0.906f, 0.82f),
+                                 TextAnchor.MiddleCenter, titleFont);
+        eyebrow.fontStyle = FontStyle.Bold;
+        AddOutline(eyebrow.gameObject, new Color(0.008f, 0.027f, 0.047f, 0.9f), 2f);
+        var ebRt = eyebrow.rectTransform;
+        ebRt.anchorMin = ebRt.anchorMax = new Vector2(0.5f, 0.5f);
+        ebRt.sizeDelta = new Vector2(screenW * 0.6f, sizeRef * 0.7f);
+        ebRt.anchoredPosition = new Vector2(0f, dir * (sizeRef * 0.95f));   // study: size*0.95
+
+        // Three chevrons pointing at the owner's edge — the redundant channel that keeps the
+        // banner readable with the colour stripped out entirely.
+        // Ported from the study's chevron(), which draws each one as the polyline
+        //   (cx - S, y - dir*0.42S) → (cx, y + dir*0.42S) → (cx + S, y - dir*0.42S)
+        // with S = size*0.16, the row starting at lane + dir*size*0.30, and each subsequent
+        // chevron dir*(S*0.85) further out and 26% dimmer. Reproducing that polyline as two
+        // rotated quads gives the arm length and angle below — they are derived from it, not
+        // chosen: len = S*sqrt(1 + 0.84^2), angle = atan(0.84).
+        // Each arm's midpoint sits exactly ON the chevron's y (the ±0.42S offsets cancel), and
+        // the left arm must descend toward the apex, i.e. rotate by +outward*angle. The previous
+        // hand-derived version used sgn*outward*32°, which flipped the left arm and drew "Λ"
+        // where the study draws "V" — the arrow pointed AWAY from the player taking the turn,
+        // breaking the one ownership cue that still works without colour.
+        float chevS   = sizeRef * 0.16f;
+        float armLen  = chevS * Mathf.Sqrt(1f + 0.84f * 0.84f);
+        float armAng  = Mathf.Atan(0.84f) * Mathf.Rad2Deg;
+        float armThick = Mathf.Max(2f, chevS * 0.32f);
+        float rowBase = laneY + outward * (sizeRef * 0.30f);
+        // Core dot, not the soft one: at this size a soft dot renders as a blurry lozenge and the
+        // chevron stops reading as an arrow — which is the channel doing the work in greyscale.
+        var armDot = GetCoreDotSprite();
+        for (int i = 0; i < 3; i++)
         {
-            t += Time.deltaTime;
-            float f = Mathf.Clamp01(t / hold);
-            for (int i = 0; i < embers.Count; i++)
+            float y = rowBase + outward * (sizeRef * 0.10f + i * chevS * 0.85f);
+            float fade = 1f - i * 0.26f;
+            for (int side = 0; side < 2; side++)
             {
-                if (embers[i] == null) continue;
-                var seed = emberSeeds[i];
-                embers[i].anchoredPosition = new Vector2(seed.x, seed.y + f * seed.z);
-                var img = embers[i].GetComponent<Image>();
-                if (img != null) img.color = new Color(img.color.r, img.color.g, img.color.b, 0.75f * Mathf.Sin(f * Mathf.PI));
+                float sgn = side == 0 ? -1f : 1f;   // -1 = left arm
+                var arm = ImageObject("Banner Chevron", marks, armDot);
+                arm.raycastTarget = false;
+                arm.color = new Color(accent.r, accent.g, accent.b, fade);
+                var art = arm.rectTransform;
+                art.anchorMin = art.anchorMax = new Vector2(0.5f, 0.5f);
+                art.sizeDelta = new Vector2(armLen, armThick);
+                art.anchoredPosition = new Vector2(sgn * chevS * 0.5f, y);
+                art.localRotation = Quaternion.Euler(0f, 0f, -sgn * outward * armAng);
             }
-            float sw = Mathf.Clamp01(f * 1.6f);
-            sweepRt.anchoredPosition = new Vector2(Mathf.Lerp(-screenW * 0.45f, screenW * 0.45f, sw), 0f);
-            sweep.color = new Color(1f, 1f, 1f, 0.55f * Mathf.Sin(sw * Mathf.PI));
-            yield return null;
         }
-        t = 0f;
-        while (t < outDur && root != null)
+
+        const float Dur = 1.80f;    // unchanged budget: 0.30 in / 1.05 hold / 0.45 out
+        float t = 0f;
+        while (t < 1f && root != null)
         {
-            t += Time.deltaTime;
-            float f = Mathf.Clamp01(t / outDur);
-            grp.alpha = 1f - SmoothStep(f);
-            streakRt.sizeDelta = new Vector2(screenW * (1.2f + 0.4f * f), 120f * (1f - 0.55f * f));
-            hotRt.sizeDelta = new Vector2(screenW * 0.8f * (1f + 0.35f * f), 40f * (1f - 0.7f * f));
-            text.rectTransform.localScale = shadow.rectTransform.localScale = Vector3.one * (1f + 0.06f * f);
+            t += Time.deltaTime / Dur;
+            float f = Mathf.Clamp01(t);
+
+            float rise   = BannerOutQuint(BannerSeg(f, 0f, 0.24f));
+            float reveal = BannerOutQuint(BannerSeg(f, 0.04f, 0.36f));
+            float outK   = BannerSeg(f, 0.72f, 1f);
+            float sink   = BannerInCubic(BannerSeg(f, 0.80f, 1f));
+            float wordA  = 1f - BannerInCubic(BannerSeg(f, 0.74f, 0.94f));
+            float here   = Mathf.Clamp01(BannerSeg(f, 0f, 0.08f) * 1.4f) * (1f - sink);
+
+            float lineY = Mathf.Lerp(edgeY, laneY, rise) + sink * (edgeY - laneY);
+            float revY  = Mathf.Lerp(edgeY, farY, reveal);
+
+            scrim.color = new Color(0.016f, 0.039f, 0.063f, 0.78f * here);
+            wash.color = new Color(accent.r, accent.g, accent.b, (1f - rise) * 0.5f * here);
+            washRt.anchoredPosition = new Vector2(0f, lineY + outward * 115f);
+            line.color = new Color(hot.r, hot.g, hot.b, here);
+            lineRt.anchoredPosition = new Vector2(0f, lineY);
+
+            // The window spans from the travelling edge back to the owner's side of the
+            // screen: everything the tide has already passed over.
+            float top = Mathf.Max(revY, farEdge), bot = Mathf.Min(revY, farEdge);
+            float mid = (top + bot) * 0.5f;
+            win.sizeDelta = new Vector2(screenW * 1.2f, Mathf.Max(0f, top - bot));
+            win.anchoredPosition = new Vector2(0f, mid);
+            text.rectTransform.anchoredPosition = new Vector2(0f, -mid);
+            shadow.rectTransform.anchoredPosition = new Vector2(3f, -mid - 4f);
+            wordGrp.alpha = wordA;
+
+            marksGrp.alpha = BannerSeg(f, 0.34f, 0.48f) * (1f - outK);
             yield return null;
         }
         if (root != null) Destroy(root.gameObject);
@@ -2656,6 +2844,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             StartCoroutine(LoadSfxClip("attack", clip => attackClip = clip));
             StartCoroutine(LoadSfxClip("event_burn", clip => burnClip = clip));
             StartCoroutine(LoadSfxClip("coin_flip", clip => coinFlipClip = clip));
+            StartCoroutine(LoadSfxClip("card_flip", clip => cardFlipClip = clip));
+            StartCoroutine(LoadSfxClip("play_card", clip => playCardClip = clip));
         }
     }
 
@@ -2683,17 +2873,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     /// <summary>The toss: one flick as the coin leaves the hand. Played once at the start of the spin
     /// rather than once per rotation — the clip is a single flick, and repeating it per turn read as a
     /// mechanical tick rather than a coin being thrown.</summary>
-    private void PlayCoinFlipSfx()
-    {
-        EnsureSfx();
-        if (coinFlipClip != null && sfxSource != null) sfxSource.PlayOneShot(coinFlipClip, SfxVolume);
-    }
+    private void PlayCoinFlipSfx() => PlaySfx(() => coinFlipClip);
 
-    private void PlayAttackSfx()
-    {
-        EnsureSfx();
-        if (attackClip != null && sfxSource != null) sfxSource.PlayOneShot(attackClip, SfxVolume);
-    }
+    private void PlayAttackSfx() => PlaySfx(() => attackClip);
 
     private IEnumerator LoadSfxClip(string name, System.Action<AudioClip> assign)
     {
@@ -2746,18 +2928,75 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return trimmed;
     }
 
-    private void PlayCardDrawSfx(float delay = 0f)
+    private void PlayCardDrawSfx(float delay = 0f) => PlaySfx(() => cardDrawClip, delay);
+
+    /// <summary>Card turning face-up. Level-matched to card_draw on import, so it needs no
+    /// per-clip volume trim here — it plays at the same SfxVolume as every other cue.</summary>
+    private void PlayCardFlipSfx() => PlaySfx(() => cardFlipClip);
+
+    // A Life card turning face-up for the Trigger step is the flip the player actually sees.
+    // Keyed on the revealed card's INSTANCE id, not on "is something revealed", so [Double Attack]
+    // — which reveals a second card without closing the step — still gets its own sound, while a
+    // repaint of the same reveal does not.
+    private void MaybePlayCardFlipSfx()
     {
-        EnsureSfx();
-        if (cardDrawClip == null) return;
-        if (delay <= 0f) sfxSource.PlayOneShot(cardDrawClip, SfxVolume);
-        else StartCoroutine(PlaySfxDelayed(cardDrawClip, delay));
+        if (isReplayMode) return;
+        faceUpScratch.Clear();
+        if (state?.Players != null)
+            foreach (var kv in state.Players)
+            {
+                var pl = kv.Value;
+                if (pl?.Life == null) continue;
+                foreach (var c in pl.Life)
+                    if (c != null && c.FaceUp && !string.IsNullOrEmpty(c.InstanceId)) faceUpScratch.Add(c.InstanceId);
+            }
+
+        int cues = flipCue.Observe(faceUpScratch, state?.Battle?.RevealedLife?.InstanceId);
+        // Staggered so a multi-card flip reads as separate cards rather than one thick noise.
+        for (int i = 0; i < cues; i++) PlayCardFlipSfxDelayed(0.13f * i);
     }
 
-    private IEnumerator PlaySfxDelayed(AudioClip clip, float delay)
+    /// <summary>Character or Stage touching down on the board. Fired from inside the impact
+    /// sequence rather than on a delay, because the lift is preceded by a visibility POLL of
+    /// unknown length — a fixed offset would drift out of sync with the slam on any play that
+    /// waited (an opponent's card behind a ghost flight) versus one that did not (a local drag).
+    /// Level-matched on import, so it plays at the shared SfxVolume with no per-clip trim.</summary>
+    private void PlayCardPlaySfx() => PlaySfx(() => playCardClip);
+
+    private void PlayCardFlipSfxDelayed(float delay) => PlaySfx(() => cardFlipClip, delay);
+
+    /// <summary>Fire a cue whose clip may still be streaming in. EnsureSfx only STARTS the async
+    /// loads, so the old `if (clip == null) return;` in every cue turned "not ready yet" into
+    /// "never plays". That dropped the coin toss EVERY time — it fires in the same synchronous
+    /// block that kicks the loads off, so its clip is guaranteed null — and dropped the Life-flip
+    /// cue whenever that flip was the first sound of a session (reported three times).
+    ///
+    /// The clip is passed as a lambda, not a value: the loader assigns the field later, so
+    /// capturing the (still null) clip by value here would wait on a reference that never fills.</summary>
+    private void PlaySfx(System.Func<AudioClip> clip, float delay = 0f)
     {
-        yield return new WaitForSeconds(delay);
-        if (clip != null && sfxSource != null) sfxSource.PlayOneShot(clip, SfxVolume);
+        EnsureSfx();
+        if (delay <= 0f)
+        {
+            var ready = clip();
+            if (ready != null)
+            {
+                if (sfxSource != null) sfxSource.PlayOneShot(ready, SfxVolume);
+                return;
+            }
+        }
+        StartCoroutine(PlaySfxRoutine(clip, delay));
+    }
+
+    private IEnumerator PlaySfxRoutine(System.Func<AudioClip> clip, float delay)
+    {
+        if (delay > 0f) yield return new WaitForSecondsRealtime(delay);
+        // Bounded: a clip whose file is genuinely missing drops the cue instead of parking a
+        // coroutine for the rest of the match. Local file loads land in a frame or two.
+        float until = Time.unscaledTime + 2f;
+        while (clip() == null && Time.unscaledTime < until) yield return null;
+        var c = clip();
+        if (c != null && sfxSource != null) sfxSource.PlayOneShot(c, SfxVolume);
     }
 
     // Soft radial dot used by the energy arrows, banner streaks and glow effects.
@@ -2826,6 +3065,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 var rt = lifeRects != null && i < lifeRects.Count && lifeRects[i] != null ? lifeRects[i] : anchor("life:" + seatKey);
                 addPose(pMv.Life[i].InstanceId, pMv.Life[i].CardId, "life:" + seatKey, rt, false);
             }
+            // A Life card revealed for the Trigger step has been POPPED out of Life and lives in
+            // Battle.RevealedLife until the player answers — it is in NO zone list for the whole
+            // duration of that prompt. Since lastCardPoses is rebuilt from this dictionary every
+            // render, leaving it out means the card loses its pose, and when it finally lands the
+            // diff reads it as "brand new" and skips every animation for it — which silently
+            // disabled the trigger burn entirely. Keep it posed at the Life stack it came from.
+            var revealedLife = state.Battle != null ? state.Battle.RevealedLife : null;
+            if (revealedLife != null && state.Battle.TargetSeat == seatKey
+                && !now.ContainsKey(revealedLife.InstanceId))
+            {
+                // Explicit null checks, not ??: RectTransform is a UnityEngine.Object, whose
+                // overloaded == does not agree with the null-coalescing operator.
+                var revRt = anchor("life:" + seatKey);
+                if (revRt == null && lifeRects != null && lifeRects.Count > 0)
+                    revRt = lifeRects[lifeRects.Count - 1];
+                addPose(revealedLife.InstanceId, revealedLife.CardId, "life:" + seatKey, revRt, false);
+            }
             for (int i = 0; i < pMv.Trash.Count; i++)
             {
                 var tc = pMv.Trash[i];
@@ -2866,6 +3122,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             int moves = 0;
             int lifeDealt = 0;
             int handDrawSeq = 0;   // staggers multi-card draws so each flies + sounds one at a time
+            int lifeFlipSeq = 0;   // same, for several Life cards leaving in one command
             // Per-PASS, not per-match: a Character can be bounced back to hand and played again,
             // and a match-lifetime guard would silently skip the impact on every replay.
             boardReactedIds.Clear();
@@ -2902,6 +3159,23 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     BeginPlayImpact(kv.Key);
                 }
 
+                // ANY card leaving the Life stack is a "life flipped up" moment to the player —
+                // damage taken to hand, an effect that trashes Life, or one that simply adds the
+                // top Life card to hand (OP08-098 Kalgara: "add 1 card from the top of your Life
+                // cards to your hand"). The first version of this sound keyed off
+                // Battle.RevealedLife, which is set ONLY by the Trigger step, so every
+                // effect-driven Life movement was silent — reported as "flipping life up with
+                // Kalgara didn't play sfx".
+                // Detected from the pose diff because effect-driven Life movement never touches an
+                // input handler, exactly like the burn below.
+                if (old.zone.StartsWith("life:") && !kv.Value.zone.StartsWith("life:")
+                    && !isReplayMode && flipCue.ShouldSoundLeavingLife(kv.Key))
+                {
+                    // Staggered so "trash 2 Life" reads as two cards rather than one thick noise.
+                    PlayCardFlipSfxDelayed(0.13f * lifeFlipSeq);
+                    lifeFlipSeq++;
+                }
+
                 // An Event/Counter leaving hand for the trash IS the burn. Detected here rather
                 // than in the click handlers, because those only ever see the LOCAL player's own
                 // plays — an opponent's Event arrives as a replayed command, and an Event played
@@ -2909,6 +3183,30 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // slide silently to the trash.
                 // old.pos/old.size carry the card's real hand rect, so the showcase still flies
                 // out of the right place even though handCardRects has already been rebuilt.
+                // A USED [Trigger] gets the same flourish, flying out of the Life stack instead of
+                // the hand. Using a trigger spends the card exactly the way playing an Event does,
+                // so the card TYPE is deliberately not checked here — a Character whose [Trigger]
+                // fired is spent just as much as an Event is, and the engine trashes it either way.
+                // A trigger that PLAYS its character to the board is never in this list, so it
+                // keeps the play-impact reaction rather than burning.
+                if (old.zone.StartsWith("life:") && kv.Value.zone.StartsWith("trash:")
+                    && !burnedThisRender.Contains(kv.Key)
+                    && state.ActivatedTriggerIds.Contains(kv.Key))
+                {
+                    var trOwner = state.Players.TryGetValue(kv.Value.owner, out var trP) ? trP : null;
+                    var trInst = trOwner?.Trash.FirstOrDefault(c => c != null && c.InstanceId == kv.Key);
+                    if (trInst != null)
+                    {
+                        burnedThisRender.Add(kv.Key);
+                        // Trigger timing always uses the Event preset, never the Counter one: a
+                        // trigger fires mid-battle, so the Battle-based pick below would shrink it
+                        // to the Counter showcase every time — and unlike a counter it is a
+                        // once-per-Life-card reveal, not something that repeats within the battle.
+                        BeginBurnToTrash(trInst, kv.Value.owner, BurnTiming.Event, old.pos, old.size);
+                        continue;                       // the burn replaces the flight
+                    }
+                }
+
                 if (old.zone.StartsWith("hand:") && kv.Value.zone.StartsWith("trash:")
                     && !burnedThisRender.Contains(kv.Key)
                     && state.ActivatedEventIds.Contains(kv.Key))   // PLAYED, not discarded to pay a cost
@@ -4237,7 +4535,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             string typePart = !string.IsNullOrEmpty(dl.CardTypeFilter) ? $" or {dl.CardTypeFilter}" : "";
             return $"[{dl.NamedCardFilter}]{typePart} ";
         }
-        string filterDesc = !string.IsNullOrEmpty(dl.FeatureFilter) ? $"{{{dl.FeatureFilter}}} " : "";
+        string filterDesc = FeatureFilterLabel(dl.FeatureFilter);
         string typeDesc   = !string.IsNullOrEmpty(dl.CardTypeFilter) ? dl.CardTypeFilter + " " : "";
         return filterDesc + typeDesc;
     }
@@ -4940,6 +5238,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
     }
 
+    /// <summary>Render a deck-look feature filter for a PROMPT. "A|B" is the engine's internal
+    /// disjunction encoding ("{A} or {B} type" text); printed raw it reads as "{Neptunian|Fish-Man
+    /// Island}". Returns "" for no filter, else a trailing-space-terminated label.</summary>
+    private static string FeatureFilterLabel(string filter) =>
+        string.IsNullOrEmpty(filter) ? "" : "{" + filter.Replace("|", "} or {") + "} ";
+
     private bool IsDeckLookSelectable(CardInstance card)
     {
         var dl = state?.DeckLook;
@@ -4957,7 +5261,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         else
         {
-            if (!string.IsNullOrEmpty(dl.FeatureFilter) && !def.HasFeature(dl.FeatureFilter)) return false;
+            // GameEngine.FeatureMatches, not def.HasFeature: the filter can be an "A|B" disjunction
+            // ("{Neptunian} or {Fish-Man Island} type"), and HasFeature would look for one literal
+            // feature containing a pipe — false for every card, greying out the whole look.
+            if (!GameEngine.FeatureMatches(def, dl.FeatureFilter)) return false;
             if (!string.IsNullOrEmpty(dl.CardTypeFilter) && !string.Equals(def.Type, dl.CardTypeFilter, System.StringComparison.OrdinalIgnoreCase)) return false;
         }
         if (dl.RequireTrigger && string.IsNullOrEmpty(def.Trigger)) return false;
@@ -6069,7 +6376,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void DrawCoinFlipOverlay()
     {
-        if (state.Status != "coinflip") { coinFlipWaitingText = null; coinFlipRevealed = false; coinFlipSpinStarted = false; return; }
+        if (state.Status != "coinflip")
+        {
+            coinFlipWaitingText = null; coinFlipRevealed = false; coinFlipSpinStarted = false;
+            coinFlipSpinStartedAt = -1f; coinFlipSpinGeneration++;   // retire any coroutine still in flight
+            return;
+        }
 
         var dim = PanelObject("Coin Flip Dim", boardRoot, new Color32(8, 10, 14, 200));
         Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -6082,14 +6394,30 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var winner = state.Players[state.CoinFlipWinner];
 
         // Spin first: a coin flips for ~1.3s (both clients see it), and only when it lands does the
-        // winner + Go First/Second choice appear. The coroutine parents the coin to `panel`; nothing
-        // forces a re-render mid-spin (no bot acts during the coin flip), so it plays uninterrupted.
+        // winner + Go First/Second choice appear. The coroutine parents the coin to `panel`, which
+        // Render() destroys — and the old code assumed "nothing forces a re-render mid-spin (no bot
+        // acts during the coin flip)". That is true solo and hotseat, and FALSE in networked play,
+        // where the peer supplies re-renders the local player never triggers: presence updates, the
+        // display-name share, deck share, chat. One of those landing during the toss destroyed the
+        // coin, and because the old `coinFlipSpinStarted` latch only ever allowed ONE spin, nothing
+        // redrew it — the opponent sat on "Flipping the coin…" with no coin and then got the result.
+        // Reported as "thereaper didnt see the coin" / "friend didnt even see the coin animation".
+        //
+        // So the spin is RESUMABLE rather than one-shot: it is re-started against each rebuilt
+        // panel, picking up at its true elapsed phase, and a generation stamp retires the orphaned
+        // coroutine so only the newest one may reveal the winner.
         if (!coinFlipRevealed)
         {
             coinFlipWaitingText = null;
             var flipLabel = TextObject("Coin Flip Text", panel, "Flipping the coin…", 15, Muted, TextAnchor.UpperCenter, titleFont);
             Stretch(flipLabel.rectTransform, new Vector2(0.06f, 0.74f), new Vector2(0.94f, 0.96f), Vector2.zero, Vector2.zero);
-            if (!coinFlipSpinStarted) { coinFlipSpinStarted = true; StartCoroutine(AnimateCoinFlip(panel)); }
+            if (!coinFlipSpinStarted)
+            {
+                coinFlipSpinStarted = true;
+                coinFlipSpinStartedAt = Time.unscaledTime;
+                PlayCoinFlipSfx();          // once per toss, at the real start — not on every resume
+            }
+            StartCoroutine(AnimateCoinFlip(panel, ++coinFlipSpinGeneration));
             return;
         }
 
@@ -6142,14 +6470,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Spins the coin (edge-on squash + an up-and-down arc) on the coin-flip panel for ~1.3s, then
     // flips coinFlipRevealed and re-renders to show the winner + first/second choice. Guarded against
     // the panel being torn down mid-spin. Uses unscaled time so it plays regardless of any pause.
-    private IEnumerator AnimateCoinFlip(RectTransform panel)
+    private IEnumerator AnimateCoinFlip(RectTransform panel, int generation)
     {
         if (panel == null) { coinFlipRevealed = true; yield break; }
-
-        // The toss is the FIRST thing in a match, so nothing has kicked off the async SFX load yet.
-        // Start it here: the first tick is 185ms away, which is ample for a local file, and a clip
-        // that somehow arrives late just means a silent tick rather than a stall.
-        EnsureSfx();
 
         // WHICH FACE THE COIN LANDS ON. The toss used to run for a fixed 1.35s at a fixed rate, so the
         // final angle was always cos(11.475) ≈ +0.46 — the front face, every single time, regardless of
@@ -6181,12 +6504,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(faceText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         faceText.raycastTarget = false;
 
-        // One flick, on the toss. Note it is played AFTER halfFlips is chosen but plays identically
-        // either way, so the audio cannot leak whether you won — same reason the spin holds a fixed
-        // rate and lets the duration vary.
-        PlayCoinFlipSfx();
-
-        float t = 0f;
+        // Resume point. The cue itself is fired once by the caller at the true start of the toss, so
+        // a re-render mid-spin neither replays it nor leaks the result (it sounds identical either
+        // way, same reason the spin holds a fixed rate and lets the duration vary).
+        float t = coinFlipSpinStartedAt >= 0f
+            ? Mathf.Clamp(Time.unscaledTime - coinFlipSpinStartedAt, 0f, dur)
+            : 0f;
         while (t < dur && coin != null && panel != null)
         {
             t += Time.unscaledDeltaTime;
@@ -6214,6 +6537,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             }
             yield return null;
         }
+        // A re-render tore down this panel and a newer coroutine now owns the toss: let that one
+        // finish and reveal. Without this, the orphan would race it to coinFlipRevealed + Render().
+        if (generation != coinFlipSpinGeneration) yield break;
+
         // Land face-on and HOLD so the player can read the H/T result before the winner is shown. The
         // parity of halfFlips already put the correct side up, so this only settles the transform.
         if (coin != null) { coin.localScale = Vector3.one; coin.anchoredPosition = Vector2.zero; }
@@ -6224,6 +6551,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             faceText.color = localWonFlip ? CoinGoldInk : CoinSilverInk;
         }
         yield return new WaitForSecondsRealtime(0.9f);
+        if (generation != coinFlipSpinGeneration) yield break;
         coinFlipRevealed = true;
         Render();
     }
@@ -8374,27 +8702,43 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Dropdown menu under the hamburger. Options populate here; for now: New Match, Close.
     private void DrawGameMenu()
     {
+        bool netActive = isNetworked && !isReplayMode && state != null && state.Status == "active" && !opponentLeft;
+        // Match Options is only meaningful where the settings panel itself is drawn (not in replays).
+        bool showOptions = !isReplayMode;
+
+        // Build the item list first, then lay it out — the slots were hand-placed constants, so
+        // adding a fifth entry meant re-deriving four magic numbers by hand and getting them
+        // consistent. Computing the bands makes the menu grow correctly on its own.
+        var items = new List<(string label, UnityEngine.Events.UnityAction act)>();
+        items.Add(("Main Menu", () => { menuOpen = false; ReturnToMenu(); }));
+        if (netActive) items.Add(("Surrender", () => { menuOpen = false; surrenderConfirmOpen = true; Render(); }));
+        else           items.Add((isSandbox ? "New Sandbox" : "New Match",
+                                  () => { menuOpen = false; if (isSandbox) NewSandbox(); else NewMatch(); }));
+        if (showOptions)
+            items.Add(("Match Options", () => { menuOpen = false; matchSettingsOpen = true; Render(); }));
+        items.Add(("Sound", () => { menuOpen = false; soundMenuOpen = true; Render(); }));
+        items.Add(("Close", () => { menuOpen = false; Render(); }));
+
+        // Height tracks the item count so rows keep a consistent size instead of being squeezed.
+        float rowFrac = 0.077f;                                   // one row, as a fraction of sideRoot
+        float panelTop = 0.95f;
+        float panelBottom = Mathf.Max(0.14f, panelTop - rowFrac * items.Count - 0.02f);
         var menu = PanelObject("Game Menu", sideRoot, (Color)new Color32(12, 23, 38, 250));
-        // Four items: New Match, Main Menu, Sound (opens the sound panel), Close.
-        Stretch(menu, new Vector2(0.52f, 0.64f), new Vector2(0.965f, 0.95f), Vector2.zero, Vector2.zero);
+        Stretch(menu, new Vector2(0.52f, panelBottom), new Vector2(0.965f, panelTop), Vector2.zero, Vector2.zero);
         RoundBig(menu);
         AddRoundedCardBorder(menu, Accent, 1.3f);
         menu.SetAsLastSibling();
 
-        // Main Menu is the TOP slot; New Match / Surrender sits just below it.
-        bool netActive = isNetworked && !isReplayMode && state != null && state.Status == "active" && !opponentLeft;
-        AddMenuItem(menu, "Main Menu", new Vector2(0.07f, 0.79f), new Vector2(0.93f, 0.955f),
-            () => { menuOpen = false; ReturnToMenu(); });
-        if (netActive)
-            AddMenuItem(menu, "Surrender", new Vector2(0.07f, 0.545f), new Vector2(0.93f, 0.71f),
-                () => { menuOpen = false; surrenderConfirmOpen = true; Render(); });
-        else
-            AddMenuItem(menu, isSandbox ? "New Sandbox" : "New Match", new Vector2(0.07f, 0.545f), new Vector2(0.93f, 0.71f),
-                () => { menuOpen = false; if (isSandbox) NewSandbox(); else NewMatch(); });
-        AddMenuItem(menu, "Sound", new Vector2(0.07f, 0.30f), new Vector2(0.93f, 0.465f),
-            () => { menuOpen = false; soundMenuOpen = true; Render(); });
-        AddMenuItem(menu, "Close", new Vector2(0.07f, 0.045f), new Vector2(0.93f, 0.21f),
-            () => { menuOpen = false; Render(); });
+        const float margin = 0.028f;
+        float span = (1f - margin * 2f) / items.Count;            // per-slot band, incl. its gap
+        float gap = span * 0.16f;
+        for (int i = 0; i < items.Count; i++)
+        {
+            float top = 1f - margin - i * span;
+            float bottom = top - (span - gap);
+            var it = items[i];
+            AddMenuItem(menu, it.label, new Vector2(0.07f, bottom), new Vector2(0.93f, top), it.act);
+        }
     }
 
     // Confirmation before surrendering a live match (opened from the game menu's "Surrender" item).
@@ -8609,6 +8953,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         replaySaved = false;
         matchStartRealtime = Time.realtimeSinceStartup;
         commandElapsedSeconds.Clear();
+        flipCue.Reset();
         mulliganAnimShownKey = null;
         mulliganRedrawSeat = null;
         handDealAnimating = false;
@@ -8770,6 +9115,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void OnNetworkChatReceived(string text)
     {
         if (!isNetworked || string.IsNullOrEmpty(text)) return;
+        // Muted: drop it entirely rather than rendering a "[hidden]" placeholder. Ranked and casual
+        // match you with STRANGERS, and blocking only exists for friends — so before this, a player
+        // receiving abuse mid-match had two options: read it, or leave. Leaving dispatches a concede
+        // (ReturnToMenu), so escaping harassment cost them the match. A mute has to be the cheaper way out.
+        if (matchChatMuted || MatchAutomationSettings.MuteMatchChat) return;
         string opponentSeat = localSeat == "south" ? "north" : "south";
         chatMessages.Add(new ChatMessage { Sender = DisplayName(opponentSeat), Text = text, Mine = false });
         TrimChatHistory();
@@ -8912,6 +9262,93 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Networked-match chat: a collapsed tab on the LEFT screen edge; clicking it expands a
     // ~300px panel with the scrollable message history + an input field (Enter or Send to
     // send). Presence/game hotkeys are guarded while the input is focused (ChatInputFocused).
+    /// In-match settings flyout. Same collapsed-tab + panel pattern as the chat panel, sitting just
+    /// below it on the left edge.
+    ///
+    /// These are the SAME MatchAutomationSettings the main menu edits — there is no separate in-match
+    /// copy — so a change here persists and is visible in Settings afterwards, and vice versa. The
+    /// point of having it here at all is that every one of these options only matters WHILE you are
+    /// playing: discovering mid-match that auto-draw is off, or that you want the opponent muted, and
+    /// then being told to quit to the main menu to change it is the exact moment the option is useless.
+    ///
+    /// Client-only, like everything in MatchAutomationSettings: nothing here touches the engine, so a
+    /// mid-match toggle cannot put the two players on different boards.
+    private void DrawMatchSettingsPanel()
+    {
+        if (!matchSettingsOpen) return;
+
+        // A REAL modal, built like the surrender / result screens: dimmed backdrop, centred, and
+        // added LAST so nothing paints over it. The previous version was a thin "OPTS" tab on the
+        // board's left edge whose panel was parented to boardRoot early in Render — the rest of the
+        // board then drew on top of it, so clicking Match Options looked like nothing happened.
+        var dim = PanelObject("Match Settings Dim", boardRoot, new Color32(8, 10, 14, 205));
+        Stretch(dim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        dim.SetAsLastSibling();
+        // Click-away to dismiss. Safe because the panel is added AFTER the dim and so sits above
+        // it — a click on the panel never reaches this.
+        var dimBtn = dim.gameObject.AddComponent<Button>();
+        dimBtn.onClick.AddListener(() => { matchSettingsOpen = false; Render(); });
+
+        var panel = PanelObject("Match Settings Panel", boardRoot, (Color)new Color32(14, 30, 46, 250));
+        Stretch(panel, new Vector2(0.30f, 0.18f), new Vector2(0.70f, 0.82f), Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, Accent, 1.6f);
+        panel.SetAsLastSibling();
+
+        var title = TextObject("Match Settings Title", panel, "MATCH OPTIONS", 17, Ink, TextAnchor.MiddleCenter, titleFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0.06f, 0.895f), new Vector2(0.94f, 0.965f), Vector2.zero, Vector2.zero);
+
+        // Rows are laid out top-down in normalised bands so the panel stays readable if its size
+        // changes; each row is a full-width toggle with the state spelled out, not colour-only.
+        int i = 0;
+        void Row(string label, bool on, System.Action toggle, string note = null)
+        {
+            float top = 0.86f - i * 0.135f;
+            var rowRt = PanelObject("Opt Row " + label, panel, on ? (Color)new Color32(30, 70, 92, 235) : (Color)new Color32(22, 42, 60, 220));
+            Stretch(rowRt, new Vector2(0.06f, top - 0.10f), new Vector2(0.94f, top), Vector2.zero, Vector2.zero);
+            Round(rowRt);
+            var t = TextObject("Opt Text " + label, rowRt, (on ? "●  " : "○  ") + label, 12,
+                on ? BadgeInk : Ink, TextAnchor.MiddleLeft, monoFont);
+            Stretch(t.rectTransform, new Vector2(0.06f, 0f), new Vector2(0.72f, 1f), Vector2.zero, Vector2.zero);
+            var state = TextObject("Opt State " + label, rowRt, on ? "ON" : "OFF", 11,
+                on ? BadgeInk : Muted, TextAnchor.MiddleRight, monoFont);
+            Stretch(state.rectTransform, new Vector2(0.72f, 0f), new Vector2(0.94f, 1f), Vector2.zero, Vector2.zero);
+            var b = rowRt.gameObject.AddComponent<Button>();
+            b.onClick.AddListener(() => { toggle(); Render(); });
+            if (!string.IsNullOrEmpty(note))
+            {
+                var n = TextObject("Opt Note " + label, panel, note, 9, Muted, TextAnchor.UpperLeft, monoFont);
+                Stretch(n.rectTransform, new Vector2(0.08f, top - 0.135f), new Vector2(0.94f, top - 0.10f), Vector2.zero, Vector2.zero);
+            }
+            i++;
+        }
+
+        Row("AUTO DRAW", MatchAutomationSettings.AutoDraw,
+            () => MatchAutomationSettings.AutoDraw = !MatchAutomationSettings.AutoDraw);
+        Row("CONFIRM END TURN", MatchAutomationSettings.ConfirmEndTurn,
+            () => MatchAutomationSettings.ConfirmEndTurn = !MatchAutomationSettings.ConfirmEndTurn);
+        Row("AUTO-PASS EMPTY TRIGGER", MatchAutomationSettings.AutoPassTriggerWhenNone,
+            () => MatchAutomationSettings.AutoPassTriggerWhenNone = !MatchAutomationSettings.AutoPassTriggerWhenNone,
+            "reveals that the card had no [Trigger]");
+        // Mute is the per-match flag, not the persistent pref: silencing one opponent should not
+        // quietly turn match chat off forever (the permanent version lives in Settings).
+        Row("MUTE MATCH CHAT", matchChatMuted || MatchAutomationSettings.MuteMatchChat,
+            () => matchChatMuted = !matchChatMuted,
+            MatchAutomationSettings.MuteMatchChat ? "always-mute is on in Settings" : null);
+
+        var closeRt = PanelObject("Opt Close", panel, (Color)Accent);
+        Stretch(closeRt, new Vector2(0.28f, 0.045f), new Vector2(0.72f, 0.125f), Vector2.zero, Vector2.zero);
+        Round(closeRt);
+        var closeTxt = TextObject("Opt Close Text", closeRt, "CLOSE", 13, BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        closeTxt.fontStyle = FontStyle.Bold;
+        Stretch(closeTxt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var closeBtn = closeRt.gameObject.AddComponent<Button>();
+        closeBtn.onClick.AddListener(() => { matchSettingsOpen = false; Render(); });
+    }
+
+    private bool matchSettingsOpen;
+
     private void DrawMatchChatPanel()
     {
         // Collapsed tab (always present so the panel can be re-opened).
@@ -8954,6 +9391,21 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Copy the whole conversation to the clipboard (the input itself already supports
         // native Ctrl+C/V paste; this covers copying the received messages/history).
         AddCopyChip(panel, "Copy", BuildChatText, new Vector2(0.70f, 0.925f), new Vector2(0.95f, 0.99f));
+
+        // Per-match mute, right where the abuse is being read. Deliberately one click and reachable
+        // without leaving the match: the alternative escape was to quit, which concedes.
+        bool muted = matchChatMuted || MatchAutomationSettings.MuteMatchChat;
+        var muteChip = PanelObject("Match Chat Mute", panel,
+            muted ? (Color)RedAccent : (Color)new Color32(34, 58, 78, 235));
+        Stretch(muteChip, new Vector2(0.44f, 0.925f), new Vector2(0.68f, 0.99f), Vector2.zero, Vector2.zero);
+        Round(muteChip);
+        var muteText = TextObject("Match Chat Mute Text", muteChip, muted ? "MUTED" : "MUTE", 9,
+            muted ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
+        Stretch(muteText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var muteBtn = muteChip.gameObject.AddComponent<Button>();
+        // Only the per-match flag is toggled here; the persistent "always mute" lives in Settings so a
+        // single bad match can't silently turn chat off forever.
+        muteBtn.onClick.AddListener(() => { matchChatMuted = !matchChatMuted; Render(); });
 
         // Scrollable message list (same viewport/ScrollRect pattern as the combat log).
         var viewport = PanelObject("Match Chat Viewport", panel, new Color(0, 0, 0, 0));
@@ -9122,13 +9574,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         RoundBig(root);
         AddRoundedCardBorder(root, enabled ? Accent2 : (Color)new Color32(70, 90, 104, 150), 2.2f);
 
-        var text = TextObject("End Turn Text", root, "END TURN", 24, enabled ? BadgeInk : new Color32(150, 165, 180, 180), TextAnchor.MiddleCenter, titleFont);
+        // Confirm-on-End-Turn (MatchAutomationSettings.ConfirmEndTurn, default ON): the first click
+        // arms, the second commits. Ending a turn early is unrecoverable and is the easiest misclick
+        // in the game, so the opt-out is offered rather than the opt-in.
+        bool armed = endTurnArmed && MatchAutomationSettings.ConfirmEndTurn;
+        string label = armed ? "CLICK AGAIN TO END" : "END TURN";
+        var text = TextObject("End Turn Text", root, label, armed ? 18 : 24, enabled ? BadgeInk : new Color32(150, 165, 180, 180), TextAnchor.MiddleCenter, titleFont);
         text.fontStyle = FontStyle.Bold;
         Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
         var button = root.gameObject.AddComponent<Button>();
         button.interactable = enabled;
-        button.onClick.AddListener(() => Dispatch(new GameCommand { Type = "endTurn", Seat = state.ActiveSeat }));
+        button.onClick.AddListener(() =>
+        {
+            if (MatchAutomationSettings.ConfirmEndTurn && !endTurnArmed)
+            {
+                endTurnArmed = true;   // arm; cleared by any other action or when the turn changes
+                Render();
+                return;
+            }
+            endTurnArmed = false;
+            Dispatch(new GameCommand { Type = "endTurn", Seat = state.ActiveSeat });
+        });
     }
 
     private void DrawContextActions(RectTransform panel)
@@ -9230,7 +9697,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             {
                 // Trash-play (OP13-082 Five Elders, Sengoku, …): pick up to N Characters from the trash to
                 // play; green = a valid pick (a name already played greys out under "different card names").
-                string feat = string.IsNullOrEmpty(dl.FeatureFilter) ? "" : $"{{{dl.FeatureFilter}}} ";
+                string feat = FeatureFilterLabel(dl.FeatureFilter);
                 string names = dl.DifferentNames ? " (different names)" : "";
                 AddInfo(body, $"{dl.SourceName}: play up to {dl.SelectCount} {feat}Character(s) from your trash{names} — click a highlighted card, or take none.");
                 AddButton(body, "Take None / Done", () => Dispatch(new GameCommand { Type = "deckLookSelect", Seat = dl.Seat, Target = null }));
@@ -9238,7 +9705,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             else
             {
                 AddInfo(body, selecting
-                    ? $"{dl.SourceName}: choose up to 1 {{{dl.FeatureFilter}}} card to add to your hand."
+                    ? $"{dl.SourceName}: choose up to 1 {FeatureFilterLabel(dl.FeatureFilter)}card to add to your hand."
                     : "Drag to set the order these return to the bottom of the deck, then confirm.");
                 if (selecting)
                     AddButton(body, "Take None", () => Dispatch(new GameCommand { Type = "deckLookSelect", Seat = dl.Seat, Target = null }));
@@ -9688,8 +10155,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                         { AddInfo(body, "  ↳ " + line.Trim()); break; }
                 }
             }
-            AddButton(body, "Resolve Trigger", () => Dispatch(new GameCommand { Type = "useTrigger", Seat = b.TargetSeat }));
-            AddButton(body, "Pass Trigger", () => Dispatch(new GameCommand { Type = "passTrigger", Seat = b.TargetSeat }));
+            else
+            {
+                AddInfo(body, "No [Trigger] — this card goes to your hand.");
+            }
+            // A card with NO [Trigger] gets ONE button that says what will actually happen. Offering
+            // "Resolve Trigger" on a card that has none is a choice the player cannot make, and reads
+            // as though the game is waiting on a decision they can't find.
+            //
+            // This does NOT leak: the engine still always enters the Trigger step, the DEFENDER is the
+            // only one who sees this panel at all, and it is their own Life card — the attacker sees
+            // "Waiting on opponent…" in both cases. The tell the always-enter rule guards against is
+            // the ATTACKER seeing a difference, and either way the defender still has to click once.
+            bool triggerAvailable = revealed != null && !string.IsNullOrWhiteSpace(revealed.Trigger);
+            if (triggerAvailable)
+            {
+                AddButton(body, "Resolve Trigger", () => Dispatch(new GameCommand { Type = "useTrigger", Seat = b.TargetSeat }));
+                AddButton(body, "Pass Trigger", () => Dispatch(new GameCommand { Type = "passTrigger", Seat = b.TargetSeat }));
+            }
+            else
+            {
+                AddButton(body, "Draw the Card", () => Dispatch(new GameCommand { Type = "passTrigger", Seat = b.TargetSeat }));
+            }
         }
     }
 
@@ -11150,7 +11637,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         if (card != null) card.localScale = Vector3.one;
 
-        // Landed. Tighten the deck-look hold to the exact beat from HERE — the ceiling set when the
+        // Landed — the card has just touched the board. Same beat the row reaction fires on, so
+        // the sound hits with the impact instead of with the lift. Inside the coroutine means one
+        // sound per play, self-rate-limited: it cannot retrigger on a repaint.
+        PlayCardPlaySfx();
+
+        // Tighten the deck-look hold to the exact beat from HERE — the ceiling set when the
         // sequence began is only a fallback for the case where this coroutine never reaches this
         // line (a re-render destroyed the card), so a search can never be held forever.
         deckLookHoldUntil = Time.unscaledTime + ImpactSearchBeat;
@@ -12670,6 +13162,30 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         scroll.verticalScrollbar = sb;
         scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+
+        // Reserve a gutter for the bar. The track is parented to the VIEWPORT and pinned to its
+        // right edge, so content that fills the viewport width runs underneath it — reported as
+        // "scroll bar for left card preview is inside the text". Done here rather than at each call
+        // site so every scroll panel gets the gutter, including ones added later.
+        const float gutter = 10f;
+        var body = scroll.content;
+        if (body == null) return;
+        var vlg = body.GetComponent<VerticalLayoutGroup>();
+        if (vlg != null)
+        {
+            // Layout-driven content: widen the padding, which the group re-applies on every rebuild.
+            // Assigning a new RectOffset (not mutating in place) is what makes it take effect.
+            var p = vlg.padding;
+            vlg.padding = new RectOffset(p.left, p.right + Mathf.RoundToInt(gutter), p.top, p.bottom);
+        }
+        else
+        {
+            // Free content (e.g. a wrapped Text sized by a ContentSizeFitter): pull the right edge
+            // in. Shifting x by half the gutter keeps the LEFT edge where it was, so only the right
+            // margin grows and the text does not appear to drift.
+            body.sizeDelta = new Vector2(body.sizeDelta.x - gutter, body.sizeDelta.y);
+            body.anchoredPosition = new Vector2(body.anchoredPosition.x - gutter * 0.5f, body.anchoredPosition.y);
+        }
     }
 
     private void AddInfo(RectTransform parent, string message)

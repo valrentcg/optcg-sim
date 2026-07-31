@@ -128,7 +128,9 @@ namespace OnePieceTcg.Sim
             SweepRatchet.AtMost("clauses that stopped for a board pick (floor check)",
                                 Math.Max(0, 200 - waiting), 0);
             SweepRatchet.AtMost("mandatory prompt with nothing clickable", deadMandatory.Count, 0);
-            SweepRatchet.AtMost("optional prompt with nothing clickable", deadOptional.Count, 192);
+            // 192 -> 172: gating IsValidEffectTarget on an unpaid DON!! −N cost stopped 20 clauses
+            // from lighting their BODY's targets while the cost was still owed.
+            SweepRatchet.AtMost("optional prompt with nothing clickable", deadOptional.Count, 172);
             return SweepRatchet.Result();
         }
 
@@ -171,6 +173,14 @@ namespace OnePieceTcg.Sim
             /// the same one the resolver uses to accept a click.</summary>
             public bool AnythingClickable(PendingEffect pe)
             {
+                // A pending "DON!! −N" payment IS actionable, but not by clicking a CARD: the legal
+                // click is a DON!!, which is a DonInstance and therefore invisible to the card scan
+                // below. IsValidEffectTarget now correctly rejects every CardInstance during that
+                // step (it used to strip the cost prefix and light the BODY's targets while the cost
+                // was still unpaid — OP16-078 Marineford), so without this the sweep would score a
+                // correctly-gated payment as "nothing clickable" and report a regression that is
+                // purely its own blind spot. GameManager lights the DON!! row here (AddCostDon).
+                if (pe != null && pe.DonPaymentRemaining > 0) return true;
                 foreach (var seat in new[] { "south", "north" })
                 {
                     var p = St.Players[seat];

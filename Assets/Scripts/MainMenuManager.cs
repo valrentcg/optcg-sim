@@ -307,17 +307,15 @@ public partial class MainMenuManager : MonoBehaviour
     // A conversation opens as a modal over the whole menu; while it's open a 2s poll tails
     // new messages. chatUnread/chatUnreadTotal are refreshed by the global social poll and
     // drive the per-row + nav-rail badges. Same object-destroyed guard idiom as the ranked poller.
-    private bool showingChat;
-    private string chatWithId;
-    private string chatWithName;
-    private string chatInput = "";
-    private bool chatBusy;
-    private string chatError;
-    private long chatLastId;                         // highest message id currently loaded (tailing cursor)
-    private List<ChatMessage> chatMessages = new List<ChatMessage>();
     private readonly Dictionary<string, int> chatUnread = new Dictionary<string, int>();  // fromId → unread count
     private int chatUnreadTotal;
     private bool socialPollActive;                   // global chat-unread + invite poller running
+    // Consecutive failed social-poll ticks, for backoff. Every client in the menu polls chat +
+    // invites on a fixed 3s beat; without this, a worker that starts erroring is retried at that
+    // same beat by every client indefinitely — the load does not let up precisely when the
+    // backend is least able to take it. A real Player.log shows both poll endpoints failing
+    // (invite/poll 500, chat/poll 15s timeout), which is the shape this guards against.
+    private int socialPollFailures;
 
     // ── Game invites (InviteStore → worker; reuses the lobby/session machinery) ──
     private GameInvite pendingInvite;                // incoming invite currently shown as a popup
@@ -545,6 +543,9 @@ public partial class MainMenuManager : MonoBehaviour
         BootUpdateAndAssetsOnce();
         // Restore the saved display mode + resolution (see DisplaySettings) — safe to call unconditionally.
         DisplaySettings.RestoreSaved();
+        // SafeFile lives engine-side (no UnityEngine) so the headless harness can gate it, so it has no
+        // logger of its own. Give it Unity's here; harmless to set more than once.
+        OnePieceTcg.Engine.SafeFile.Warn = m => Debug.LogWarning(m);
         // Apply the custom golden-spearhead cursor at the saved size/rotation (no-op if art missing).
         CursorManager.Init();
     }
@@ -829,9 +830,11 @@ public partial class MainMenuManager : MonoBehaviour
         if (showingAccountGate) BuildAccountGateModal(menuRoot);
         if (rankedQueueActive) BuildRankedQueueModal(menuRoot);
         if (showSaveConfirm) BuildSaveConfirmModal(menuRoot);
-        // Friend chat + incoming game-invite popups render as modals over the whole menu,
-        // so they're reachable from any stage. Invite popup sits on top of chat.
-        if (showingChat) BuildChatModal(menuRoot);
+        // The chat dock and the incoming game-invite popup render over the whole menu, so they
+        // are reachable from any stage. The dock is NOT a modal — it does not blank the screen
+        // behind it and it persists across menu navigation, which is the point of docking it.
+        // The invite popup sits on top.
+        BuildChatDock(menuRoot);
         if (pendingInvite != null) BuildInviteModal(menuRoot);
         if (showRestoreCode) BuildRestoreCodeModal(menuRoot);
         Canvas.ForceUpdateCanvases();
@@ -1119,6 +1122,53 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.30", "Your name on the turn, triggers that burn, and chat that holds more than one friend", "Jul 30, 2026", new (string, string[])[]
+        {
+            ("Whose turn it is", new[]
+            {
+                "The turn announcement is rebuilt. A tide line lifts off your edge of the board, your name is revealed in its wake, and the line settles clear of the letters before sinking back the way it came.",
+                "It uses the player's actual name in every mode now, not just hotseat — \"VALREN'S TURN\" rather than \"YOUR TURN\".",
+                "The side it rises from is what tells you whose turn it is, so it still reads if the two colours are hard to tell apart. Amber for you, violet for your opponent.",
+            }),
+            ("Triggers", new[]
+            {
+                "Using a [Trigger] now costs you visibly: the card flies out of your Life stack, burns at centre screen the way an Event does, and reforms in the trash. Characters too — using a trigger spends the card whatever it is.",
+                "A Life card with no [Trigger] no longer offers a choice you cannot make. It just says Draw the Card.",
+                "The Trigger step is always entered, even on a card with no [Trigger]. Resolving instantly used to tell your opponent exactly which of your Life cards were Triggers.",
+            }),
+            ("Chat", new[]
+            {
+                "Several friends can be open at once, docked along the bottom right, each collapsed to its title bar or expanded with its own history and unread count.",
+                "Opening a second conversation used to throw the first one away.",
+            }),
+            ("In-match options", new[]
+            {
+                "Match Options moved into the in-game menu and opens as a window you can close again, instead of a tab tucked against the edge of the board.",
+                "You are no longer asked to confirm ending your turn or playing a counter by default. Both are still toggles if you want them back.",
+            }),
+            ("Sound", new[]
+            {
+                "A Life card turning face-up has a sound — taking damage, or an effect like Wyper or Shirahoshi turning one over.",
+                "Playing a Character or Stage lands with a sound as it hits the board.",
+            }),
+            ("Deck builder", new[]
+            {
+                "Deck lists import correctly. A line like \"4x Nami (OP01-016)\" matched nothing, so a 50-card list came in as one of everything, and codes the game does not know yet arrived as phantom copies instead of being reported.",
+                "Searching is far more forgiving. Punctuation, accents and apostrophes are ignored, so \"youre\" finds \"You're\" and \"monkey d luffy\" finds \"Monkey.D.Luffy\", and several words can match across a card's name and its text at once.",
+                "Deck legality is enforced when you save or pick a deck. Wrong card count, more than four copies, off-colour cards and leader restrictions only tinted a badge before.",
+                "The in-deck count bubble and the profile tier badge are readable against any card art.",
+            }),
+            ("Fixes underneath", new[]
+            {
+                "A deck file that failed to read could be overwritten on the next save, taking every deck and sealed run with it. Saves are now written atomically with a backup, and refuse to overwrite anything they could not read.",
+                "A networked match aborts with a clear message if the two players are on different versions or different card data, instead of quietly drifting apart mid-game.",
+                "Restore codes are bounded, so a malformed one can no longer lock up the client.",
+                "Timed matches cannot hang forever when an opponent's clock stops reporting.",
+                "In timed matches the opponent's clock now sits in their own Leader-to-Life gap, mirroring yours, instead of being crowded onto the same side of the board as your own clock.",
+                "Quitting a ranked match by force now settles as a loss instead of leaving the result unrecorded.",
+                "The updater's \"What's New\" panel actually lists what changed while it downloads. It has been blank on every update until now — the notes were never embedded into the release being packaged.",
+            }),
+        }),
         ("v1.0.29", "Cards land with weight, and the board answers", "Jul 29, 2026", new (string, string[])[]
         {
             ("Playing a Character or Stage", new[]
@@ -3679,7 +3729,10 @@ public partial class MainMenuManager : MonoBehaviour
     private void BuildPreferencesSection(RectTransform panel)
     {
         var card = PanelObject("Preferences Card", panel, new Color32(8, 16, 26, 200));
-        Stretch(card, new Vector2(0.22f, 1f), new Vector2(0.78f, 1f), new Vector2(0f, -648f), new Vector2(0f, -392f));
+        // Bottom extended from -648 to -800: the IN-MATCH toggle rows run to roughly -372 inside the
+        // card, and the old 256px height stopped at the audio slider (-234). Anything added below here
+        // must grow this too, or it renders outside the card's fill and border.
+        Stretch(card, new Vector2(0.22f, 1f), new Vector2(0.78f, 1f), new Vector2(0f, -800f), new Vector2(0f, -392f));
         Round(card);
         AddRoundedCardBorder(card, MenuB, 1f);
 
@@ -3749,6 +3802,45 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(audioLbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -208f), new Vector2(-24f, -192f));
         AddSlider(card, new Vector2(24f, -234f), new Vector2(-24f, -216f),
             0f, 1f, false, GameManager.SfxVolume, v => GameManager.SfxVolume = v);
+
+        // ── In-match automation ── one pill per toggle; the pill lights when the option is ON.
+        // These only ever drive THIS client (see MatchAutomationSettings) — the engine is untouched,
+        // so nothing here can put two networked players on different boards.
+        var autoLbl = TextObject("Automation Label", card, "IN-MATCH", 10, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(autoLbl.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -266f), new Vector2(-24f, -250f));
+
+        var autoRow1 = LeftPackedRow(card, new Vector2(24f, -294f), new Vector2(-24f, -270f));
+        AddTogglePill(autoRow1, "AUTO DRAW", MatchAutomationSettings.AutoDraw,
+            () => MatchAutomationSettings.AutoDraw = !MatchAutomationSettings.AutoDraw);
+        AddTogglePill(autoRow1, "CONFIRM END TURN", MatchAutomationSettings.ConfirmEndTurn,
+            () => MatchAutomationSettings.ConfirmEndTurn = !MatchAutomationSettings.ConfirmEndTurn);
+        AddTogglePill(autoRow1, "CONFIRM COUNTER", MatchAutomationSettings.ConfirmCounter,
+            () => MatchAutomationSettings.ConfirmCounter = !MatchAutomationSettings.ConfirmCounter);
+
+        var autoRow2 = LeftPackedRow(card, new Vector2(24f, -322f), new Vector2(-24f, -298f));
+        AddTogglePill(autoRow2, "CONFIRM DON ATTACH", MatchAutomationSettings.ConfirmDonAttach,
+            () => MatchAutomationSettings.ConfirmDonAttach = !MatchAutomationSettings.ConfirmDonAttach);
+        AddTogglePill(autoRow2, "HIDE PLAYER NAMES", MatchAutomationSettings.HidePlayerNames,
+            () => MatchAutomationSettings.HidePlayerNames = !MatchAutomationSettings.HidePlayerNames);
+        AddTogglePill(autoRow2, "MUTE MATCH CHAT", MatchAutomationSettings.MuteMatchChat,
+            () => MatchAutomationSettings.MuteMatchChat = !MatchAutomationSettings.MuteMatchChat);
+
+        // Kept on its own row with the warning spelled out, because it is the only option here that
+        // costs you something you cannot see: an instant pass tells the attacker your Life card had no
+        // [Trigger]. Default OFF for that reason.
+        var trigRow = LeftPackedRow(card, new Vector2(24f, -350f), new Vector2(-24f, -326f));
+        AddTogglePill(trigRow, "AUTO-PASS EMPTY TRIGGER", MatchAutomationSettings.AutoPassTriggerWhenNone,
+            () => MatchAutomationSettings.AutoPassTriggerWhenNone = !MatchAutomationSettings.AutoPassTriggerWhenNone);
+        var trigWarn = TextObject("Trigger Warn", card,
+            "auto-pass reveals that the card had no [Trigger]", 9, Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(trigWarn.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -372f), new Vector2(-24f, -356f));
+    }
+
+    // A settings pill that reads as ON/OFF rather than as a one-shot action: lit when enabled, muted
+    // when not, with the state also spelled out in text so it does not rely on colour alone.
+    private void AddTogglePill(RectTransform row, string label, bool on, System.Action toggle)
+    {
+        AddDisplayModePill(row, (on ? "● " : "○ ") + label, on, () => { toggle(); RenderMenu(); });
     }
 
     // A transparent, top-anchored row that packs its children from the left (used for pill groups).
@@ -5107,101 +5199,267 @@ public partial class MainMenuManager : MonoBehaviour
     // on any stage; the chat conversation is a modal with its own 2s tail poll.
     // ══════════════════════════════════════════════════════════════════════════
 
+    // ── Chat dock (League-style) ────────────────────────────────────────────────
+    // Several conversations at once, docked along the bottom-right, each independently
+    // expanded or collapsed to its title bar. Replaces the old single full-screen modal,
+    // which could only ever hold ONE friend: opening a second conversation silently threw
+    // the first one away, so you could not follow two people at the same time.
+    private sealed class ChatWindow
+    {
+        public string PlayerId;
+        public string Username;
+        public readonly List<ChatMessage> Messages = new List<ChatMessage>();
+        public long LastId;
+        public bool Minimized;
+        public string Draft = "";
+        public string Error;
+        public bool Busy;
+        public bool Loaded;
+    }
+
+    // Left-to-right order along the dock. Newest-opened goes on the RIGHT (nearest the
+    // friends list it was opened from), matching how the tabs read.
+    private readonly List<ChatWindow> chatDock = new List<ChatWindow>();
+    private const int ChatDockMax = 4;          // beyond this, the least-recently-used closes
+    private const float ChatWinW = 296f;
+    private const float ChatHeadH = 34f;
+    private const float ChatOpenH = 320f;
+    private bool chatDockPolling;
+
+    private ChatWindow FindChatWindow(string playerId)
+    {
+        for (int i = 0; i < chatDock.Count; i++)
+            if (chatDock[i].PlayerId == playerId) return chatDock[i];
+        return null;
+    }
+
+    // Open, or focus if already docked. Never opens a duplicate window for the same friend.
     private void OpenChat(string playerId, string username)
     {
         if (string.IsNullOrEmpty(playerId) || AccountManager.IsGuest) return;
-        showingChat = true;
-        chatWithId = playerId;
-        chatWithName = username;
-        chatError = null;
-        chatInput = "";
-        chatMessages = new List<ChatMessage>();
-        chatLastId = 0;
+        var w = FindChatWindow(playerId);
+        if (w != null)
+        {
+            w.Minimized = false;
+            chatDock.Remove(w); chatDock.Add(w);      // re-focus → move to the near end
+        }
+        else
+        {
+            w = new ChatWindow { PlayerId = playerId, Username = username };
+            chatDock.Add(w);
+            // Evict the least-recently-focused window rather than refusing to open a new one:
+            // being unable to open a chat is a worse failure than losing the oldest tab.
+            while (chatDock.Count > ChatDockMax) chatDock.RemoveAt(0);
+        }
+        chatUnread.Remove(playerId);
+        RecomputeChatUnreadTotal();
         RenderMenu();
-        LoadChatHistory(markRead: true);
-        ChatPollLoop();
+        LoadWindowHistory(w, markRead: true);
+        StartChatDockPoll();
     }
 
-    private void CloseChat()
+    private void CloseChatWindow(ChatWindow w)
     {
-        showingChat = false;
-        chatWithId = null;
-        chatError = null;
+        if (w == null) return;
+        chatDock.Remove(w);
         RenderMenu();
     }
 
-    // Pulls messages newer than chatLastId and appends them. On open (markRead) it also
-    // clears this friend's unread badge locally + server-side.
-    private async void LoadChatHistory(bool markRead)
+    private void ToggleChatWindow(ChatWindow w)
     {
-        string withId = chatWithId;
-        if (string.IsNullOrEmpty(withId)) return;
-        var msgs = await ChatStore.HistoryAsync(withId, chatLastId);
-        if (this == null || menuRoot == null || !showingChat || chatWithId != withId) return;
+        if (w == null) return;
+        w.Minimized = !w.Minimized;
+        if (!w.Minimized)
+        {
+            chatUnread.Remove(w.PlayerId);
+            RecomputeChatUnreadTotal();
+            if (!w.Loaded) LoadWindowHistory(w, markRead: true);
+            else _ = ChatStore.MarkReadAsync(w.PlayerId);
+        }
+        RenderMenu();
+    }
+
+    // Pulls messages newer than this window's LastId and appends them.
+    private async void LoadWindowHistory(ChatWindow w, bool markRead)
+    {
+        if (w == null || string.IsNullOrEmpty(w.PlayerId)) return;
+        var msgs = await ChatStore.HistoryAsync(w.PlayerId, w.LastId);
+        // The window may have been closed or evicted while the request was in flight.
+        if (this == null || menuRoot == null || !chatDock.Contains(w)) return;
+        w.Loaded = true;
         if (msgs.Count > 0)
         {
-            chatMessages.AddRange(msgs);
-            chatLastId = chatMessages[chatMessages.Count - 1].id;
+            w.Messages.AddRange(msgs);
+            w.LastId = w.Messages[w.Messages.Count - 1].id;
         }
         if (markRead)
         {
-            chatUnread.Remove(withId);
+            chatUnread.Remove(w.PlayerId);
             RecomputeChatUnreadTotal();
-            _ = ChatStore.MarkReadAsync(withId);
+            _ = ChatStore.MarkReadAsync(w.PlayerId);
         }
-        if (showingChat && chatWithId == withId) RenderMenu();
+        RenderMenu();
     }
 
-    // Tails the open conversation every 2s. Exits automatically when the modal closes or
-    // the player switches to a different friend (chatWithId changes).
-    private async void ChatPollLoop()
+    // ONE loop tails every expanded conversation, rather than a loop per window: N windows
+    // each polling on their own timer would multiply the request rate by N against a worker
+    // that is already polled every 3s for badges and invites.
+    private async void StartChatDockPoll()
     {
-        string withId = chatWithId;
-        while (showingChat && chatWithId == withId)
+        if (chatDockPolling) return;
+        chatDockPolling = true;
+        while (chatDock.Count > 0)
         {
             await Task.Delay(2000);
-            if (this == null || menuRoot == null) return;
-            if (!showingChat || chatWithId != withId) return;
-            var msgs = await ChatStore.HistoryAsync(withId, chatLastId);
-            if (this == null || menuRoot == null || !showingChat || chatWithId != withId) return;
-            if (msgs.Count > 0)
+            if (this == null || menuRoot == null) { chatDockPolling = false; return; }
+            bool changed = false;
+            // Snapshot: the list can be mutated by the UI (open/close) while we await.
+            var open = new List<ChatWindow>();
+            for (int i = 0; i < chatDock.Count; i++) if (!chatDock[i].Minimized) open.Add(chatDock[i]);
+            foreach (var w in open)
             {
-                chatMessages.AddRange(msgs);
-                chatLastId = chatMessages[chatMessages.Count - 1].id;
-                chatUnread.Remove(withId);           // reading live
-                RecomputeChatUnreadTotal();
-                _ = ChatStore.MarkReadAsync(withId);
-                RenderMenu();
+                var msgs = await ChatStore.HistoryAsync(w.PlayerId, w.LastId);
+                if (this == null || menuRoot == null) { chatDockPolling = false; return; }
+                if (!chatDock.Contains(w) || msgs.Count == 0) continue;
+                w.Messages.AddRange(msgs);
+                w.LastId = w.Messages[w.Messages.Count - 1].id;
+                chatUnread.Remove(w.PlayerId);       // it is on screen, so it is read
+                _ = ChatStore.MarkReadAsync(w.PlayerId);
+                changed = true;
             }
+            if (changed) { RecomputeChatUnreadTotal(); RenderMenu(); }
         }
+        chatDockPolling = false;
     }
 
-    private async void SendChatClicked()
+    private async void SendChatFor(ChatWindow w)
     {
-        if (string.IsNullOrWhiteSpace(chatInput) || string.IsNullOrEmpty(chatWithId)) return;
-        string body = chatInput.Trim();
-        string withId = chatWithId;
-        chatBusy = true;
-        chatError = null;
+        if (w == null || string.IsNullOrWhiteSpace(w.Draft)) return;
+        string body = w.Draft.Trim();
+        w.Busy = true; w.Error = null;
         RenderMenu();
         try
         {
-            var sent = await ChatStore.SendAsync(withId, body);
+            var sent = await ChatStore.SendAsync(w.PlayerId, body);
             if (this == null || menuRoot == null) return;
+            if (!chatDock.Contains(w)) return;
             if (sent != null)
             {
-                chatInput = "";
-                if (showingChat && chatWithId == withId)
-                {
-                    chatMessages.Add(sent);
-                    chatLastId = Math.Max(chatLastId, sent.id);
-                }
+                w.Draft = "";
+                w.Messages.Add(sent);
+                w.LastId = Math.Max(w.LastId, sent.id);
             }
-            else chatError = "Couldn't send — check your connection.";
+            else w.Error = "Couldn't send — check your connection.";
         }
         finally
         {
-            if (this != null && menuRoot != null) { chatBusy = false; RenderMenu(); }
+            if (this != null && menuRoot != null && chatDock.Contains(w)) { w.Busy = false; RenderMenu(); }
+        }
+    }
+
+    // Docked strip along the bottom-right. Laid out right-to-left so the newest conversation
+    // sits nearest the friends list, and so adding one never shifts the others' positions.
+    private void BuildChatDock(RectTransform root)
+    {
+        if (chatDock.Count == 0) return;
+
+        float avail = root.rect.width > 1f ? root.rect.width : 1280f;
+        // Narrow windows: shrink rather than overflow off-screen.
+        float winW = Mathf.Min(ChatWinW, Mathf.Max(180f, (avail - 40f) / Mathf.Max(1, chatDock.Count)));
+
+        for (int i = chatDock.Count - 1, slot = 0; i >= 0; i--, slot++)
+        {
+            var w = chatDock[i];
+            float h = w.Minimized ? ChatHeadH : ChatOpenH;
+            float xRight = -(16f + slot * (winW + 8f));
+
+            var win = PanelObject("Chat Win " + slot, root, new Color32(12, 20, 30, 252));
+            win.anchorMin = win.anchorMax = new Vector2(1f, 0f);
+            win.pivot = new Vector2(1f, 0f);
+            win.sizeDelta = new Vector2(winW, h);
+            win.anchoredPosition = new Vector2(xRight, 12f);
+            Round(win);
+            AddRoundedCardBorder(win, MenuB, 1.2f);
+
+            // ── title bar: whole bar toggles expand/collapse ──
+            var head = PanelObject("Head", win, new Color32(22, 36, 52, 255));
+            head.anchorMin = new Vector2(0f, 1f); head.anchorMax = new Vector2(1f, 1f);
+            head.pivot = new Vector2(0.5f, 1f);
+            head.sizeDelta = new Vector2(0f, ChatHeadH);
+            head.anchoredPosition = Vector2.zero;
+            Round(head);
+            var headBtn = head.gameObject.AddComponent<Button>();
+            var wRef = w;
+            headBtn.onClick.AddListener(() => ToggleChatWindow(wRef));
+
+            int unread = chatUnread.TryGetValue(w.PlayerId, out var uc) ? uc : 0;
+            string caret = w.Minimized ? "▲" : "▼";
+            var name = TextObject("Name", head,
+                caret + "  " + w.Username + (w.Minimized && unread > 0 ? $"  ({unread})" : ""),
+                13, unread > 0 && w.Minimized ? GoodGreen : Ink, TextAnchor.MiddleLeft);
+            name.fontStyle = FontStyle.Bold;
+            Stretch(name.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(10f, 0f), new Vector2(-30f, 0f));
+
+            var x = TextObject("X", head, "×", 16, Muted, TextAnchor.MiddleCenter);
+            var xrt = x.rectTransform;
+            xrt.anchorMin = new Vector2(1f, 0.5f); xrt.anchorMax = new Vector2(1f, 0.5f);
+            xrt.pivot = new Vector2(1f, 0.5f);
+            xrt.sizeDelta = new Vector2(26f, ChatHeadH);
+            xrt.anchoredPosition = new Vector2(-4f, 0f);
+            var xBtn = x.gameObject.AddComponent<Button>();
+            xBtn.onClick.AddListener(() => CloseChatWindow(wRef));
+
+            if (w.Minimized) continue;
+
+            // ── history ──
+            var listArea = PanelObject("Msgs", win, new Color32(6, 12, 20, 210));
+            Stretch(listArea, Vector2.zero, Vector2.one,
+                    new Vector2(8f, 46f), new Vector2(-8f, -(ChatHeadH + 6f)));
+            Round(listArea);
+
+            if (w.Messages.Count == 0)
+            {
+                var empty = TextObject("Empty", listArea, w.Loaded ? "No messages yet. Say hi!" : "Loading…",
+                                       11, Muted, TextAnchor.UpperLeft, monoFont);
+                Stretch(empty.rectTransform, Vector2.zero, Vector2.one, new Vector2(9f, 0f), new Vector2(-9f, -9f));
+            }
+            else
+            {
+                const int maxShown = 8;
+                const float rowH = 26f, pad = 6f;
+                int start = Mathf.Max(0, w.Messages.Count - maxShown);
+                for (int m = start; m < w.Messages.Count; m++)
+                {
+                    var msg = w.Messages[m];
+                    var line = TextObject("M" + m, listArea,
+                        (msg.mine ? "You:  " : w.Username + ":  ") + msg.body, 11,
+                        msg.mine ? Ink : GoodGreen,
+                        msg.mine ? TextAnchor.UpperRight : TextAnchor.UpperLeft, monoFont);
+                    line.horizontalOverflow = HorizontalWrapMode.Wrap;
+                    var rt = line.rectTransform;
+                    rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(1f, 1f);
+                    rt.pivot = new Vector2(0.5f, 1f);
+                    rt.sizeDelta = new Vector2(-14f, rowH);
+                    rt.anchoredPosition = new Vector2(0f, -(pad + (m - start) * rowH));
+                }
+            }
+
+            if (!string.IsNullOrEmpty(w.Error))
+            {
+                var err = TextObject("Err", win, w.Error, 9, RedAccent, TextAnchor.MiddleLeft, monoFont);
+                Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+                        new Vector2(10f, 38f), new Vector2(-10f, 52f));
+            }
+
+            // ── composer ──
+            var field = MakeInput(win, "Message…", w.Draft, s => wRef.Draft = s, _ => SendChatFor(wRef));
+            Stretch(field, new Vector2(0f, 0f), new Vector2(0.74f, 0f), new Vector2(8f, 8f), new Vector2(0f, 38f));
+
+            var sendHolder = PanelObject("SendHolder", win, new Color(0, 0, 0, 0));
+            Stretch(sendHolder, new Vector2(0.74f, 0f), new Vector2(1f, 0f), new Vector2(2f, 8f), new Vector2(-8f, 38f));
+            var slg = sendHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
+            slg.childAlignment = TextAnchor.MiddleRight; slg.childControlWidth = false; slg.childControlHeight = false;
+            AddButton(sendHolder, w.Busy ? "…" : "Send", () => SendChatFor(wRef), !w.Busy, false);
         }
     }
 
@@ -5210,74 +5468,6 @@ public partial class MainMenuManager : MonoBehaviour
         int t = 0;
         foreach (var kv in chatUnread) t += kv.Value;
         chatUnreadTotal = t;
-    }
-
-    private void BuildChatModal(RectTransform root)
-    {
-        var blocker = PanelObject("Chat Blocker", root, new Color(0f, 0f, 0f, 0.62f));
-        Stretch(blocker, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-
-        var panel = PanelObject("Chat Panel", root, new Color32(12, 20, 30, 255));
-        panel.anchorMin = panel.anchorMax = new Vector2(0.5f, 0.5f);
-        panel.pivot = new Vector2(0.5f, 0.5f);
-        panel.sizeDelta = new Vector2(560f, 520f);
-        panel.anchoredPosition = Vector2.zero;
-        Round(panel);
-        AddRoundedCardBorder(panel, MenuB, 1.2f);
-
-        var title = TextObject("Chat Title", panel, $"Chat — {chatWithName}", 18, Ink, TextAnchor.MiddleLeft);
-        title.fontStyle = FontStyle.Bold;
-        Stretch(title.rectTransform, new Vector2(0f, 1f), new Vector2(0.7f, 1f), new Vector2(18f, -52f), new Vector2(0f, -14f));
-
-        var closeHolder = PanelObject("Chat Close Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(closeHolder, new Vector2(0.7f, 1f), new Vector2(1f, 1f), new Vector2(0f, -52f), new Vector2(-14f, -14f));
-        var chlg = closeHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        chlg.childAlignment = TextAnchor.MiddleRight; chlg.childControlWidth = false; chlg.childControlHeight = false;
-        AddButton(closeHolder, "Close", CloseChat, true, false);
-
-        var listArea = PanelObject("Chat Messages", panel, new Color32(6, 12, 20, 200));
-        Stretch(listArea, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(14f, 96f), new Vector2(-14f, -60f));
-        Round(listArea);
-
-        if (chatMessages.Count == 0)
-        {
-            var empty = TextObject("Chat Empty", listArea, "No messages yet. Say hi!", 12, Muted, TextAnchor.UpperLeft, monoFont);
-            Stretch(empty.rectTransform, Vector2.zero, Vector2.one, new Vector2(12f, 0f), new Vector2(-12f, -12f));
-        }
-        else
-        {
-            // Newest messages, stacked top-down; mine right-aligned/ink, theirs left/green.
-            const int maxShown = 14;
-            const float rowH = 30f, pad = 8f;
-            int start = Mathf.Max(0, chatMessages.Count - maxShown);
-            for (int i = start; i < chatMessages.Count; i++)
-            {
-                var m = chatMessages[i];
-                var line = TextObject("Msg " + i, listArea,
-                    (m.mine ? "You:  " : chatWithName + ":  ") + m.body, 12,
-                    m.mine ? Ink : GoodGreen, m.mine ? TextAnchor.UpperRight : TextAnchor.UpperLeft, monoFont);
-                line.horizontalOverflow = HorizontalWrapMode.Wrap;
-                var rt = line.rectTransform;
-                rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(1f, 1f); rt.pivot = new Vector2(0.5f, 1f);
-                rt.sizeDelta = new Vector2(-20f, rowH);
-                rt.anchoredPosition = new Vector2(0f, -(pad + (i - start) * rowH));
-            }
-        }
-
-        if (!string.IsNullOrEmpty(chatError))
-        {
-            var err = TextObject("Chat Error", panel, chatError, 10, RedAccent, TextAnchor.MiddleLeft, monoFont);
-            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 56f), new Vector2(-16f, 78f));
-        }
-
-        var inputField = MakeInput(panel, "Message…", chatInput, s => chatInput = s, _ => SendChatClicked());
-        Stretch(inputField, new Vector2(0f, 0f), new Vector2(0.78f, 0f), new Vector2(14f, 14f), new Vector2(0f, 50f));
-
-        var sendHolder = PanelObject("Send Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(sendHolder, new Vector2(0.78f, 0f), new Vector2(1f, 0f), new Vector2(4f, 14f), new Vector2(-14f, 50f));
-        var shlg = sendHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        shlg.childAlignment = TextAnchor.MiddleRight; shlg.childControlWidth = false; shlg.childControlHeight = false;
-        AddButton(sendHolder, chatBusy ? "…" : "Send", SendChatClicked, !chatBusy, false);
     }
 
     // ── Invites ─────────────────────────────────────────────────────────────
@@ -5309,7 +5499,6 @@ public partial class MainMenuManager : MonoBehaviour
             else
             {
                 showingFriends = false;
-                showingChat = false;
                 OpenLobbyHub();   // CurrentSession != null → waiting room
             }
         }
@@ -5381,7 +5570,7 @@ public partial class MainMenuManager : MonoBehaviour
             if (this == null || menuRoot == null) return;
             SubscribeToSessionEvents(session);
             pendingInvite = null;
-            showingFriends = false; showingChat = false;
+            showingFriends = false;
             OpenLobbyHub();   // CurrentSession != null → waiting room
         }
         catch (Exception ex)
@@ -5418,10 +5607,17 @@ public partial class MainMenuManager : MonoBehaviour
     {
         while (socialPollActive)
         {
-            await Task.Delay(3000);
+            // 3s normally; doubles per consecutive failed tick up to 48s, and snaps straight back
+            // to 3s on the first success. Backing off is what stops a transient worker error from
+            // being amplified by every client retrying it forever at full rate.
+            await Task.Delay(3000 * (1 << Mathf.Min(socialPollFailures, 4)));
             if (this == null || menuRoot == null) { socialPollActive = false; return; }
             // Guests / not-configured: SocialHttp no-ops, so these return empty — harmless.
             if (AccountManager.IsGuest) continue;
+            // Snapshot the transport's failure counter, not a try/catch: SocialHttp returns null
+            // on failure and both poll stores turn that into an empty result, so nothing here
+            // ever throws on a 500 and an exception-based check would never fire.
+            int failuresBefore = SocialHttp.FailureCount;
 
             // Incoming friend-request popups. Cheap count first (no network); only resolve
             // names when it changes, so a new request surfaces a side toast on any stage.
@@ -5451,7 +5647,7 @@ public partial class MainMenuManager : MonoBehaviour
                 if (total != chatUnreadTotal)
                 {
                     chatUnreadTotal = total;
-                    if (showingFriends && !showingChat) RenderMenu();
+                    if (showingFriends) RenderMenu();
                 }
             }
             catch { /* transient; next tick retries */ }
@@ -5472,6 +5668,12 @@ public partial class MainMenuManager : MonoBehaviour
                 }
             }
             catch { /* transient; next tick retries */ }
+
+            // Any request this tick that reached the network and failed backs the loop off;
+            // one clean tick snaps it straight back to 3s.
+            socialPollFailures = SocialHttp.FailureCount > failuresBefore
+                ? Mathf.Min(socialPollFailures + 1, 4)
+                : 0;
         }
     }
 
@@ -6317,6 +6519,7 @@ public partial class MainMenuManager : MonoBehaviour
             format = lobbyMode == "custom" ? lobbyFormat : "standard", // card format; casual/ranked are Standard
             blitz = lobbyMode == "custom" ? LobbyBlitzConfig() : null, // timed-match settings; custom lobbies only
             build = UpdateChecker.CurrentBuildNumber,               // guest aborts on a version mismatch (anti-desync)
+            cards = GameManager.CardLibraryFingerprint,             // ...and on a CARD DATA mismatch at the same build
             southDon = DonDeckSettings.Serialize(),                 // host's own DON art
             northDon = lobbyPeerDeck != null ? lobbyPeerDeck.don : null,   // guest's, as shared in the lobby
         };
@@ -6335,6 +6538,23 @@ public partial class MainMenuManager : MonoBehaviour
         if (payload != null && payload.build != UpdateChecker.CurrentBuildNumber)
         {
             lobbyError = "Your opponent is on a different game version. Please make sure you're both updated.";
+            rankedQueueActive = false;
+            rankedStatus = "idle";
+            _ = LobbyManager.LeaveCurrentAsync();
+            RenderMenu();
+            return;
+        }
+        // Same build is NOT enough: card DATA can differ at an identical build number, because the CDN
+        // path versions the library by UpdateChecker.AssetsVersion (read from the remote manifest at
+        // runtime, falling back to 1 if that fetch fails). The engine interprets card TEXT, so divergent
+        // libraries make the shared command log resolve differently. Compare only when BOTH sides
+        // actually reported a fingerprint — null/empty means an older client or a library that hasn't
+        // finished loading, and the build check above already covers the older-client case.
+        string myCards = GameManager.CardLibraryFingerprint;
+        if (payload != null && !string.IsNullOrEmpty(payload.cards) && !string.IsNullOrEmpty(myCards)
+            && payload.cards != myCards)
+        {
+            lobbyError = "Your card data doesn't match your opponent's. Please restart to pick up the latest cards.";
             rankedQueueActive = false;
             rankedStatus = "idle";
             _ = LobbyManager.LeaveCurrentAsync();
@@ -6381,6 +6601,7 @@ public partial class MainMenuManager : MonoBehaviour
     // forever on "Connecting you to your opponent…" while the host launched alone.
     private bool rankedGuestReady;
     private bool rankedLaunching;        // match is starting — stop polling/acting
+    private bool rankedNameWaited;       // the one bounded wait for the guest's name has been spent
     private int  rankedErrorStreak;      // consecutive failed /queue/* calls (0 = healthy)
     // A blip is normal (we keep polling); a *persistent* run of errors means the
     // matchmaking worker is unreachable/misconfigured — surface it instead of
@@ -6418,6 +6639,7 @@ public partial class MainMenuManager : MonoBehaviour
         rankedIAccepted = rankedOppAccepted = false;
         rankedSessionCreated = rankedGuestJoined = rankedLaunching = false;
         rankedGuestReady = false;
+        rankedNameWaited = false;
         rankedErrorStreak = 0;
         rankedConnectStart = -1f;
         rankedSessionId = null;
@@ -6589,6 +6811,22 @@ public partial class MainMenuManager : MonoBehaviour
         // could drop the guest onto a starter default. OnPeerDeckShared re-runs this once the deck lands. The
         // queue requires a resolvable deck to enter, so the guest always shares one — this can't deadlock.
         if (lobbyPeerDeck == null) return;
+        // …and for the guest's NAME, for exactly the same reason as the deck. rankedGuestReady can
+        // flip on either message, so a launch driven by the deck's arrival could read lobbyPeerName
+        // as still null — and LaunchNetworkedMatch bakes that into PendingNorthName as the literal
+        // "Player 2" for the whole match. That is the reported "casual play says Player 2 rather
+        // than thereaper so it doesnt say his name on turn transition": TurnBannerText treats
+        // "Player 2" as a placeholder and omits it, so the banner names nobody.
+        //
+        // Unlike the deck there is NO protocol guarantee the name ever lands (the queue does not
+        // require one), so this is a single bounded wait rather than an open one: give it a beat,
+        // then launch with whatever we have. Never deadlocks — the retry is scheduled, not awaited.
+        if (string.IsNullOrEmpty(lobbyPeerName) && !rankedNameWaited)
+        {
+            rankedNameWaited = true;
+            Invoke(nameof(TryHostLaunch), 1.5f);
+            return;
+        }
         rankedLaunching = true;
         rankedQueueActive = false;
         lobbyRanked = lobbyMode == "ranked";   // casual must NOT count toward the bounty ladder
@@ -7320,7 +7558,26 @@ public partial class MainMenuManager : MonoBehaviour
     // Resolve a menu deck id to a DeckStore deck (falling back to the active deck
     // when nothing was explicitly picked yet returns null — the pick is explicit
     // by design: the mockup flow wants the player to choose before queueing).
-    private DeckData ResolveMenuDeck(string deckId) => DeckStore.Get(deckId);
+    // The single place the menu turns a deck id into a deck for a MATCH, so it is where construction
+    // legality is enforced. It used to be a bare DeckStore.Get: DeckBuilderManager computed every
+    // construction problem correctly and then used the result only to tint a badge, so a 40-card,
+    // 8-copies-of-one-card, off-colour deck could be saved and played in solo, custom, casual and
+    // ranked. (The casual/ranked grey-out is FORMAT legality — Standard/Extra + ban list — a different
+    // axis that says nothing about deck construction.)
+    private DeckData ResolveMenuDeck(string deckId)
+    {
+        var d = DeckStore.Get(deckId);
+        if (d == null) return null;
+        var problems = OnePieceTcg.Engine.DeckConstructionLegality.Problems(
+            d.leaderId, d.cards.Select(e => (e.id, e.count)));
+        if (problems.Count == 0) return d;
+        menuDeckIllegalReason = problems[0] + (problems.Count > 1 ? $" (+{problems.Count - 1} more)" : "");
+        Debug.LogWarning($"Deck '{d.name}' is not a legal deck and cannot be used: {string.Join("; ", problems)}");
+        return null;
+    }
+
+    /// First construction problem of the deck the player last tried to use, for the picker's alert.
+    private string menuDeckIllegalReason;
 
     // Deck pick for the Duel portal — one-shot picker, stored for the lobby flow too.
     private void PickDuelDeck()

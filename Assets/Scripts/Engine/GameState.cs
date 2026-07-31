@@ -159,6 +159,12 @@ namespace OnePieceTcg.Engine
     {
         public string EffectId;
         public string Seat;
+        /// <summary>GameState.CommandBatch at the moment this effect was queued. Two effects sharing a
+        /// batch had their activation timing fulfilled "at the same time" in the sense of rule 8-6-1,
+        /// which is what lets the engine make the turn player resolve first WITHOUT ordering effects
+        /// that merely happen to be queued at once from different commands (ordering those could
+        /// deadlock: a turn-player effect can be waiting on a prompt owned by the non-turn player).</summary>
+        public int QueuedBatch;
         public string SourceInstanceId;
         public string SourceCardId;
         public string Timing;
@@ -277,6 +283,28 @@ namespace OnePieceTcg.Engine
         public string ActiveSeat = "south";
         public string Phase = "setup";      // "refresh" | "draw" | "don" | "main" | "battle" | "end" | "finished"
         public int TurnNumber;
+        /// <summary>The end-of-turn sequence is STAGED, because both [End of Your Turn] and
+        /// [End of Your Opponent's Turn] effects can need a player decision and the turn must not
+        /// hand over while one is unanswered. EndTurn used to run both scanners and then advance the
+        /// turn unconditionally, so a queued end-of-turn pick resolved during the OPPONENT's turn
+        /// (after their Refresh Phase — by which point its targets were gone) and gated the new
+        /// active player's whole main phase on the previous player's queue.
+        ///
+        /// Staging it also implements rule 6-6-1-1-2: ALL [End of Your Turn] effects are activated
+        /// and resolved before ANY [End of Your Opponent's Turn] effect. AdvanceEndOfTurn walks
+        /// "eoyt" → "eoot" → "handover", pausing whenever PendingEffects is non-empty and resuming
+        /// from the ApplyCommand tail once the queue drains.
+        /// null when no turn is mid-end.</summary>
+        public string EndTurnStage;        // null | "eoyt" | "eoot" | "handover"
+        public string EndTurnSeat;         // the seat whose turn is ending
+        /// <summary>Incremented once per TOP-LEVEL ApplyCommand. Stamped onto every PendingEffect as
+        /// QueuedBatch so "activated at the same time" (rule 8-6-1) is a decidable fact.</summary>
+        public int CommandBatch;
+        /// <summary>Set to the DEFENDING seat between an attack declaration and the point where that
+        /// seat's [On Your Opponent's Attack] reactions may be queued. Rule 8-6-1 gives the turn player
+        /// the floor first, so the defender's simultaneous reactions are staged until the turn player's
+        /// queue drains (AdvanceBattleReactions). null when nothing is staged.</summary>
+        public string BattleReactionSeat;
         public SelectionRef Selected;       // UI selection echo (kept on state to mirror JS)
         public BattleState Battle;
         public List<PendingEffect> PendingEffects = new List<PendingEffect>();
@@ -344,6 +372,15 @@ namespace OnePieceTcg.Engine
         /// showcase off this rather than off "a card moved hand -> trash", which cannot tell a card
         /// that was PLAYED from one DISCARDED to pay a cost. Never read by the rules.</summary>
         public List<string> ActivatedEventIds = new List<string>();
+
+        /// <summary>Instance ids of Life cards whose [Trigger] was ACTIVATED and which were spent to
+        /// the trash for it. Same purpose and same contract as <see cref="ActivatedEventIds"/>: a
+        /// presentation signal only, never read by the rules. The view cannot infer this from
+        /// "a card moved life -> trash", because that is also what an ordinary damage card looks
+        /// like when it is discarded rather than taken to hand. Card TYPE is deliberately not part
+        /// of it — using a [Trigger] spends the card whatever it is, so a Character trigger earns
+        /// the same flourish as an Event one.</summary>
+        public List<string> ActivatedTriggerIds = new List<string>();
         // Instance-ids of cards (Leaders/Characters) that BATTLED an opponent's Character this turn — i.e.
         // reached the damage step of an attack whose (final) target was a Character. For "If this Leader has
         // battled your opponent's Character during this turn" (OP12-020 Zoro restand). Cleared each turn.

@@ -122,6 +122,9 @@ public static class GameLogStore
         return category;
     }
 
+    /// <summary>Newest-N retention per log category (see PruneOldest inside Export).</summary>
+    public const int MaxStoredLogsPerCategory = 300;
+
     /// <summary>Call once, right after ReplayStore.Save() returns a non-null record for a
     /// finished match. Re-simulates that record's CommandHistory (the same deterministic
     /// replay ResimulateReplayTo uses) to capture a full state snapshot at every turn
@@ -140,11 +143,34 @@ public static class GameLogStore
             string dir = CategoryDir(category);
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, record.Id + ".md"), markdown);
+            PruneOldest(dir);
         }
         catch (Exception ex)
         {
             Debug.LogWarning($"Failed to export game log: {ex.Message}");
             return;
+        }
+        // (prune runs inside the try above, right after the write)
+
+        // Newest-N retention, PER CATEGORY. A log is exported automatically for every finished match
+        // and carries a full per-turn state snapshot (~42 KB measured), and nothing ever removed them.
+        // Together with the replay written for the same match (~66 KB) that is ~108 KB per game with no
+        // ceiling — invisible to the player and unclearable from inside the game. Oldest goes first;
+        // the newest logs are the ones still useful for puzzle extraction / training pulls.
+        void PruneOldest(string dir)
+        {
+            try
+            {
+                var files = Directory.GetFiles(dir, "*.md");
+                if (files.Length <= MaxStoredLogsPerCategory) return;
+                foreach (var fi in files.Select(f => new FileInfo(f))
+                                        .OrderBy(fi => fi.LastWriteTimeUtc)
+                                        .Take(files.Length - MaxStoredLogsPerCategory))
+                {
+                    try { fi.Delete(); } catch { /* locked file: retried on the next export */ }
+                }
+            }
+            catch (Exception ex) { Debug.LogWarning($"Game-log prune skipped: {ex.Message}"); }
         }
         UploadAsync(markdown, record, category, southUsername, northUsername);
     }

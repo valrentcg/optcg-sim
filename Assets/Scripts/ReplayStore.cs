@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEngine;
 using OnePieceTcg.Engine;
 
@@ -189,12 +190,46 @@ public static class ReplayStore
         {
             Directory.CreateDirectory(Dir);
             File.WriteAllText(Path.Combine(Dir, record.Id + ".json"), JsonUtility.ToJson(record, true));
+            PruneOldest();
         }
         catch (Exception ex)
         {
             Debug.LogWarning($"Failed to save replay: {ex.Message}");
         }
         return record;
+    }
+
+    /// <summary>Newest-N retention for saved replays.
+    ///
+    /// A replay is written automatically at the end of EVERY finished match and nothing ever removed
+    /// them, so the folder grew without limit. Measured on a real install: ~66 KB per replay (and the
+    /// per-turn GameLogs export adds ~42 KB on top), i.e. roughly 108 KB per match — around 100 MB a
+    /// year for someone playing a few matches a day, invisible to the player and with no way to clear
+    /// it from inside the game.
+    ///
+    /// Note the asymmetry this fixes: MatchHistoryStore was already capped (MaxEntries = 20) because
+    /// Cloud Save imposes a per-key limit, while the far larger LOCAL stores had no cap at all.
+    ///
+    /// 300 keeps months of play (~20 MB) while bounding the worst case. Deleting the OLDEST is the
+    /// safe direction: the newest replays are the ones a player might still export or restore.</summary>
+    public const int MaxStoredReplays = 300;
+
+    private static void PruneOldest()
+    {
+        try
+        {
+            var files = Directory.GetFiles(Dir, "*.json");
+            if (files.Length <= MaxStoredReplays) return;
+            // Ordered by write time so "oldest" means oldest match, not lowest filename.
+            var byAge = files.Select(f => new FileInfo(f))
+                             .OrderBy(fi => fi.LastWriteTimeUtc)
+                             .Take(files.Length - MaxStoredReplays);
+            foreach (var fi in byAge)
+            {
+                try { fi.Delete(); } catch { /* a locked file is skipped, retried next save */ }
+            }
+        }
+        catch (Exception ex) { Debug.LogWarning($"Replay prune skipped: {ex.Message}"); }
     }
 
     /// <summary>CreateMatch always logs "Match created: {south} vs {north}." as EventLog[0].</summary>
