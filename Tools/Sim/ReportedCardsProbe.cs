@@ -45,8 +45,81 @@ namespace OnePieceTcg.Sim
             Console.WriteLine();
             ProbeDonMinusTargets();
             Console.WriteLine();
+            ProbeTwoOncePerTurn();
+            Console.WriteLine();
             MeasureCostPrefixClass();
             return 0;
+        }
+
+        /// <summary>OP06-118 Roronoa Zoro carries TWO [Once Per Turn] abilities whose bodies are
+        /// identical ("Set this Character as active"), differing only in timing and cost:
+        ///   [When Attacking]   [Once Per Turn] You may rest 1 of your DON!! cards: …
+        ///   [Activate: Main]   [Once Per Turn] You may rest 2 of your DON!! cards: …
+        /// They must not share a once-per-turn budget. Dumps AbilityUsedThisTurn so the KEY that is
+        /// actually written is visible, rather than inferred.</summary>
+        private static void ProbeTwoOncePerTurn()
+        {
+            Console.WriteLine("-- OP06-118 Zoro: two [Once Per Turn] abilities, one budget? --");
+            var st = NewBoard();
+            var s = st.Players["south"];
+            var zoro = Make("OP06-118", "south", "character");
+            zoro.PlayedOnTurn = 0; zoro.Rested = false;
+            s.CharacterArea[0] = zoro;
+            var n = st.Players["north"];
+            for (int i = 0; i < 5; i++) n.CharacterArea[i] = null;
+
+            Console.WriteLine($"   keys before attack: [{string.Join(", ", s.AbilityUsedThisTurn)}]");
+            st = GameEngine.ApplyCommand(st, new GameCommand
+            { Type = "declareAttack", Seat = "south", Attacker = zoro.InstanceId, Target = n.Leader.InstanceId });
+            Console.WriteLine($"   keys after declareAttack: [{string.Join(", ", st.Players["south"].AbilityUsedThisTurn)}]");
+            for (int i = 0; i < 6; i++)
+            {
+                var pe = st.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
+                if (pe == null) break;
+                st = GameEngine.ApplyCommand(st, new GameCommand
+                { Type = "passEffect", Seat = "south", EffectId = pe.EffectId });
+            }
+            Console.WriteLine($"   keys after answering:     [{string.Join(", ", st.Players["south"].AbilityUsedThisTurn)}]");
+            Console.WriteLine($"   zoro instanceId = {zoro.InstanceId}");
+            Console.WriteLine($"   bare id present (blocks [Activate: Main]): "
+                            + $"{st.Players["south"].AbilityUsedThisTurn.Contains(zoro.InstanceId)}");
+            // IsTurnPlayerInMain gates activateMain on ALL of these; any one non-clear refuses it
+            // SILENTLY, which is what the multiclause diag showed (no [main] log line at all).
+            Console.WriteLine($"   Battle={(st.Battle == null ? "null" : st.Battle.Step)}  "
+                            + $"PendingEffects={st.PendingEffects.Count}  "
+                            + $"DeckLook={(st.DeckLook == null ? "null" : st.DeckLook.Step)}  "
+                            + $"Phase={st.Phase} Active={st.ActiveSeat}");
+            foreach (var pe in st.PendingEffects.Where(e => e != null))
+                Console.WriteLine($"     [left pending] seat={pe.Seat} optional={pe.Optional} text={Trim(pe.Text)}");
+
+            // Drive the battle to its end, stepping by the actual step, then try [Activate: Main].
+            for (int i = 0; i < 8 && st.Battle != null; i++)
+            {
+                int before = st.EventLog.Count;
+                string step = st.Battle.Step;
+                var cmd = step == "block" ? new GameCommand { Type = "passBlock", Seat = "north" }
+                        : step == "counter" ? new GameCommand { Type = "passCounter", Seat = "north" }
+                        : step == "trigger" ? new GameCommand { Type = "passTrigger", Seat = "north" }
+                        : new GameCommand { Type = "resolveAttack", Seat = "north" };
+                st = GameEngine.ApplyCommand(st, cmd);
+                Console.WriteLine($"     step '{step}' -> Battle={(st.Battle == null ? "null" : st.Battle.Step)} phase={st.Phase}");
+                if (st.EventLog.Count == before) { Console.WriteLine("     (no progress — stuck)"); break; }
+            }
+            var sp2 = st.Players["south"];
+            Console.WriteLine($"   after battle: Battle={(st.Battle == null ? "null" : st.Battle.Step)} phase={st.Phase} "
+                            + $"pending={st.PendingEffects.Count} keys=[{string.Join(", ", sp2.AbilityUsedThisTurn)}]");
+            st.Phase = "main"; st.ActiveSeat = "south";
+            var zAfter = st.Players["south"].CharacterArea.FirstOrDefault(c => c != null && c.CardId == "OP06-118");
+            if (zAfter != null)
+            {
+                if (zAfter.Rested) zAfter.Rested = false;
+                int lg = st.EventLog.Count;
+                st = GameEngine.ApplyCommand(st, new GameCommand
+                { Type = "activateMain", Seat = "south", Target = zAfter.InstanceId });
+                Console.WriteLine($"   activateMain after the battle: pending={st.PendingEffects.Count}");
+                foreach (var e in st.EventLog.Skip(lg)) Console.WriteLine("        log: " + e.Message);
+                if (st.EventLog.Count == lg) Console.WriteLine("        (no log at all — refused by a silent guard)");
+            }
         }
 
         /// <summary>A "DON!! −N" return must accept EVERY DON!! on the field — cost-area active,

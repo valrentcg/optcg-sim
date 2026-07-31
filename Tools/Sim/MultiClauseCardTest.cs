@@ -311,14 +311,27 @@ namespace OnePieceTcg.Sim
                     Apply(new GameCommand { Type = "passEffect", Seat = "south", EffectId = pe.EffectId });
                     if (St.EventLog.Count == before) break;
                 }
-                if (St.Battle != null)
+                // Drive the battle to its END, stepping by whatever step it is actually on. This used
+                // to send resolveAttack only — which the engine refuses at the BLOCK and COUNTER steps,
+                // so the loop broke on the first no-op and left St.Battle set at "counter".
+                //
+                // That mattered because IsTurnPlayerInMain gates activateMain on `Battle == null`, and
+                // refuses SILENTLY. WhenAttackingDoesNotConsumeActivateMain then read "no [Activate:
+                // Main] offered" as "the two [Once Per Turn]s share a budget", when the real answer was
+                // "you cannot use an [Activate: Main] in the middle of a battle" — which is correct
+                // (Comprehensive 8-1-3-2: activate effects are declared during the Main Phase). The
+                // test only ever passed because `offered` also accepts a LEFTOVER pending effect, so it
+                // was reporting on a stale prompt rather than on the ability.
+                for (int i = 0; i < 8 && St.Battle != null; i++)
                 {
-                    for (int i = 0; i < 4 && St.Battle != null; i++)
-                    {
-                        int before = St.EventLog.Count;
-                        Apply(new GameCommand { Type = "resolveAttack", Seat = "north" });
-                        if (St.EventLog.Count == before) break;
-                    }
+                    int before = St.EventLog.Count;
+                    string step = St.Battle.Step;
+                    var cmd = step == "block"   ? new GameCommand { Type = "passBlock",     Seat = "north" }
+                            : step == "counter" ? new GameCommand { Type = "passCounter",   Seat = "north" }
+                            : step == "trigger" ? new GameCommand { Type = "passTrigger",   Seat = "north" }
+                            :                     new GameCommand { Type = "resolveAttack", Seat = "north" };
+                    Apply(cmd);
+                    if (St.EventLog.Count == before) break;
                 }
             }
 
