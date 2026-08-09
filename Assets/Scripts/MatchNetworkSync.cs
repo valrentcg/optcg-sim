@@ -189,6 +189,7 @@ public static class MatchNetworkSync
     private const string PresenceMessage = "OptcgPresence";
     private const string RematchReqMessage = "OptcgRematchReq";   // "I want a rematch"
     private const string RematchGoMessage = "OptcgRematchGo";     // host: "rematch on, here's the seed"
+    private const string LobbyReturnMessage = "OptcgLobbyReturn"; // custom match: return both clients to the room
     private const string RewindReqMessage = "OptcgRewindReq";     // "can we rewind to cursor N?"
     private const string RewindRespMessage = "OptcgRewindResp";   // "accept/decline your rewind"
     private const string ReadyMessage = "OptcgReady";             // custom lobby: "I am / am not ready"
@@ -220,6 +221,7 @@ public static class MatchNetworkSync
     public static event Action<PresencePayload> PresenceReceived; // peer's hover/raised-hand state
     public static event Action RematchRequested;                 // peer clicked "Rematch" (custom match)
     public static event Action<string> RematchStartReceived;     // host published the rematch seed
+    public static event Action LobbyReturnRequested;             // peer clicked "Change Deck" (custom match)
     public static event Action<RewindRequestPayload> RewindRequested;   // peer asked to rewind
     public static event Action<RewindResponsePayload> RewindResponded;  // peer answered our rewind ask
     public static event Action<bool> ReadyReceived;                     // peer toggled their lobby Ready state
@@ -278,6 +280,7 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(PresenceMessage, OnPresenceMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RematchReqMessage, OnRematchReqMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RematchGoMessage, OnRematchGoMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(LobbyReturnMessage, OnLobbyReturnMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindReqMessage, OnRewindReqMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindRespMessage, OnRewindRespMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(ReadyMessage, OnReadyMessage);
@@ -426,6 +429,9 @@ public static class MatchNetworkSync
         writer.WriteValueSafe((byte)1);
         nm.CustomMessagingManager.SendNamedMessage(RematchReqMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
     }
+
+    /// <summary>Return both players from a finished custom match to their still-live room.</summary>
+    public static void SendLobbyReturnRequest() => SendByte(LobbyReturnMessage, 1);
 
     /// <summary>Tell the peer whether we've readied up in the custom lobby (both must be ready to start).</summary>
     public static void SendReady(bool ready)
@@ -617,6 +623,12 @@ public static class MatchNetworkSync
     {
         reader.ReadValueSafe(out byte _);
         RematchRequested?.Invoke();
+    }
+
+    private static void OnLobbyReturnMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out byte _);
+        LobbyReturnRequested?.Invoke();
     }
 
     private static void OnReadyMessage(ulong senderClientId, FastBufferReader reader)

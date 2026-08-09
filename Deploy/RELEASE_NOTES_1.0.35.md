@@ -15,3 +15,8 @@
 
 - The sidebar now shows friends who are online as soon as the menu loads instead of reporting 0 online until the Friends list is opened.
 - Friend relationships and presence perform a background server resync after the account is restored, then continue updating live.
+
+## Sealed rematch flow
+
+- Change Deck now keeps both players in the same Custom lobby instead of returning either player to the main menu.
+- Both players leave the finished match together, their Ready checks reset, and the lobby owner is taken straight to the pack carousel to choose the next set.

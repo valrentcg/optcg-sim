@@ -769,6 +769,7 @@ namespace OnePieceTcg.Sealed
             GameManager.PendingNetworkedSeat = seat;
             GameManager.PendingNetworkedRanked = false;
             GameManager.PendingNetworkedMode = payload.mode;
+            GameManager.PendingNetworkedSealed = true;
             GameManager.PendingNetworkedForgiveness = payload.forgiveness;
             GameManager.PendingNetworkedBlitz = payload.blitz;
             GameManager.PendingSouthName = string.IsNullOrWhiteSpace(payload.southName) ? "Player 1" : payload.southName.Trim();

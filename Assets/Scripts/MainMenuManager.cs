@@ -162,6 +162,7 @@ public partial class MainMenuManager : MonoBehaviour
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
     private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
     private static bool reopenLobbyAfterPicker;   // restore the waiting room after the picker closes
+    private static bool pickNewSealedSetAfterMatch; // host opens the pack carousel after Change Deck
     // Custom-lobby Ready handshake: the game can't start until BOTH players are ready.
     private static bool localReady;               // this client has readied up
     private static bool peerReady;                // the peer has readied up (via OptcgReady)
@@ -353,6 +354,18 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (UnityEngine.Object.FindAnyObjectByType<MainMenuManager>() == null)
             new GameObject("MainMenuManager").AddComponent<MainMenuManager>();
+    }
+
+    /// <summary>Preserve the live custom session while rebuilding its waiting-room UI after a match.</summary>
+    public static void PrepareCustomLobbyReturn(bool sealedMatch)
+    {
+        reopenLobbyAfterPicker = true;
+        pickNewSealedSetAfterMatch = sealedMatch;
+        localReady = false;
+        peerReady = false;
+        hostAutoStarted = false;
+        lobbyPeerDeck = null;
+        MatchNetworkSync.SendReady(false);
     }
 
     private void Awake()
@@ -555,6 +568,16 @@ public partial class MainMenuManager : MonoBehaviour
         OnePieceTcg.Engine.SafeFile.Warn = m => Debug.LogWarning(m);
         // Apply the custom golden-spearhead cursor at the saved size/rotation (no-op if art missing).
         CursorManager.Init();
+
+        // A Sealed Change Deck starts a genuinely new six-pack build. Put the guest back in
+        // the waiting room, while the lobby owner immediately chooses the next set from the
+        // same carousel used during room setup. The Relay/session stays connected throughout.
+        if (pickNewSealedSetAfterMatch)
+        {
+            pickNewSealedSetAfterMatch = false;
+            if (LobbyManager.CurrentSession != null && LobbyManager.CurrentSession.IsHost)
+                Invoke(nameof(PickLobbySealedSet), 0f);
+        }
     }
 
     // Launch-time update check + CDN asset index, once per app run. On WebGL a
@@ -1230,6 +1253,11 @@ public partial class MainMenuManager : MonoBehaviour
             {
                 "The sidebar now shows friends who are online as soon as the menu loads instead of reporting 0 online until you open the Friends list.",
                 "Friend relationships and presence perform a background server resync after your account is restored, then continue updating live.",
+            }),
+            ("Sealed rematch flow", new[]
+            {
+                "Change Deck now keeps both players in the same Custom lobby instead of returning either player to the main menu.",
+                "Both players leave the finished match together, their Ready checks reset, and the lobby owner goes straight to the pack carousel to choose the next set.",
             }),
         }),
         ("v1.0.34", "Online lobby connection hotfix", "Aug 8, 2026", new (string, string[])[]

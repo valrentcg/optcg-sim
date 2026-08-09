@@ -117,6 +117,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     public static string PendingNetworkedSeat;
     public static bool PendingNetworkedRanked;   // set by the Ranked queue launch path only
     public static string PendingNetworkedMode;   // "ranked"|"casual"|"custom" for a networked match
+    public static bool PendingNetworkedSealed;   // custom match came through the six-pack Sealed flow
     public static bool PendingNetworkedForgiveness;   // custom lobby: in-match rewind toggle enabled
     public static BlitzConfig PendingNetworkedBlitz;   // custom lobby: timed-match settings (null = untimed)
     // Deck picks for a networked match (from the lobby's SELECT DECK flow). Sent
@@ -134,6 +135,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private string southDisplayName = "Player 1";
     private string northDisplayName = "Player 2";
     private string DisplayName(string seat) => seat == "north" ? northDisplayName : southDisplayName;
+    private bool isNetworkedSealed;
+    private bool returningToLobby;
     private bool isNetworked;
     private bool isRankedMatch;   // networked match launched from the Ranked queue → reports to RankedStore
     private string networkedMode; // "ranked"|"casual"|"custom" for a networked match (else null)
@@ -511,6 +514,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         MatchNetworkSync.PresenceReceived -= OnNetworkPresenceReceived;
         MatchNetworkSync.RematchRequested -= OnRematchRequested;
         MatchNetworkSync.RematchStartReceived -= OnRematchStartReceived;
+        MatchNetworkSync.LobbyReturnRequested -= OnLobbyReturnRequested;
         UnsubscribeRewind();
         var nm = Unity.Netcode.NetworkManager.Singleton;
         if (nm != null) nm.OnClientDisconnectCallback -= OnPeerDisconnected;
@@ -1242,6 +1246,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         PendingNetworkedRanked = false;
         networkedMode = PendingNetworkedMode;
         PendingNetworkedMode = null;
+        isNetworkedSealed = PendingNetworkedSealed;
+        PendingNetworkedSealed = false;
         isForgiveness = PendingNetworkedForgiveness;
         PendingNetworkedForgiveness = false;
         localSeat = seat;
@@ -1303,6 +1309,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         MatchNetworkSync.RematchRequested += OnRematchRequested;
         MatchNetworkSync.RematchStartReceived -= OnRematchStartReceived;
         MatchNetworkSync.RematchStartReceived += OnRematchStartReceived;
+        MatchNetworkSync.LobbyReturnRequested -= OnLobbyReturnRequested;
+        MatchNetworkSync.LobbyReturnRequested += OnLobbyReturnRequested;
         if (isForgiveness) SubscribeRewind();
         rewindWaiting = rewindPromptOpen = false;
         rewindNote = null;
@@ -8901,14 +8909,30 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // ── End-of-match rematch / deck-swap (result screen; see DrawMatchResultOverlay) ──
 
     // Custom online "Change Deck": return to the lobby waiting room WITHOUT tearing down —
-    // the session/Netcode connection stays open so the host's next Start Match reuses it,
-    // and each player can re-pick their deck there (the existing lobby flow handles both).
-    // EnsureMenu shows the waiting room while LobbyManager.CurrentSession is non-null.
+    // the session/Netcode connection stays open so the host's next Start Match reuses it.
+    // The peer is told to return at the same time; Sealed sends the host straight into the
+    // set carousel while the guest waits in the room for the new first Ready check.
     // NOTE: networked path — needs live 2-client testing.
     public void ReturnToLobby()
     {
+        if (returningToLobby) return;
+        MatchNetworkSync.SendLobbyReturnRequest();
+        CompleteReturnToLobby();
+    }
+
+    private void OnLobbyReturnRequested()
+    {
+        if (this == null || !isNetworked || networkedMode != "custom") return;
+        CompleteReturnToLobby();
+    }
+
+    private void CompleteReturnToLobby()
+    {
+        if (returningToLobby) return;
+        returningToLobby = true;
         PendingSouthDeckId = null;
         PendingNorthDeckId = null;
+        MainMenuManager.PrepareCustomLobbyReturn(isNetworkedSealed);
         if (canvas != null) canvas.gameObject.SetActive(false);
         MainMenuManager.EnsureMenu();
         if (canvas != null) Destroy(canvas.gameObject);
@@ -16140,8 +16164,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
-
 
 
 
