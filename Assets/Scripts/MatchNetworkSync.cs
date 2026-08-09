@@ -109,6 +109,19 @@ public class LobbySettingsPayload
     public string sealedSet;             // host-selected booster product for Sealed
 }
 
+/// <summary>
+/// Bilateral waiting-room snapshot. Unlike the older one-field messages, this is
+/// periodically re-sent while the room is open, so rebuilding a picker/menu cannot
+/// permanently lose the peer's name, Ready state, or Sealed leader selection.
+/// </summary>
+[Serializable]
+public class LobbyPeerStatePayload
+{
+    public string name;
+    public bool ready;
+    public string sealedLeader;
+}
+
 [Serializable]
 public class SealedBuildStartPayload
 {
@@ -176,6 +189,7 @@ public static class MatchNetworkSync
     private const string RewindRespMessage = "OptcgRewindResp";   // "accept/decline your rewind"
     private const string ReadyMessage = "OptcgReady";             // custom lobby: "I am / am not ready"
     private const string LobbySettingsMessage = "OptcgLobbySet";  // host -> guest: format + custom-rule details
+    private const string LobbyPeerStateMessage = "OptcgLobbyPeer";
     private const string SealedLeaderMessage = "OptcgSealedLeader";
     private const string SealedBuildStartMessage = "OptcgSealedBuild";
     private const string SealedBuildAckMessage = "OptcgSealedBuildAck";
@@ -206,6 +220,7 @@ public static class MatchNetworkSync
     public static event Action<RewindResponsePayload> RewindResponded;  // peer answered our rewind ask
     public static event Action<bool> ReadyReceived;                     // peer toggled their lobby Ready state
     public static event Action<LobbySettingsPayload> LobbySettingsReceived; // host told us the lobby's rules
+    public static event Action<LobbyPeerStatePayload> LobbyPeerStateReceived;
     public static event Action<string> SealedLeaderReceived;
     public static event Action<SealedBuildStartPayload> SealedBuildStartReceived;
     public static event Action<string> SealedBuildAcknowledged;
@@ -220,6 +235,12 @@ public static class MatchNetworkSync
         if (nm == null) return;
         nm.OnClientConnectedCallback -= OnClientConnected;
         nm.OnClientConnectedCallback += OnClientConnected;
+
+        // A menu/picker rebuild can call this after Netcode has already fired the
+        // local connect callback. Register immediately in that case instead of
+        // waiting for a callback which may never fire again on a one-client host.
+        if (nm.IsListening && nm.CustomMessagingManager != null)
+            RegisterHandlers(nm);
     }
 
     /// <summary>Reset after a Netcode shutdown. Shutdown() destroys the CustomMessagingManager, and the
@@ -235,9 +256,15 @@ public static class MatchNetworkSync
     // fires for both the host's own local connection and, later, the joining guest.
     private static void OnClientConnected(ulong clientId)
     {
-        if (handlersRegistered) return;
         var nm = NetworkManager.Singleton;
         if (nm == null || nm.CustomMessagingManager == null) return;
+
+        RegisterHandlers(nm);
+    }
+
+    private static void RegisterHandlers(NetworkManager nm)
+    {
+        if (handlersRegistered || nm == null || nm.CustomMessagingManager == null) return;
 
         nm.CustomMessagingManager.RegisterNamedMessageHandler(MatchStartMessage, OnMatchStartMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(GameCommandMessage, OnGameCommandMessage);
@@ -251,6 +278,7 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindRespMessage, OnRewindRespMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(ReadyMessage, OnReadyMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(LobbySettingsMessage, OnLobbySettingsMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(LobbyPeerStateMessage, OnLobbyPeerStateMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedLeaderMessage, OnSealedLeaderMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedBuildStartMessage, OnSealedBuildStartMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedBuildAckMessage, OnSealedBuildAckMessage);
@@ -417,6 +445,9 @@ public static class MatchNetworkSync
     }
 
     public static void SendSealedLeader(string leaderId) => SendString(SealedLeaderMessage, leaderId);
+
+    public static void SendLobbyPeerState(LobbyPeerStatePayload payload)
+        => SendJson(LobbyPeerStateMessage, payload, NetworkDelivery.ReliableSequenced);
 
     public static bool SendSealedBuildStart(SealedBuildStartPayload payload)
         => SendJson(SealedBuildStartMessage, payload, NetworkDelivery.ReliableSequenced);
@@ -591,6 +622,14 @@ public static class MatchNetworkSync
         LobbySettingsPayload payload = null;
         try { payload = JsonUtility.FromJson<LobbySettingsPayload>(json); } catch { /* ignore malformed */ }
         if (payload != null) LobbySettingsReceived?.Invoke(payload);
+    }
+
+    private static void OnLobbyPeerStateMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        LobbyPeerStatePayload payload = null;
+        try { payload = JsonUtility.FromJson<LobbyPeerStatePayload>(json); } catch { /* ignore malformed */ }
+        if (payload != null) LobbyPeerStateReceived?.Invoke(payload);
     }
 
     private static void OnSealedLeaderMessage(ulong senderClientId, FastBufferReader reader)

@@ -404,6 +404,9 @@ public partial class MainMenuManager : MonoBehaviour
         MatchNetworkSync.LobbySettingsReceived -= OnLobbySettingsReceived;
         MatchNetworkSync.LobbySettingsReceived += OnLobbySettingsReceived;
 
+        MatchNetworkSync.LobbyPeerStateReceived -= OnLobbyPeerStateReceived;
+        MatchNetworkSync.LobbyPeerStateReceived += OnLobbyPeerStateReceived;
+
         MatchNetworkSync.SealedLeaderReceived -= OnPeerSealedLeaderReceived;
         MatchNetworkSync.SealedLeaderReceived += OnPeerSealedLeaderReceived;
         MatchNetworkSync.SealedBuildStartReceived -= OnSealedBuildStartReceived;
@@ -6280,7 +6283,53 @@ public partial class MainMenuManager : MonoBehaviour
         MatchNetworkSync.SendReady(localReady);
         MatchNetworkSync.SendPeerName(
             AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName);
+        SendLocalLobbyPeerState();
         HostBroadcastLobbyState();
+    }
+
+    private static void SendLocalLobbyPeerState()
+    {
+        MatchNetworkSync.SendLobbyPeerState(new LobbyPeerStatePayload
+        {
+            name = AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName,
+            ready = localReady,
+            sealedLeader = lobbySealedLeader,
+        });
+    }
+
+    private void HeartbeatCustomLobbyState()
+    {
+        if (!showingLobbyHub || lobbyMode != "custom" || LobbyManager.CurrentSession == null
+            || !MatchNetworkSync.IsPeerConnected) return;
+        // Only the compact snapshot repeats. Re-sending the legacy one-field events
+        // here would make their handlers repaint the whole waiting room every second.
+        SendLocalLobbyPeerState();
+    }
+
+    private void OnLobbyPeerStateReceived(LobbyPeerStatePayload state)
+    {
+        if (state == null || lobbyMode != "custom") return;
+
+        string nextName = string.IsNullOrWhiteSpace(state.name) ? null : state.name.Trim();
+        if (nextName != null && nextName.Length > 48) nextName = nextName.Substring(0, 48);
+
+        string nextLeader = null;
+        if (!string.IsNullOrWhiteSpace(state.sealedLeader))
+        {
+            string candidate = state.sealedLeader.Trim();
+            var def = OnePieceTcg.Engine.CardData.GetCard(candidate);
+            if (def != null && string.Equals(def.Type, "leader", StringComparison.OrdinalIgnoreCase))
+                nextLeader = candidate;
+        }
+
+        bool changed = lobbyPeerName != nextName || peerReady != state.ready
+            || lobbyPeerSealedLeader != nextLeader;
+        lobbyPeerName = nextName;
+        peerReady = state.ready;
+        lobbyPeerSealedLeader = nextLeader;
+        MarkRankedGuestReady();
+        TryLobbyAutoStart();
+        if (changed && showingLobbyHub) RenderMenu();
     }
 
     // Peer toggled ready. Track it; if BOTH are ready, the host commits the match once.
@@ -6991,10 +7040,13 @@ public partial class MainMenuManager : MonoBehaviour
             NetworkManager.Singleton.OnClientConnectedCallback -= OnLobbyNetworkClientConnected;
             NetworkManager.Singleton.OnClientConnectedCallback += OnLobbyNetworkClientConnected;
         }
+        CancelInvoke(nameof(HeartbeatCustomLobbyState));
+        InvokeRepeating(nameof(HeartbeatCustomLobbyState), 0.25f, 1f);
     }
 
     private void UnsubscribeFromSessionEvents()
     {
+        CancelInvoke(nameof(HeartbeatCustomLobbyState));
         if (subscribedLobbySession != null)
         {
             subscribedLobbySession.Changed -= OnLobbySessionChanged;
@@ -7038,6 +7090,7 @@ public partial class MainMenuManager : MonoBehaviour
         MatchNetworkSync.PeerNameReceived -= OnPeerNameReceived;
         MatchNetworkSync.ReadyReceived -= OnPeerReadyReceived;
         MatchNetworkSync.LobbySettingsReceived -= OnLobbySettingsReceived;
+        MatchNetworkSync.LobbyPeerStateReceived -= OnLobbyPeerStateReceived;
         MatchNetworkSync.SealedLeaderReceived -= OnPeerSealedLeaderReceived;
         MatchNetworkSync.SealedBuildStartReceived -= OnSealedBuildStartReceived;
         MatchNetworkSync.SealedBuildAcknowledged -= OnSealedBuildAcknowledged;
