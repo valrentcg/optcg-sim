@@ -9218,16 +9218,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // circles on the same explicit centre; sharing an edge pivot makes their centres drift.
         var pivot = new Vector2(0.5f, 0.5f);
         var centerOffset = new Vector2((mirror ? -1f : 1f) * rimSize * 0.5f, 0f);
-        if (highlight)
-        {
-            var rim = PanelObject("Avatar Active Rim", plate, Accent);
-            rim.anchorMin = rim.anchorMax = new Vector2(dotX, 0.5f);
-            rim.pivot = pivot;
-            rim.sizeDelta = new Vector2(rimSize, rimSize);
-            rim.anchoredPosition = centerOffset;
-            RoundCircle(rim);
-        }
-
         var circle = PanelObject("Profile Avatar", plate, new Color32(11, 20, 32, 255));
         circle.anchorMin = circle.anchorMax = new Vector2(dotX, 0.5f);
         circle.pivot = pivot;
@@ -9257,6 +9247,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         image.sprite = sprite;
         image.preserveAspect = false;
         image.raycastTarget = false;
+
+        // Draw a real stroke over the crop. Exposing a larger filled circle underneath
+        // produced uneven left/right thickness after Canvas scaling rounded each edge.
+        if (highlight)
+        {
+            var rim = ImageObject("Avatar Active Rim", plate, GetAvatarRingSprite());
+            rim.color = Accent;
+            rim.raycastTarget = false;
+            rim.rectTransform.anchorMin = rim.rectTransform.anchorMax = new Vector2(dotX, 0.5f);
+            rim.rectTransform.pivot = pivot;
+            rim.rectTransform.sizeDelta = new Vector2(rimSize, rimSize);
+            rim.rectTransform.anchoredPosition = centerOffset;
+        }
         return true;
     }
 
@@ -14154,6 +14157,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
     private Sprite _circleSprite;
+    private Sprite _avatarRingSprite;
     private Sprite GetCircleSprite()
     {
         if (_circleSprite != null) return _circleSprite;
@@ -14171,6 +14175,34 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         tex.SetPixels32(px); tex.Apply(false, true);
         _circleSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f), 100f, 0, SpriteMeshType.FullRect);
         return _circleSprite;
+    }
+
+    private Sprite GetAvatarRingSprite()
+    {
+        if (_avatarRingSprite != null) return _avatarRingSprite;
+        const int S = 64;
+        const float outerRadius = 31.5f;
+        const float stroke = 5f;
+        var tex = new Texture2D(S, S, TextureFormat.RGBA32, false);
+        tex.filterMode = FilterMode.Bilinear;
+        tex.wrapMode = TextureWrapMode.Clamp;
+        var px = new Color32[S * S];
+        for (int y = 0; y < S; y++)
+            for (int x = 0; x < S; x++)
+            {
+                float dx = x + 0.5f - S * 0.5f;
+                float dy = y + 0.5f - S * 0.5f;
+                float dist = Mathf.Sqrt(dx * dx + dy * dy);
+                float outer = Mathf.Clamp01(outerRadius - dist + 0.5f);
+                float inner = Mathf.Clamp01(dist - (outerRadius - stroke) + 0.5f);
+                float alpha = Mathf.Min(outer, inner);
+                px[y * S + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(alpha * 255f));
+            }
+        tex.SetPixels32(px);
+        tex.Apply(false, true);
+        _avatarRingSprite = Sprite.Create(tex, new Rect(0, 0, S, S), new Vector2(0.5f, 0.5f),
+            100f, 0, SpriteMeshType.FullRect);
+        return _avatarRingSprite;
     }
 
     // Make a small panel a true circle (count badges, avatar dots, bullet dots).
@@ -16292,7 +16324,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
 
 
 
