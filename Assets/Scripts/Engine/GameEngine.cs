@@ -4494,7 +4494,7 @@ namespace OnePieceTcg.Engine
             var winCard = FindOpponentBlockWinCard(attackerPlayer);
             if (winCard != null && (attackerPlayer.Life.Count == 0 || defender.Life.Count == 0))
             {
-                FinishGame(state);
+                FinishGame(state, attackerPlayer.Seat, "alternate-win");
                 Log(state, "system", $"{attackerPlayer.Name} wins instantly — {NameId(winCard)} triggers when a Blocker is activated with a player at 0 Life.");
                 return;
             }
@@ -5515,8 +5515,7 @@ namespace OnePieceTcg.Engine
             }
             else
             {
-                state.Status = "finished";
-                state.Phase = "finished";
+                FinishGame(state, OtherSeat(defenderSeat), "leader-defeat");
                 Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
             }
             state.Battle = null;
@@ -5532,8 +5531,7 @@ namespace OnePieceTcg.Engine
             var lifeCard = Pop(p.Life);
             if (lifeCard == null)
             {
-                state.Status = "finished";
-                state.Phase = "finished";
+                FinishGame(state, OtherSeat(defenderSeat), "leader-defeat");
                 Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
                 state.Battle = null;
                 CleanupBattleModifiers(state, endedBattleId);
@@ -5561,8 +5559,7 @@ namespace OnePieceTcg.Engine
             {
                 if (canDefeat)
                 {
-                    state.Status = "finished";
-                    state.Phase = "finished";
+                    FinishGame(state, OtherSeat(defenderSeat), "leader-defeat");
                     Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
                     state.Battle = null;
                     return;
@@ -5599,7 +5596,29 @@ namespace OnePieceTcg.Engine
             // Safe for bots: both agents answer the step unconditionally
             // (IntermediateBot -> useTrigger/passTrigger, AdvancedContractBot -> TriggerUtilityPolicy),
             // and LegalActions lists both commands at Step == "trigger".
+
+            // REPLAY COMPATIBILITY ONLY — never enabled in live play. See LegacyTriggerAutoSkip.
+            if (LegacyTriggerAutoSkip && string.IsNullOrWhiteSpace(GetCard(cardFromLife).Trigger))
+                FinalizeTrigger(state, defenderSeat);
         }
+
+        /// <summary>Restores the PRE-2026-07-30 behaviour where the Trigger step auto-finalized whenever
+        /// the revealed Life card had no [Trigger] text.
+        ///
+        /// That auto-skip was removed because it leaked hidden information (a Trigger card paused for a
+        /// decision, a non-Trigger card resolved instantly, so the attacker learned which Life cards were
+        /// Triggers). Removing it also silently broke EVERY REPLAY RECORDED BEFORE THE CHANGE: those
+        /// histories contain no useTrigger/passTrigger command for a blank Trigger — the engine used to
+        /// resolve it with no command at all — so replaying one against the current engine parks the
+        /// battle at Step == "trigger" forever and the match never finishes. Measured on 21 real replays:
+        /// 20 stalled, and only the one that ended in a concede reached its recorded result.
+        ///
+        /// This flag exists so a REPLAY of a pre-change match can be resimulated faithfully. It must stay
+        /// false for live play — turning it on re-creates the information leak. Set it from the replay's
+        /// recorded engine version (ReplayRecord.EngineVersion; absent/0 ⇒ legacy), never from a user
+        /// preference. It is a process-wide static, so drive it from the single-threaded replay path
+        /// (Unity main thread); do not toggle it from parallel self-play.</summary>
+        public static bool LegacyTriggerAutoSkip = false;
 
         private static void FinalizeTrigger(GameState state, string defenderSeat)
         {
@@ -5705,8 +5724,7 @@ namespace OnePieceTcg.Engine
                     // player survives at 0 Life (official ruling Q36).
                     if (i == 0)
                     {
-                        state.Status = "finished";
-                        state.Phase = "finished";
+                        FinishGame(state, OtherSeat(defenderSeat), "leader-defeat");
                         Log(state, "system", $"{Player(state, OtherSeat(defenderSeat)).Name} wins.");
                         state.Battle = null;
                         CleanupBattleModifiers(state, endedBattleId);
@@ -16252,7 +16270,7 @@ namespace OnePieceTcg.Engine
                         var lc = Pop(meDmg.Life);
                         if (lc == null)
                         {
-                            FinishGame(state);
+                            FinishGame(state, OtherSeat(effect.Seat), "effect-damage");
                             Log(state, "system", $"{Player(state, OtherSeat(effect.Seat)).Name} wins — {meDmg.Name} took damage with no Life left.");
                             return EffectResolution.Resolved;
                         }
@@ -16277,7 +16295,7 @@ namespace OnePieceTcg.Engine
                         var lifeD = Pop(oppDmg.Life);
                         if (lifeD == null)
                         {
-                            FinishGame(state);
+                            FinishGame(state, effect.Seat, "effect-damage");
                             Log(state, "system", $"{Player(state, effect.Seat).Name} wins — damage with no Life left.");
                             return EffectResolution.Resolved;
                         }
@@ -19293,7 +19311,7 @@ namespace OnePieceTcg.Engine
             var endingPlayer = Player(state, seat);
             if (endingPlayer.Deck.Count == 0 && CardData.HasDeferredDeckOutRule(endingPlayer.Leader.CardId))
             {
-                FinishGame(state);
+                FinishGame(state, OtherSeat(seat), "deck-out");
                 Log(state, "system", $"{Player(state, OtherSeat(seat)).Name} wins. {endingPlayer.Name} has no cards in deck at the end of their turn.");
                 return;
             }
@@ -19580,10 +19598,12 @@ namespace OnePieceTcg.Engine
         }
 
         // Shared "end the match right now" plumbing for every deck-out branch below.
-        private static void FinishGame(GameState state)
+        private static void FinishGame(GameState state, string winnerSeat = null, string outcomeType = null)
         {
             state.Status = "finished";
             state.Phase = "finished";
+            state.WinnerSeat = winnerSeat == "south" || winnerSeat == "north" ? winnerSeat : null;
+            state.OutcomeType = outcomeType ?? (state.WinnerSeat == null ? "draw" : "unknown");
             state.Battle = null;
             state.PendingEffects.Clear();
             // Abandon any staged end-of-turn: the match is over, nothing may hand the turn over now.
@@ -19592,9 +19612,8 @@ namespace OnePieceTcg.Engine
             state.BattleReactionSeat = null;   // match over: no reaction may still stage in
         }
 
-        // A player surrenders: the match ends at once and the OTHER seat wins. The winner is read
-        // back from the trailing "{name} wins." log by ReplayStore.ExtractWinner, exactly like every
-        // other win path, so it must be logged LAST. No-op if the game is already finished (guards a
+        // A player surrenders: the match ends at once and the OTHER seat wins. The structured outcome is
+        // authoritative; the display log remains for players and legacy replay readers. No-op if finished (guards a
         // surrender racing a natural game end, or a double concede).
         private static void Concede(GameState state, string seat)
         {
@@ -19602,7 +19621,7 @@ namespace OnePieceTcg.Engine
             string winner = OtherSeat(seat);
             Log(state, "system", $"{Player(state, seat).Name} surrendered.");
             Log(state, "system", $"{Player(state, winner).Name} wins.");
-            FinishGame(state);
+            FinishGame(state, winner, "concede");
         }
 
         private static void CheckRuleProcessing(GameState state)
@@ -19626,7 +19645,7 @@ namespace OnePieceTcg.Engine
             var winsInstead = deckedOut.FirstOrDefault(seat => CardData.WinsOnDeckOut(Player(state, seat).Leader.CardId));
             if (winsInstead != null)
             {
-                FinishGame(state);
+                FinishGame(state, winsInstead, "alternate-win");
                 Log(state, "system", $"{Player(state, winsInstead).Name}'s deck reached 0 cards — they win instead of losing.");
                 return;
             }
@@ -19635,12 +19654,13 @@ namespace OnePieceTcg.Engine
             // instant their deck hits 0 — EndTurn finalizes that loss instead.
             var defeated = deckedOut.Where(seat => !CardData.HasDeferredDeckOutRule(Player(state, seat).Leader.CardId)).ToList();
             if (defeated.Count == 0) return;
-            FinishGame(state);
             if (defeated.Count == 2)
             {
+                FinishGame(state, null, "draw");
                 Log(state, "system", "Both players have no cards in deck. The game ends in simultaneous defeat.");
                 return;
             }
+            FinishGame(state, OtherSeat(defeated[0]), "deck-out");
             Log(state, "system", $"{Player(state, OtherSeat(defeated[0])).Name} wins. {Player(state, defeated[0]).Name} has no cards in deck.");
         }
 
@@ -19743,4 +19763,3 @@ namespace OnePieceTcg.Engine
         }
     }
 }
-

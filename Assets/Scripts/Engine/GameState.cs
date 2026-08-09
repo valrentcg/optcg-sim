@@ -282,6 +282,8 @@ namespace OnePieceTcg.Engine
         public string Status = "setup";     // "coinflip" | "setup" | "active" | "finished"
         public string ActiveSeat = "south";
         public string Phase = "setup";      // "refresh" | "draw" | "don" | "main" | "battle" | "end" | "finished"
+        public string WinnerSeat;            // structured terminal outcome: "south" | "north" | null for draw/unfinished
+        public string OutcomeType;           // "leader-defeat" | "effect-damage" | "deck-out" | "alternate-win" | "concede" | "draw"
         public int TurnNumber;
         /// <summary>The end-of-turn sequence is STAGED, because both [End of Your Turn] and
         /// [End of Your Opponent's Turn] effects can need a player decision and the turn must not

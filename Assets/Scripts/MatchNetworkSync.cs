@@ -105,6 +105,27 @@ public class LobbySettingsPayload
     public bool forgiveness;             // rewind toggle enabled
     public string timing = "Untimed";    // human-readable timing summary (per-player clocks etc.)
     public bool ignoreBans;              // custom lobby: deck pickers allow banned cards/pairs
+    public string game = "constructed"; // "constructed" | "sealed"
+    public string sealedSet;             // host-selected booster product for Sealed
+}
+
+[Serializable]
+public class SealedBuildStartPayload
+{
+    public string seed;
+    public string setCode;
+    public string southLeader;
+    public string northLeader;
+    public bool forgiveness;
+    public string format;
+    public BlitzConfig blitz;
+}
+
+[Serializable]
+public class SealedBuildReadyPayload
+{
+    public bool ready;
+    public NetworkDeck deck;
 }
 
 // Lightweight "what am I looking at" state each client streams to its opponent while
@@ -155,6 +176,12 @@ public static class MatchNetworkSync
     private const string RewindRespMessage = "OptcgRewindResp";   // "accept/decline your rewind"
     private const string ReadyMessage = "OptcgReady";             // custom lobby: "I am / am not ready"
     private const string LobbySettingsMessage = "OptcgLobbySet";  // host -> guest: format + custom-rule details
+    private const string SealedLeaderMessage = "OptcgSealedLeader";
+    private const string SealedBuildStartMessage = "OptcgSealedBuild";
+    private const string SealedBuildAckMessage = "OptcgSealedBuildAck";
+    private const string SealedBuildReadyMessage = "OptcgSealedReady";
+    private const string SealedStartRequestMessage = "OptcgSealedStartAsk";
+    private const string SealedStartResponseMessage = "OptcgSealedStartReply";
 
     // Chat messages longer than this are truncated before sending (UI should enforce the
     // same cap on its input field; this is the transport-level backstop).
@@ -179,6 +206,12 @@ public static class MatchNetworkSync
     public static event Action<RewindResponsePayload> RewindResponded;  // peer answered our rewind ask
     public static event Action<bool> ReadyReceived;                     // peer toggled their lobby Ready state
     public static event Action<LobbySettingsPayload> LobbySettingsReceived; // host told us the lobby's rules
+    public static event Action<string> SealedLeaderReceived;
+    public static event Action<SealedBuildStartPayload> SealedBuildStartReceived;
+    public static event Action<string> SealedBuildAcknowledged;
+    public static event Action<SealedBuildReadyPayload> SealedBuildReadyReceived;
+    public static event Action SealedStartRequested;
+    public static event Action<bool> SealedStartResponded;
 
     /// <summary>Call once, right after the NetworkManager singleton is created.</summary>
     public static void EnsureHandlersRegistered()
@@ -218,6 +251,12 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(RewindRespMessage, OnRewindRespMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(ReadyMessage, OnReadyMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(LobbySettingsMessage, OnLobbySettingsMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedLeaderMessage, OnSealedLeaderMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedBuildStartMessage, OnSealedBuildStartMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedBuildAckMessage, OnSealedBuildAckMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedBuildReadyMessage, OnSealedBuildReadyMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedStartRequestMessage, OnSealedStartRequestMessage);
+        nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedStartResponseMessage, OnSealedStartResponseMessage);
         handlersRegistered = true;
     }
 
@@ -377,6 +416,60 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.SendNamedMessage(LobbySettingsMessage, target.Value, writer, NetworkDelivery.ReliableSequenced);
     }
 
+    public static void SendSealedLeader(string leaderId) => SendString(SealedLeaderMessage, leaderId);
+
+    public static bool SendSealedBuildStart(SealedBuildStartPayload payload)
+        => SendJson(SealedBuildStartMessage, payload, NetworkDelivery.ReliableSequenced);
+
+    public static void SendSealedBuildAcknowledgement(string seed) => SendString(SealedBuildAckMessage, seed);
+
+    public static void SendSealedBuildReady(bool ready, NetworkDeck deck)
+        => SendJson(SealedBuildReadyMessage, new SealedBuildReadyPayload { ready = ready, deck = deck },
+            NetworkDelivery.ReliableFragmentedSequenced);
+
+    public static void SendSealedStartRequest() => SendByte(SealedStartRequestMessage, 1);
+    public static void SendSealedStartResponse(bool accept) => SendByte(SealedStartResponseMessage, accept ? (byte)1 : (byte)0);
+
+    private static void SendString(string message, string value)
+    {
+        var nm = NetworkManager.Singleton;
+        var target = GetPeerClientId();
+        if (nm == null || nm.CustomMessagingManager == null || target == null || string.IsNullOrEmpty(value)) return;
+        using var writer = new FastBufferWriter(value.Length * 2 + 32, Allocator.Temp);
+        writer.WriteValueSafe(value);
+        nm.CustomMessagingManager.SendNamedMessage(message, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
+    private static void SendByte(string message, byte value)
+    {
+        var nm = NetworkManager.Singleton;
+        var target = GetPeerClientId();
+        if (nm == null || nm.CustomMessagingManager == null || target == null) return;
+        using var writer = new FastBufferWriter(8, Allocator.Temp);
+        writer.WriteValueSafe(value);
+        nm.CustomMessagingManager.SendNamedMessage(message, target.Value, writer, NetworkDelivery.ReliableSequenced);
+    }
+
+    private static bool SendJson<T>(string message, T payload, NetworkDelivery delivery)
+    {
+        var nm = NetworkManager.Singleton;
+        var target = GetPeerClientId();
+        if (nm == null || nm.CustomMessagingManager == null || target == null || payload == null) return false;
+        try
+        {
+            string json = JsonUtility.ToJson(payload);
+            using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+            writer.WriteValueSafe(json);
+            nm.CustomMessagingManager.SendNamedMessage(message, target.Value, writer, delivery);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Couldn't send {message}: {ex.Message}");
+            return false;
+        }
+    }
+
     /// <summary>Host only: publish the agreed rematch seed so both clients rebuild an
     /// identical new match (same decks, new deal) over the still-open session.</summary>
     public static void SendRematchStart(string seed)
@@ -498,6 +591,46 @@ public static class MatchNetworkSync
         LobbySettingsPayload payload = null;
         try { payload = JsonUtility.FromJson<LobbySettingsPayload>(json); } catch { /* ignore malformed */ }
         if (payload != null) LobbySettingsReceived?.Invoke(payload);
+    }
+
+    private static void OnSealedLeaderMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string leaderId);
+        if (!string.IsNullOrEmpty(leaderId)) SealedLeaderReceived?.Invoke(leaderId);
+    }
+
+    private static void OnSealedBuildStartMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        SealedBuildStartPayload payload = null;
+        try { payload = JsonUtility.FromJson<SealedBuildStartPayload>(json); } catch { }
+        if (payload != null && !string.IsNullOrEmpty(payload.seed)) SealedBuildStartReceived?.Invoke(payload);
+    }
+
+    private static void OnSealedBuildAckMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string seed);
+        if (!string.IsNullOrEmpty(seed)) SealedBuildAcknowledged?.Invoke(seed);
+    }
+
+    private static void OnSealedBuildReadyMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out string json);
+        SealedBuildReadyPayload payload = null;
+        try { payload = JsonUtility.FromJson<SealedBuildReadyPayload>(json); } catch { }
+        if (payload != null) SealedBuildReadyReceived?.Invoke(payload);
+    }
+
+    private static void OnSealedStartRequestMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out byte _);
+        SealedStartRequested?.Invoke();
+    }
+
+    private static void OnSealedStartResponseMessage(ulong senderClientId, FastBufferReader reader)
+    {
+        reader.ReadValueSafe(out byte accepted);
+        SealedStartResponded?.Invoke(accepted != 0);
     }
 
     private static void OnRematchGoMessage(ulong senderClientId, FastBufferReader reader)

@@ -48,6 +48,69 @@ $repoRoot   = Split-Path -Parent $PSScriptRoot
 $checkerSrc = Join-Path $repoRoot "Assets\Scripts\Updater\UpdateChecker.cs"
 $verJsonP   = Join-Path $PSScriptRoot "version.json"
 
+# Unpromoted bot research belongs under Tools/, never Assets/. Freeze the complete shipping search-bot
+# folder by content hash so a research experiment cannot silently enter a Unity build or player release.
+$botRoot = Join-Path $repoRoot "Assets\Scripts\Engine\Bot\Search"
+$botBaseline = Join-Path $PSScriptRoot "shipping_bot_baseline.sha256"
+if (-not (Test-Path $botBaseline)) {
+    Write-Error "Missing shipping bot baseline: $botBaseline"
+    exit 1
+}
+$botErrors = @()
+foreach ($line in (Get-Content $botBaseline)) {
+    $trimmed = $line.Trim()
+    if (-not $trimmed -or $trimmed.StartsWith('#')) { continue }
+    $parts = $trimmed.Split('|', 2)
+    if ($parts.Count -ne 2) { $botErrors += "Malformed baseline row: $trimmed"; continue }
+    $source = Join-Path $botRoot $parts[0]
+    if (-not (Test-Path $source)) { $botErrors += "Missing shipping bot file: $($parts[0])"; continue }
+    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash.ToLowerInvariant()
+    if ($actual -ne $parts[1].ToLowerInvariant()) { $botErrors += "Changed shipping bot file: $($parts[0])" }
+}
+$approvedBotNames = @(Get-Content $botBaseline | Where-Object {
+    $_.Trim() -and -not $_.Trim().StartsWith('#')
+} | ForEach-Object { $_.Split('|', 2)[0] })
+$unexpectedBotFiles = Get-ChildItem $botRoot -File -Filter '*.cs' | Where-Object {
+    $_.Name -notin $approvedBotNames
+}
+foreach ($file in $unexpectedBotFiles) { $botErrors += "Unapproved shipping bot file: $($file.Name)" }
+if ($botErrors.Count -gt 0) {
+    $botMessage = "Player bot differs from the frozen shipping baseline. Keep experiments under Tools/Sim or deliberately promote and update Deploy/shipping_bot_baseline.sha256:`n - " + ($botErrors -join "`n - ")
+    Write-Error $botMessage
+    exit 1
+}
+Write-Output "Shipping bot boundary OK (frozen baseline; research remains under Tools/)."
+
+# Packaging consumes an already-built Unity directory. Source safety alone is insufficient if that directory
+# predates this check and still contains an experimental Assembly-CSharp.dll. Require a rebuild whenever the
+# frozen player-bot sources are newer than the compiled player assembly.
+$playerAssembly = Join-Path $BuildDir "One Piece TCG Simulator_Data\Managed\Assembly-CSharp.dll"
+if (-not (Test-Path $playerAssembly)) {
+    Write-Error "Missing Unity player assembly: $playerAssembly. Make a fresh Windows build before publishing."
+    exit 1
+}
+$newestBotSource = Get-ChildItem $botRoot -File -Filter '*.cs' |
+    Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+if ($playerAssembly.LastWriteTimeUtc -lt $newestBotSource.LastWriteTimeUtc) {
+    Write-Error "Unity player assembly is older than the frozen shipping bot sources. Rebuild the Windows player before publishing."
+    exit 1
+}
+Write-Output "Unity player assembly freshness OK."
+
+# Sealed mode uses real wrapper art from StreamingAssets. Refuse to package a stale build that
+# predates those assets, otherwise the release silently falls back to procedural wrappers.
+$packArtDir = Join-Path $BuildDir "One Piece TCG Simulator_Data\StreamingAssets\Cards\Packs"
+$expectedPackArt = @(
+    (1..16 | ForEach-Object { "OP{0:D2}.png" -f $_ })
+    (1..4  | ForEach-Object { "EB{0:D2}.png" -f $_ })
+)
+$missingPackArt = @($expectedPackArt | Where-Object { -not (Test-Path (Join-Path $packArtDir $_)) })
+if ($missingPackArt.Count -gt 0) {
+    Write-Error "Unity build is missing sealed pack artwork: $($missingPackArt -join ', '). Make a fresh Windows build before publishing."
+    exit 1
+}
+Write-Output "Sealed pack artwork OK ($($expectedPackArt.Count) wrappers)."
+
 $constMatch = Select-String -Path $checkerSrc -Pattern 'CurrentBuildNumber\s*=\s*(\d+)' | Select-Object -First 1
 if (-not $constMatch) { Write-Error "Could not read CurrentBuildNumber from $checkerSrc"; exit 1 }
 $constBuild = [int]$constMatch.Matches[0].Groups[1].Value

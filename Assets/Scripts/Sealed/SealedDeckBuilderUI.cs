@@ -33,6 +33,8 @@ namespace OnePieceTcg.Sealed
         private readonly Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
 
         private RectTransform preview;
+        private enum BuilderTab { CardsFromPacks, InDeck }
+        private BuilderTab activeTab = BuilderTab.CardsFromPacks;
         private float deadlineUnscaled = -1f;      // build timer; -1 = untimed
         private Text timerText;
 
@@ -98,8 +100,9 @@ namespace OnePieceTcg.Sealed
         private void Render()
         {
             if (body != null) Destroy(body.gameObject);
-            body = SealedUI.Panel(root, "Sealed Builder", SealedUI.PanelBg);
+            body = SealedUI.Panel(root, "Sealed Builder", Color.clear);
             SealedUI.Fill(body);
+            SealedUI.AddStandardBackground(body);
 
             BuildToolbar();
             BuildFilterRail();
@@ -136,7 +139,8 @@ namespace OnePieceTcg.Sealed
                 Render();
             }).let(rt => SealedUI.Stretch(rt, new Vector2(0.53f, 0.15f), new Vector2(0.645f, 0.85f)));
 
-            SealedUI.Button(bar, "RESET", SealedUI.ChipOff, SealedUI.Ink, () => { view.Reset(); Render(); })
+            SealedUI.Button(bar, "RESET", SealedUI.ChipOff, SealedUI.Ink, () =>
+                { view.Reset(); activeTab = BuilderTab.CardsFromPacks; showcase = false; Render(); })
                 .let(rt => SealedUI.Stretch(rt, new Vector2(0.65f, 0.15f), new Vector2(0.71f, 0.85f)));
 
             // POOL ⇄ SHOWCASE. The showcase is a view of the DECK, so it belongs in the builder next
@@ -188,10 +192,6 @@ namespace OnePieceTcg.Sealed
                 SealedUI.Chip(row, chip.Label, view.IsActive(chip), () => { view.Toggle(captured); Render(); });
             }
 
-            // Deck-only toggle sits with the filters because that is how it reads to a player.
-            var deckOnly = SealedUI.Chip(col, view.DeckOnly ? "IN DECK ✓" : "IN DECK", view.DeckOnly,
-                () => { view.DeckOnly = !view.DeckOnly; Render(); });
-            deckOnly.gameObject.GetComponent<LayoutElement>().preferredHeight = 24f;
         }
 
         private RectTransform poolHost;      // the pool grid's outer panel — swapped for the showcase
@@ -206,18 +206,49 @@ namespace OnePieceTcg.Sealed
             var host = SealedUI.Panel(body, "Pool", new Color(0, 0, 0, 0));
             SealedUI.Stretch(host, new Vector2(0.145f, 0f), new Vector2(0.795f, 0.94f));
             poolHost = host;
-            if (showcase) { BuildShowcase(host); return; }
+            BuildNotebookTabs(host);
+            var page = SealedUI.Panel(host, "Tab Page", new Color32(12, 25, 40, 132));
+            SealedUI.Stretch(page, new Vector2(0.008f, 0.008f), new Vector2(0.992f, 0.915f));
+            SealedUI.Round(page);
+            if (showcase) { BuildShowcase(page); return; }
             float live = host.rect.width;
             gridWidth = live > 200f ? live : 1920f * (0.795f - 0.145f);
-            gridHost = SealedUI.ScrollColumn(host, "Pool", 6f);
+            gridHost = SealedUI.ScrollColumn(page, "Pool", 6f);
             SealedUI.Stretch(gridHost.parent as RectTransform, new Vector2(0.01f, 0.01f), new Vector2(0.99f, 0.99f));
             RefreshGrid();
+        }
+
+        private void BuildNotebookTabs(RectTransform host)
+        {
+            var strip = SealedUI.Panel(host, "Collection Tabs", Color.clear);
+            SealedUI.Stretch(strip, new Vector2(0.012f, 0.912f), new Vector2(0.988f, 1f));
+            int deckCount = pool.Deck.Values.Sum();
+            AddTab("CARDS FROM PACKS", BuilderTab.CardsFromPacks, 0f, 0.31f);
+            AddTab($"IN DECK  {deckCount}/40", BuilderTab.InDeck, 0.315f, 0.52f);
+
+            void AddTab(string label, BuilderTab tab, float minX, float maxX)
+            {
+                bool selected = activeTab == tab && !showcase;
+                var button = SealedUI.Button(strip, label,
+                    selected ? new Color32(25, 55, 72, 255) : new Color32(25, 40, 57, 235),
+                    selected ? SealedUI.Accent : SealedUI.Muted,
+                    () => { activeTab = tab; view.DeckOnly = tab == BuilderTab.InDeck; showcase = false; Render(); },
+                    11, selected);
+                SealedUI.Stretch(button, new Vector2(minX, selected ? 0f : 0.10f), new Vector2(maxX, 0.94f));
+                SealedUI.Round(button);
+                if (selected)
+                {
+                    var underline = SealedUI.Panel(button, "Active", SealedUI.Accent);
+                    SealedUI.Stretch(underline, new Vector2(0.04f, 0f), new Vector2(0.96f, 0.055f));
+                }
+            }
         }
 
         private void RefreshGrid()
         {
             if (showcase) { RefreshShowcase(); return; }
             if (gridHost == null) return;
+            view.DeckOnly = activeTab == BuilderTab.InDeck;
             for (int i = gridHost.childCount - 1; i >= 0; i--) Destroy(gridHost.GetChild(i).gameObject);
 
             var groups = view.Build(pool, chips);
@@ -264,6 +295,7 @@ namespace OnePieceTcg.Sealed
 
             var cell = SealedUI.Panel(parent, cardId, new Color32(24, 36, 52, 255), raycast: true);
             var img = cell.GetComponent<Image>();
+            RoundedCardMask.ApplyTo(img);
             var sprite = GetSprite(cardId);
             if (sprite != null) { img.sprite = sprite; img.color = exhausted ? new Color(0.45f, 0.45f, 0.5f) : Color.white; img.preserveAspect = true; }
             else
@@ -330,6 +362,16 @@ namespace OnePieceTcg.Sealed
             Row($"Leader: {leaderName}", v.LeaderLegal && v.HasLeader ? SealedUI.Good : SealedUI.Bad, 12);
             Row($"Format: {SealedLeaderRules.ModeName(pool.LeaderMode)}", SealedUI.Muted, 10);
 
+            var auto = SealedUI.Button(statsHost, "AUTO-BUILD  ·  ADVANCED", SealedUI.Accent,
+                SealedUI.BadgeInk, () =>
+                {
+                    SealedDeckAI.Build(pool, "advanced", pool.LeaderId);
+                    activeTab = BuilderTab.InDeck;
+                    view.DeckOnly = true;
+                    Render();
+                }, 11);
+            auto.gameObject.AddComponent<LayoutElement>().preferredHeight = 34f;
+
             // Composition, counters, curve and colour identity are the SAME graphs the constructed
             // builder draws (DeckStatsPanel), not a limited-only text readout. The ASCII bars that used
             // to live here said the same things less clearly, and a player moving between the two
@@ -372,17 +414,23 @@ namespace OnePieceTcg.Sealed
         {
             HidePreview();
             var sprite = GetSprite(cardId);
-            preview = SealedUI.Panel(root, "Preview", sprite != null ? Color.white : new Color32(24, 36, 52, 250));
-            preview.anchorMin = preview.anchorMax = new Vector2(0.5f, 0.5f);
+            preview = SealedUI.Panel(root, "Card Preview", Color.clear);
+            preview.anchorMin = preview.anchorMax = new Vector2(0.875f, 0.51f);
             preview.pivot = new Vector2(0.5f, 0.5f);
-            preview.sizeDelta = new Vector2(420f, 588f);
+            preview.sizeDelta = new Vector2(315f, 441f);
             preview.SetAsLastSibling();
-            var img = preview.GetComponent<Image>();
+            var group = preview.gameObject.AddComponent<CanvasGroup>();
+            group.blocksRaycasts = false; group.interactable = false;
+            SealedUI.AddCardPreviewGlow(preview);
+            var art = SealedUI.Panel(preview, "Card Art", sprite != null ? Color.white : new Color32(24, 36, 52, 250));
+            SealedUI.Fill(art);
+            var img = art.GetComponent<Image>();
+            RoundedCardMask.ApplyTo(img);
             if (sprite != null) { img.sprite = sprite; img.preserveAspect = true; }
             else
             {
                 var def = CardData.GetCard(cardId);
-                var t = SealedUI.Label(preview, "N",
+                var t = SealedUI.Label(art, "N",
                     $"{def?.Name}\n\n{def?.Effect}", 13, SealedUI.Ink, TextAnchor.UpperCenter);
                 SealedUI.Stretch(t.rectTransform, new Vector2(0.06f, 0.06f), new Vector2(0.94f, 0.94f));
                 t.horizontalOverflow = HorizontalWrapMode.Wrap;

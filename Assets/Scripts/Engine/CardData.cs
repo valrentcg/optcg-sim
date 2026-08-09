@@ -736,6 +736,22 @@ namespace OnePieceTcg.Engine
         public const int DonDeckCards = 10;
 
         /// <summary>Look up a card definition by id, returning a placeholder for unknown ids (mirrors getCard).</summary>
+        /// <summary>GetCard NEVER returns null — an unknown id yields a placeholder whose Name IS
+        /// the id and whose Type is "unknown". So `GetCard(x) != null` is not an existence check;
+        /// this is. Use it anywhere a missing card must be reported as missing rather than silently
+        /// treated as a real card of the wrong type.</summary>
+        public static bool Has(string cardId) => cardId != null && Library.ContainsKey(cardId);
+
+        /// <summary>False until a full official card library has been parsed over the seeded
+        /// starter-deck set below. Anything that judges a card by its data — deck legality above
+        /// all — must not run while this is false: every non-starter id resolves to the "unknown"
+        /// placeholder, so a perfectly legal deck reads as illegal.</summary>
+        public static bool OfficialLibraryLoaded { get; private set; }
+
+        /// <summary>Called by whichever loader finished populating the official library
+        /// (Unity's GameManager, or the headless harness loader).</summary>
+        public static void MarkOfficialLibraryLoaded() => OfficialLibraryLoaded = true;
+
         public static CardDef GetCard(string cardId)
         {
             if (cardId != null && Library.TryGetValue(cardId, out var def)) return def;

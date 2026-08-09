@@ -167,6 +167,12 @@ public partial class MainMenuManager : MonoBehaviour
     private static bool peerReady;                // the peer has readied up (via OptcgReady)
     private static bool hostAutoStarted;          // host: guards a single auto-commence when both go ready
     private static string lobbyTimingSummary = "Untimed";  // guest's copy of the host's timing rule (for display)
+    private static string lobbyCustomGame = "constructed";
+    private static string lobbySealedSet = "OP16";
+    private static string lobbySealedLeader;
+    private static string lobbyPeerSealedLeader;
+    private SealedBuildStartPayload pendingSealedBuild;
+    private int pendingSealedBuildAttempts;
     // Set when ENTER is pressed without both decks chosen; cleared automatically
     // once both are valid (recomputed fresh every BuildLaunchBar), so it doesn't
     // need its own timer — it just flags whichever slot(s) are still empty.
@@ -247,38 +253,19 @@ public partial class MainMenuManager : MonoBehaviour
     // local player happens to click something else.
     private ISession subscribedLobbySession;
 
-    // Account gate: shown automatically once signed in if no username has been claimed
-    // yet (required to play - it's the name shown as lobby owner), before any other
-    // stage is reachable. Also offers switching to "sign in with an existing account"
-    // for players recovering onto a new device instead of claiming a fresh name.
+    // Account gate: shown automatically at boot until the player has both a Unity account
+    // (or has chosen to be a guest) and a claimed username - the name is required to play,
+    // since it's what the lobby shows as owner. Which of the two steps renders is derived
+    // from AccountManager state rather than stored as a mode flag: the old gate carried
+    // three bool modes and they could disagree with reality after a sign-out.
     private bool showingAccountGate;
-    private bool accountGateSignInMode;
-    // Post-claim "secure your account" step: shown right after a successful name claim
-    // so linking a recovery email is offered up front instead of buried in settings.
-    private bool accountGatePostClaimMode;
-    // Two-click arm for signing out with no recovery email linked (account would be lost).
+    // Two-click arm for signing out with no Unity account linked (session would be lost).
     private bool signOutArmed;
-    // Show/hide state for the settings password field ("SHOW"/"HIDE" toggle).
-    private bool settingsPasswordVisible;
-    // Registration-only: retype-your-password confirmation field.
-    private string accountPasswordConfirmInput = "";
-    // SHOW/HIDE toggles for the registration password fields.
-    private bool regPasswordVisible;
-    private bool regConfirmVisible;
-    // Settings sub-view: add/change the secondary recovery email.
-    private bool accountSettingsRecoveryMode;
-    private string recoveryEmailInput = "";
-    // Account & Recovery: opened from the gear icon / Settings nav row. Lets an
-    // already-playing account link email+password (for recovery) and request/confirm
-    // a password reset. Not required to play, unlike the gate above.
+    // Account & Recovery: opened from the gear icon / Settings nav row. Now a read-only
+    // summary plus links out to Unity's hosted portal - it no longer collects credentials,
+    // because Unity owns them. Not required to play, unlike the gate above.
     private bool showingAccountSettings;
-    private bool accountSettingsResetMode;
     private string usernameInput = "";
-    private string accountEmailInput = "";
-    private string accountPasswordInput = "";
-    private string resetTokenInput = "";
-    private string resetNewPasswordInput = "";
-    private string resetNewPasswordConfirmInput = "";
     private bool accountBusy;
     private string accountError;
 
@@ -385,12 +372,14 @@ public partial class MainMenuManager : MonoBehaviour
         }
         catch { monoFont = null; }
 
-        // Coming back from the lobby's deck picker: reopen the waiting room (the
-        // session itself survived in LobbyManager.CurrentSession; only the UI died).
+        // Coming back from any private-room picker: reopen the Private Room stage. If a
+        // session exists BuildLobbyStage shows its waiting room; otherwise it shows the
+        // create/join screen. Basing this flag on CurrentSession incorrectly returned the
+        // pre-creation set carousel to the main Play screen.
         if (reopenLobbyAfterPicker)
         {
             reopenLobbyAfterPicker = false;
-            showingLobbyHub = LobbyManager.CurrentSession != null;
+            showingLobbyHub = true;
         }
 
         EnsureEventSystem();
@@ -414,6 +403,19 @@ public partial class MainMenuManager : MonoBehaviour
 
         MatchNetworkSync.LobbySettingsReceived -= OnLobbySettingsReceived;
         MatchNetworkSync.LobbySettingsReceived += OnLobbySettingsReceived;
+
+        MatchNetworkSync.SealedLeaderReceived -= OnPeerSealedLeaderReceived;
+        MatchNetworkSync.SealedLeaderReceived += OnPeerSealedLeaderReceived;
+        MatchNetworkSync.SealedBuildStartReceived -= OnSealedBuildStartReceived;
+        MatchNetworkSync.SealedBuildStartReceived += OnSealedBuildStartReceived;
+        MatchNetworkSync.SealedBuildAcknowledged -= OnSealedBuildAcknowledged;
+        MatchNetworkSync.SealedBuildAcknowledged += OnSealedBuildAcknowledged;
+
+        // A lobby picker temporarily replaces this MainMenuManager. Messages sent while it is gone
+        // cannot be replayed by NGO, so re-announce every authoritative local choice as soon as the
+        // waiting room is rebuilt. The guest's name also prompts the host to re-broadcast the set/rules.
+        if (showingLobbyHub && LobbyManager.CurrentSession != null && MatchNetworkSync.IsPeerConnected)
+            ResyncCustomLobbyState();
 
         FriendsManager.FriendsChanged -= OnFriendsChanged;
         FriendsManager.FriendsChanged += OnFriendsChanged;
@@ -735,14 +737,15 @@ public partial class MainMenuManager : MonoBehaviour
         var kb = UnityEngine.InputSystem.Keyboard.current;
         if (kb == null) return;
 
-        // Enter submits whichever account form is showing (uGUI single-line
-        // InputFields end their edit on Enter but don't consume the key).
+        // Enter submits the account gate (uGUI single-line InputFields end their edit on
+        // Enter but don't consume the key). Only the claim step has a field to submit -
+        // the sign-in step is buttons that hand off to the browser, where Enter would be
+        // ambiguous between "create account" and "sign in".
         if ((kb.enterKey.wasPressedThisFrame || kb.numpadEnterKey.wasPressedThisFrame)
-            && showingAccountGate && !accountBusy)
+            && showingAccountGate && !accountBusy
+            && AccountManager.HasUnityAccount && string.IsNullOrEmpty(AccountManager.CurrentUsername))
         {
-            if (accountGatePostClaimMode) LinkEmailClicked();
-            else if (accountGateSignInMode) SignInWithEmailClicked();
-            else ClaimUsernameClicked();
+            ClaimUsernameClicked();
             return;
         }
 
@@ -1122,6 +1125,90 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.33", "The Sealed / Pre-Release overhaul", "Aug 8, 2026", new (string, string[])[]
+        {
+            ("Sealed / Pre-Release", new[]
+            {
+                "Sealed is now a complete six-pack game mode: choose a booster set, rip six randomized packs, build a 40-card deck from your pool, then play the deck you made.",
+                "The product screen is a swipeable, momentum-based pack carousel with real wrapper art, set dates, card counts, and Leader counts. OP and EB products are offered whenever their complete card pool is available.",
+                "Seeds are generated automatically. The same seed and seat reproduce the same pool, while every new run starts with a fresh randomized seed.",
+            }),
+            ("Opening packs", new[]
+            {
+                "Swipe across the highlighted top seam to open a pack. A periodic shine points out the cut line, the wrapper stays in place during the gesture, and the torn foil peels away only after the swipe is complete.",
+                "Unopened packs remain stacked behind the current wrapper and the pile visibly shrinks as you open them. Revealed cards collect into their own stack below.",
+                "A strong pack announces itself at the tear: Super Rare hits use silver sparkles and Secret Rare hits use gold. The matching rarity glow returns when the card is revealed.",
+                "Pack and card reveals have smoother pacing, polished non-square sparkles, rounded card corners, and a glowing right-side preview when you hover a pull.",
+            }),
+            ("Choosing Leaders", new[]
+            {
+                "Click either Leader card to open the full Leader roster. Filter by colour or set, sort by name, set, Life, or power in either direction, and use the mouse wheel even while hovering a card.",
+                "Banned Leaders remain visible but are greyed out and cannot be selected. Hovering a Leader opens the same large glowing overlay used during a match.",
+                "Rainbow Luffy remains first in the roster and is fully defined for the special all-colours, all-types, all-attributes, and all-names Sealed variant.",
+            }),
+            ("Building your deck", new[]
+            {
+                "The Sealed builder has notebook-style IN DECK and CARDS FROM PACKS tabs, better use of the card grid, live pool/deck counts, and a glowing right-side hover preview.",
+                "AUTO-BUILD - ADVANCED instantly creates a legal 40-card deck using the Advanced Sealed builder's curve, Counter density, efficient bodies, interaction, and Leader-synergy priorities.",
+                "Sealed legality uses the real pre-release structure: exactly 40 cards from your opened pool, without normal colour or four-copy restrictions.",
+            }),
+            ("Solo Sealed", new[]
+            {
+                "Choose both your Leader and the A.I. Leader before opening packs, then select Beginner, Intermediate, or Advanced.",
+                "The opponent opens its own derived six-pack pool and builds immediately. Advanced follows the strongest scoring pattern; Intermediate relaxes its curve and Counter discipline; Beginner adds more noise and tempting rarity-driven mistakes.",
+            }),
+            ("Custom Sealed", new[]
+            {
+                "Custom rooms can now select Sealed. The host chooses the set, both players choose Leaders, and the first Ready check confirms the lobby choices before either player enters pack opening.",
+                "Each player receives a separate deterministic six-pack pool, opens it, and builds privately. The deck checkpoint shows whether the opponent is still building or Ready, and either player can cancel Ready to keep editing.",
+                "After both 40-card decks are Ready, the host asks to start and the opponent can accept or cancel without losing the time spent opening packs or building. Version and card-data mismatches are stopped before the match begins.",
+            }),
+            ("Card information", new[]
+            {
+                "When a card is drawn from Life, its normal printed effect is now written in the Trigger panel even when the card has no [Trigger]. Vanilla cards are identified clearly too.",
+            }),
+        }),
+        ("v1.0.32", "New accounts, reliable deck checks, and safer replays", "Aug 1, 2026", new (string, string[])[]
+        {
+            ("Accounts and sign-in", new[]
+            {
+                "Accounts now use Unity Player Accounts. Sign-up and sign-in happen on Unity's hosted pages, where email verification and a working Forgot Password flow are available before you log in.",
+                "Your email is used to sign in while your unique display name remains what other players see. The game does not receive or store your password.",
+                "Because the identity system changed, every account starts fresh in this version: saved decks, replays, ranked rating, and friends do not carry over. Guest play is unchanged and still works offline.",
+            }),
+            ("Decks and replays", new[]
+            {
+                "Legal decks are no longer rejected while the card database is still loading. This was most visible when OP16-060 Sengoku was incorrectly reported as not being a Leader card.",
+                "New replays record the engine version that created them, so incompatible recordings can be identified instead of silently stopping partway through playback.",
+            }),
+        }),
+        ("v1.0.31", "Targeting arrows return, DON!! costs behave, and broken card effects are repaired", "Jul 30, 2026", new (string, string[])[]
+        {
+            ("Targeting and the coin flip", new[]
+            {
+                "Targeting arrows are restored in packaged builds for attack dragging, target hovering, and declared attacks. The shared arrow shader had only been retained in the Unity Editor.",
+                "The coin toss sound now plays, the first sound of a session is no longer swallowed, and an opponent's board updates can no longer erase the coin animation mid-toss.",
+            }),
+            ("DON!! costs", new[]
+            {
+                "Paying a DON!! -N cost clearly highlights every eligible DON!!: active, rested, or attached to your Leader and Characters.",
+                "Effects with a cost can now be declined instead of forcing payment, and multi-part costs are paid in the correct order.",
+            }),
+            ("Card fixes", new[]
+            {
+                "Emporio.Ivankov now reveals an {Impel Down} card to your hand before offering an eligible Character from your hand to play.",
+                "The 1-cost Shirahoshi search accepts both {Neptunian} and {Fish-Man Island} cards.",
+                "Let's Go!! To the Navy Headquarters!! now sets your Leader and Characters active after its cost is paid.",
+                "Mamaragan lets you choose the power target and resolves its draw independently; Borsalino's end-of-turn cost can be declined.",
+                "Counter Events that say up to 1 of your Leader or Characters now offer only legal targets and let you choose not to select one.",
+            }),
+            ("Elsewhere", new[]
+            {
+                "Casual matches keep the opponent's real name even when it arrives after the match begins.",
+                "A personal DON!! deck no longer carries into another account on the same PC.",
+                "The card-preview scrollbar no longer covers its text, and the A.I. can select from searches that accept either of two card types.",
+            }),
+        }),
         ("v1.0.30", "Your name on the turn, triggers that burn, and chat that holds more than one friend", "Jul 30, 2026", new (string, string[])[]
         {
             ("Whose turn it is", new[]
@@ -3434,8 +3521,6 @@ public partial class MainMenuManager : MonoBehaviour
     {
         showingProfile = false; showingLeaderboard = false; showingPatchNotes = false;
         showingAccountSettings = true;
-        accountSettingsResetMode = false;
-        accountSettingsRecoveryMode = false;
         accountError = null;
         signOutArmed = false;
         RenderMenu();
@@ -3456,6 +3541,10 @@ public partial class MainMenuManager : MonoBehaviour
         if (!AccountManager.StaySignedIn) AccountManager.SignOut();
     }
 
+    // The welcome gate. Two steps now, not three: get an account (Unity's browser flow),
+    // then pick a name. The old gate collected an email and password itself and had a third
+    // "the name claimed but the login link failed" retry state - none of which can happen
+    // any more, because we no longer hold the credential half of the transaction.
     private void BuildAccountGateModal(RectTransform root)
     {
         // Full-screen dim layer whose Image IS a raycast target, so everything
@@ -3464,43 +3553,39 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(blocker, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         blocker.GetComponent<Image>().raycastTarget = true;
 
+        // Signed in with Unity but nameless = the claim step. Otherwise the sign-in step.
+        bool claimStep = AccountManager.HasUnityAccount && string.IsNullOrEmpty(AccountManager.CurrentUsername);
+
         var window = PanelObject("Account Modal Window", blocker, new Color32(10, 19, 28, 250));
         window.anchorMin = new Vector2(0.5f, 0.5f);
         window.anchorMax = new Vector2(0.5f, 0.5f);
         window.pivot     = new Vector2(0.5f, 0.5f);
-        window.sizeDelta = new Vector2(560f,
-            accountGatePostClaimMode ? 470f : accountGateSignInMode ? 460f : 630f);
+        window.sizeDelta = new Vector2(560f, claimStep ? 400f : 440f);
         window.anchoredPosition = Vector2.zero;
         RoundBig(window);
         AddRoundedCardBorder(window, MenuB, 1f);
 
-        string title = accountGatePostClaimMode ? "Secure Your Account"
-            : accountGateSignInMode ? "Welcome Back!" : "Welcome to One Piece TCG Simulator!";
+        string title = claimStep ? "Pick Your Pirate Name" : "Welcome to One Piece TCG Simulator!";
         var titleText = TextObject("Modal Title", window, title, 21, Ink, TextAnchor.MiddleCenter);
         titleText.fontStyle = FontStyle.Bold;
         Stretch(titleText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -60f), new Vector2(-24f, -14f));
 
-        string subtitle = accountGatePostClaimMode
-            ? "One more step - add your login details."
-            : accountGateSignInMode ? "Sign in with your username or email."
-            : "Set up your username to start playing.";
+        string subtitle = claimStep
+            ? "Last step - this is how everyone will see you."
+            : "Sign in to keep your decks and rank on any device.";
         var sub = TextObject("Modal Sub", window, subtitle, 12, Muted, TextAnchor.MiddleCenter, monoFont);
         Stretch(sub.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -90f), new Vector2(-24f, -62f));
 
-        // Content sits above a reserved bottom strip inside the window where the
-        // guest option lives, separated by a hairline so it reads as "or, just
-        // look around" rather than a third equal choice.
         var content = PanelObject("Modal Content", window, new Color(0, 0, 0, 0));
         Stretch(content, Vector2.zero, Vector2.one,
-            new Vector2(0f, accountGatePostClaimMode ? 16f : 60f), new Vector2(0f, -96f));
+            new Vector2(0f, claimStep ? 16f : 60f), new Vector2(0f, -96f));
 
-        if (accountGatePostClaimMode) BuildPostClaimEmailFields(content);
-        else if (accountGateSignInMode) BuildAccountSignInFields(content);
-        else BuildAccountClaimFields(content);
+        if (claimStep) BuildAccountClaimFields(content);
+        else BuildAccountSignInFields(content);
 
-        // Not offered on the retry step (the name is already claimed there -
-        // finishing login setup is the only path).
-        if (!accountGatePostClaimMode)
+        // Guests skip the account entirely. Not offered on the claim step - they already
+        // have an account by then, and a nameless account is not a state to leave them in.
+        if (!claimStep)
         {
             var guestDivider = PanelObject("Guest Divider", window, new Color32(255, 255, 255, 20));
             Stretch(guestDivider, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(24f, 59f), new Vector2(-24f, 60f));
@@ -3511,48 +3596,7 @@ public partial class MainMenuManager : MonoBehaviour
             guestHolder.pivot     = new Vector2(0.5f, 0f);
             guestHolder.sizeDelta = new Vector2(190f, 34f);
             guestHolder.anchoredPosition = new Vector2(0f, 14f);
-            AddButton(guestHolder, "Continue as guest", ContinueAsGuestClicked, true, false, true);
-        }
-    }
-
-    private void BuildPostClaimEmailFields(RectTransform panel)
-    {
-        // Reached only when the name claim succeeded but the email link failed -
-        // the retry screen for finishing login setup without losing the name.
-        var header = TextObject("Header", panel, "FINISH LOGIN SETUP", 12, Muted, TextAnchor.UpperLeft, monoFont);
-        header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -26f), new Vector2(-24f, -6f));
-
-        var hint = TextObject("Hint", panel,
-            $"Your name \"{AccountManager.CurrentUsername}\" is claimed, but the email link didn't go through. Fix the details below and retry, or skip and add it later in Settings.",
-            11, Muted, TextAnchor.UpperLeft, monoFont);
-        hint.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -92f), new Vector2(-24f, -30f));
-
-        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
-        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -132f), new Vector2(-24f, -98f));
-
-        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
-            InputField.ContentType.Password);
-        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -172f), new Vector2(-24f, -138f));
-
-        var pwHint = TextObject("Password Hint", panel,
-            "8-30 characters with an uppercase letter, lowercase letter, number, and symbol.",
-            10, Muted, TextAnchor.UpperLeft, monoFont);
-        pwHint.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(pwHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -210f), new Vector2(-24f, -176f));
-
-        AddCenteredButton(panel, accountBusy ? "Working..." : "Link Email", LinkEmailClicked,
-            -222f, 180f, 38f, !accountBusy);
-        AddCenteredButton(panel, "Skip for now",
-            () => { accountGatePostClaimMode = false; showingAccountGate = false; accountError = null; RenderMenu(); },
-            -268f, 160f, 34f, !accountBusy);
-
-        if (!string.IsNullOrEmpty(accountError))
-        {
-            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
-            err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -350f), new Vector2(-24f, -310f));
+            AddButton(guestHolder, "Continue as guest", ContinueAsGuestClicked, !accountBusy, false, true);
         }
     }
 
@@ -3571,58 +3615,14 @@ public partial class MainMenuManager : MonoBehaviour
             s => { usernameInput = s.Length > 16 ? s.Substring(0, 16) : s; }, null);
         Stretch(nameField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -92f), new Vector2(-24f, -58f));
 
-        var divider = PanelObject("Divider", panel, new Color32(255, 255, 255, 20));
-        Stretch(divider, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -113f), new Vector2(-24f, -112f));
-
-        var acctHeader = TextObject("Account Header", panel, "ACCOUNT LOGIN", 12, Muted, TextAnchor.UpperLeft, monoFont);
-        acctHeader.fontStyle = FontStyle.Bold;
-        Stretch(acctHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -140f), new Vector2(-24f, -120f));
-
-        var acctHint = TextObject("Account Hint", panel,
-            "Sign in later with your name or this email, on any device.",
-            11, Muted, TextAnchor.UpperLeft, monoFont);
-        acctHint.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(acctHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -166f), new Vector2(-24f, -144f));
-
-        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
-        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -206f), new Vector2(-24f, -172f));
-
-        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
-            regPasswordVisible ? InputField.ContentType.Standard : InputField.ContentType.Password);
-        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -246f), new Vector2(-82f, -212f));
-
-        var pwEyeHolder = PanelObject("PW Eye Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(pwEyeHolder, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-78f, -246f), new Vector2(-24f, -212f));
-        AddButton(pwEyeHolder, regPasswordVisible ? "HIDE" : "SHOW",
-            () => { regPasswordVisible = !regPasswordVisible; RenderMenu(); }, true, false, true);
-
-        var confirmField = MakeInput(panel, "Confirm password", accountPasswordConfirmInput,
-            s => accountPasswordConfirmInput = s, null,
-            regConfirmVisible ? InputField.ContentType.Standard : InputField.ContentType.Password);
-        Stretch(confirmField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -286f), new Vector2(-82f, -252f));
-
-        var cfEyeHolder = PanelObject("CF Eye Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(cfEyeHolder, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-78f, -286f), new Vector2(-24f, -252f));
-        AddButton(cfEyeHolder, regConfirmVisible ? "HIDE" : "SHOW",
-            () => { regConfirmVisible = !regConfirmVisible; RenderMenu(); }, true, false, true);
-
-        var pwHint = TextObject("Password Hint", panel,
-            "8-30 characters with an uppercase letter, lowercase letter, number, and symbol.",
-            10, Muted, TextAnchor.UpperLeft, monoFont);
-        pwHint.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(pwHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -324f), new Vector2(-24f, -290f));
-
-        AddCenteredButton(panel, accountBusy ? "Working..." : "Create Account", ClaimUsernameClicked,
-            -336f, 200f, 38f, !accountBusy);
-        AddCenteredButton(panel, "Already have an account?\nSign in",
-            () => { accountGateSignInMode = true; accountError = null; RenderMenu(); },
-            -382f, 230f, 42f);
+        AddCenteredButton(panel, accountBusy ? "Working..." : "Claim Name", ClaimUsernameClicked,
+            -116f, 200f, 38f, !accountBusy);
 
         if (!string.IsNullOrEmpty(accountError))
         {
             var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
             err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -466f), new Vector2(-24f, -428f));
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -212f), new Vector2(-24f, -166f));
         }
     }
 
@@ -3640,45 +3640,50 @@ public partial class MainMenuManager : MonoBehaviour
         AddButton(holder, label, action, enabled, false, true);
     }
 
+    // No email field, no password field, no "username or email" ambiguity. Two buttons that
+    // open Unity's hosted pages, plus the one link that actually matters to a locked-out
+    // player - which is reachable here WITHOUT signing in first, unlike the old flow where
+    // "forgot password" was buried behind a form they couldn't get past.
     private void BuildAccountSignInFields(RectTransform panel)
     {
-        var header = TextObject("Header", panel, "SIGN IN", 12, Muted, TextAnchor.UpperLeft, monoFont);
+        var header = TextObject("Header", panel, "ACCOUNT", 12, Muted, TextAnchor.UpperLeft, monoFont);
         header.fontStyle = FontStyle.Bold;
         Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -26f), new Vector2(-24f, -6f));
 
-        var idField = MakeInput(panel, "Username or email", accountEmailInput, s => accountEmailInput = s, null);
-        Stretch(idField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -72f), new Vector2(-24f, -38f));
+        var hint = TextObject("Hint", panel,
+            accountBusy
+                ? "Finish signing in with the browser window that just opened, then come back here."
+                : "Sign-in opens in your browser. Unity handles your password, so we never see it - and you can always reset it if you forget.",
+            11, Muted, TextAnchor.UpperLeft, monoFont);
+        hint.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -74f), new Vector2(-24f, -30f));
 
-        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
-            InputField.ContentType.Password);
-        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(24f, -112f), new Vector2(-24f, -78f));
+        if (accountBusy)
+        {
+            AddCenteredButton(panel, "Waiting for your browser...", null, -86f, 260f, 40f, false);
+            AddCenteredButton(panel, "Cancel", CancelUnitySignInClicked, -134f, 160f, 34f);
+        }
+        else
+        {
+            AddCenteredButton(panel, "Create Account", () => SignInWithUnityClicked(true), -86f, 260f, 40f);
+            AddCenteredButton(panel, "I already have one - Sign In", () => SignInWithUnityClicked(false), -134f, 260f, 36f);
+            AddCenteredButton(panel, "Forgot your password?", AccountManager.OpenPasswordReset, -178f, 220f, 32f);
+        }
 
-        // Sign In and the stay-signed-in checkbox share one centered row.
-        var signRow = PanelObject("Sign In Row", panel, new Color(0, 0, 0, 0));
-        signRow.anchorMin = new Vector2(0.5f, 1f);
-        signRow.anchorMax = new Vector2(0.5f, 1f);
-        signRow.pivot     = new Vector2(0.5f, 1f);
-        signRow.sizeDelta = new Vector2(400f, 38f);
-        signRow.anchoredPosition = new Vector2(0f, -124f);
-
-        var signInHolder = PanelObject("Sign In Holder", signRow, new Color(0, 0, 0, 0));
-        Stretch(signInHolder, Vector2.zero, new Vector2(0.44f, 1f), Vector2.zero, Vector2.zero);
-        AddButton(signInHolder, accountBusy ? "Working..." : "Sign In", SignInWithEmailClicked, !accountBusy, false, true);
-
-        var stayHolder = PanelObject("Stay Holder", signRow, new Color(0, 0, 0, 0));
-        Stretch(stayHolder, new Vector2(0.5f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var stayHolder = PanelObject("Stay Holder", panel, new Color(0, 0, 0, 0));
+        stayHolder.anchorMin = new Vector2(0.5f, 1f);
+        stayHolder.anchorMax = new Vector2(0.5f, 1f);
+        stayHolder.pivot     = new Vector2(0.5f, 1f);
+        stayHolder.sizeDelta = new Vector2(200f, 30f);
+        stayHolder.anchoredPosition = new Vector2(0f, -216f);
         AddButton(stayHolder, (AccountManager.StaySignedIn ? "[x] " : "[ ] ") + "Stay signed in",
-            () => { AccountManager.StaySignedIn = !AccountManager.StaySignedIn; RenderMenu(); }, true, false, true);
-
-        AddCenteredButton(panel, "New here? Create an account",
-            () => { accountGateSignInMode = false; accountError = null; RenderMenu(); },
-            -174f, 240f, 36f);
+            () => { AccountManager.StaySignedIn = !AccountManager.StaySignedIn; RenderMenu(); }, !accountBusy, false, true);
 
         if (!string.IsNullOrEmpty(accountError))
         {
             var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperCenter, monoFont);
             err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -266f), new Vector2(-24f, -218f));
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -292f), new Vector2(-24f, -246f));
         }
     }
 
@@ -3703,24 +3708,18 @@ public partial class MainMenuManager : MonoBehaviour
         // Guest view spreads across the full stage width; the account forms keep
         // the narrower half-width column that suits stacked input fields.
         var panel = PanelObject("Account Settings Panel", stage, new Color32(8, 16, 24, 153));
-        // Full-width for the "browse" views (guest info, linked-account summary);
-        // half-width column only for the stacked-input forms (link email, reset).
-        bool wideSettings = AccountManager.IsGuest
-            || (AccountManager.HasEmailLinked && !accountSettingsResetMode && !accountSettingsRecoveryMode);
-        Stretch(panel, Vector2.zero, new Vector2(wideSettings ? 1f : 0.5f, 1f), Vector2.zero, new Vector2(0f, -titleH));
+        // Every account view is now a full-width "browse" view: the stacked-input forms
+        // (link email, reset password, recovery email) are gone entirely, because Unity
+        // hosts all of that. Nothing here collects a credential any more.
+        Stretch(panel, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
         Round(panel);
         AddRoundedCardBorder(panel, MenuB, 1f);
 
         if (AccountManager.IsGuest) BuildGuestSettingsFields(panel);
-        else if (accountSettingsResetMode) BuildPasswordResetFields(panel);
-        else if (accountSettingsRecoveryMode) BuildRecoveryEmailFields(panel);
-        else if (AccountManager.HasEmailLinked) BuildEmailLinkedSummary(panel);
-        else BuildLinkEmailFields(panel);
+        else if (AccountManager.HasUnityAccount) BuildAccountSummary(panel);
+        else BuildSignInPrompt(panel);
 
-        // App preferences (display / cursor / audio) live in one tidy card below the account
-        // content. Only on the non-form views — the reset/recovery/link forms keep the focus on
-        // their inputs (audio was never essential there).
-        if (wideSettings) BuildPreferencesSection(panel);
+        BuildPreferencesSection(panel);
     }
 
     // A single bordered "Preferences" card, anchored just below the account/guest content, grouping
@@ -3998,13 +3997,12 @@ public partial class MainMenuManager : MonoBehaviour
             AccountManager.EndGuestSession();
             showingAccountSettings = false;
             showingAccountGate = true;
-            accountGateSignInMode = false;
             accountError = null;
             RenderMenu();
         }, true, false, true);
     }
 
-    private void BuildEmailLinkedSummary(RectTransform panel)
+    private void BuildAccountSummary(RectTransform panel)
     {
         // Mirrors the guest-mode page's full-width, center-aligned layout: identity
         // block up top, a row of status/action cards, sign-out anchored at the bottom.
@@ -4020,7 +4018,7 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(nameText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -138f), new Vector2(-24f, -98f));
 
         var note = TextObject("Account Note", panel,
-            "A recovery email is linked - you can sign in with your name or email on any device, and your match history follows your account.",
+            "Signed in with your Unity account - your name, decks and rank follow you to any device, and you can always get back in from Unity's sign-in page.",
             11, Muted, TextAnchor.UpperCenter, monoFont);
         note.horizontalOverflow = HorizontalWrapMode.Wrap;
         Stretch(note.rectTransform, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -196f), new Vector2(0f, -146f));
@@ -4030,13 +4028,16 @@ public partial class MainMenuManager : MonoBehaviour
 
         // Status/action cards, same geometry as the guest page's locked-feature row.
         const float cardTop = -248f, cardBottom = -372f;
-        string emailsDesc =
-            $"Main: {AccountManager.PrimaryEmail ?? "on file"}\nRecovery: {AccountManager.RecoveryEmail ?? "not set"}";
+        // The email comes from the Player Accounts ID token, so it can be absent if the
+        // `email` OAuth scope was turned off in Project Settings - don't render "null".
+        string email = AccountManager.AccountEmail;
+        string emailDesc = string.IsNullOrEmpty(email)
+            ? "Managed by your Unity account."
+            : email + (AccountManager.AccountEmailVerified ? "\nVerified." : "\nNot verified yet - check your inbox.");
         (string title, string desc, string action)[] cards =
         {
-            ("Emails", emailsDesc + "\nEither address works for sign-in and reset codes.",
-                AccountManager.RecoveryEmail == null ? "Add Recovery Email" : "Change Recovery Email"),
-            ("Password", "Change it any time - a reset code is emailed to your addresses.", "Reset Password"),
+            ("Email", emailDesc, "portal"),
+            ("Password", "Your password lives with Unity - we never see it. Changing it uses the same emailed reset link as forgetting it.", "reset"),
             ("Session", "Stay signed in between launches, or require a sign-in every time.", "toggle"),
         };
         for (int i = 0; i < cards.Length; i++)
@@ -4061,13 +4062,18 @@ public partial class MainMenuManager : MonoBehaviour
             if (cards[i].action == "toggle")
                 AddButton(btnHolder, (AccountManager.StaySignedIn ? "[x] " : "[ ] ") + "Stay signed in",
                     () => { AccountManager.StaySignedIn = !AccountManager.StaySignedIn; RenderMenu(); }, true, false, true);
-            else if (cards[i].action == "Reset Password")
-                AddButton(btnHolder, "Reset Password",
-                    () => { accountSettingsResetMode = true; accountError = null; RenderMenu(); }, !accountBusy, false, true);
             else
-                AddButton(btnHolder, cards[i].action,
-                    () => { accountSettingsRecoveryMode = true; recoveryEmailInput = ""; accountError = null; RenderMenu(); },
-                    !accountBusy, false, true);
+                // These are genuinely two DIFFERENT destinations, and getting it wrong is a
+                // dead end: AccountPortalUrl is hardcoded to player-account.unity.com, which is
+                // a bare "Welcome <email>" page with NO password UI on it at all. The only
+                // working way to change a password is the same hosted reset flow that a
+                // locked-out player uses (player-login.unity.com/request-reset-password),
+                // which mails you a link. So Password must NOT point at the portal.
+                AddButton(btnHolder,
+                    cards[i].action == "reset" ? "Change Password" : "Unity Account",
+                    cards[i].action == "reset" ? AccountManager.OpenPasswordReset
+                                               : (UnityEngine.Events.UnityAction)AccountManager.OpenAccountPortal,
+                    true, false, true);
         }
 
         AddSignOutRow(panel);
@@ -4093,12 +4099,12 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void SignOutClicked()
     {
-        // An anonymous account with no recovery email is gone forever once signed out,
+        // An anonymous session with no Unity account is gone forever once signed out,
         // so require a deliberate second click in that case.
-        if (!AccountManager.HasEmailLinked && !signOutArmed)
+        if (!AccountManager.HasUnityAccount && !signOutArmed)
         {
             signOutArmed = true;
-            accountError = "This account has no email & password yet, so there'd be no way to sign back in - the account and its name would be lost for good. Link an email above first, or click 'Sign out anyway' if you're sure.";
+            accountError = "This account isn't linked to a Unity account yet, so there'd be no way to sign back in - it and its name would be lost for good. Sign in above first, or click 'Sign out anyway' if you're sure.";
             RenderMenu();
             return;
         }
@@ -4106,95 +4112,80 @@ public partial class MainMenuManager : MonoBehaviour
         signOutArmed = false;
         AccountManager.SignOut();
         accountError = null;
-        accountEmailInput = "";
-        accountPasswordInput = "";
         showingAccountSettings = false;
         showingAccountGate = true;
-        accountGateSignInMode = true;
-        accountGatePostClaimMode = false;
         RenderMenu();
     }
 
-    private void BuildLinkEmailFields(RectTransform panel)
+    // Shown in Settings when the player is on a bare anonymous session - i.e. everything
+    // they've done so far lives only in this install and dies with it. One button, because
+    // there is exactly one thing to do: get a real account.
+    private void BuildSignInPrompt(RectTransform panel)
     {
-        var header = TextObject("Header", panel, "LINK RECOVERY EMAIL", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        var header = TextObject("Header", panel, "SECURE YOUR ACCOUNT", 13, Muted, TextAnchor.UpperCenter, monoFont);
         header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(24f, -48f), new Vector2(-24f, -26f));
 
-        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
-        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -70f), new Vector2(-16f, -46f));
+        var note = TextObject("Note", panel,
+            "You're playing on this device only. Create a Unity account to keep your name, decks and rank if you reinstall or play elsewhere - and to be able to get back in if you forget your password.",
+            11, Muted, TextAnchor.UpperCenter, monoFont);
+        note.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(note.rectTransform, new Vector2(0.15f, 1f), new Vector2(0.85f, 1f), new Vector2(0f, -142f), new Vector2(0f, -76f));
 
-        var passwordField = MakeInput(panel, "Password", accountPasswordInput, s => accountPasswordInput = s, null,
-            settingsPasswordVisible ? InputField.ContentType.Standard : InputField.ContentType.Password);
-        Stretch(passwordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -106f), new Vector2(-70f, -82f));
+        AddCenteredButton(panel, accountBusy ? "Waiting for your browser..." : "Create Account or Sign In",
+            () => SignInWithUnityClicked(false), -168f, 280f, 40f, !accountBusy);
 
-        var eyeHolder = PanelObject("Eye Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(eyeHolder, new Vector2(1f, 1f), new Vector2(1f, 1f), new Vector2(-66f, -106f), new Vector2(-16f, -82f));
-        AddButton(eyeHolder, settingsPasswordVisible ? "HIDE" : "SHOW",
-            () => { settingsPasswordVisible = !settingsPasswordVisible; RenderMenu(); }, true, false, true);
-
-        if (!string.IsNullOrEmpty(accountError))
+        if (accountBusy)
         {
-            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
-            err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 100f));
+            // The browser is a separate window the player can lose track of entirely, so
+            // this needs an explicit way back rather than a menu that sits busy forever.
+            AddCenteredButton(panel, "Cancel", CancelUnitySignInClicked, -216f, 160f, 34f);
         }
 
-        var linkHolder = PanelObject("Link Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(linkHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
-        AddButton(linkHolder, accountBusy ? "Working..." : "Link Email", LinkEmailClicked, !accountBusy, false, true);
-
-        var signOutHolder = PanelObject("Sign Out Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(signOutHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, -14f), new Vector2(-16f, 16f));
-        AddButton(signOutHolder, signOutArmed ? "Sign out anyway" : "Sign Out", SignOutClicked, !accountBusy, false);
+        AddSignOutRow(panel);
     }
 
-    private void BuildRecoveryEmailFields(RectTransform panel)
+    // Opens Unity's hosted sign-in page in the system browser and waits for the round trip.
+    // `signingUp` only chooses which page they land on first - both pages link to each other,
+    // so it never traps anyone on the wrong one.
+    private async void SignInWithUnityClicked(bool signingUp)
     {
-        var header = TextObject("Header", panel, "RECOVERY EMAIL", 13, Muted, TextAnchor.UpperLeft, monoFont);
-        header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
-
-        var hint = TextObject("Hint", panel,
-            "A second address for this account. Reset codes can be sent to it, and it works for email sign-in - useful if you ever lose access to your main inbox.",
-            11, Muted, TextAnchor.UpperLeft, monoFont);
-        hint.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -96f), new Vector2(-16f, -42f));
-
-        var emailField = MakeInput(panel, "recovery@example.com", recoveryEmailInput, s2 => recoveryEmailInput = s2, null);
-        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -138f), new Vector2(-16f, -104f));
-
-        if (!string.IsNullOrEmpty(accountError))
-        {
-            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
-            err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -196f), new Vector2(-16f, -148f));
-        }
-
-        AddCenteredButton(panel, accountBusy ? "Working..." : "Save Recovery Email", SetRecoveryEmailClicked,
-            -204f, 220f, 38f, !accountBusy);
-        AddCenteredButton(panel, "< Back",
-            () => { accountSettingsRecoveryMode = false; accountError = null; RenderMenu(); },
-            -250f, 120f, 34f);
-    }
-
-    private async void SetRecoveryEmailClicked()
-    {
-        if (string.IsNullOrWhiteSpace(recoveryEmailInput) || !recoveryEmailInput.Contains("@"))
-        {
-            accountError = "Enter a valid email address.";
-            RenderMenu();
-            return;
-        }
         accountBusy = true;
         accountError = null;
         RenderMenu();
         try
         {
-            var result = await AccountManager.SetRecoveryEmailAsync(recoveryEmailInput.Trim());
+            var result = await AccountManager.SignInWithUnityAccountAsync(signingUp);
             if (this == null || menuRoot == null) return;
-            if (result.Ok) accountSettingsRecoveryMode = false;
-            else accountError = result.Message;
+
+            if (result.Ok)
+            {
+                signOutArmed = false;
+                // Signed in, but a brand-new account still has no game name. Keep the gate
+                // up and switch it to the claim step rather than dropping them into a menu
+                // that shows them as nameless.
+                if (string.IsNullOrEmpty(AccountManager.CurrentUsername))
+                {
+                    showingAccountGate = true;
+                    usernameInput = "";
+                    accountError = null;
+                }
+                else
+                {
+                    showingAccountGate = false;
+                    accountError = null;
+                }
+                RefreshIdentityDependentState();
+            }
+            else if (result.Reason == AccountFailureReason.Cancelled)
+            {
+                // Walked away from the browser. Not an error - say nothing.
+                accountError = null;
+            }
+            else
+            {
+                accountError = result.Message;
+            }
         }
         catch (Exception ex)
         {
@@ -4211,52 +4202,21 @@ public partial class MainMenuManager : MonoBehaviour
         }
     }
 
-    private void BuildPasswordResetFields(RectTransform panel)
+    private void CancelUnitySignInClicked()
     {
-        var header = TextObject("Header", panel, "RESET PASSWORD", 13, Muted, TextAnchor.UpperLeft, monoFont);
-        header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), new Vector2(0.55f, 1f), new Vector2(16f, -34f), new Vector2(-8f, -14f));
+        AccountManager.CancelUnityAccountSignIn();
+        accountError = null;
+        // accountBusy is cleared by the awaiting SignInWithUnityClicked when the cancelled
+        // task returns; don't clear it here or the two would race on the same flag.
+        RenderMenu();
+    }
 
-        // Back to the account summary — top-RIGHT of the panel on the header row (it used to sit at the
-        // very top and overlap the header).
-        var backHolder = PanelObject("Reset Back Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(backHolder, new Vector2(0.55f, 1f), new Vector2(1f, 1f), new Vector2(8f, -42f), new Vector2(-16f, -8f));
-        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        backHlg.childAlignment = TextAnchor.MiddleRight; backHlg.childControlWidth = false; backHlg.childControlHeight = false;
-        AddButton(backHolder, "< Back", () => { accountSettingsResetMode = false; accountError = null; RenderMenu(); }, true, false);
-
-        var emailField = MakeInput(panel, "Email", accountEmailInput, s => accountEmailInput = s, null);
-        Stretch(emailField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -76f), new Vector2(-16f, -52f));
-
-        var sendHolder = PanelObject("Send Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(sendHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -112f), new Vector2(-16f, -82f));
-        var sendHlg = sendHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        sendHlg.childAlignment = TextAnchor.MiddleLeft; sendHlg.childControlWidth = false; sendHlg.childControlHeight = false;
-        AddButton(sendHolder, accountBusy ? "Working..." : "Email Me a Code", RequestPasswordResetClicked, !accountBusy, false);
-
-        var tokenField = MakeInput(panel, "Code from email", resetTokenInput, s => resetTokenInput = s, null);
-        Stretch(tokenField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -160f), new Vector2(-16f, -130f));
-
-        var newPasswordField = MakeInput(panel, "New password", resetNewPasswordInput, s => resetNewPasswordInput = s, null,
-            InputField.ContentType.Password);
-        Stretch(newPasswordField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -198f), new Vector2(-16f, -168f));
-
-        var confirmPwField = MakeInput(panel, "Confirm new password", resetNewPasswordConfirmInput, s => resetNewPasswordConfirmInput = s, null,
-            InputField.ContentType.Password);
-        Stretch(confirmPwField, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -236f), new Vector2(-16f, -206f));
-
-        if (!string.IsNullOrEmpty(accountError))
-        {
-            var err = TextObject("Error", panel, accountError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
-            err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -292f), new Vector2(-16f, -246f));
-        }
-
-        var confirmHolder = PanelObject("Confirm Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(confirmHolder, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -340f), new Vector2(-16f, -304f));
-        var confHlg = confirmHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        confHlg.childAlignment = TextAnchor.MiddleLeft; confHlg.childControlWidth = false; confHlg.childControlHeight = false;
-        AddButton(confirmHolder, accountBusy ? "Working..." : "Set New Password", ConfirmPasswordResetClicked, !accountBusy, false);
+    // Re-pull the things that are keyed to WHO is signed in. Signing in swaps the identity
+    // (and therefore the local deck/replay scope, which is keyed by PlayerId), so anything
+    // cached against the previous identity has to be dropped rather than shown to the new one.
+    private void RefreshIdentityDependentState()
+    {
+        _ = AccountManager.EnsureProfileIconLoadedAsync();
     }
 
     private async void ClaimUsernameClicked()
@@ -4264,28 +4224,7 @@ public partial class MainMenuManager : MonoBehaviour
         if (string.IsNullOrWhiteSpace(usernameInput)) { accountError = "Enter a name first."; RenderMenu(); return; }
         if (usernameInput.Trim().Length < 3)
         {
-            // Unity's username/password login requires 3+ chars, and the claimed name
-            // doubles as the login username.
             accountError = "Names must be at least 3 characters.";
-            RenderMenu();
-            return;
-        }
-        if (string.IsNullOrWhiteSpace(accountEmailInput) || !accountEmailInput.Contains("@"))
-        {
-            accountError = "Enter a valid email address.";
-            RenderMenu();
-            return;
-        }
-        string pwProblem = PasswordProblem(accountPasswordInput);
-        if (pwProblem != null)
-        {
-            accountError = pwProblem;
-            RenderMenu();
-            return;
-        }
-        if (accountPasswordInput != accountPasswordConfirmInput)
-        {
-            accountError = "Passwords don't match - retype them to make sure.";
             RenderMenu();
             return;
         }
@@ -4294,36 +4233,16 @@ public partial class MainMenuManager : MonoBehaviour
         RenderMenu();
         try
         {
+            // Just the name now. Credentials are Unity's - there is no email or password
+            // to collect here any more, which is why this step no longer has a half-done
+            // state to recover from (the old flow could claim the name and then fail to
+            // link the login, stranding the player on a retry screen).
             var result = await AccountManager.ClaimUsernameAsync(usernameInput.Trim());
             if (this == null || menuRoot == null) return;
             if (result.Ok)
             {
-                // A signed-in account that ALREADY has credentials (e.g. recovered via
-                // sign-in but missing a username) just needed the claim - trying to
-                // link again would fail with "already linked". Done.
-                if (AccountManager.HasEmailLinked)
-                {
-                    showingAccountGate = false;
-                    accountPasswordInput = "";
-                    accountError = null;
-                    return;
-                }
-                var linkResult = await AccountManager.LinkEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
-                if (this == null || menuRoot == null) return;
-                if (linkResult.Ok)
-                {
-                    showingAccountGate = false;
-                    accountPasswordInput = "";
-                    accountPasswordConfirmInput = "";
-                    accountError = null;
-                }
-                else
-                {
-                    // Name is claimed; only the email link failed. Land on the retry
-                    // screen with the reason so they can fix it or skip.
-                    accountGatePostClaimMode = true;
-                    accountError = linkResult.Message;
-                }
+                showingAccountGate = false;
+                accountError = null;
             }
             else
             {
@@ -4343,179 +4262,6 @@ public partial class MainMenuManager : MonoBehaviour
                 RenderMenu();
             }
         }
-    }
-
-    private async void SignInWithEmailClicked()
-    {
-        if (string.IsNullOrWhiteSpace(accountEmailInput) || string.IsNullOrWhiteSpace(accountPasswordInput))
-        {
-            accountError = "Enter your email and password.";
-            RenderMenu();
-            return;
-        }
-        accountBusy = true;
-        accountError = null;
-        RenderMenu();
-        try
-        {
-            var result = await AccountManager.SignInWithEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
-            if (this == null || menuRoot == null) return;
-            if (result.Ok)
-            {
-                if (string.IsNullOrEmpty(AccountManager.CurrentUsername))
-                {
-                    // Recovered an account that has credentials but no claimed name
-                    // (possible after support-side data fixes): send them straight to
-                    // the claim screen instead of dropping them into the menu nameless.
-                    accountGateSignInMode = false;
-                    accountError = "Signed in! This account has no name yet - pick one to finish.";
-                }
-                else
-                {
-                    showingAccountGate = false;
-                }
-            }
-            else accountError = result.Message;
-        }
-        catch (Exception ex)
-        {
-            if (this == null || menuRoot == null) return;
-            accountError = $"Couldn't reach the server: {ex.Message}";
-        }
-        finally
-        {
-            if (this != null && menuRoot != null)
-            {
-                accountBusy = false;
-                RenderMenu();
-            }
-        }
-    }
-
-    private async void LinkEmailClicked()
-    {
-        if (string.IsNullOrWhiteSpace(accountEmailInput) || string.IsNullOrWhiteSpace(accountPasswordInput))
-        {
-            accountError = "Enter an email and password.";
-            RenderMenu();
-            return;
-        }
-        accountBusy = true;
-        accountError = null;
-        RenderMenu();
-        try
-        {
-            var result = await AccountManager.LinkEmailPasswordAsync(accountEmailInput.Trim(), accountPasswordInput);
-            if (this == null || menuRoot == null) return;
-            if (!result.Ok) accountError = result.Message;
-            else if (accountGatePostClaimMode) // reached from the claim retry screen
-            {
-                // Linked from the post-claim step - done with the whole gate.
-                accountGatePostClaimMode = false;
-                showingAccountGate = false;
-                accountPasswordInput = "";
-            }
-        }
-        catch (Exception ex)
-        {
-            if (this == null || menuRoot == null) return;
-            accountError = $"Couldn't reach the server: {ex.Message}";
-        }
-        finally
-        {
-            if (this != null && menuRoot != null)
-            {
-                accountBusy = false;
-                RenderMenu();
-            }
-        }
-    }
-
-    private async void RequestPasswordResetClicked()
-    {
-        if (string.IsNullOrWhiteSpace(accountEmailInput)) { accountError = "Enter your email first."; RenderMenu(); return; }
-        accountSettingsResetMode = true;
-        accountBusy = true;
-        accountError = null;
-        RenderMenu();
-        try
-        {
-            await AccountManager.RequestPasswordResetAsync(accountEmailInput.Trim());
-            if (this == null || menuRoot == null) return;
-            accountError = "If that email has an account, a code is on its way.";
-        }
-        catch (Exception ex)
-        {
-            if (this == null || menuRoot == null) return;
-            accountError = $"Couldn't reach the server: {ex.Message}";
-        }
-        finally
-        {
-            if (this != null && menuRoot != null)
-            {
-                accountBusy = false;
-                RenderMenu();
-            }
-        }
-    }
-
-    private async void ConfirmPasswordResetClicked()
-    {
-        if (string.IsNullOrWhiteSpace(resetTokenInput) || string.IsNullOrWhiteSpace(resetNewPasswordInput))
-        {
-            accountError = "Enter the code from your email and a new password.";
-            RenderMenu();
-            return;
-        }
-        string pwProblem = PasswordProblem(resetNewPasswordInput);
-        if (pwProblem != null) { accountError = pwProblem; RenderMenu(); return; }
-        if (resetNewPasswordInput != resetNewPasswordConfirmInput)
-        {
-            accountError = "Passwords don't match.";
-            RenderMenu();
-            return;
-        }
-        accountBusy = true;
-        accountError = null;
-        RenderMenu();
-        try
-        {
-            var result = await AccountManager.ConfirmPasswordResetAsync(resetTokenInput.Trim(), resetNewPasswordInput);
-            if (this == null || menuRoot == null) return;
-            accountError = result.Ok ? "Password updated - you can sign in with it now." : result.Message;
-        }
-        catch (Exception ex)
-        {
-            if (this == null || menuRoot == null) return;
-            accountError = $"Couldn't reach the server: {ex.Message}";
-        }
-        finally
-        {
-            if (this != null && menuRoot != null)
-            {
-                accountBusy = false;
-                RenderMenu();
-            }
-        }
-    }
-
-    // Mirrors Unity Authentication's password policy so failures are caught with a
-    // friendly message before the round-trip instead of an opaque SDK error after it.
-    private static string PasswordProblem(string pw)
-    {
-        if (string.IsNullOrEmpty(pw) || pw.Length < 8 || pw.Length > 30)
-            return "Password must be 8-30 characters.";
-        bool upper = false, lower = false, digit = false, symbol = false;
-        foreach (char c in pw)
-        {
-            if (char.IsUpper(c)) upper = true;
-            else if (char.IsLower(c)) lower = true;
-            else if (char.IsDigit(c)) digit = true;
-            else symbol = true;
-        }
-        if (!(upper && lower && digit && symbol))
-            return "Password needs an uppercase letter, a lowercase letter, a number, and a symbol.";
-        return null;
     }
 
     // ── Guest mode ────────────────────────────────────────────────────────────
@@ -4543,8 +4289,6 @@ public partial class MainMenuManager : MonoBehaviour
         string guestName = $"[Guest] {GuestTitles[rng.Next(GuestTitles.Length)]} {GuestCharacters[rng.Next(GuestCharacters.Length)]}";
         AccountManager.StartGuestSession(guestName);
         showingAccountGate = false;
-        accountGateSignInMode = false;
-        accountGatePostClaimMode = false;
         accountError = null;
         RenderMenu();
     }
@@ -5236,7 +4980,7 @@ public partial class MainMenuManager : MonoBehaviour
     // Open, or focus if already docked. Never opens a duplicate window for the same friend.
     private void OpenChat(string playerId, string username)
     {
-        if (string.IsNullOrEmpty(playerId) || AccountManager.IsGuest) return;
+        if (string.IsNullOrEmpty(playerId) || !AccountManager.HasClaimedIdentity) return;
         var w = FindChatWindow(playerId);
         if (w != null)
         {
@@ -5477,7 +5221,7 @@ public partial class MainMenuManager : MonoBehaviour
     private async void InviteFriendClicked(string playerId, string username)
     {
         if (string.IsNullOrEmpty(playerId)) return;
-        if (AccountManager.IsGuest) { showingAccountGate = true; RenderMenu(); return; }
+        if (!AccountManager.HasClaimedIdentity) { showingAccountGate = true; RenderMenu(); return; }
         if (!RankedStore.IsConfigured) { friendsError = "Invites aren't available yet."; RenderMenu(); return; }
         inviteBusy = true;
         friendsError = null;
@@ -5693,7 +5437,13 @@ public partial class MainMenuManager : MonoBehaviour
         {
             if (canvas != null) canvas.gameObject.SetActive(true);
             // A sealed practice match hands off through SealedMatchLaunch; if one is pending, start it.
-            if (OnePieceTcg.Sealed.SealedMatchLaunch.Requested != null) EnterVersusSelf();
+            if (OnePieceTcg.Sealed.SealedMatchLaunch.Requested != null)
+            {
+                CancelInvoke();
+                GameManager.LaunchSealedMatch();
+                if (canvas != null) Destroy(canvas.gameObject);
+                Destroy(gameObject);
+            }
             else RenderMenu();
         };
         OnePieceTcg.Sealed.SealedManager.Open();
@@ -5803,10 +5553,23 @@ public partial class MainMenuManager : MonoBehaviour
 
         // Game mode: Standard vs Forgiveness (adds an in-match rewind toggle — 1 turn / 1 action —
         // where either rewind needs the opponent's OK). Sent to both clients in the match-start payload.
-        var modeLabel = TextObject("Mode Label", panel, "Game mode", 11, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(modeLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -196f), new Vector2(-16f, -180f));
+        var typeLabel = TextObject("Game Type Label", panel, "Game type", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(typeLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -196f), new Vector2(-16f, -180f));
+        var typeRow = PanelObject("Game Type Row", panel, new Color(0, 0, 0, 0));
+        Stretch(typeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -234f), new Vector2(-16f, -200f));
+        var typeHlg = typeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
+        typeHlg.spacing = 8f; typeHlg.childAlignment = TextAnchor.MiddleLeft;
+        typeHlg.childControlWidth = false; typeHlg.childControlHeight = false;
+        BuildCustomGameOption(typeRow, "Constructed", "constructed");
+        BuildCustomGameOption(typeRow, "Sealed", "sealed");
+        if (lobbyCustomGame == "sealed")
+            AddButton(typeRow, "SET: " + lobbySealedSet + "  (CHANGE)", PickLobbySealedSet,
+                !lobbyBusy, false, false, 190f, 30f);
+
+        var modeLabel = TextObject("Mode Label", panel, "Rewind rules", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(modeLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -272f), new Vector2(-16f, -256f));
         var modeRow = PanelObject("Mode Row", panel, new Color(0, 0, 0, 0));
-        Stretch(modeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -234f), new Vector2(-16f, -200f));
+        Stretch(modeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -310f), new Vector2(-16f, -276f));
         var modeHlg = modeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         modeHlg.spacing = 8f; modeHlg.childAlignment = TextAnchor.MiddleLeft;
         modeHlg.childControlWidth = false; modeHlg.childControlHeight = false;
@@ -5817,14 +5580,14 @@ public partial class MainMenuManager : MonoBehaviour
             var fg = TextObject("Forgive Hint", panel, "Rewind (1 turn / 1 action) enabled — each rewind needs opponent approval.",
                 9, new Color(Accent.r, Accent.g, Accent.b, 0.85f), TextAnchor.UpperLeft, monoFont);
             fg.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(fg.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -270f), new Vector2(-16f, -238f));
+            Stretch(fg.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -346f), new Vector2(-16f, -314f));
         }
 
         // Timing: Standard (untimed) / Ranked (match clock + overtime) / Blitz (personal chess clocks).
         var timeLabel = TextObject("Timing Label", panel, "Timing", 11, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(timeLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -300f), new Vector2(-16f, -284f));
+        Stretch(timeLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -376f), new Vector2(-16f, -360f));
         var timeRow = PanelObject("Timing Row", panel, new Color(0, 0, 0, 0));
-        Stretch(timeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -338f), new Vector2(-16f, -304f));
+        Stretch(timeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -414f), new Vector2(-16f, -380f));
         var timeHlg = timeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         timeHlg.spacing = 8f; timeHlg.childAlignment = TextAnchor.MiddleLeft;
         timeHlg.childControlWidth = false; timeHlg.childControlHeight = false;
@@ -5836,12 +5599,12 @@ public partial class MainMenuManager : MonoBehaviour
             var rHint = TextObject("Ranked Hint", panel, "One shared match clock for the whole game (not per player), plus overtime.",
                 9, new Color(Gold.r, Gold.g, Gold.b, 0.85f), TextAnchor.UpperLeft, monoFont);
             rHint.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(rHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -372f), new Vector2(-16f, -344f));
+            Stretch(rHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -448f), new Vector2(-16f, -420f));
         }
         else if (lobbyTimingMode == "blitz")
         {
             var presetRow = PanelObject("Preset Row", panel, new Color(0, 0, 0, 0));
-            Stretch(presetRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -376f), new Vector2(-16f, -342f));
+            Stretch(presetRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -452f), new Vector2(-16f, -418f));
             var pHlg = presetRow.gameObject.AddComponent<HorizontalLayoutGroup>();
             pHlg.spacing = 6f; pHlg.childAlignment = TextAnchor.MiddleLeft;
             pHlg.childControlWidth = false; pHlg.childControlHeight = false;
@@ -5862,16 +5625,16 @@ public partial class MainMenuManager : MonoBehaviour
             var bHint = TextObject("Blitz Hint", panel, "Personal clock per player — " + blitzHint,
                 9, new Color(Gold.r, Gold.g, Gold.b, 0.85f), TextAnchor.UpperLeft, monoFont);
             bHint.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(bHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -398f), new Vector2(-16f, -380f));
+            Stretch(bHint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -474f), new Vector2(-16f, -456f));
 
             if (lobbyBlitzPreset == "custom")
             {
                 // Two-column compact fields: clocks (m:ss), per-action increment, and response limits.
-                BuildCustomField(panel, "Your clock (m:ss)", lobbyBlitzCustomSouthText, s => lobbyBlitzCustomSouthText = s, true, -412f);
-                BuildCustomField(panel, "Opponent clock", lobbyBlitzCustomNorthText, s => lobbyBlitzCustomNorthText = s, false, -412f);
-                BuildCustomField(panel, "+ sec / turn", lobbyBlitzCustomIncrementText, s => lobbyBlitzCustomIncrementText = s, true, -458f);
-                BuildCustomField(panel, "Response limit (s)", lobbyBlitzCustomResponseText, s => lobbyBlitzCustomResponseText = s, false, -458f);
-                BuildCustomField(panel, "Complex select (s)", lobbyBlitzCustomComplexText, s => lobbyBlitzCustomComplexText = s, true, -504f);
+                BuildCustomField(panel, "Your clock (m:ss)", lobbyBlitzCustomSouthText, s => lobbyBlitzCustomSouthText = s, true, -488f);
+                BuildCustomField(panel, "Opponent clock", lobbyBlitzCustomNorthText, s => lobbyBlitzCustomNorthText = s, false, -488f);
+                BuildCustomField(panel, "+ sec / turn", lobbyBlitzCustomIncrementText, s => lobbyBlitzCustomIncrementText = s, true, -534f);
+                BuildCustomField(panel, "Response limit (s)", lobbyBlitzCustomResponseText, s => lobbyBlitzCustomResponseText = s, false, -534f);
+                BuildCustomField(panel, "Complex select (s)", lobbyBlitzCustomComplexText, s => lobbyBlitzCustomComplexText = s, true, -580f);
             }
         }
 
@@ -6101,6 +5864,64 @@ public partial class MainMenuManager : MonoBehaviour
         btn.onClick.AddListener(() => { lobbyFormat = fmt; HostBroadcastLobbyState(); RenderMenu(); });
     }
 
+    private void BuildCustomGameOption(RectTransform parent, string label, string game)
+    {
+        bool selected = lobbyCustomGame == game;
+        var tile = PanelObject(label + " Custom Game Option", parent,
+            selected ? new Color(Accent.r, Accent.g, Accent.b, 0.16f) : new Color32(20, 30, 42, 200));
+        SetPreferred(tile, new Vector2(130, 30)); tile.sizeDelta = new Vector2(130, 30);
+        Round(tile); AddRoundedCardBorder(tile, selected ? Accent : MenuB, selected ? 1.6f : 1f);
+        var text = TextObject("Text", tile, label, 11, selected ? Ink : Muted, TextAnchor.MiddleCenter, monoFont);
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        tile.gameObject.AddComponent<Button>().onClick.AddListener(() =>
+        {
+            lobbyCustomGame = game;
+            localReady = peerReady = hostAutoStarted = false;
+            MatchNetworkSync.SendReady(false);
+            HostBroadcastLobbyState();
+            RenderMenu();
+        });
+    }
+
+    private void PickLobbySealedSet()
+    {
+        CancelInvoke();
+        UnsubscribeFromSessionEvents();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        OnePieceTcg.Sealed.SealedManager.OpenProductPicker(lobbySealedSet,
+            setCode =>
+            {
+                lobbySealedSet = setCode;
+                localReady = peerReady = hostAutoStarted = false;
+                MatchNetworkSync.SendReady(false);
+                reopenLobbyAfterPicker = true;
+                EnsureMenu();
+            },
+            () => { reopenLobbyAfterPicker = true; EnsureMenu(); });
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
+    private void PickLobbySealedLeader()
+    {
+        CancelInvoke();
+        UnsubscribeFromSessionEvents();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        OnePieceTcg.Sealed.SealedManager.OpenLeaderPicker(lobbySealedLeader,
+            id =>
+            {
+                lobbySealedLeader = id;
+                localReady = false;
+                MatchNetworkSync.SendReady(false);
+                MatchNetworkSync.SendSealedLeader(id);
+                reopenLobbyAfterPicker = true;
+                EnsureMenu();
+            },
+            () => { reopenLobbyAfterPicker = true; EnsureMenu(); });
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
+    }
+
     private void BuildJoinLobbyPanel(RectTransform panel)
     {
         var header = TextObject("Header", panel, "JOIN A LOBBY", 13, Muted, TextAnchor.UpperLeft, monoFont);
@@ -6226,17 +6047,25 @@ public partial class MainMenuManager : MonoBehaviour
         // is shared with the peer (OptcgDeckShare) and both decks ride inside the
         // match-start payload. No pick = that seat's starter default.
         SubscribeToSessionEvents(session);   // idempotent; re-attaches after a picker rebuild
+        bool sealedLobby = lobbyCustomGame == "sealed";
         var myDeck = DeckStore.Get(lobbyDeckId);
-        string myDeckName = myDeck != null ? myDeck.name
-            : (session.IsHost ? "Straw Hat Crew [ST01] (default)" : "Worst Generation [ST02] (default)");
-        var myDeckText = TextObject("My Deck", panel, $"YOUR DECK: {myDeckName}", 12, Ink, TextAnchor.UpperLeft, monoFont);
+        string myChoice = sealedLobby
+            ? (string.IsNullOrEmpty(lobbySealedLeader) ? "not selected" : OnePieceTcg.Engine.CardData.GetCard(lobbySealedLeader)?.Name ?? lobbySealedLeader)
+            : (myDeck != null ? myDeck.name
+                : (session.IsHost ? "Straw Hat Crew [ST01] (default)" : "Worst Generation [ST02] (default)"));
+        var myDeckText = TextObject("My Deck", panel,
+            $"YOUR {(sealedLobby ? "LEADER" : "DECK")}: {myChoice}", 12, Ink, TextAnchor.UpperLeft, monoFont);
         Stretch(myDeckText.rectTransform, new Vector2(0f, 1f), new Vector2(0.6f, 1f), new Vector2(16f, y - 24f), new Vector2(-8f, y));
         var pickHolder = PanelObject("Pick Deck Holder", panel, new Color(0, 0, 0, 0));
         Stretch(pickHolder, new Vector2(0.6f, 1f), Vector2.one, new Vector2(0f, y - 30f), new Vector2(-16f, y + 4f));
-        AddButton(pickHolder, "Select Deck", PickLobbyDeck, !lobbyBusy, false);
+        AddButton(pickHolder, sealedLobby ? "Select Leader" : "Select Deck",
+            sealedLobby ? PickLobbySealedLeader : PickLobbyDeck, !lobbyBusy, false);
         y -= 34f;
-        string peerDeckName = lobbyPeerDeck != null ? lobbyPeerDeck.name : "not chosen yet (starter default)";
-        var peerDeckText = TextObject("Peer Deck", panel, $"OPPONENT DECK: {peerDeckName}", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        string peerChoice = sealedLobby
+            ? (string.IsNullOrEmpty(lobbyPeerSealedLeader) ? "not selected" : OnePieceTcg.Engine.CardData.GetCard(lobbyPeerSealedLeader)?.Name ?? lobbyPeerSealedLeader)
+            : (lobbyPeerDeck != null ? lobbyPeerDeck.name : "not chosen yet (starter default)");
+        var peerDeckText = TextObject("Peer Deck", panel,
+            $"OPPONENT {(sealedLobby ? "LEADER" : "DECK")}: {peerChoice}", 11, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(peerDeckText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 22f), new Vector2(-16f, y));
         y -= 30f;
 
@@ -6262,6 +6091,17 @@ public partial class MainMenuManager : MonoBehaviour
                 hlg.childControlWidth = false; hlg.childControlHeight = false;
                 y -= h + 6f;
                 return row;
+            }
+
+            var gameRow = RuleRow("WR Game Type Row", 30f);
+            BuildCustomGameOption(gameRow, "Constructed", "constructed");
+            BuildCustomGameOption(gameRow, "Sealed", "sealed");
+
+            if (sealedLobby)
+            {
+                var setRow = RuleRow("WR Sealed Set Row", 30f);
+                AddButton(setRow, "SET: " + lobbySealedSet + "  (CHANGE)", PickLobbySealedSet, true, false,
+                    false, 190f, 30f);
             }
 
             var fmtRow = RuleRow("WR Format Row", 30f);
@@ -6291,7 +6131,8 @@ public partial class MainMenuManager : MonoBehaviour
         }
         string fmtName = (lobbyMode == "custom" && lobbyFormat == "extra") ? "Extra Regulation (all blocks)" : "Standard (Blocks 2–5)";
         string timingName = session.IsHost ? LobbyTimingSummary() : lobbyTimingSummary;
-        string rules = $"Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}"
+        string rules = (sealedLobby ? $"Mode: SEALED     Set: {lobbySealedSet}     " : "Mode: CONSTRUCTED     ")
+            + $"Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}"
             + (lobbyIgnoreBans ? "     Ban list: IGNORED" : "");
         var rulesText = TextObject("Rules", panel, rules, 11, Accent2, TextAnchor.UpperLeft, monoFont);
         rulesText.horizontalOverflow = HorizontalWrapMode.Wrap;
@@ -6312,15 +6153,17 @@ public partial class MainMenuManager : MonoBehaviour
         // guest on "Connecting…". The guest always sends its name on connect, so this can't stall.
         // Ranked auto-launch already waits on this (rankedGuestReady); custom's manual Start didn't.
         // (P2 in Tools/Sim/docs/lobby-connectivity-audit-2026-07.md.)
-        bool peerHandlersReady = lobbyPeerName != null || lobbyPeerDeck != null;
+        bool peerHandlersReady = lobbyPeerName != null || lobbyPeerDeck != null || lobbyPeerSealedLeader != null;
         bool connected = bothPresent && networkReady && peerHandlersReady;
-        bool deckPicked = lobbyDeckId != null;   // "after they've locked in their deck"
+        bool deckPicked = sealedLobby ? !string.IsNullOrEmpty(lobbySealedLeader) : lobbyDeckId != null;
 
         string noteMessage;
         if (!bothPresent) noteMessage = "Waiting for another player to join...";
         else if (!connected) noteMessage = "Both players are here. Finishing connection...";
-        else if (!deckPicked) noteMessage = "Select your deck, then hit Ready. The match starts once BOTH players are ready.";
-        else noteMessage = $"You: {(localReady ? "READY ✓" : "not ready")}    ·    Opponent: {(peerReady ? "READY ✓" : "not ready")}    ·    The match starts automatically when both are ready.";
+        else if (!deckPicked) noteMessage = $"Select your {(sealedLobby ? "leader" : "deck")}, then hit Ready.";
+        else noteMessage = $"You: {(localReady ? "READY ✓" : "not ready")}    ·    Opponent: {(peerReady ? "READY ✓" : "not ready")}"
+            + (sealedLobby ? $"    ·    Agree on {lobbySealedSet}; both Ready starts pack opening."
+                           : "    ·    The match starts automatically when both are ready.");
         var noteText = TextObject("Note", panel, noteMessage,
             11, connected && localReady && peerReady ? GoodGreen : Muted, TextAnchor.UpperLeft, monoFont);
         noteText.horizontalOverflow = HorizontalWrapMode.Wrap;
@@ -6389,6 +6232,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyPeerDeck = null;
         lobbyPeerName = null;
+        lobbyPeerSealedLeader = null;
         localReady = false;
         peerReady = false;
         hostAutoStarted = false;
@@ -6421,14 +6265,38 @@ public partial class MainMenuManager : MonoBehaviour
             forgiveness = lobbyForgiveness,
             timing = LobbyTimingSummary(),
             ignoreBans = lobbyIgnoreBans,
+            game = lobbyCustomGame,
+            sealedSet = lobbySealedSet,
         });
         MatchNetworkSync.SendReady(localReady);
+        if (!string.IsNullOrEmpty(lobbySealedLeader)) MatchNetworkSync.SendSealedLeader(lobbySealedLeader);
+    }
+
+    private void ResyncCustomLobbyState()
+    {
+        ShareLobbyDeck();
+        if (!string.IsNullOrEmpty(lobbySealedLeader))
+            MatchNetworkSync.SendSealedLeader(lobbySealedLeader);
+        MatchNetworkSync.SendReady(localReady);
+        MatchNetworkSync.SendPeerName(
+            AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName);
+        HostBroadcastLobbyState();
     }
 
     // Peer toggled ready. Track it; if BOTH are ready, the host commits the match once.
     private void OnPeerReadyReceived(bool ready)
     {
         peerReady = ready;
+        if (!ready && pendingSealedBuild != null)
+        {
+            CancelInvoke(nameof(RetryPendingSealedBuild));
+            pendingSealedBuild = null;
+            lobbyBusy = false;
+            hostAutoStarted = false;
+            localReady = false;
+            MatchNetworkSync.SendReady(false);
+            lobbyError = "The opponent cancelled Ready. Both players remain in the lobby.";
+        }
         if (showingLobbyHub) RenderMenu();
         TryLobbyAutoStart();
     }
@@ -6437,10 +6305,20 @@ public partial class MainMenuManager : MonoBehaviour
     private void OnLobbySettingsReceived(LobbySettingsPayload p)
     {
         if (p == null) return;
+        bool sealedChoiceChanged = lobbyCustomGame != (p.game == "sealed" ? "sealed" : "constructed")
+            || (!string.IsNullOrEmpty(p.sealedSet)
+                && !string.Equals(lobbySealedSet, p.sealedSet, StringComparison.OrdinalIgnoreCase));
         lobbyFormat = p.format == "extra" ? "extra" : "standard";
         lobbyForgiveness = p.forgiveness;
         lobbyTimingSummary = string.IsNullOrEmpty(p.timing) ? "Untimed" : p.timing;
         lobbyIgnoreBans = p.ignoreBans;
+        lobbyCustomGame = p.game == "sealed" ? "sealed" : "constructed";
+        if (!string.IsNullOrEmpty(p.sealedSet)) lobbySealedSet = p.sealedSet;
+        if (sealedChoiceChanged && localReady)
+        {
+            localReady = false;
+            MatchNetworkSync.SendReady(false);
+        }
         if (showingLobbyHub) RenderMenu();
     }
 
@@ -6453,10 +6331,13 @@ public partial class MainMenuManager : MonoBehaviour
         if (lobbyMode != "custom" || hostAutoStarted) return;
         var s = LobbyManager.CurrentSession;
         if (s == null || !s.IsHost) return;
-        if (localReady && peerReady && lobbyPeerDeck != null && !lobbyBusy)
+        bool sealedGame = lobbyCustomGame == "sealed";
+        bool peerChoiceReady = sealedGame ? !string.IsNullOrEmpty(lobbyPeerSealedLeader) : lobbyPeerDeck != null;
+        if (localReady && peerReady && peerChoiceReady && !lobbyBusy && MatchNetworkSync.IsPeerConnected)
         {
             hostAutoStarted = true;
-            StartMatchClicked();
+            if (sealedGame) StartNetworkSealedBuild();
+            else StartMatchClicked();
         }
     }
 
@@ -6467,6 +6348,8 @@ public partial class MainMenuManager : MonoBehaviour
         // Re-share our deck alongside readying so the peer definitely has our real pick before the match
         // commits (guards the "selected a deck but got the starter default" race).
         if (localReady) ShareLobbyDeck();
+        if (localReady && lobbyCustomGame == "sealed" && !string.IsNullOrEmpty(lobbySealedLeader))
+            MatchNetworkSync.SendSealedLeader(lobbySealedLeader);
         MatchNetworkSync.SendReady(localReady);
         RenderMenu();
         TryLobbyAutoStart();
@@ -6479,6 +6362,95 @@ public partial class MainMenuManager : MonoBehaviour
         TryHostLaunch();                      // ranked/casual: the deck may arrive AFTER the name — launch now
         TryLobbyAutoStart();                  // custom: deck may arrive AFTER "ready"; commit now that we have it
         if (showingLobbyHub) RenderMenu();   // live-update the "OPPONENT DECK" line
+    }
+
+    private void OnPeerSealedLeaderReceived(string leaderId)
+    {
+        lobbyPeerSealedLeader = leaderId;
+        TryLobbyAutoStart();
+        if (showingLobbyHub) RenderMenu();
+    }
+
+    private void StartNetworkSealedBuild()
+    {
+        if (!MatchNetworkSync.IsPeerConnected)
+        {
+            hostAutoStarted = false;
+            lobbyError = "Your opponent disconnected before sealed deck building could start.";
+            RenderMenu();
+            return;
+        }
+        pendingSealedBuild = new SealedBuildStartPayload
+        {
+            seed = Guid.NewGuid().ToString("N"),
+            setCode = lobbySealedSet,
+            southLeader = lobbySealedLeader,
+            northLeader = lobbyPeerSealedLeader,
+            forgiveness = lobbyForgiveness,
+            format = lobbyFormat,
+            blitz = LobbyBlitzConfig(),
+        };
+        pendingSealedBuildAttempts = 0;
+        lobbyBusy = true;
+        RetryPendingSealedBuild();
+        InvokeRepeating(nameof(RetryPendingSealedBuild), 2f, 2f);
+        RenderMenu();
+    }
+
+    private void OnSealedBuildStartReceived(SealedBuildStartPayload payload)
+    {
+        if (payload == null || string.IsNullOrEmpty(payload.seed) || string.IsNullOrEmpty(payload.setCode)
+            || string.IsNullOrEmpty(payload.southLeader) || string.IsNullOrEmpty(payload.northLeader)) return;
+        if (!localReady)
+        {
+            MatchNetworkSync.SendReady(false);
+            return;
+        }
+        // The build payload is authoritative. Lobby settings and this message use separate named
+        // message handlers, so do not drop a valid build if a delayed settings packet arrives second.
+        lobbyCustomGame = "sealed";
+        lobbySealedSet = payload.setCode;
+        MatchNetworkSync.SendSealedBuildAcknowledgement(payload.seed);
+        LaunchNetworkSealedBuilder(payload, "north");
+    }
+
+    private void RetryPendingSealedBuild()
+    {
+        if (pendingSealedBuild == null) { CancelInvoke(nameof(RetryPendingSealedBuild)); return; }
+        if (!MatchNetworkSync.IsPeerConnected || pendingSealedBuildAttempts >= 5)
+        {
+            CancelInvoke(nameof(RetryPendingSealedBuild));
+            pendingSealedBuild = null;
+            lobbyBusy = false;
+            hostAutoStarted = false;
+            localReady = false;
+            MatchNetworkSync.SendReady(false);
+            lobbyError = "The opponent did not confirm sealed deck building. Both players remain in the lobby; reconnect and Ready again.";
+            RenderMenu();
+            return;
+        }
+        pendingSealedBuildAttempts++;
+        MatchNetworkSync.SendSealedBuildStart(pendingSealedBuild);
+    }
+
+    private void OnSealedBuildAcknowledged(string seed)
+    {
+        if (pendingSealedBuild == null || !string.Equals(pendingSealedBuild.seed, seed, StringComparison.Ordinal)) return;
+        var payload = pendingSealedBuild;
+        pendingSealedBuild = null;
+        CancelInvoke(nameof(RetryPendingSealedBuild));
+        lobbyBusy = false;
+        LaunchNetworkSealedBuilder(payload, "south");
+    }
+
+    private void LaunchNetworkSealedBuilder(SealedBuildStartPayload payload, string seat)
+    {
+        CancelInvoke();
+        UnsubscribeFromSessionEvents();
+        if (canvas != null) canvas.gameObject.SetActive(false);
+        OnePieceTcg.Sealed.SealedManager.OpenNetworked(payload, seat);
+        if (canvas != null) Destroy(canvas.gameObject);
+        Destroy(gameObject);
     }
 
     private void OnPeerNameReceived(string name)
@@ -6615,7 +6587,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (rankedQueueActive) return;
         if (!RankedStore.IsConfigured) { lobbyError = "Matchmaking isn't available yet."; RenderMenu(); return; }
-        if (AccountManager.IsGuest) { showingAccountGate = true; RenderMenu(); return; }
+        if (!AccountManager.HasClaimedIdentity) { showingAccountGate = true; RenderMenu(); return; }
 
         // Casual and Ranked are Standard-only. Enforce it HERE — the single chokepoint every queue path
         // funnels through — so a Standard-illegal deck can never enter, not just when it's picked. The
@@ -7040,6 +7012,7 @@ public partial class MainMenuManager : MonoBehaviour
         // a no-op — re-send now that there's actually a peer to receive it. The
         // display name rides along the same way (turn indicator / chat prefixes).
         ShareLobbyDeck();
+        if (!string.IsNullOrEmpty(lobbySealedLeader)) MatchNetworkSync.SendSealedLeader(lobbySealedLeader);
         MatchNetworkSync.SendPeerName(
             AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName);
         // Host: push the lobby rules (format/forgiveness/timing) the instant a peer connects, so the GUEST has
@@ -7062,8 +7035,13 @@ public partial class MainMenuManager : MonoBehaviour
         UnsubscribeFromSessionEvents();
         MatchNetworkSync.MatchStartReceived -= OnNetworkMatchStartReceived;
         MatchNetworkSync.DeckShareReceived -= OnPeerDeckShared;
+        MatchNetworkSync.PeerNameReceived -= OnPeerNameReceived;
         MatchNetworkSync.ReadyReceived -= OnPeerReadyReceived;
         MatchNetworkSync.LobbySettingsReceived -= OnLobbySettingsReceived;
+        MatchNetworkSync.SealedLeaderReceived -= OnPeerSealedLeaderReceived;
+        MatchNetworkSync.SealedBuildStartReceived -= OnSealedBuildStartReceived;
+        MatchNetworkSync.SealedBuildAcknowledged -= OnSealedBuildAcknowledged;
+        CancelInvoke(nameof(RetryPendingSealedBuild));
         FriendsManager.FriendsChanged -= OnFriendsChanged;
     }
 
@@ -7568,6 +7546,17 @@ public partial class MainMenuManager : MonoBehaviour
     {
         var d = DeckStore.Get(deckId);
         if (d == null) return null;
+
+        // The menu renders (and therefore resolves decks) BEFORE GameManager has parsed the
+        // official card library, so at boot every non-starter id resolves to the "unknown"
+        // placeholder and EVERY real deck fails construction legality — observed in Player.log as
+        // three "Deck 'Navy' is not a legal deck … OP16-060 is not a leader card" warnings logged
+        // ABOVE the "Loaded 2636 official One Piece card definitions." line. Returning null there
+        // marks a perfectly legal deck unusable. We cannot validate what hasn't loaded; letting the
+        // deck through is correct, because every path that actually STARTS a match re-resolves it
+        // once the library is up.
+        if (!OnePieceTcg.Engine.CardData.OfficialLibraryLoaded) return d;
+
         var problems = OnePieceTcg.Engine.DeckConstructionLegality.Problems(
             d.leaderId, d.cards.Select(e => (e.id, e.count)));
         if (problems.Count == 0) return d;

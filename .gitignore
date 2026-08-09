@@ -49,8 +49,18 @@ sysinfo.txt
 # Other VCS this project also uses (Unity Version Control / Plastic)
 .plastic/
 
-# Large card-art asset library — synced via Plastic SCM cloud instead of git
-/Assets/StreamingAssets/Cards/
+# Large card-art asset library — synced via Plastic SCM cloud instead of git.
+# Pack wrappers are a small release dependency and are intentionally versioned.
+/Assets/StreamingAssets/Cards/*
+!/Assets/StreamingAssets/Cards/Packs/
+!/Assets/StreamingAssets/Cards/Packs/**
+# The synthetic Release Event Leader is not part of the bulk card-art sync, but
+# Sealed needs its one small, stable image in desktop builds and the CDN manifest.
+!/Assets/StreamingAssets/Cards/OfficialById/
+/Assets/StreamingAssets/Cards/OfficialById/*
+!/Assets/StreamingAssets/Cards/OfficialById/SEALED.meta
+!/Assets/StreamingAssets/Cards/OfficialById/SEALED/
+!/Assets/StreamingAssets/Cards/OfficialById/SEALED/**
 
 # Sim harness build output (Tools/ is outside Assets/, so Unity's [Oo]bj/ rule above doesn't reach it)
 /Tools/Sim/bin/

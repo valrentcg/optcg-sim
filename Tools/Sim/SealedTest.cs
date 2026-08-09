@@ -31,6 +31,8 @@ namespace OnePieceTcg.Sim
             SeedsAreDeterministicAndShareable();
             PoolAndDeckRulesHold();
             AiBuildsALegalSealedDeck();
+            TieredAiConstruction();
+            AdvancedPilotAcceptsSealedBuild();
             EventRunsAFullSwiss();
             LeaderFormatVariants();
             BuilderFiltersAndViews();
@@ -45,6 +47,20 @@ namespace OnePieceTcg.Sim
             Check("newest set is first (OP16)", products.FirstOrDefault()?.SetCode == "OP16");
             Check("no starter/promo products leaked in",
                 products.All(p => p.SetCode.StartsWith("OP") || p.SetCode.StartsWith("EB")));
+
+            var requiredExtraBoosters = new[] { "EB01", "EB02", "EB03" };
+            Check("EB01-EB03 are selectable products",
+                requiredExtraBoosters.All(code => products.Any(p => p.SetCode == code)));
+            Check("EB01-EB03 generate complete 12-card packs without UC cards",
+                requiredExtraBoosters.All(code =>
+                {
+                    var product = SealedCatalog.Find(code);
+                    var packs = PackGenerator.Open(product, "extra-booster-shape-" + code);
+                    return product != null && packs.Count == product.PackCount
+                        && packs.All(pack => pack.Cards.Count == 12)
+                        && packs.SelectMany(pack => pack.Cards)
+                            .All(card => card.CardId.StartsWith(code + "-", StringComparison.OrdinalIgnoreCase));
+                }));
         }
 
         // The published composition of a modern booster set. If ID-prefix filtering is right, OP16's
@@ -210,6 +226,97 @@ namespace OnePieceTcg.Sim
             Check($"A.I. decks keep real Counter density ({counterOk}/{trials})", counterOk >= trials - 4);
         }
 
+        private static void TieredAiConstruction()
+        {
+            var product = SealedCatalog.Find("OP16");
+            product.LeaderMode = SealedLeaderMode.FreeSelect;
+            const string selectedLeader = "ST01-001";
+            const int trials = 36;
+            int legal = 0, samePacks = 0, selected = 0, tierDifferences = 0;
+            int advancedPriority = 0, intermediatePriority = 0, beginnerPriority = 0, availablePriority = 0;
+            int advancedCounters = 0, intermediateCounters = 0, beginnerCounters = 0;
+
+            string PackFingerprint(SealedPool p) => string.Join(",",
+                p.Packs.SelectMany(pack => pack.Cards).Select(c => c.CardId + (c.IsParallel ? "*" : "")));
+            int PriorityInPool(SealedPool p) => p.PoolCounts().Sum(kv =>
+            {
+                var d = CardData.GetCard(kv.Key);
+                return d != null && d.Type != "leader"
+                    && (d.Counter >= 2000 || SealedPool.HasKeyword(d, "Blocker")) ? kv.Value : 0;
+            });
+            int PriorityInDeck(SealedPool p) => p.Deck.Sum(kv =>
+            {
+                var d = CardData.GetCard(kv.Key);
+                return d != null && (d.Counter >= 2000 || SealedPool.HasKeyword(d, "Blocker")) ? kv.Value : 0;
+            });
+            string DeckFingerprint(SealedPool p) => string.Join(",",
+                p.Deck.OrderBy(kv => kv.Key).Select(kv => kv.Key + "x" + kv.Value));
+
+            for (int i = 0; i < trials; i++)
+            {
+                var advanced = SealedDeckAI.BuildOpponent(product, "tier-build", i, "advanced", selectedLeader);
+                var intermediate = SealedDeckAI.BuildOpponent(product, "tier-build", i, "intermediate", selectedLeader);
+                var beginner = SealedDeckAI.BuildOpponent(product, "tier-build", i, "beginner", selectedLeader);
+
+                if (advanced.Validate().Ok && intermediate.Validate().Ok && beginner.Validate().Ok) legal++;
+                if (PackFingerprint(advanced) == PackFingerprint(intermediate)
+                    && PackFingerprint(advanced) == PackFingerprint(beginner)) samePacks++;
+                if (advanced.Packs.Count == product.PackCount && intermediate.Packs.Count == product.PackCount
+                    && beginner.Packs.Count == product.PackCount) selected++;
+                if (advanced.LeaderId != selectedLeader || intermediate.LeaderId != selectedLeader
+                    || beginner.LeaderId != selectedLeader) selected--;
+                if (DeckFingerprint(advanced) != DeckFingerprint(intermediate)
+                    && DeckFingerprint(advanced) != DeckFingerprint(beginner)) tierDifferences++;
+
+                availablePriority += PriorityInPool(advanced);
+                advancedPriority += PriorityInDeck(advanced);
+                intermediatePriority += PriorityInDeck(intermediate);
+                beginnerPriority += PriorityInDeck(beginner);
+                advancedCounters += advanced.DeckStats().Counter1000 + advanced.DeckStats().Counter2000;
+                intermediateCounters += intermediate.DeckStats().Counter1000 + intermediate.DeckStats().Counter2000;
+                beginnerCounters += beginner.DeckStats().Counter1000 + beginner.DeckStats().Counter2000;
+            }
+
+            Check($"all three build tiers produce legal decks ({legal}/{trials})", legal == trials);
+            Check($"all tiers open the same independent six-pack pool ({samePacks}/{trials})", samePacks == trials);
+            Check("the selected opponent Leader is used before all three builds",
+                selected == trials);
+            Check($"difficulty changes the selected 40-card deck ({tierDifferences}/{trials})",
+                tierDifferences >= trials * 3 / 4);
+            Check($"Advanced retains at least as many priority Blockers/2Ks "
+                + $"(A {advancedPriority}, I {intermediatePriority}, B {beginnerPriority} of {availablePriority})",
+                advancedPriority >= intermediatePriority && intermediatePriority >= beginnerPriority);
+            Check($"Advanced keeps at least as much Counter density "
+                + $"(A {advancedCounters}, I {intermediateCounters}, B {beginnerCounters})",
+                advancedCounters >= intermediateCounters && intermediateCounters >= beginnerCounters);
+        }
+
+        private static void AdvancedPilotAcceptsSealedBuild()
+        {
+            var product = SealedCatalog.Find("OP16");
+            product.LeaderMode = SealedLeaderMode.FreeSelect;
+            const string leader = "ST01-001";
+            var strong = SealedDeckAI.BuildOpponent(product, "advanced-sealed-pilot", 1, "advanced", leader);
+            var noisy = SealedDeckAI.BuildOpponent(product, "advanced-sealed-pilot", 2, "beginner", leader);
+            int finished = 0, invalid = 0;
+            for (int game = 0; game < 2; game++)
+            {
+                bool swap = game == 1;
+                var southDeck = (swap ? noisy : strong).ToDeckDef(swap ? "Beginner Build" : "Advanced Build");
+                var northDeck = (swap ? strong : noisy).ToDeckDef(swap ? "Advanced Build" : "Beginner Build");
+                var record = MatchDriver.Play(
+                    new ShippedAdvancedAgent("sealed-advanced-south"),
+                    new ShippedAdvancedAgent("sealed-advanced-north"),
+                    southDeck, northDeck, "sealed-pilot-" + game,
+                    game == 0 ? "south" : "north",
+                    new MatchDriver.Options { CommandCap = 12000 });
+                if (record.end == "life" || record.end == "deckout") finished++;
+                if (record.end == "stall" || record.end == "cap" || record.end == "crash") invalid++;
+            }
+            Check($"shipped Advanced can pilot tier-built sealed decks to completion ({finished}/2)",
+                finished == 2 && invalid == 0);
+        }
+
         private static void EventRunsAFullSwiss()
         {
             var product = SealedCatalog.Find("OP16");
@@ -277,6 +384,9 @@ namespace OnePieceTcg.Sim
             Check("Rainbow Luffy matches the printed card: 5000 power, 5 Life, Strike, Straw Hat Crew",
                 rainbow.Power == 5000 && rainbow.Life == 5
                 && rainbow.Attribute == "Strike" && rainbow.Rarity == "L");
+            Check("Rainbow Luffy exposes the complete printed rules text",
+                rainbow.Effect.Contains("only be used in designated events", StringComparison.OrdinalIgnoreCase)
+                && rainbow.Effect.Contains("all card names, types, and attributes", StringComparison.OrdinalIgnoreCase));
 
             var st = GameEngine.CreateMatch(new MatchConfig { SouthDeck = "st01", NorthDeck = "st02", Seed = "rainbow" });
             var leaderInst = new CardInstance { InstanceId = "rl", CardId = SealedLeaderRules.RainbowLuffyId, Owner = "south", Zone = "leader" };

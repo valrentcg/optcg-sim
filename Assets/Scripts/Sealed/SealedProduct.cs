@@ -97,6 +97,29 @@ namespace OnePieceTcg.Sealed
                 }),
             },
         };
+
+        /// <summary>English Extra Boosters also contain 12 cards, but their base set has no UC
+        /// rarity at all. Keep the two rare-or-better positions and fill the remaining ten slots
+        /// from the Common sheet. Hit weights remain approximate, as they are for the standard
+        /// collation, and missing weighted rarities safely fall back in PackGenerator.</summary>
+        public static PackCollation ExtraBooster() => new PackCollation
+        {
+            CardsPerPack = 12,
+            PacksPerBox = 24,
+            Slots =
+            {
+                PackSlot.Fixed(Rarity.Common, 10),
+                PackSlot.Fixed(Rarity.Rare, 1),
+                PackSlot.Weights(new Dictionary<string, double>
+                {
+                    { Rarity.Leader,     12.0 / 24 },
+                    { Rarity.SuperRare,   8.0 / 24 },
+                    { Rarity.SecretRare,  1.0 / 24 },
+                    { Rarity.Special,     1.0 / 144 },
+                    { Rarity.Rare,        2.958 / 24 },
+                }),
+            },
+        };
     }
 
     /// <summary>A sealed product the player can choose: which set, how many packs, and the deck rules
@@ -216,9 +239,9 @@ namespace OnePieceTcg.Sealed
                 ["OP14"] = ("Beyond the Dawn", "Mar 2026"),
                 ["OP15"] = ("Crown of Ambition", "Jun 2026"),
                 ["OP16"] = ("The Time of Battle", "Sep 2026"),
-                ["EB01"] = ("Memorial Collection", "Jul 2024"),
-                ["EB02"] = ("Anime 25th Collection", "Feb 2025"),
-                ["EB03"] = ("Reflections of Bonds", "Nov 2025"),
+                ["EB01"] = ("Memorial Collection", "May 2024"),
+                ["EB02"] = ("Anime 25th Collection", "May 2025"),
+                ["EB03"] = ("One Piece Heroines Edition", "Feb 2026"),
                 ["EB04"] = ("Ultra Deck Collection", "Mar 2026"),
             };
 
@@ -245,6 +268,9 @@ namespace OnePieceTcg.Sealed
                     SetCode = code,
                     DisplayName = meta.name ?? code,
                     ReleaseDate = meta.released ?? "",
+                    Collation = code.StartsWith("EB", StringComparison.OrdinalIgnoreCase)
+                        ? PackCollation.ExtraBooster()
+                        : PackCollation.StandardBooster(),
                 };
                 if (p.IsPlayable(out _)) products.Add(p);
             }

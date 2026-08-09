@@ -48,6 +48,9 @@ static class CardLibraryLoader
                 Str(el, "block"));
             n++;
         }
+        // Parity with Unity's GameManager.ParseOfficialCardLibrary: anything that judges a
+        // card by its data (deck legality) must be able to tell "loaded" from "seeded only".
+        CardData.MarkOfficialLibraryLoaded();
         return n;
     }
 

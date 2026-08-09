@@ -77,7 +77,12 @@ namespace OnePieceTcg.Engine
             var lead = CardData.GetCard(leaderId);
             var list = entries?.ToList() ?? new List<(string id, int count)>();
 
-            if (string.IsNullOrEmpty(leaderId) || lead == null) msgs.Add("No leader selected");
+            // CardData.Has, NOT `lead == null`: GetCard never returns null, so the old null check
+            // was dead and an id missing from the library fell through to the type check below —
+            // where the placeholder's Type ("unknown") and Name (the id itself) rendered as the
+            // nonsense "OP16-060 is not a leader card" for a card that is very much a Leader.
+            if (string.IsNullOrEmpty(leaderId)) msgs.Add("No leader selected");
+            else if (!CardData.Has(leaderId)) msgs.Add($"Unknown leader {leaderId}");
             else if (!string.Equals(lead.Type, "leader", System.StringComparison.OrdinalIgnoreCase))
                 msgs.Add($"{lead.Name} is not a leader card");
 
@@ -94,7 +99,7 @@ namespace OnePieceTcg.Engine
                 string id = group.Key;
                 int count = group.Sum(g => g.count);
                 var def = CardData.GetCard(id);
-                if (def == null) { msgs.Add($"Unknown card {id}"); continue; }
+                if (!CardData.Has(id)) { msgs.Add($"Unknown card {id}"); continue; }   // see the leader note above
 
                 int maxCopies = MaxCopiesFor(id);
                 if (count > maxCopies) msgs.Add($"{def.Name}: {count} copies (max {maxCopies})");

@@ -1,17 +1,5 @@
-// One Piece TCG — Sealed / Pre-Release: reusable effect primitives for the pack rip and the
-// rarity payoffs.
-//
-// What makes a pack opening feel physical, distilled from how the good ones do it:
-//   ANTICIPATION  the pack is alive before you touch it — a specular glint travels across the foil
-//   PROPAGATION   the tear ZIPS across the seal rather than the top simply vanishing; you see the
-//                 torn paper edge left behind, so the pack reads as paper and not as a rectangle
-//   ESCAPE        light gets out through the widening tear, and its colour foreshadows the pull
-//   DEBRIS        foil flecks burst off the tear front — small, but it is what sells "ripped"
-//   WEIGHT        a shake on separation, scaled to what is actually in the pack
-//   HIERARCHY     commons flow past; a Super Rare stops the sequence; a Secret Rare takes the screen
-//
-// All of it is plain uGUI quads driven by unscaled-time coroutines: no particle system, no shaders,
-// no new art. Anything here can be dropped into any screen in the mode.
+// One Piece TCG — Sealed / Pre-Release: reusable uGUI light primitives for the pack opening.
+// The active sequence uses feathered additive sprites instead of square particle debris.
 
 using System;
 using System.Collections;
@@ -56,6 +44,11 @@ namespace OnePieceTcg.Sealed
         /// own rect. This is what stops the wrapper reading as a flat rectangle while it sits there.</summary>
         public static IEnumerator Glint(RectTransform pack, float dur, float alpha = 0.5f)
         {
+            yield return GlintTinted(pack, dur, alpha, Color.white);
+        }
+
+        public static IEnumerator GlintTinted(RectTransform pack, float dur, float alpha, Color tint)
+        {
             if (pack == null) yield break;
 
             // Clip to the pack so the band never spills onto the backdrop.
@@ -63,7 +56,7 @@ namespace OnePieceTcg.Sealed
             clip.gameObject.AddComponent<RectMask2D>();
 
             float w = pack.sizeDelta.x, h = pack.sizeDelta.y;
-            var band = Quad(clip, "Glint", new Color(1f, 1f, 1f, alpha), new Vector2(w * 0.20f, h * 1.9f));
+            var band = Quad(clip, "Glint", new Color(tint.r, tint.g, tint.b, alpha), new Vector2(w * 0.20f, h * 1.9f));
             band.localRotation = Quaternion.Euler(0, 0, 22f);
 
             float t = 0f;
@@ -163,7 +156,7 @@ namespace OnePieceTcg.Sealed
 
         // ---- light -----------------------------------------------------------------------------
 
-        /// <summary>God rays: long thin wedges around a point, slowly rotating. Returns the root so the
+        /// <summary>Broad feathered rays around a point, slowly rotating. Returns the root so the
         /// caller can fade and destroy it.</summary>
         public static RectTransform Rays(RectTransform parent, Vector2 at, Color colour, int count, float length)
         {
@@ -171,12 +164,101 @@ namespace OnePieceTcg.Sealed
             root.anchoredPosition = at;
             for (int i = 0; i < count; i++)
             {
-                var ray = Quad(root, "Ray", colour, new Vector2(UnityEngine.Random.Range(9f, 26f), length));
+                var ray = Quad(root, "Ray", colour, new Vector2(UnityEngine.Random.Range(44f, 82f), length));
+                var image = ray.GetComponent<Image>();
+                image.sprite = UiGlow.Sprite;
+                image.material = UiGlow.Additive;
                 ray.pivot = new Vector2(0.5f, 0f);            // rotate about the origin point
                 ray.anchoredPosition = Vector2.zero;
                 ray.localRotation = Quaternion.Euler(0, 0, (360f / count) * i + UnityEngine.Random.Range(-8f, 8f));
             }
             return root;
+        }
+
+        /// <summary>A feathered additive halo that expands behind a revealed card.</summary>
+        public static IEnumerator SoftGlow(RectTransform parent, Vector2 at, Color colour,
+            float fromSize, float toSize, float dur, float maxAlpha)
+        {
+            var glow = Quad(parent, "Soft Glow", new Color(colour.r, colour.g, colour.b, 0f),
+                Vector2.one * fromSize);
+            glow.anchoredPosition = at;
+            glow.SetAsFirstSibling();
+            var image = glow.GetComponent<Image>();
+            image.sprite = UiGlow.Sprite;
+            image.material = UiGlow.Additive;
+
+            float t = 0f;
+            while (t < dur && glow != null)
+            {
+                t += Time.unscaledDeltaTime;
+                float k = Mathf.Clamp01(t / dur);
+                float size = Mathf.Lerp(fromSize, toSize, EaseOut(k));
+                glow.sizeDelta = Vector2.one * size;
+                SetAlpha(glow, maxAlpha * Mathf.Sin(k * Mathf.PI));
+                yield return null;
+            }
+            if (glow != null) UnityEngine.Object.Destroy(glow.gameObject);
+        }
+
+        /// <summary>Small crossed light-stars that twinkle out of a freshly opened seam. These use
+        /// feathered additive strokes rather than ParticleSystem quads, so even a compact burst reads
+        /// as polished sparkles instead of square debris.</summary>
+        public static IEnumerator RipSparkles(RectTransform parent, Vector2 at, Color colour,
+            int count, float width, float life)
+        {
+            if (parent == null) yield break;
+            var roots = new List<RectTransform>(count);
+            var velocities = new List<Vector2>(count);
+            var delays = new List<float>(count);
+            var scales = new List<float>(count);
+
+            for (int i = 0; i < count; i++)
+            {
+                var root = Quad(parent, "Rip Sparkle", Color.clear, Vector2.one);
+                root.anchoredPosition = at + new Vector2(UnityEngine.Random.Range(-width, width),
+                    UnityEngine.Random.Range(-8f, 10f));
+                float scale = UnityEngine.Random.Range(0.72f, 1.35f);
+                AddStroke(root, new Vector2(3.2f, 24f) * scale);
+                AddStroke(root, new Vector2(15f, 2.4f) * scale);
+                roots.Add(root);
+                velocities.Add(new Vector2(UnityEngine.Random.Range(-26f, 26f), UnityEngine.Random.Range(22f, 72f)));
+                delays.Add(UnityEngine.Random.Range(0f, life * 0.34f));
+                scales.Add(scale);
+            }
+
+            float t = 0f;
+            while (t < life)
+            {
+                float dt = Time.unscaledDeltaTime;
+                t += dt;
+                for (int i = 0; i < roots.Count; i++)
+                {
+                    var star = roots[i];
+                    if (star == null) continue;
+                    float local = Mathf.Clamp01((t - delays[i]) / Mathf.Max(0.05f, life - delays[i]));
+                    float twinkle = local <= 0f ? 0f : Mathf.Sin(local * Mathf.PI);
+                    star.anchoredPosition += velocities[i] * dt;
+                    star.localRotation *= Quaternion.Euler(0f, 0f, 32f * dt);
+                    star.localScale = Vector3.one * scales[i] * (0.55f + twinkle * 0.65f);
+                    foreach (Transform child in star)
+                    {
+                        var image = child.GetComponent<Image>();
+                        if (image == null) continue;
+                        image.color = new Color(colour.r, colour.g, colour.b, twinkle * colour.a);
+                    }
+                }
+                yield return null;
+            }
+            foreach (var star in roots) if (star != null) UnityEngine.Object.Destroy(star.gameObject);
+
+            void AddStroke(RectTransform star, Vector2 size)
+            {
+                var stroke = Quad(star, "Glow Stroke", new Color(colour.r, colour.g, colour.b, 0f), size);
+                stroke.anchoredPosition = Vector2.zero;
+                var image = stroke.GetComponent<Image>();
+                image.sprite = UiGlow.Sprite;
+                image.material = UiGlow.Additive;
+            }
         }
 
         public static IEnumerator SpinAndFade(RectTransform rays, float spinDegPerSec, float dur, float startAlpha)

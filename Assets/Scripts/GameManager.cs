@@ -689,6 +689,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     card.attribute,
                     card.block);
             }
+            CardData.MarkOfficialLibraryLoaded();
             Debug.Log($"Loaded {seen.Count} official One Piece card definitions.");
         }
         catch (System.Exception ex)
@@ -774,6 +775,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         EnsureBoard();
     }
 
+    /// <summary>Launch a pending SealedMatchLaunch directly. Unlike the constructed versus-self
+    /// bridge this needs no DeckStore ids: NewMatch consumes both sealed DeckDefs and routes north
+    /// through the selected A.I. tier.</summary>
+    public static void LaunchSealedMatch()
+    {
+        PendingAiNorth = true;
+        EnsureBoard();
+    }
+
     // Converts a deck-builder DeckData (leaderId + main-deck DeckEntry list) into
     // the engine's DeckDef. Returns null if the deck has no leader assigned.
     private static DeckDef BuildDeckDef(DeckData d)
@@ -811,6 +821,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             config.SouthDeckDef = sealedLaunch.PlayerDeck;
             config.NorthDeckDef = sealedLaunch.OpponentDeck;
             if (!string.IsNullOrEmpty(sealedLaunch.Seed)) config.Seed = sealedLaunch.Seed + ":match";
+            PendingAiNorth = true;
+            PendingAiDifficulty = string.IsNullOrEmpty(sealedLaunch.AiDifficulty)
+                ? "intermediate" : sealedLaunch.AiDifficulty;
         }
         else if (!string.IsNullOrEmpty(PendingSouthDeckId) && !string.IsNullOrEmpty(PendingNorthDeckId))
         {
@@ -10139,6 +10152,17 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // effects) with its [Trigger] text — not just bare buttons.
             if (b.RevealedLife != null) AddEffectCardVisual(body, b.RevealedLife.CardId);
             AddInfo(body, "Revealed: " + (revealed != null ? revealed.Name : "?"));
+            // State the card's ordinary printed effect independently of its Trigger. Previously a
+            // non-Trigger Life card only said that it would enter the player's hand, forcing them to
+            // read tiny card art to understand what they had just drawn. This remains private to the
+            // defending player's Trigger panel, just like the revealed card itself.
+            if (revealed != null)
+            {
+                if (!string.IsNullOrWhiteSpace(revealed.Effect))
+                    AddScaledInfo(body, "Card effect: " + revealed.Effect.Trim());
+                else
+                    AddInfo(body, "Card effect: None (vanilla card).");
+            }
             if (revealed != null && !string.IsNullOrWhiteSpace(revealed.Trigger))
             {
                 AddInfo(body, "[Trigger] pending: " + revealed.Trigger);
@@ -16116,9 +16140,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
-
-
 
 
 

@@ -214,6 +214,8 @@ namespace OnePieceTcg.Engine.Puzzles
 
         public static string WinnerOf(GameState g)
         {
+            if (g == null) return null;
+            if (g.WinnerSeat == "south" || g.WinnerSeat == "north") return g.WinnerSeat;
             for (int i = g.EventLog.Count - 1; i >= 0; i--)
             {
                 var m = g.EventLog[i].Message;

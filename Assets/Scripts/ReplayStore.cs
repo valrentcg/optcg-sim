@@ -78,6 +78,24 @@ public sealed class ReplayRecord
 {
     public string Id;              // timestamp-sortable, also the filename stem
     public string SavedAtIso;
+
+    // ── Engine behaviour version ──────────────────────────────────────────────
+    // A replay is only reproducible against an engine that asks the SAME QUESTIONS the recording
+    // client answered. Every time the engine gains a player decision it used to resolve silently,
+    // older histories stop being replayable: the resim parks on a prompt no command answers.
+    //
+    // That already happened, unnoticed. The 2026-07-30 trigger-step fix (removing the auto-skip
+    // that leaked whether a Life card was a [Trigger]) and the 1.0.31 declinable-cost work both
+    // added decision points. Measured on 21 real pre-change replays: 20 never reach their recorded
+    // ending — they stall at the first damage event or the first optional cost. Nothing detected
+    // this because the record carried no version at all, so a stalled replay looked like a replay
+    // that simply ended.
+    //
+    // 0 (the default for any record written before this field existed) means "legacy": the reader
+    // must enable the compatibility shims (GameEngine.LegacyTriggerAutoSkip, …) to reproduce it.
+    // BUMP THIS whenever a change adds or removes a decision point, and add the matching shim.
+    public const int CurrentEngineVersion = 1;
+    public int EngineVersion;
     public string Seed;
     public string SouthDeckId;     // deck-builder deck id; empty = starter default (st01)
     public string NorthDeckId;     // empty = starter default (st02)
@@ -168,6 +186,7 @@ public static class ReplayStore
         {
             Id = DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff"),
             SavedAtIso = DateTime.UtcNow.ToString("o"),
+            EngineVersion = ReplayRecord.CurrentEngineVersion,
             Seed = config.Seed,
             SouthDeckId = config.SouthDeckDef?.Id,
             NorthDeckId = config.NorthDeckDef?.Id,
@@ -244,9 +263,11 @@ public static class ReplayStore
         return parts.Length == 2 ? (parts[0], parts[1]) : (null, null);
     }
 
-    /// <summary>Every win path logs "{name} wins." as a "system" entry right before Status flips.</summary>
+    /// <summary>Structured engine outcome first; display-log parsing is retained for legacy replay states.</summary>
     private static string ExtractWinner(GameState state)
     {
+        if (state.WinnerSeat != null && state.Players.TryGetValue(state.WinnerSeat, out var winner))
+            return winner?.Name;
         const string suffix = " wins.";
         for (int i = state.EventLog.Count - 1; i >= 0; i--)
         {

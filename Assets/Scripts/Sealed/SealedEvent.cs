@@ -62,7 +62,8 @@ namespace OnePieceTcg.Sealed
         /// <summary>Create an event: the human's pool plus N-1 A.I. entrants, each with their OWN
         /// seeded pool derived from the event seed, and each with a deck already built.</summary>
         public static SealedEvent Create(SealedProduct product, string seed, SealedPool humanPool,
-            int playerCount = 8, bool timed = true)
+            int playerCount = 8, bool timed = true, string aiDifficulty = "advanced",
+            string aiLeaderId = null)
         {
             seed = PackGenerator.NormalizeSeed(seed);
             var ev = new SealedEvent
@@ -84,7 +85,7 @@ namespace OnePieceTcg.Sealed
 
             for (int i = 1; i < ev.PlayerCount; i++)
             {
-                var aiPool = SealedDeckAI.BuildOpponent(product, seed, i);
+                var aiPool = SealedDeckAI.BuildOpponent(product, seed, i, aiDifficulty, aiLeaderId);
                 ev.Entrants.Add(new SealedEntrant
                 {
                     Id = "ai" + i,

@@ -25,6 +25,8 @@ namespace OnePieceTcg.Sealed
         public static readonly Color Gold = new Color32(226, 188, 74, 255);
 
         private static Font legacy;
+        private static Sprite standardBackground;
+        private static Shader cardGlowShader;
         public static Font Legacy =>
             legacy != null ? legacy : (legacy = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
 
@@ -63,6 +65,103 @@ namespace OnePieceTcg.Sealed
         }
 
         public static void Fill(RectTransform rt) => Stretch(rt, Vector2.zero, Vector2.one);
+
+        /// <summary>The deep blue play-mat language used by the rest of the client.</summary>
+        public static void AddStandardBackground(RectTransform parent)
+        {
+            var bg = Panel(parent, "Blue Background", Color.white);
+            Fill(bg);
+            bg.GetComponent<Image>().sprite = StandardBackgroundSprite();
+            bg.SetAsFirstSibling();
+            AddAmbientGlow(parent, "Upper Cyan Bloom", new Vector2(0.14f, 0.28f),
+                new Vector2(0.88f, 1.12f), new Color(0.08f, 0.48f, 0.72f, 0.11f));
+            AddAmbientGlow(parent, "Lower Blue Bloom", new Vector2(0.34f, -0.22f),
+                new Vector2(1.08f, 0.54f), new Color(0.04f, 0.27f, 0.55f, 0.08f));
+        }
+
+        private static Sprite StandardBackgroundSprite()
+        {
+            if (standardBackground != null) return standardBackground;
+            const int W = 8, H = 256;
+            var tex = new Texture2D(W, H, TextureFormat.RGBA32, false);
+            tex.filterMode = FilterMode.Bilinear; tex.wrapMode = TextureWrapMode.Clamp;
+            var px = new Color32[W * H];
+            Color bottom = new Color32(13, 38, 50, 255), top = new Color32(13, 33, 60, 255);
+            for (int y = 0; y < H; y++)
+            {
+                Color c = Color.Lerp(bottom, top, y / (H - 1f));
+                for (int x = 0; x < W; x++) px[y * W + x] = c;
+            }
+            tex.SetPixels32(px); tex.Apply(false, true);
+            standardBackground = Sprite.Create(tex, new Rect(0, 0, W, H), new Vector2(0.5f, 0.5f), 100f);
+            return standardBackground;
+        }
+
+        private static void AddAmbientGlow(RectTransform parent, string name, Vector2 min, Vector2 max, Color colour)
+        {
+            var glow = Panel(parent, name, colour);
+            Stretch(glow, min, max);
+            var image = glow.GetComponent<Image>();
+            image.sprite = UiGlow.Sprite;
+            image.material = UiGlow.Additive;
+            glow.SetAsFirstSibling();
+            var background = parent.Find("Blue Background") as RectTransform;
+            if (background != null) background.SetAsFirstSibling();
+        }
+
+        /// <summary>Add the same animated preview rim used by cards in a match.</summary>
+        public static RectTransform AddCardPreviewGlow(RectTransform holder)
+        {
+            if (holder == null) return null;
+            if (cardGlowShader == null) cardGlowShader = Shader.Find("UI/CardHoverGlow");
+            if (cardGlowShader == null) { Border(holder, Gold, 2.5f); return null; }
+            const float expand = 0.28f;
+            var go = new GameObject("Preview Glow", typeof(RectTransform), typeof(RawImage));
+            var rt = go.GetComponent<RectTransform>();
+            rt.SetParent(holder, false);
+            rt.anchorMin = new Vector2(-expand, -expand); rt.anchorMax = new Vector2(1f + expand, 1f + expand);
+            rt.offsetMin = rt.offsetMax = Vector2.zero; rt.SetAsFirstSibling();
+            var image = go.GetComponent<RawImage>();
+            image.texture = Texture2D.whiteTexture; image.raycastTarget = false;
+            var material = new Material(cardGlowShader);
+            material.SetColor("_GlowColor", new Color(1.00f, 0.59f, 0.10f, 1f) * 1.28f);
+            material.SetColor("_CoreColor", new Color(1.00f, 0.80f, 0.38f, 1f) * 1.12f);
+            material.SetColor("_OuterColor", new Color(0.82f, 0.29f, 0.04f, 1f) * 1.05f);
+            material.SetFloat("_Speed", 0.55f); material.SetFloat("_NoiseScale", 3.0f);
+            material.SetFloat("_Pulse", 0.22f);
+            image.material = material;
+            go.AddComponent<CardPreviewGlowDriver>().Init(image, expand);
+            return rt;
+        }
+
+        private sealed class CardPreviewGlowDriver : MonoBehaviour
+        {
+            private static readonly int IntensityId = Shader.PropertyToID("_Intensity");
+            private Material material; private RectTransform rect; private float expand, intensity;
+            public void Init(RawImage image, float expandFraction)
+            {
+                rect = image.rectTransform; material = image.material; expand = expandFraction;
+                if (material != null) material.SetFloat(IntensityId, 0f);
+            }
+            private void Update()
+            {
+                if (material == null || rect == null) return;
+                Vector2 glow = rect.rect.size;
+                if (glow.x > 1f && glow.y > 1f)
+                {
+                    Vector2 card = glow / (1f + 2f * expand); float edge = Mathf.Min(card.x, card.y);
+                    material.SetVector("_GlowSize", new Vector4(glow.x, glow.y, 0f, 0f));
+                    material.SetVector("_CardSize", new Vector4(card.x, card.y, 0f, 0f));
+                    material.SetFloat("_CornerPx", edge * 0.06f); material.SetFloat("_BleedPx", edge * 0.05f);
+                    material.SetFloat("_GlowWidthPx", edge * 0.075f);
+                    material.SetFloat("_CoreWidthPx", Mathf.Max(1.5f, edge * 0.02f));
+                    material.SetFloat("_WispPx", edge * 0.06f);
+                }
+                intensity = Mathf.MoveTowards(intensity, 1f, 6.5f * Time.unscaledDeltaTime);
+                material.SetFloat(IntensityId, intensity);
+            }
+            private void OnDestroy() { if (material != null) Destroy(material); }
+        }
 
         public static RectTransform Button(RectTransform parent, string label, Color bg, Color fg, Action onClick,
             int size = 12, bool bold = true)

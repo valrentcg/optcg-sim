@@ -110,8 +110,7 @@ module.exports = async ({ params, context, logger }) => {
   //
   // Unlike the registry write above, this one must UPDATE cleanly if an entry
   // already exists (setCustomItem without writeLock is create-only and throws
-  // otherwise - same bug class RegisterEmailForRecovery.js had). Non-fatal on
-  // failure: the claim itself already stands.
+  // otherwise). Non-fatal on failure: the claim itself already stands.
   try {
     const idxLookup = await cloudSaveApi.getCustomItems(projectId, CUSTOM_ID_PLAYER_USERNAMES, [
       playerId,

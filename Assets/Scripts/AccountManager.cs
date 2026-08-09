@@ -6,15 +6,34 @@
 // concern MatchNetworkSync and a future FriendsManager will also depend on independently
 // of whether a lobby is active.
 //
-// Unity's Username/Password identity provider has no built-in "forgot password" flow
-// (confirmed absent from the installed Authentication SDK), so RequestPasswordResetAsync/
-// ConfirmPasswordResetAsync call our own Cloud Code scripts (RequestPasswordReset.js /
-// ConfirmPasswordReset.js) that implement it via a mailed token instead.
+// CREDENTIALS ARE UNITY'S PROBLEM, NOT OURS (2026-07-31 migration).
+// This used to sit on Unity's Username/Password identity provider, which has NO built-in
+// "forgot password" flow - so recovery was a hand-rolled stack: a mailed token in Cloud
+// Save, Resend as the mail vendor, a service account, and an admin API call to force-set
+// the password. That was ~400 lines of JS, three secrets and a third-party dependency, and
+// it shipped broken (the admin call went to a URL that didn't exist).
+//
+// It is now Unity Player Accounts: a hosted browser flow that owns signup, EMAIL
+// VERIFICATION (which we never had) and password reset. Unity sends the mail. We store no
+// passwords and no email->account index. Recovery happens entirely at accounts.unity.com,
+// so there is nothing here for us to break.
+//
+// Player Accounts ships INSIDE com.unity.services.authentication (the standalone
+// com.unity.services.playeraccounts package is a 2023 pre-release relic - do not install
+// it). The assembly is autoReferenced, so no manifest change was needed.
+//
+// What did NOT change: usernames. ClaimUsername.js still owns the unique 16-char display
+// name + profanity filter, because friend lookup depends on that uniqueness and Unity's own
+// Player Names feature would only offer "Name#1234". Login is now email-based and fully
+// decoupled from the display name, which is strictly cleaner than the old arrangement where
+// the claimed username doubled as the Unity Auth login.
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Unity.Services.Authentication;
+using Unity.Services.Authentication.PlayerAccounts;
 using Unity.Services.CloudCode;
 using Unity.Services.CloudSave;
 using Unity.Services.Core;
@@ -33,6 +52,12 @@ public enum AccountFailureReason
     InvalidCredentials,
     InvalidOrExpiredToken,
     NoNetwork,
+    // Player Accounts outcomes. Cancelled is a first-class, non-error result: the
+    // browser flow is trivially abandonable (player closes the tab, alt-tabs away
+    // and forgets) and that must not read as a failure in the UI.
+    Cancelled,
+    NotConfigured,
+    ServerMisconfigured,
     Unknown,
 }
 
@@ -75,17 +100,97 @@ public static class AccountManager
     private const string UsernameCloudSaveKey = "username";
 
     public static string CurrentUsername { get; private set; }
-    public static bool HasEmailLinked { get; private set; }
 
-    // Display copies of the account's email addresses. The credential itself is
-    // username+password (emails are just registry lookups server-side), so these
-    // exist purely so the settings UI can show what's on file. Persisted in Cloud
-    // Save player data because Unity Auth has no API to read back an identity's
-    // email address.
-    public static string PrimaryEmail { get; private set; }
-    public static string RecoveryEmail { get; private set; }
+    /// <summary>True when this session is backed by a Unity Player Account rather than
+    /// a bare anonymous session. An anonymous account signed out is unrecoverable, so the
+    /// sign-out flow warns when this is false.
+    ///
+    /// THIS CANNOT JUST ASK PlayerAccountService. Its refresh token is held in memory only
+    /// (verified in the SDK source - nothing persists it), so after an app restart
+    /// PlayerAccountService.IsSignedIn is FALSE even though Unity Authentication has
+    /// happily restored the real session from its own cached token. Trusting it alone
+    /// would tell a perfectly good account "you're playing on this device only" on every
+    /// launch, and arm the "you'll lose this account forever" sign-out warning. That is
+    /// the same restart-blindness the old email-linked flag had, arriving by a new route.
+    /// Three sources, cheapest first, any one of them is proof.</summary>
+    public static bool HasUnityAccount
+    {
+        get
+        {
+            // 1. Browser sign-in completed during THIS run.
+            try { if (PlayerAccountService.Instance.IsSignedIn) return true; }
+            catch { /* services not initialized yet */ }
 
-    private const string EmailsCloudSaveKey = "accountEmails";
+            // 2. A restored UGS session carrying a linked Unity identity. Needs
+            //    RefreshUnityAccountAsync to have run - PlayerInfo is bare at boot.
+            try
+            {
+                if (!string.IsNullOrEmpty(AuthenticationService.Instance.PlayerInfo?.GetUnityId()))
+                    return true;
+            }
+            catch { /* not signed in yet */ }
+
+            // 3. Local memory, keyed per player. Set when we KNOW (a successful sign-in),
+            //    and only ever upgrades to true - an identity list that comes back empty
+            //    is not treated as proof of absence.
+            try { return PlayerPrefs.GetInt(UnityAccountPrefKey, 0) == 1; }
+            catch { return false; }
+        }
+    }
+
+    private static string UnityAccountPrefKey => "account_unity_linked_" + SafePlayerId();
+    private static string SafePlayerId()
+    {
+        try { return AuthenticationService.Instance.PlayerId ?? "none"; }
+        catch { return "none"; }
+    }
+    private static void RememberUnityAccount()
+    {
+        PlayerPrefs.SetInt(UnityAccountPrefKey, 1);
+        PlayerPrefs.Save();
+    }
+
+    /// <summary>Populates PlayerInfo.Identities for a session restored at boot, so
+    /// HasUnityAccount's source #2 can answer. A bare restored PlayerInfo has an empty
+    /// identity list until this is fetched. Never throws - offline just leaves the other
+    /// two sources to answer.</summary>
+    public static async Task RefreshUnityAccountAsync()
+    {
+        try
+        {
+            var info = await AuthenticationService.Instance.GetPlayerInfoAsync();
+            if (!string.IsNullOrEmpty(info?.GetUnityId())) RememberUnityAccount();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"RefreshUnityAccount failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>The account's email, straight from the Player Accounts ID token - we do
+    /// not store it. Null until the player signs in through the browser flow (an
+    /// anonymous or guest session has no email), and null if the `email` OAuth scope is
+    /// ever turned off in Project Settings.</summary>
+    public static string AccountEmail
+    {
+        get
+        {
+            try { return PlayerAccountService.Instance.IdTokenClaims?.Email; }
+            catch { return null; }
+        }
+    }
+
+    /// <summary>Whether Unity has confirmed the player owns that address. Unity drives
+    /// verification itself; we only report it. The old hand-rolled flow had no concept of
+    /// this at all - anyone could register any address they didn't own.</summary>
+    public static bool AccountEmailVerified
+    {
+        get
+        {
+            try { return PlayerAccountService.Instance.IdTokenClaims?.EmailVerified ?? false; }
+            catch { return false; }
+        }
+    }
 
     // Stable key for scoping LOCAL storage (decks, replays) to whoever is using
     // the game right now, so accounts and guests on the same machine never see
@@ -204,58 +309,23 @@ public static class AccountManager
         }
     }
 
-    [Serializable]
-    private class EmailsBlob { public string primary; public string recovery; }
-
-    // Local per-player memory that a credential exists. Unity's GetPlayerInfoAsync
-    // has proven unreliable at reporting username/password identities (returns an
-    // empty list for accounts that demonstrably sign in with credentials), so the
-    // game records the fact itself at the moments it KNOWS: a successful
-    // AddUsernamePasswordAsync or a successful credential sign-in.
-    private static string LinkedPrefKey => "account_linked_" + SafePlayerId();
-    private static string SafePlayerId()
+    /// <summary>Unity's hosted account portal (change password, change email, delete
+    /// account). Opening it is the entire "manage my account" feature now - the URL comes
+    /// from the SDK rather than being hardcoded, so it follows Unity if they move it.</summary>
+    public static void OpenAccountPortal()
     {
-        try { return AuthenticationService.Instance.PlayerId ?? "none"; }
-        catch { return "none"; }
-    }
-    private static void RememberLinked()
-    {
-        HasEmailLinked = true;
-        PlayerPrefs.SetInt(LinkedPrefKey, 1);
-        PlayerPrefs.Save();
+        string url = null;
+        try { url = PlayerAccountService.Instance.AccountPortalUrl; }
+        catch (Exception ex) { Debug.LogWarning($"Account portal URL unavailable: {ex.Message}"); }
+        Application.OpenURL(string.IsNullOrEmpty(url) ? "https://player-login.unity.com" : url);
     }
 
-    private static async Task SaveEmailsAsync()
+    /// <summary>Unity's hosted "forgot password" page. Reachable WITHOUT being signed in,
+    /// which is the whole point - it's the one screen a locked-out player needs, and it is
+    /// the same page the sign-in flow links to.</summary>
+    public static void OpenPasswordReset()
     {
-        var blob = new EmailsBlob { primary = PrimaryEmail ?? "", recovery = RecoveryEmail ?? "" };
-        await CloudSaveService.Instance.Data.Player.SaveAsync(new Dictionary<string, object>
-        { [EmailsCloudSaveKey] = JsonUtility.ToJson(blob) });
-    }
-
-    // Registers an additional email for this account: it lands in the same
-    // emailRegistry the password-reset and email-sign-in flows read, so reset
-    // codes can be sent to either address and either signs you in.
-    public static async Task<AccountResult> SetRecoveryEmailAsync(string email)
-    {
-        await EnsureReadyAsync();
-        if (string.IsNullOrEmpty(CurrentUsername))
-            return AccountResult.Fail(AccountFailureReason.Unknown, "Claim a name first.");
-        try
-        {
-            var response = await CloudCodeService.Instance.CallEndpointAsync<SimpleOkResponse>(
-                "RegisterEmailForRecovery", new Dictionary<string, object>
-                { ["email"] = email, ["username"] = CurrentUsername });
-            if (!response.ok)
-                return AccountResult.Fail(ParseReason(response.reason), "Couldn't register that email.");
-
-            RecoveryEmail = email;
-            await SaveEmailsAsync();
-            return AccountResult.Success();
-        }
-        catch (RequestFailedException ex)
-        {
-            return AccountResult.Fail(AccountFailureReason.NoNetwork, $"Couldn't reach the server: {ex.Message}");
-        }
+        Application.OpenURL("https://player-login.unity.com/request-reset-password");
     }
 
     // ── Guest mode ──────────────────────────────────────────────────────────
@@ -283,6 +353,20 @@ public static class AccountManager
     /// "Unknown Pirate" even while everyone in the match saw their name. Resolve it in ONE place so
     /// the ladder cannot disagree with the rest of the app about who someone is.</summary>
     public static string DisplayName => CurrentUsername ?? CachedUsername ?? GuestDisplayName;
+
+    /// <summary>Whether this player has a CLAIMED username — the precondition for every
+    /// online feature that reports or displays an identity (ranked, invites, chat).
+    ///
+    /// `!IsGuest` is NOT sufficient on its own, which is what these call sites used to check.
+    /// A guest has a display name but no claimed one; a player who has just signed in with
+    /// Unity has NEITHER until the claim step completes. That second state didn't exist
+    /// before Player Accounts (the old flow claimed the name first, then attached the
+    /// login), and in it DisplayName is null — so a ranked report would carry
+    /// `username: null` and land the player on the ladder as an unnamed entry, the same
+    /// way guests once did. The gate normally blocks that window, but the ladder should
+    /// not depend on a UI modal being up to stay correct.</summary>
+    public static bool HasClaimedIdentity =>
+        !IsGuest && !string.IsNullOrEmpty(CurrentUsername ?? CachedUsername);
 
     public static void StartGuestSession(string displayName)
     {
@@ -350,48 +434,17 @@ public static class AccountManager
         set { PlayerPrefs.SetInt(StaySignedInPrefKey, value ? 1 : 0); PlayerPrefs.Save(); }
     }
 
-    // Reflects the username/password identity on the signed-in player, so HasEmailLinked
-    // survives app restarts instead of only being true in the session where linking
-    // happened. IMPORTANT: a cached session resumed at boot has a bare PlayerInfo whose
-    // Identities list is NOT populated - it must be fetched with GetPlayerInfoAsync(),
-    // otherwise a fully-linked account looks unlinked after every restart (and the
-    // sign-out flow shows a scary "you'll lose this account" warning it shouldn't).
-    public static async Task RefreshEmailLinkedAsync()
-    {
-        try
-        {
-            // Local memory first: if this player linked a credential on this machine,
-            // that fact is definitive regardless of what the identity endpoint says.
-            if (PlayerPrefs.GetInt(LinkedPrefKey, 0) == 1) HasEmailLinked = true;
-
-            var info = await AuthenticationService.Instance.GetPlayerInfoAsync();
-            var ids = info?.Identities ?? AuthenticationService.Instance.PlayerInfo?.Identities;
-            if (ids != null)
-            {
-                Debug.Log($"RefreshEmailLinked: player={AuthenticationService.Instance.PlayerId} " +
-                    $"{ids.Count} identities [{string.Join(", ", ids.ConvertAll(i => i.TypeId))}] " +
-                    $"localLinked={PlayerPrefs.GetInt(LinkedPrefKey, 0)}");
-                // Identities can only ever UPGRADE to linked - an empty list is not
-                // trusted as proof of absence (observed returning [] for accounts
-                // that sign in with credentials just fine).
-                if (ids.Exists(i => !string.IsNullOrEmpty(i.TypeId) &&
-                        (i.TypeId.ToLowerInvariant().Contains("username") ||
-                         i.TypeId.ToLowerInvariant().Contains("password"))))
-                    HasEmailLinked = true;
-            }
-        }
-        catch (Exception ex)
-        {
-            // Offline or not signed in - keep the current value rather than lying.
-            Debug.LogWarning($"RefreshEmailLinked failed: {ex.Message}");
-        }
-    }
-
     // Signs out and clears the cached session token so the next launch does not silently
-    // resume this account. Caller is responsible for warning the user first when no email
-    // is linked (an anonymous account signed out this way is unrecoverable).
+    // resume this account. Caller is responsible for warning the user first when there is
+    // no Unity account (an anonymous session signed out this way is unrecoverable).
     public static void SignOut()
     {
+        // Player Accounts first: signing out of Unity Auth alone leaves the Player
+        // Accounts session live, so the next "Sign In" would throw "Player is already
+        // signed in" instead of opening the browser.
+        try { PlayerAccountService.Instance.SignOut(); }
+        catch (Exception ex) { Debug.LogWarning($"Player Accounts sign-out failed: {ex.Message}"); }
+
         try
         {
             AuthenticationService.Instance.SignOut(true);
@@ -401,9 +454,6 @@ public static class AccountManager
             Debug.LogWarning($"SignOut failed: {ex.Message}");
         }
         CurrentUsername = null;
-        HasEmailLinked = false;
-        PrimaryEmail = null;
-        RecoveryEmail = null;
         CacheUsername(null);
         // Reset in-memory profile-icon state so the next sign-in loads THAT
         // account's icon instead of showing this one (the PlayerPrefs cache is
@@ -447,8 +497,6 @@ public static class AccountManager
             "NAME_TAKEN" => AccountFailureReason.NameTaken,
             "ALREADY_HAS_USERNAME" => AccountFailureReason.AlreadyHasUsername,
             "EMAIL_TAKEN" => AccountFailureReason.EmailAlreadyLinked,
-            "INVALID_TOKEN" => AccountFailureReason.InvalidOrExpiredToken,
-            "EXPIRED" => AccountFailureReason.InvalidOrExpiredToken,
             _ => AccountFailureReason.Unknown,
         };
     }
@@ -468,6 +516,28 @@ public static class AccountManager
 
             CurrentUsername = response.username;
             CacheUsername(response.username);
+
+            // Welcome-aboard mail. This used to hang off the email-link step, which no
+            // longer exists, so claiming the name is now the account-created moment. The
+            // address comes from the Player Accounts ID token rather than a field we own.
+            //
+            // OPTIONAL: the only surviving use of Resend. If RESEND_API_KEY /
+            // RESET_SENDER_EMAIL aren't configured the script fails server-side and this
+            // swallows it - strictly fire-and-forget, a mail hiccup must never surface as
+            // an account error. Delete SendWelcomeEmail.js and this block to drop Resend
+            // entirely; Unity already sends its own verification mail at signup.
+            string email = AccountEmail;
+            if (!string.IsNullOrEmpty(email))
+            {
+                try
+                {
+                    _ = CloudCodeService.Instance.CallEndpointAsync<SimpleOkResponse>(
+                        "SendWelcomeEmail", new Dictionary<string, object>
+                        { ["email"] = email, ["username"] = response.username ?? "Captain" });
+                }
+                catch (Exception ex) { Debug.LogWarning($"SendWelcomeEmail failed: {ex.Message}"); }
+            }
+
             return UsernameClaimResult.Success(response.username);
         }
         catch (RequestFailedException ex)
@@ -480,9 +550,13 @@ public static class AccountManager
     public static async Task<string> LoadOwnUsernameAsync()
     {
         await EnsureReadyAsync();
-        await RefreshEmailLinkedAsync();
+        // Runs on the boot path, which is exactly when PlayerInfo is bare and the
+        // Player Accounts session hasn't been restored (it can't be - see HasUnityAccount).
+        await RefreshUnityAccountAsync();
+        // No email keys to load any more: the address lives in the Player Accounts ID
+        // token (see AccountEmail), so there is nothing of ours to keep in sync with it.
         var results = await CloudSaveService.Instance.Data.Player.LoadAsync(
-            new HashSet<string> { UsernameCloudSaveKey, EmailsCloudSaveKey });
+            new HashSet<string> { UsernameCloudSaveKey });
         if (results.TryGetValue(UsernameCloudSaveKey, out var item))
         {
             CurrentUsername = item.Value.GetAs<string>();
@@ -495,20 +569,6 @@ public static class AccountManager
             CurrentUsername = null;
         }
         CacheUsername(CurrentUsername);
-        if (results.TryGetValue(EmailsCloudSaveKey, out var emailsItem))
-        {
-            try
-            {
-                var blob = JsonUtility.FromJson<EmailsBlob>(emailsItem.Value.GetAs<string>());
-                PrimaryEmail = string.IsNullOrEmpty(blob.primary) ? null : blob.primary;
-                RecoveryEmail = string.IsNullOrEmpty(blob.recovery) ? null : blob.recovery;
-                // The emails blob is only ever written after a successful credential
-                // link, so its presence is cross-device proof one exists - unlike the
-                // unreliable identity endpoint.
-                if (PrimaryEmail != null) HasEmailLinked = true;
-            }
-            catch { /* malformed blob - emails just won't display */ }
-        }
         return CurrentUsername;
     }
 
@@ -529,178 +589,122 @@ public static class AccountManager
         }
     }
 
-    public static async Task<AccountResult> LinkEmailPasswordAsync(string email, string password)
+    // ── Unity Player Accounts ────────────────────────────────────────────────
+    // The whole credential story, and it is deliberately small: hand off to Unity's
+    // hosted browser flow, take the access token it returns, and exchange it for a
+    // UGS session. Signup, email verification, password change and PASSWORD RESET all
+    // live on Unity's pages - none of them are our code, our email vendor, or our bug
+    // surface. That is the entire reason for the migration.
+
+    // StartSignInAsync returns as soon as the SYSTEM BROWSER HAS BEEN LAUNCHED - it does
+    // NOT wait for the player to finish signing in (verified in the SDK source:
+    // PlayerAccountServiceInternal.StartSignInAsync awaits only LaunchUrlAsync). Completion
+    // arrives later on the SignedIn / SignInFailed events, so awaiting that task alone
+    // would hand back a session that isn't there yet. Everything below exists to bridge
+    // those events back into a single awaitable result.
+    private static TaskCompletionSource<bool> _browserSignIn;
+
+    /// <summary>Abandon an in-flight browser sign-in. The player can always walk away from
+    /// the browser tab, so the UI needs a way out that doesn't leave the menu stuck on
+    /// "waiting" forever. Safe to call when nothing is pending.</summary>
+    public static void CancelUnityAccountSignIn()
     {
-        await EnsureReadyAsync();
-
-        // The claimed game name IS the login username (Unity Auth just needs any unique
-        // string, and username uniqueness is already enforced by ClaimUsername). Email
-        // sign-in resolves email -> username via the emailRegistry first.
-        if (string.IsNullOrEmpty(CurrentUsername))
-            return AccountResult.Fail(AccountFailureReason.Unknown, "Claim a name before linking an email.");
-
-        try
-        {
-            await AuthenticationService.Instance.AddUsernamePasswordAsync(CurrentUsername.ToLowerInvariant(), password);
-            RememberLinked();
-            PrimaryEmail = email;
-            try { await SaveEmailsAsync(); }
-            catch (Exception ex) { Debug.LogWarning($"Saving account emails failed: {ex.Message}"); }
-
-            try
-            {
-                await CloudCodeService.Instance.CallEndpointAsync<SimpleOkResponse>(
-                    "RegisterEmailForRecovery", new Dictionary<string, object>
-                    { ["email"] = email, ["username"] = CurrentUsername });
-            }
-            catch (RequestFailedException ex)
-            {
-                // Non-fatal: the account is linked either way, this only affects the
-                // reverse lookup password-reset needs later. Log and move on.
-                Debug.LogWarning($"RegisterEmailForRecovery failed: {ex.Message}");
-            }
-
-            // Welcome-aboard email. Strictly fire-and-forget: registration is done
-            // and a mail hiccup must never surface as an account error.
-            try
-            {
-                _ = CloudCodeService.Instance.CallEndpointAsync<SimpleOkResponse>(
-                    "SendWelcomeEmail", new Dictionary<string, object>
-                    { ["email"] = email, ["username"] = CurrentUsername ?? "Captain" });
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"SendWelcomeEmail failed: {ex.Message}");
-            }
-
-            return AccountResult.Success();
-        }
-        catch (AuthenticationException ex) when (ex.ErrorCode == AuthenticationErrorCodes.AccountAlreadyLinked)
-        {
-            return AccountResult.Fail(AccountFailureReason.EmailAlreadyLinked,
-                "That email's already linked to an account - try signing in instead.");
-        }
-        catch (RequestFailedException ex)
-        {
-            return AccountResult.Fail(AccountFailureReason.NoNetwork, $"Couldn't reach the server: {ex.Message}");
-        }
+        _browserSignIn?.TrySetResult(false);
+        try { PlayerAccountService.Instance.SignOut(); } catch { /* nothing to cancel */ }
     }
 
-    [Serializable]
-    private class LoginNameResponse
+    /// <summary>Sign in (or sign up) through Unity Player Accounts, then exchange the
+    /// result for a UGS session. <paramref name="signingUp"/> only picks which page the
+    /// browser lands on first; either page can reach the other, so it is a hint, not a
+    /// mode.</summary>
+    public static async Task<AccountResult> SignInWithUnityAccountAsync(bool signingUp = false)
     {
-        public bool ok;
-        public string reason;   // present on ok:false responses - the Cloud Code
-                                // deserializer is strict and errors on any member
-                                // the script returns that the class doesn't declare
-        public string username;
-    }
-
-    // For recovering an account on a new device/after reinstall - distinct from the
-    // anonymous-session path since it requires AuthenticationState.SignedOut first.
-    // Accepts a username OR an email: emails are resolved to the login username via
-    // Cloud Code (GetLoginNameForEmail) while the anonymous session is still alive,
-    // since Cloud Code calls need an authenticated caller.
-    public static async Task<AccountResult> SignInWithEmailPasswordAsync(string identifier, string password)
-    {
-        string loginName = identifier.Trim();
-        if (loginName.Contains("@"))
-        {
-            try
-            {
-                await EnsureReadyAsync();
-                var lookup = await CloudCodeService.Instance.CallEndpointAsync<LoginNameResponse>(
-                    "GetLoginNameForEmail", new Dictionary<string, object> { ["email"] = loginName });
-                if (lookup.ok && !string.IsNullOrEmpty(lookup.username)) loginName = lookup.username;
-                Debug.Log($"Email sign-in: '{identifier.Trim()}' resolved to login name '{loginName}' (lookup ok={lookup.ok} reason={lookup.reason})");
-                // Not found: fall through with the email itself - deliberately generic
-                // failure below, so this can't be used to probe which emails exist.
-            }
-            catch (RequestFailedException ex)
-            {
-                return AccountResult.Fail(AccountFailureReason.NoNetwork, $"Couldn't reach the server: {ex.Message}");
-            }
-        }
-
+        // Services must be up, but do NOT force the anonymous sign-in here: the whole
+        // point is to replace whatever session exists with the real account.
         await LobbyManager.EnsureServicesInitializedAsync();
-        if (AuthenticationService.Instance.IsSignedIn)
-        {
-            AuthenticationService.Instance.SignOut();
-        }
 
+        // A live Player Accounts session makes StartSignInAsync throw InvalidState rather
+        // than opening the browser, which would strand the player on a dead button.
+        try { if (PlayerAccountService.Instance.IsSignedIn) PlayerAccountService.Instance.SignOut(); }
+        catch (Exception ex) { Debug.LogWarning($"Pre-sign-in cleanup failed: {ex.Message}"); }
+
+        var pending = new TaskCompletionSource<bool>();
+        _browserSignIn = pending;
+        Exception failure = null;
+
+        void OnSignedIn() => pending.TrySetResult(true);
+        void OnFailed(RequestFailedException ex) { failure = ex; pending.TrySetResult(false); }
+
+        PlayerAccountService.Instance.SignedIn += OnSignedIn;
+        PlayerAccountService.Instance.SignInFailed += OnFailed;
         try
         {
-            await AuthenticationService.Instance.SignInWithUsernamePasswordAsync(loginName.ToLowerInvariant(), password);
-            RememberLinked(); // signing in WITH a credential is proof one exists
-            await LoadOwnUsernameAsync();
-
-            // Self-heal the email registry on EVERY successful credential sign-in.
-            // The email to register comes from what the player typed (if it was an
-            // email) or from the account's stored primary email (loaded from Cloud
-            // Save just above) - so even a username sign-in repairs a broken/missing
-            // registry entry. Covers accounts whose original RegisterEmailForRecovery
-            // call failed; without this, their password reset / email sign-in stays
-            // broken forever.
-            string healEmail = identifier.Contains("@") ? identifier.Trim() : PrimaryEmail;
-            if (!string.IsNullOrEmpty(healEmail) && !string.IsNullOrEmpty(CurrentUsername))
+            await PlayerAccountService.Instance.StartSignInAsync(signingUp);
+            bool ok = await pending.Task;
+            if (!ok)
             {
-                try
+                if (failure != null)
                 {
-                    var heal = await CloudCodeService.Instance.CallEndpointAsync<SimpleOkResponse>(
-                        "RegisterEmailForRecovery", new Dictionary<string, object>
-                        { ["email"] = healEmail, ["username"] = CurrentUsername });
-                    Debug.Log($"Email registry self-heal for '{healEmail}': ok={heal.ok} reason={heal.reason}");
-                    if (string.IsNullOrEmpty(PrimaryEmail)) { PrimaryEmail = healEmail; await SaveEmailsAsync(); }
+                    Debug.LogWarning($"Player Accounts sign-in failed: {failure.Message}");
+                    return AccountResult.Fail(AccountFailureReason.NoNetwork,
+                        "Sign-in didn't complete. Check your connection and try again.");
                 }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning($"Email registry self-heal failed: {ex.Message}");
-                }
+                return AccountResult.Fail(AccountFailureReason.Cancelled, null);
             }
-            return AccountResult.Success();
+        }
+        catch (PlayerAccountsException ex) when (ex.ErrorCode == PlayerAccountsErrorCodes.MissingClientId)
+        {
+            // Project Settings > Services > Player Accounts has no Client ID. This is a
+            // BUILD misconfiguration, not anything the player did - say so instead of
+            // showing them a generic failure they'll retry forever.
+            Debug.LogError("Player Accounts Client ID is not configured - see Project Settings > Services > Player Accounts.");
+            return AccountResult.Fail(AccountFailureReason.NotConfigured,
+                "Accounts aren't set up in this build. Please report this - you can keep playing as a guest.");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Player Accounts sign-in threw: {ex.Message}");
+            return AccountResult.Fail(AccountFailureReason.NoNetwork,
+                "Couldn't open the sign-in page. Check your connection and try again.");
+        }
+        finally
+        {
+            PlayerAccountService.Instance.SignedIn -= OnSignedIn;
+            PlayerAccountService.Instance.SignInFailed -= OnFailed;
+            if (ReferenceEquals(_browserSignIn, pending)) _browserSignIn = null;
+        }
+
+        // Unity Auth refuses SignInWithUnityAsync unless it is in the SignedOut state, and
+        // boot has almost certainly left an ANONYMOUS session running. Drop it first.
+        // Note this deliberately does NOT link: linking would keep the throwaway anonymous
+        // PlayerId, and a returning player on a new device must land on THEIR account.
+        try
+        {
+            if (AuthenticationService.Instance.IsSignedIn) AuthenticationService.Instance.SignOut();
+            await AuthenticationService.Instance.SignInWithUnityAsync(PlayerAccountService.Instance.AccessToken);
         }
         catch (AuthenticationException ex)
         {
-            // Deliberately generic - don't distinguish "wrong password" from "no such
-            // account" so this can't be used to enumerate registered emails.
-            Debug.LogWarning($"SignInWithEmailPassword failed: {ex.Message}");
-            return AccountResult.Fail(AccountFailureReason.InvalidCredentials, "Incorrect email or password.");
+            Debug.LogWarning($"SignInWithUnity failed: {ex.Message}");
+            return AccountResult.Fail(AccountFailureReason.Unknown,
+                "Signed in with Unity, but couldn't start your game session. Please try again.");
         }
         catch (RequestFailedException ex)
         {
             return AccountResult.Fail(AccountFailureReason.NoNetwork, $"Couldn't reach the server: {ex.Message}");
         }
-    }
 
-    public static async Task<AccountResult> RequestPasswordResetAsync(string email)
-    {
-        await EnsureReadyAsync();
-        try
-        {
-            await CloudCodeService.Instance.CallEndpointAsync<SimpleOkResponse>(
-                "RequestPasswordReset", new Dictionary<string, object> { ["email"] = email });
-            // Always reported as success by design (avoids email enumeration) regardless
-            // of whether the address is actually registered.
-            return AccountResult.Success();
-        }
-        catch (RequestFailedException ex)
-        {
-            return AccountResult.Fail(AccountFailureReason.NoNetwork, $"Couldn't reach the server: {ex.Message}");
-        }
-    }
+        // Record the link NOW, against the new PlayerId, while we know for certain it's
+        // real. This is what survives the restart that PlayerAccountService cannot.
+        RememberUnityAccount();
 
-    public static async Task<AccountResult> ConfirmPasswordResetAsync(string token, string newPassword)
-    {
-        await EnsureReadyAsync();
-        try
-        {
-            var response = await CloudCodeService.Instance.CallEndpointAsync<SimpleOkResponse>(
-                "ConfirmPasswordReset", new Dictionary<string, object> { ["token"] = token, ["newPassword"] = newPassword });
-            return response.ok ? AccountResult.Success() : AccountResult.Fail(ParseReason(response.reason), "That code is invalid or has expired.");
-        }
-        catch (RequestFailedException ex)
-        {
-            return AccountResult.Fail(AccountFailureReason.NoNetwork, $"Couldn't reach the server: {ex.Message}");
-        }
+        // A guest who signs in stops being a guest - otherwise IsGuest stays true (it keys
+        // off GuestDisplayName) and the account would keep being treated as throwaway,
+        // including having its local data deleted on the next guest session.
+        if (!string.IsNullOrEmpty(GuestDisplayName)) EndGuestSession();
+
+        await LoadOwnUsernameAsync();
+        await EnsureProfileIconLoadedAsync();
+        return AccountResult.Success();
     }
 }
