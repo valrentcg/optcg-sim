@@ -724,6 +724,8 @@ namespace OnePieceTcg.Sealed
                 seed = networkBuild.seed + "|match",
                 south = CurrentNetworkDeck(),
                 north = networkPeerDeck,
+                southName = networkBuild.southName,
+                northName = networkBuild.northName,
                 ranked = false,
                 mode = "custom",
                 forgiveness = networkBuild.forgiveness,
@@ -769,6 +771,8 @@ namespace OnePieceTcg.Sealed
             GameManager.PendingNetworkedMode = payload.mode;
             GameManager.PendingNetworkedForgiveness = payload.forgiveness;
             GameManager.PendingNetworkedBlitz = payload.blitz;
+            GameManager.PendingSouthName = string.IsNullOrWhiteSpace(payload.southName) ? "Player 1" : payload.southName.Trim();
+            GameManager.PendingNorthName = string.IsNullOrWhiteSpace(payload.northName) ? "Player 2" : payload.northName.Trim();
             GameManager.PendingNetworkedSouthDeck = payload.south;
             GameManager.PendingNetworkedNorthDeck = payload.north;
             GameManager.EnsureBoard();

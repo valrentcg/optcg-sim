@@ -1,0 +1,17 @@
+# One Piece TCG Simulator 1.0.35
+
+## Scrollable update notes
+
+- The launch-time update screen now shows the complete patch notes inside a larger scrollable panel while the update downloads.
+- Use the mouse wheel or drag the visible scrollbar to read every section without moving the version, progress bar, or download percentage.
+- Release-note headings and bullet points are formatted for the game instead of showing raw Markdown symbols.
+
+## Player names
+
+- Ranked, Casual, Custom, and Custom Sealed matches use both players' real display names again instead of falling back to Player 1 and Player 2.
+- Both names now travel inside the authoritative match-start message instead of depending on separate lobby-message timing.
+
+## Friends
+
+- The sidebar now shows friends who are online as soon as the menu loads instead of reporting 0 online until the Friends list is opened.
+- Friend relationships and presence perform a background server resync after the account is restored, then continue updating live.

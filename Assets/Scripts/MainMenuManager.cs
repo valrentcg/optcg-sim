@@ -282,6 +282,8 @@ public partial class MainMenuManager : MonoBehaviour
     private List<FriendEntry> friendsList = new List<FriendEntry>();
     private List<FriendEntry> incomingRequests = new List<FriendEntry>();
     private List<FriendEntry> outgoingRequests = new List<FriendEntry>();
+    private bool friendsBootSyncInFlight;
+    private bool friendsBootSyncComplete;
     // Blocked-players view: the right friends panel swaps to a "BLOCKED" list (with Unblock
     // chips) when this is on. blockConfirmId is the friend whose Block chip is one click from
     // firing — Block is a two-step confirm so a stray tap can't silently block a friend.
@@ -589,9 +591,11 @@ public partial class MainMenuManager : MonoBehaviour
     // _updateProgress; Update() applies it on the main thread via ApplyUpdateSplashProgress().
     private static GameObject _updateSplash;
     private static Text _updateSplashTitle, _updateSplashVersion, _updateSplashPercent, _updateSplashNotes;
+    private static ScrollRect _updateSplashNotesScroll;
+    private static string _updateSplashLastNotes;
     private static RectTransform _updateSplashBarFill;
     private static float _updateBarShown;                          // smoothed 0..1 bar fill
-    private const float UpdateBarInset = 40f, UpdateBarSpan = 520f; // track geometry within the 600-wide panel
+    private const float UpdateBarInset = 40f, UpdateBarSpan = 640f; // track geometry within the 720-wide panel
     private static volatile UpdateChecker.UpdateProgress _updateProgress;
 
     private static Text SplashText(Transform parent, int size, Color color, TextAnchor anchor,
@@ -616,15 +620,89 @@ public partial class MainMenuManager : MonoBehaviour
         return img;
     }
 
+    private static string FormatUpdateNotes(string markdown)
+    {
+        if (string.IsNullOrWhiteSpace(markdown)) return "";
+        var lines = markdown.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string line = lines[i].TrimEnd();
+            if (line.StartsWith("### ")) line = line.Substring(4).ToUpperInvariant();
+            else if (line.StartsWith("## ")) line = line.Substring(3).ToUpperInvariant();
+            else if (line.StartsWith("# ")) line = line.Substring(2).ToUpperInvariant();
+            else if (line.StartsWith("- ")) line = "• " + line.Substring(2);
+            lines[i] = line;
+        }
+        return string.Join("\n", lines).Trim();
+    }
+
+    private static void BuildUpdateNotesScroller(Transform panel)
+    {
+        var viewport = SplashImage(panel, new Color32(8, 18, 31, 210), Vector2.zero, Vector2.one,
+            new Vector2(UpdateBarInset, 28f), new Vector2(-UpdateBarInset - 18f, -218f));
+        viewport.gameObject.name = "Patch Notes Viewport";
+        viewport.raycastTarget = true;
+        viewport.gameObject.AddComponent<RectMask2D>();
+
+        var contentGo = new GameObject("Patch Notes Content", typeof(RectTransform));
+        var content = contentGo.GetComponent<RectTransform>();
+        content.SetParent(viewport.transform, false);
+        content.anchorMin = new Vector2(0f, 1f);
+        content.anchorMax = new Vector2(1f, 1f);
+        content.pivot = new Vector2(0.5f, 1f);
+        content.anchoredPosition = Vector2.zero;
+        content.sizeDelta = Vector2.zero;
+
+        var layout = contentGo.AddComponent<VerticalLayoutGroup>();
+        layout.padding = new RectOffset(12, 12, 10, 10);
+        layout.childAlignment = TextAnchor.UpperLeft;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+        var contentFitter = contentGo.AddComponent<ContentSizeFitter>();
+        contentFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+        contentFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        _updateSplashNotes = SplashText(content, 13, new Color32(206, 218, 230, 255), TextAnchor.UpperLeft,
+            new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero, wrap: true);
+        _updateSplashNotes.verticalOverflow = VerticalWrapMode.Overflow;
+        _updateSplashNotes.raycastTarget = false;
+
+        var track = SplashImage(panel, new Color32(24, 42, 60, 255), new Vector2(1f, 0f), new Vector2(1f, 1f),
+            new Vector2(-UpdateBarInset - 10f, 28f), new Vector2(-UpdateBarInset, -218f));
+        track.gameObject.name = "Patch Notes Scrollbar";
+        track.raycastTarget = true;
+        var handle = SplashImage(track.transform, new Color32(79, 195, 224, 230), Vector2.zero, Vector2.one,
+            new Vector2(2f, 2f), new Vector2(-2f, -2f));
+        handle.gameObject.name = "Handle";
+        handle.raycastTarget = true;
+        var scrollbar = track.gameObject.AddComponent<Scrollbar>();
+        scrollbar.handleRect = handle.rectTransform;
+        scrollbar.targetGraphic = handle;
+        scrollbar.direction = Scrollbar.Direction.BottomToTop;
+
+        _updateSplashNotesScroll = viewport.gameObject.AddComponent<ScrollRect>();
+        _updateSplashNotesScroll.viewport = viewport.rectTransform;
+        _updateSplashNotesScroll.content = content;
+        _updateSplashNotesScroll.horizontal = false;
+        _updateSplashNotesScroll.vertical = true;
+        _updateSplashNotesScroll.movementType = ScrollRect.MovementType.Clamped;
+        _updateSplashNotesScroll.scrollSensitivity = 30f;
+        _updateSplashNotesScroll.verticalScrollbar = scrollbar;
+        _updateSplashNotesScroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+    }
+
     private static void ShowUpdateSplash()
     {
         if (_updateSplash != null) return;
-        _updateProgress = null; _updateBarShown = 0f;
+        _updateProgress = null; _updateBarShown = 0f; _updateSplashLastNotes = null;
         _updateSplash = new GameObject("Update Splash");
         UnityEngine.Object.DontDestroyOnLoad(_updateSplash);
         var canvas = _updateSplash.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
         canvas.sortingOrder = 32000;   // above every menu canvas
+        _updateSplash.AddComponent<GraphicRaycaster>();
 
         // Deep-navy ground matching the menu.
         SplashImage(_updateSplash.transform, new Color32(7, 13, 22, 255), Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -632,7 +710,7 @@ public partial class MainMenuManager : MonoBehaviour
         // Centered card panel with an accent top rule.
         var panel = SplashImage(_updateSplash.transform, new Color32(14, 28, 46, 255),
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
-        panel.rectTransform.sizeDelta = new Vector2(600f, 400f);
+        panel.rectTransform.sizeDelta = new Vector2(720f, 520f);
         SplashImage(panel.transform, new Color32(79, 195, 224, 255), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -4), Vector2.zero);
 
         SplashText(panel.transform, 13, new Color32(120, 150, 175, 255), TextAnchor.UpperCenter,
@@ -658,8 +736,7 @@ public partial class MainMenuManager : MonoBehaviour
 
         SplashText(panel.transform, 11, new Color32(120, 150, 175, 255), TextAnchor.UpperLeft,
             new Vector2(0, 1), new Vector2(1, 1), new Vector2(UpdateBarInset, -200), new Vector2(-UpdateBarInset, -182)).text = "WHAT'S NEW";
-        _updateSplashNotes = SplashText(panel.transform, 12, new Color32(206, 218, 230, 255), TextAnchor.UpperLeft,
-            new Vector2(0, 0), new Vector2(1, 1), new Vector2(UpdateBarInset, 24), new Vector2(-UpdateBarInset, -218), wrap: true);
+        BuildUpdateNotesScroller(panel.transform);
     }
 
     private static void HideUpdateSplash()
@@ -667,6 +744,8 @@ public partial class MainMenuManager : MonoBehaviour
         if (_updateSplash != null) UnityEngine.Object.Destroy(_updateSplash);
         _updateSplash = null;
         _updateSplashTitle = _updateSplashVersion = _updateSplashPercent = _updateSplashNotes = null;
+        _updateSplashNotesScroll = null;
+        _updateSplashLastNotes = null;
         _updateSplashBarFill = null;
         _updateProgress = null;
     }
@@ -689,7 +768,13 @@ public partial class MainMenuManager : MonoBehaviour
             _updateSplashBarFill.offsetMax = om;
         }
         if (_updateSplashPercent != null) _updateSplashPercent.text = pr.percent >= 0 ? pr.percent + "%" : "";
-        if (_updateSplashNotes != null && !string.IsNullOrEmpty(pr.notes)) _updateSplashNotes.text = pr.notes;
+        if (_updateSplashNotes != null && !string.IsNullOrEmpty(pr.notes) && pr.notes != _updateSplashLastNotes)
+        {
+            _updateSplashLastNotes = pr.notes;
+            _updateSplashNotes.text = FormatUpdateNotes(pr.notes);
+            Canvas.ForceUpdateCanvases();
+            if (_updateSplashNotesScroll != null) _updateSplashNotesScroll.verticalNormalizedPosition = 1f;
+        }
     }
 
     // ── Tab navigation between input fields ──────────────────────────────────
@@ -1128,6 +1213,25 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.35", "Scrollable update notes", "Aug 8, 2026", new (string, string[])[]
+        {
+            ("Updater", new[]
+            {
+                "The launch-time update screen now shows the complete patch notes inside a larger scrollable panel while the update downloads.",
+                "Use the mouse wheel or drag the visible scrollbar to read every section without moving the version, progress bar, or download percentage.",
+                "Release-note headings and bullet points are formatted for the game instead of showing raw Markdown symbols such as ## and -.",
+            }),
+            ("Player names", new[]
+            {
+                "Ranked, Casual, Custom, and Custom Sealed matches use both players' real display names again instead of falling back to Player 1 and Player 2.",
+                "Both names now travel inside the authoritative match-start message, so they no longer depend on which separate lobby message arrived first.",
+            }),
+            ("Friends", new[]
+            {
+                "The sidebar now shows friends who are online as soon as the menu loads instead of reporting 0 online until you open the Friends list.",
+                "Friend relationships and presence perform a background server resync after your account is restored, then continue updating live.",
+            }),
+        }),
         ("v1.0.34", "Online lobby connection hotfix", "Aug 8, 2026", new (string, string[])[]
         {
             ("Ranked and Casual", new[]
@@ -5362,7 +5466,37 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (socialPollActive) return;
         socialPollActive = true;
+        RefreshFriendsAtBoot();
         SocialPollLoop();
+    }
+
+    private async void RefreshFriendsAtBoot()
+    {
+        if (friendsBootSyncInFlight || friendsBootSyncComplete) return;
+        friendsBootSyncInFlight = true;
+        try
+        {
+            // Wait for restored authentication before deciding whether this is a guest.
+            // Opening the Friends screen used to be the only place that forced this
+            // server snapshot, leaving the global sidebar stuck at 0 online until clicked.
+            await AccountManager.EnsureReadyAsync();
+            if (AccountManager.IsGuest) return;
+            await FriendsManager.ForceResyncAsync();
+            if (this == null || menuRoot == null) return;
+            await RefreshFriendsListsAwaited();
+            if (this == null || menuRoot == null) return;
+            friendsBootSyncComplete = true;
+            lastIncomingCount = incomingRequests?.Count ?? 0;
+            RenderMenu();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Friends background refresh failed: {ex.Message}");
+        }
+        finally
+        {
+            friendsBootSyncInFlight = false;
+        }
     }
 
     private async void SocialPollLoop()
@@ -5376,6 +5510,7 @@ public partial class MainMenuManager : MonoBehaviour
             if (this == null || menuRoot == null) { socialPollActive = false; return; }
             // Guests / not-configured: SocialHttp no-ops, so these return empty — harmless.
             if (AccountManager.IsGuest) continue;
+            if (!friendsBootSyncComplete) RefreshFriendsAtBoot();
             // Snapshot the transport's failure counter, not a try/catch: SocialHttp returns null
             // on failure and both poll stores turn that into an empty result, so nothing here
             // ever throws on a 500 and an exception-based check would never fire.
@@ -6463,6 +6598,8 @@ public partial class MainMenuManager : MonoBehaviour
             setCode = lobbySealedSet,
             southLeader = lobbySealedLeader,
             northLeader = lobbyPeerSealedLeader,
+            southName = AccountManager.DisplayName,
+            northName = lobbyPeerName,
             forgiveness = lobbyForgiveness,
             format = lobbyFormat,
             blitz = LobbyBlitzConfig(),
@@ -6560,6 +6697,8 @@ public partial class MainMenuManager : MonoBehaviour
         var payload = new MatchStartPayload
         {
             seed = Guid.NewGuid().ToString("N"),
+            southName = AccountManager.DisplayName,
+            northName = lobbyPeerName,
             south = NetworkDeck.From(DeckStore.Get(lobbyDeckId)),   // null → engine default ST01
             north = lobbyPeerDeck,                                  // null → engine default ST02
             ranked = lobbyRanked,                                  // true only from the ranked queue
@@ -7021,24 +7160,28 @@ public partial class MainMenuManager : MonoBehaviour
     private void LaunchNetworkedMatch(MatchStartPayload payload, string localSeat)
     {
         CancelInvoke();
-        // Player display names for the in-match center turn indicator (host = south,
-        // guest = north). Our own name comes from the account; the host's name is also
-        // visible to the guest as the session owner. The host has no reliable view of the
-        // guest's display name here, so that falls back to "Player 2".
-        string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName;
-        // Both clients exchanged display names on peer connect (OptcgNameShare), so the
-        // host knows the guest's name too; session owner name remains a guest-side fallback.
+        // Names now travel in the authoritative match-start payload. Local/session values
+        // are compatibility fallbacks only; reconstructing both names independently let
+        // message timing turn authenticated players back into Player 1 / Player 2.
+        string CleanName(string value)
+        {
+            value = value?.Trim();
+            if (string.IsNullOrEmpty(value)) return null;
+            return value.Length <= 40 ? value : value.Substring(0, 40);
+        }
+        string myName = CleanName(AccountManager.DisplayName);
         string hostName = LobbyManager.CurrentSession != null ? LobbyManager.GetOwnerName(LobbyManager.CurrentSession) : null;
+        string southName = CleanName(payload?.southName);
+        string northName = CleanName(payload?.northName);
         if (localSeat == "south")
         {
-            GameManager.PendingSouthName = string.IsNullOrEmpty(myName) ? "Player 1" : myName;
-            GameManager.PendingNorthName = string.IsNullOrEmpty(lobbyPeerName) ? "Player 2" : lobbyPeerName;
+            GameManager.PendingSouthName = southName ?? myName ?? "Player 1";
+            GameManager.PendingNorthName = northName ?? CleanName(lobbyPeerName) ?? "Player 2";
         }
         else
         {
-            GameManager.PendingSouthName = !string.IsNullOrEmpty(lobbyPeerName) ? lobbyPeerName
-                : (string.IsNullOrEmpty(hostName) ? "Player 1" : hostName);
-            GameManager.PendingNorthName = string.IsNullOrEmpty(myName) ? "Player 2" : myName;
+            GameManager.PendingSouthName = southName ?? CleanName(lobbyPeerName) ?? CleanName(hostName) ?? "Player 1";
+            GameManager.PendingNorthName = northName ?? myName ?? "Player 2";
         }
         UnsubscribeFromSessionEvents();
         if (canvas != null) canvas.gameObject.SetActive(false);

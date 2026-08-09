@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.34",
-  "buildNumber": 32,
+  "buildVersion": "1.0.35",
+  "buildNumber": 33,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "ONLINE LOBBY CONNECTION HOTFIX\n\nRANKED AND CASUAL\n\nFixed both players getting stuck on Connecting to opponent after accepting the Ready check. The Relay handshake now waits for a real peer connection and retries deck and player-name exchange until the host receives both. Starting a new queue also clears connection state from the previous opponent.\n\nCUSTOM AND CUSTOM SEALED\n\nFixed a joined player's selected Leader and Ready state failing to appear for the host. Leader, Ready, and player-name state now resynchronizes while the waiting room is open, including after returning from the Leader or set selector. Lobby message handlers also recover when the network connection finishes before the waiting-room screen is ready.",
+  "notes": "SCROLLABLE UPDATE NOTES\n\nThe launch-time update screen now shows the complete patch notes inside a larger scrollable panel while the update downloads. Use the mouse wheel or drag the visible scrollbar to read every section without moving the version, progress bar, or download percentage. Release-note headings and bullets are formatted for the game instead of showing raw Markdown symbols.\n\nPLAYER NAMES\n\nRanked, Casual, Custom, and Custom Sealed matches use both players' real display names again instead of falling back to Player 1 and Player 2. Both names now travel inside the authoritative match-start message instead of depending on separate lobby-message timing.\n\nFRIENDS\n\nThe sidebar now shows friends who are online as soon as the menu loads instead of reporting 0 online until the Friends list is opened. Friend relationships and presence perform a background server resync after the account is restored, then continue updating live.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

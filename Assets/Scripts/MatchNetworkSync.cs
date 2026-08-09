@@ -70,6 +70,8 @@ public class MatchStartPayload
     public string seed;
     public NetworkDeck south;   // host's deck
     public NetworkDeck north;   // guest's deck
+    public string southName;    // authoritative display names; do not reconstruct from message timing
+    public string northName;
     public bool ranked;         // true = a Ranked-queue match that counts toward the bounty ladder
     public string mode;         // "ranked" | "casual" | "custom" — the game type for stats/history
     public bool forgiveness;    // custom lobby: enable the in-match rewind toggle (opponent-approved)
@@ -129,6 +131,8 @@ public class SealedBuildStartPayload
     public string setCode;
     public string southLeader;
     public string northLeader;
+    public string southName;
+    public string northName;
     public bool forgiveness;
     public string format;
     public BlitzConfig blitz;
