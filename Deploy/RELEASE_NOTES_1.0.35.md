@@ -22,3 +22,4 @@
 - Both players leave the finished match together, their Ready checks reset, and the lobby owner is taken straight to the pack carousel to choose the next set.
 - Fixed the set carousel reporting that no booster sets were available after a match rewrote the card library without its pack-rarity data.
 - Solo Play now marks Sealed as Ready and keeps its Open Packs action visibly selectable.
+- Casual and Ranked now wait for a finished Custom lobby to close completely before creating the next matchmaking session.

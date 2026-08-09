@@ -1260,6 +1260,7 @@ public partial class MainMenuManager : MonoBehaviour
                 "Both players leave the finished match together, their Ready checks reset, and the lobby owner goes straight to the pack carousel to choose the next set.",
                 "Fixed the set carousel becoming empty after a match rewrote the card library without its pack-rarity data.",
                 "Solo Play now marks Sealed as Ready and keeps its Open Packs action visibly selectable.",
+                "Casual and Ranked now wait for a finished Custom lobby to close completely before creating the next matchmaking session.",
             }),
         }),
         ("v1.0.34", "Online lobby connection hotfix", "Aug 8, 2026", new (string, string[])[]
@@ -6865,6 +6866,13 @@ public partial class MainMenuManager : MonoBehaviour
         lobbyRanked = mode == "ranked";   // casual matches don't touch the ladder
         lobbyMode = mode;
         RenderMenu();
+
+        // A Custom match's result screen rebuilds this menu before its UGS LeaveAsync has
+        // necessarily completed. Wait for that captured old session to leave before queueing;
+        // otherwise its late continuation can null/shutdown the new matchmaking session.
+        UnsubscribeFromSessionEvents();
+        await LobbyManager.LeaveCurrentAsync();
+        if (this == null || menuRoot == null || !rankedQueueActive) return;
 
         var profile = await RankedStore.LoadAsync();
         if (this == null || menuRoot == null || !rankedQueueActive) return;

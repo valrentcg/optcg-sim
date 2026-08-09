@@ -25,6 +25,10 @@ public static class LobbyManager
 
     private static Task _initTask;
     private static Task _signInTask;
+    // A finished match can rebuild the menu before the UGS LeaveAsync request completes.
+    // Every subsequent create/join/queue entry awaits this shared task so the old leave cannot
+    // finish late and shut down the NEW session's NetworkManager underneath it.
+    private static Task _leaveTask = Task.CompletedTask;
 
     // AuthenticationService.Instance throws ("Singleton is not initialized") if touched
     // before UnityServices.InitializeAsync() has completed, so that must always run first
@@ -68,6 +72,7 @@ public static class LobbyManager
 
     public static async Task<IHostSession> CreateLobbyAsync(string lobbyName, bool isPrivate, string ownerDisplayName)
     {
+        await LeaveCurrentAsync();
         await EnsureSignedInAsync();
         NetworkBootstrap.EnsureNetworkManager(); // must exist before CreateSessionAsync
         // Netcode for GameObjects is installed, so .WithRelayNetwork() auto-wires
@@ -88,6 +93,7 @@ public static class LobbyManager
 
     public static async Task<ISession> JoinByCodeAsync(string joinCode)
     {
+        await LeaveCurrentAsync();
         await EnsureSignedInAsync();
         NetworkBootstrap.EnsureNetworkManager(); // must exist before JoinSessionByCodeAsync
         var session = await MultiplayerService.Instance.JoinSessionByCodeAsync(joinCode.Trim());
@@ -97,6 +103,7 @@ public static class LobbyManager
 
     public static async Task<ISession> JoinByIdAsync(string sessionId)
     {
+        await LeaveCurrentAsync();
         await EnsureSignedInAsync();
         NetworkBootstrap.EnsureNetworkManager(); // must exist before JoinSessionByIdAsync
         var session = await MultiplayerService.Instance.JoinSessionByIdAsync(sessionId);
@@ -134,21 +141,27 @@ public static class LobbyManager
         return null;
     }
 
-    public static async Task LeaveCurrentAsync()
+    public static Task LeaveCurrentAsync()
     {
-        try
-        {
-            if (CurrentSession != null)
-            {
-                try { await CurrentSession.LeaveAsync(); }
-                catch (Exception ex) { Debug.LogWarning($"Leave lobby failed: {ex.Message}"); }
-                CurrentSession = null;
-            }
-        }
-        finally
-        {
-            ShutdownNetwork();
-        }
+        if (_leaveTask != null && !_leaveTask.IsCompleted) return _leaveTask;
+
+        // Detach immediately so freshly rebuilt menu code cannot mistake this for a usable
+        // lobby while the service request is still in flight. Capture the exact old session;
+        // the continuation must never clear or leave a newer session.
+        var leaving = CurrentSession;
+        CurrentSession = null;
+        ShutdownNetwork();
+        _leaveTask = LeaveCapturedSessionAsync(leaving);
+        return _leaveTask;
+    }
+
+    private static async Task LeaveCapturedSessionAsync(ISession leaving)
+    {
+        if (leaving == null) return;
+        try { await leaving.LeaveAsync(); }
+        catch (Exception ex) { Debug.LogWarning($"Leave lobby failed: {ex.Message}"); }
+        // Network teardown happened synchronously before the await. Do not repeat it here:
+        // by now another guarded create/join may be preparing its own NetworkManager.
     }
 
     /// <summary>Tear down the Netcode connection left over from a match. Leaving the UGS
