@@ -286,6 +286,7 @@ public static class MatchNetworkSync
         nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedStartRequestMessage, OnSealedStartRequestMessage);
         nm.CustomMessagingManager.RegisterNamedMessageHandler(SealedStartResponseMessage, OnSealedStartResponseMessage);
         handlersRegistered = true;
+        Debug.Log($"[NetworkHandshake] Named handlers registered (host={nm.IsHost}, client={nm.IsClient}, listening={nm.IsListening}).");
     }
 
     // Returns null (rather than silently falling back to ServerClientId/self) when no peer
@@ -295,7 +296,11 @@ public static class MatchNetworkSync
     {
         var nm = NetworkManager.Singleton;
         if (nm == null) return null;
-        if (!nm.IsHost) return NetworkManager.ServerClientId;
+        // A runtime-created NetworkManager is neither host nor connected client while
+        // Relay is still starting. Returning ServerClientId in that state made
+        // IsPeerConnected report a false positive and let the ranked guest attempt its
+        // one-shot deck/name sends before a server connection existed.
+        if (!nm.IsHost) return nm.IsConnectedClient ? NetworkManager.ServerClientId : null;
         foreach (var id in nm.ConnectedClientsIds)
             if (id != nm.LocalClientId) return id;
         return null;

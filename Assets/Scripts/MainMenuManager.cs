@@ -6297,10 +6297,23 @@ public partial class MainMenuManager : MonoBehaviour
         });
     }
 
-    private void HeartbeatCustomLobbyState()
+    private void HeartbeatLobbyHandshake()
     {
-        if (!showingLobbyHub || lobbyMode != "custom" || LobbyManager.CurrentSession == null
-            || !MatchNetworkSync.IsPeerConnected) return;
+        if (LobbyManager.CurrentSession == null || !MatchNetworkSync.IsPeerConnected) return;
+
+        // JoinSessionByIdAsync may finish after Netcode's connect callback already
+        // fired, or before the connection is usable for custom messages. Re-announce
+        // ranked/casual identity and deck until the host receives them and launches.
+        if (rankedQueueActive && (lobbyMode == "ranked" || lobbyMode == "casual"))
+        {
+            ShareLobbyDeck();
+            MatchNetworkSync.SendPeerName(
+                AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName);
+            TryHostLaunch();
+            return;
+        }
+
+        if (!showingLobbyHub || lobbyMode != "custom") return;
         // Only the compact snapshot repeats. Re-sending the legacy one-field events
         // here would make their handlers repaint the whole waiting room every second.
         SendLocalLobbyPeerState();
@@ -6664,6 +6677,7 @@ public partial class MainMenuManager : MonoBehaviour
         rankedErrorStreak = 0;
         rankedConnectStart = -1f;
         rankedSessionId = null;
+        ResetPeerLobbyState();
         lobbyRanked = mode == "ranked";   // casual matches don't touch the ladder
         lobbyMode = mode;
         RenderMenu();
@@ -6699,6 +6713,7 @@ public partial class MainMenuManager : MonoBehaviour
             if (rankedQueueActive && !rankedLaunching && rankedConnectStart >= 0f
                 && Time.realtimeSinceStartup - rankedConnectStart > RankedConnectTimeout)
             {
+                Debug.LogWarning($"[RankedHandshake] Timed out: status={rankedStatus}, session={LobbyManager.CurrentSession != null}, peer={MatchNetworkSync.IsPeerConnected}, guestState={rankedGuestReady}, deck={lobbyPeerDeck != null}, name={!string.IsNullOrEmpty(lobbyPeerName)}.");
                 lobbyError = "Couldn't connect to your opponent — please try again.";
                 EndRankedQueue(true);
                 return;
@@ -6781,6 +6796,7 @@ public partial class MainMenuManager : MonoBehaviour
             if (this == null || menuRoot == null || !rankedQueueActive) return;
             SubscribeToSessionEvents(session);
             rankedSessionId = session.Id;
+            Debug.Log("[RankedHandshake] Host session created; publishing it to the matched guest.");
             // Publish the session id so the guest can JoinById. Retry a few times: a single failed
             // post leaves the guest stranded in "accepted" with no matchId until the connect timeout
             // (P1) / 120s server STALE. QueueHostReadyAsync never throws (returns status "error" on
@@ -6789,7 +6805,11 @@ public partial class MainMenuManager : MonoBehaviour
             {
                 var hr = await RankedStore.QueueHostReadyAsync(session.Id);
                 if (this == null || menuRoot == null || !rankedQueueActive) return;
-                if (hr != null && hr.status != "error") break;
+                if (hr != null && hr.status != "error")
+                {
+                    Debug.Log($"[RankedHandshake] Host session published (attempt {attempt + 1}, status={hr.status}).");
+                    break;
+                }
                 await Task.Delay(700);
                 if (this == null || menuRoot == null || !rankedQueueActive) return;
             }
@@ -6806,10 +6826,12 @@ public partial class MainMenuManager : MonoBehaviour
     {
         try
         {
+            Debug.Log("[RankedHandshake] Guest joining host session.");
             var session = await LobbyManager.JoinByIdAsync(sessionId);
             if (this == null || menuRoot == null || !rankedQueueActive) return;
             SubscribeToSessionEvents(session);
-            ShareLobbyDeck();   // send our deck to the host
+            Debug.Log($"[RankedHandshake] Guest session join returned (peer={MatchNetworkSync.IsPeerConnected}); beginning handshake heartbeat.");
+            HeartbeatLobbyHandshake();
             // Guest now waits for the host's match-start (OnNetworkMatchStartReceived).
         }
         catch (Exception ex)
@@ -7040,13 +7062,13 @@ public partial class MainMenuManager : MonoBehaviour
             NetworkManager.Singleton.OnClientConnectedCallback -= OnLobbyNetworkClientConnected;
             NetworkManager.Singleton.OnClientConnectedCallback += OnLobbyNetworkClientConnected;
         }
-        CancelInvoke(nameof(HeartbeatCustomLobbyState));
-        InvokeRepeating(nameof(HeartbeatCustomLobbyState), 0.25f, 1f);
+        CancelInvoke(nameof(HeartbeatLobbyHandshake));
+        InvokeRepeating(nameof(HeartbeatLobbyHandshake), 0.25f, 1f);
     }
 
     private void UnsubscribeFromSessionEvents()
     {
-        CancelInvoke(nameof(HeartbeatCustomLobbyState));
+        CancelInvoke(nameof(HeartbeatLobbyHandshake));
         if (subscribedLobbySession != null)
         {
             subscribedLobbySession.Changed -= OnLobbySessionChanged;
@@ -7060,6 +7082,7 @@ public partial class MainMenuManager : MonoBehaviour
     private void OnLobbyNetworkClientConnected(ulong clientId)
     {
         if (this == null || menuRoot == null) return;
+        Debug.Log($"[NetworkHandshake] Client connected callback: id={clientId}, host={NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost}, mode={lobbyMode}.");
         // If we picked a deck before the Relay connection finished, the share was
         // a no-op — re-send now that there's actually a peer to receive it. The
         // display name rides along the same way (turn indicator / chat prefixes).
