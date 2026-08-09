@@ -45,7 +45,7 @@ public static class UpdateChecker
     // client paired with a patched-27 client would silently desync — the exact failure
     // MatchStartPayload.build exists to prevent. Bumping is mandatory for any engine change, not
     // cosmetic. Keep Deploy/version.json's "buildNumber" equal to this.
-    public const int CurrentBuildNumber = 31;
+    public const int CurrentBuildNumber = 32;
     // -----------------------------------------------------------------------
 
     [Serializable]

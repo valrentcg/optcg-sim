@@ -1128,6 +1128,21 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.34", "Online lobby connection hotfix", "Aug 8, 2026", new (string, string[])[]
+        {
+            ("Ranked and Casual", new[]
+            {
+                "Fixed both players getting stuck on Connecting to opponent after accepting the Ready check.",
+                "The Relay handshake now waits for a real peer connection and retries each player's deck and display name until the host receives them, instead of relying on a single message that could arrive too early.",
+                "Every new queue clears the previous opponent's connection state before searching, preventing an old deck or name from leaking into the next match attempt.",
+            }),
+            ("Custom and Custom Sealed", new[]
+            {
+                "Fixed a joined player selecting a Leader and pressing Ready while the host continued to see Opponent Leader: not selected.",
+                "Leader, Ready, and player-name state now resynchronizes while the waiting room is open, including after either player returns from the Leader or set selector.",
+                "Lobby message handlers recover when the network connection finishes before the waiting-room screen is ready, so a missed first update no longer strands the room on Finishing connection.",
+            }),
+        }),
         ("v1.0.33", "The Sealed / Pre-Release overhaul", "Aug 8, 2026", new (string, string[])[]
         {
             ("Sealed / Pre-Release", new[]
