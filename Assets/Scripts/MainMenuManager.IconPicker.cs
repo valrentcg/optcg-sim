@@ -41,6 +41,33 @@ public partial class MainMenuManager
     // face-data.json's heuristic guesses miss on busy or off-center art.
     private static readonly string[] ProfileIconExtras =
     {
+        "ST21-012",
+        "ST22-002",
+        "ST22-004",
+        "ST22-007",
+        "ST22-011",
+        "ST22-013",
+        "ST22-014",
+        "OP14-088",
+        "OP14-093",
+        "OP14-095",
+        "OP14-102",
+        "OP14-103",
+        "OP14-112",
+        "OP13-101",
+        "OP13-103",
+        "OP13-107",
+        "OP13-109",
+        "OP13-111",
+        "OP12-061",
+        "OP12-065",
+        "OP12-076",
+        "OP12-082",
+        "OP12-088",
+        "OP12-091",
+        "OP12-092",
+        "OP12-110",
+        "OP12-114",
         "OP05-047",  // Basil Hawkins
         "OP05-054",  // Monkey D. Garp
         "OP08-028",  // Nekomamushi

@@ -20,6 +20,7 @@
 
 - Human players now use their selected profile picture in the in-match player plate instead of the generic Leader-colour hex.
 - Each player's profile picture travels with the match-start data in Ranked, Casual, Custom, and Custom Sealed. Bots keep their existing hex icons.
+- Added 27 new profile-picture choices from ST21, ST22, OP12, OP13, and OP14.
 
 ## Sealed rematch flow
 
