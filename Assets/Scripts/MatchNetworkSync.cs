@@ -34,6 +34,7 @@ public class NetworkDeck
     // Sender's personalised DON!! layout (DonDeckSettings.Serialize). Rides the deck share so the
     // guest's choice reaches the host with no new message. Cosmetic only; null on older clients.
     public string don;
+    public string profileIcon; // sender's selected profile-picture card id; cosmetic only
 
     public static NetworkDeck From(DeckData d)
     {
@@ -72,6 +73,8 @@ public class MatchStartPayload
     public NetworkDeck north;   // guest's deck
     public string southName;    // authoritative display names; do not reconstruct from message timing
     public string northName;
+    public string southIcon;    // authoritative profile-picture card ids; null = default/fallback
+    public string northIcon;
     public bool ranked;         // true = a Ranked-queue match that counts toward the bounty ladder
     public string mode;         // "ranked" | "casual" | "custom" — the game type for stats/history
     public bool forgiveness;    // custom lobby: enable the in-match rewind toggle (opponent-approved)
@@ -120,6 +123,7 @@ public class LobbySettingsPayload
 public class LobbyPeerStatePayload
 {
     public string name;
+    public string profileIcon;
     public bool ready;
     public string sealedLeader;
 }
@@ -133,6 +137,8 @@ public class SealedBuildStartPayload
     public string northLeader;
     public string southName;
     public string northName;
+    public string southIcon;
+    public string northIcon;
     public bool forgiveness;
     public string format;
     public BlitzConfig blitz;

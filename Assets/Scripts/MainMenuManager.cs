@@ -161,6 +161,7 @@ public partial class MainMenuManager : MonoBehaviour
 
     private static NetworkDeck lobbyPeerDeck;     // the peer's shared pick (via OptcgDeckShare); null = their default
     private static string lobbyPeerName;          // the peer's display name (via OptcgNameShare)
+    private static string lobbyPeerIcon;          // peer's selected profile-picture card id
     private static bool reopenLobbyAfterPicker;   // restore the waiting room after the picker closes
     private static bool pickNewSealedSetAfterMatch; // host opens the pack carousel after Change Deck
     // Custom-lobby Ready handshake: the game can't start until BOTH players are ready.
@@ -1253,6 +1254,11 @@ public partial class MainMenuManager : MonoBehaviour
             {
                 "The sidebar now shows friends who are online as soon as the menu loads instead of reporting 0 online until you open the Friends list.",
                 "Friend relationships and presence perform a background server resync after your account is restored, then continue updating live.",
+            }),
+            ("Player profiles", new[]
+            {
+                "Human players now use their selected profile picture in the in-match player plate instead of the generic Leader-colour hex.",
+                "Each player's profile picture travels with the match-start data in Ranked, Casual, Custom, and Custom Sealed. Bots keep their existing hex icons.",
             }),
             ("Sealed rematch flow", new[]
             {
@@ -6403,6 +6409,7 @@ public partial class MainMenuManager : MonoBehaviour
         {
             var shared = NetworkDeck.From(deck);
             shared.don = DonDeckSettings.Serialize();   // cosmetic DON art travels with the deck pick
+            shared.profileIcon = AccountManager.ProfileIconId ?? AccountManager.CachedProfileIconId;
             MatchNetworkSync.SendDeckShare(shared);
         }
     }
@@ -6416,6 +6423,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyPeerDeck = null;
         lobbyPeerName = null;
+        lobbyPeerIcon = null;
         lobbyPeerSealedLeader = null;
         localReady = false;
         peerReady = false;
@@ -6473,6 +6481,7 @@ public partial class MainMenuManager : MonoBehaviour
         MatchNetworkSync.SendLobbyPeerState(new LobbyPeerStatePayload
         {
             name = AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName,
+            profileIcon = AccountManager.ProfileIconId ?? AccountManager.CachedProfileIconId,
             ready = localReady,
             sealedLeader = lobbySealedLeader,
         });
@@ -6506,6 +6515,8 @@ public partial class MainMenuManager : MonoBehaviour
 
         string nextName = string.IsNullOrWhiteSpace(state.name) ? null : state.name.Trim();
         if (nextName != null && nextName.Length > 48) nextName = nextName.Substring(0, 48);
+        string nextIcon = string.IsNullOrWhiteSpace(state.profileIcon) ? null : state.profileIcon.Trim();
+        if (nextIcon != null && nextIcon.Length > 64) nextIcon = nextIcon.Substring(0, 64);
 
         string nextLeader = null;
         if (!string.IsNullOrWhiteSpace(state.sealedLeader))
@@ -6516,9 +6527,10 @@ public partial class MainMenuManager : MonoBehaviour
                 nextLeader = candidate;
         }
 
-        bool changed = lobbyPeerName != nextName || peerReady != state.ready
+        bool changed = lobbyPeerName != nextName || lobbyPeerIcon != nextIcon || peerReady != state.ready
             || lobbyPeerSealedLeader != nextLeader;
         lobbyPeerName = nextName;
+        lobbyPeerIcon = nextIcon;
         peerReady = state.ready;
         lobbyPeerSealedLeader = nextLeader;
         MarkRankedGuestReady();
@@ -6601,6 +6613,7 @@ public partial class MainMenuManager : MonoBehaviour
     private void OnPeerDeckShared(NetworkDeck deck)
     {
         lobbyPeerDeck = deck;
+        if (!string.IsNullOrWhiteSpace(deck?.profileIcon)) lobbyPeerIcon = deck.profileIcon.Trim();
         MarkRankedGuestReady();               // any inbound guest message = guest can receive ours
         TryHostLaunch();                      // ranked/casual: the deck may arrive AFTER the name — launch now
         TryLobbyAutoStart();                  // custom: deck may arrive AFTER "ready"; commit now that we have it
@@ -6631,6 +6644,8 @@ public partial class MainMenuManager : MonoBehaviour
             northLeader = lobbyPeerSealedLeader,
             southName = AccountManager.DisplayName,
             northName = lobbyPeerName,
+            southIcon = AccountManager.ProfileIconId ?? AccountManager.CachedProfileIconId,
+            northIcon = lobbyPeerIcon,
             forgiveness = lobbyForgiveness,
             format = lobbyFormat,
             blitz = LobbyBlitzConfig(),
@@ -6730,6 +6745,8 @@ public partial class MainMenuManager : MonoBehaviour
             seed = Guid.NewGuid().ToString("N"),
             southName = AccountManager.DisplayName,
             northName = lobbyPeerName,
+            southIcon = AccountManager.ProfileIconId ?? AccountManager.CachedProfileIconId,
+            northIcon = lobbyPeerIcon ?? lobbyPeerDeck?.profileIcon,
             south = NetworkDeck.From(DeckStore.Get(lobbyDeckId)),   // null → engine default ST01
             north = lobbyPeerDeck,                                  // null → engine default ST02
             ranked = lobbyRanked,                                  // true only from the ranked queue
@@ -7233,6 +7250,8 @@ public partial class MainMenuManager : MonoBehaviour
         GameManager.PendingNetworkedNorthDeck = payload.north;
         GameManager.PendingNetworkedSouthDon = payload.southDon;
         GameManager.PendingNetworkedNorthDon = payload.northDon;
+        GameManager.PendingSouthProfileIcon = payload.southIcon;
+        GameManager.PendingNorthProfileIcon = payload.northIcon;
         GameManager.EnsureBoard();
         if (canvas != null) Destroy(canvas.gameObject);
         Destroy(gameObject);

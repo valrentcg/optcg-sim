@@ -132,8 +132,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // EnsureBoard() for networked matches; hotseat falls back to "Player 1"/"Player 2".
     public static string PendingSouthName;
     public static string PendingNorthName;
+    public static string PendingSouthProfileIcon;
+    public static string PendingNorthProfileIcon;
     private string southDisplayName = "Player 1";
     private string northDisplayName = "Player 2";
+    private string southProfileIcon;
+    private string northProfileIcon;
     private string DisplayName(string seat) => seat == "north" ? northDisplayName : southDisplayName;
     private bool isNetworkedSealed;
     private bool returningToLobby;
@@ -392,6 +396,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private Image northHandPanelImage;
 
     private readonly Dictionary<string, Texture2D> texCache = new Dictionary<string, Texture2D>();
+    private readonly Dictionary<string, float> profileFaceX = new Dictionary<string, float>();
+    private readonly Dictionary<string, float> profileFaceY = new Dictionary<string, float>();
     private readonly Dictionary<string, Texture2D> colorIconCache = new Dictionary<string, Texture2D>();
     private readonly Dictionary<Texture2D, Texture2D> iconOutlinedCache = new Dictionary<Texture2D, Texture2D>();
     private readonly Dictionary<string, Sprite> spriteCache = new Dictionary<string, Sprite>();
@@ -472,6 +478,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void Start()
     {
         LoadOfficialCardLibrary();
+        LoadProfileFaceData();
         if (PendingReplayLoad != null)
         {
             var record = PendingReplayLoad;
@@ -653,6 +660,57 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (string.IsNullOrEmpty(json)) { Debug.LogWarning("Official card library unavailable from CDN."); return; }
         ParseOfficialCardLibrary(json);
         _artRefreshQueued = true;
+    }
+
+    private void LoadProfileFaceData()
+    {
+        if (CardAssets.UseCdn) { LoadProfileFaceDataAsync(); return; }
+        try
+        {
+            string path = CardAssets.LocalPath("face-data.json");
+            if (File.Exists(path)) ParseProfileFaceData(File.ReadAllText(path));
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"Profile face-data failed to load: {ex.Message}");
+        }
+    }
+
+    private void ParseProfileFaceData(string json)
+    {
+        var data = JsonUtility.FromJson<FaceMapFile>(json);
+        if (data?.ids == null || data.y == null) return;
+
+        profileFaceX.Clear();
+        profileFaceY.Clear();
+        for (int i = 0; i < data.ids.Length && i < data.y.Length; i++)
+        {
+            if (!string.IsNullOrEmpty(data.ids[i])) profileFaceY[data.ids[i]] = data.y[i];
+        }
+        if (data.x != null)
+        {
+            for (int i = 0; i < data.ids.Length && i < data.x.Length; i++)
+            {
+                if (!string.IsNullOrEmpty(data.ids[i])) profileFaceX[data.ids[i]] = data.x[i];
+            }
+        }
+    }
+
+    private async void LoadProfileFaceDataAsync()
+    {
+        try
+        {
+            _ = CardAssets.InitAsync();
+            while (!CardAssets.Ready) await System.Threading.Tasks.Task.Yield();
+            string json = await CardAssets.ReadTextAsync("face-data.json");
+            if (string.IsNullOrEmpty(json)) return;
+            ParseProfileFaceData(json);
+            _artRefreshQueued = true;
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"Profile face-data failed to load: {ex.Message}");
+        }
     }
 
     /// Stable fingerprint of the card library this client actually loaded. Both load paths (in-build
@@ -1249,6 +1307,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         PendingNetworkedMode = null;
         isNetworkedSealed = PendingNetworkedSealed;
         PendingNetworkedSealed = false;
+        southProfileIcon = PendingSouthProfileIcon;
+        northProfileIcon = PendingNorthProfileIcon;
+        PendingSouthProfileIcon = null;
+        PendingNorthProfileIcon = null;
         isForgiveness = PendingNetworkedForgiveness;
         PendingNetworkedForgiveness = false;
         localSeat = seat;
@@ -9085,15 +9147,27 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         bool mirror = seat == BottomSeat;
 
         float dotX = mirror ? 0.945f : 0.055f;
-        // Show the leader's color-identity hex icon; fall back to a plain dot if unavailable.
+        // Human seats use their selected profile-picture card. A.I. seats deliberately keep
+        // the existing leader-colour hex, as do humans with no selected/available profile art.
+        string profileIcon = aiSeat == seat || isReplayMode ? null
+            : isNetworked ? (seat == "south" ? southProfileIcon : northProfileIcon)
+            : (AccountManager.ProfileIconId ?? AccountManager.CachedProfileIconId);
+        bool drewProfile = !string.IsNullOrEmpty(profileIcon)
+            && DrawProfilePlateAvatar(plate, profileIcon, dotX, mirror, highlight);
+
+        // Show the leader's color-identity hex icon when this is a bot or profile art is unavailable.
         string leaderColor = null;
         if (p != null && p.Leader != null)
         {
             var ldef = GameEngine.GetCard(p.Leader);
             if (ldef != null) leaderColor = ldef.Color;
         }
-        var iconTex = LoadColorIcon(leaderColor);
-        if (iconTex != null)
+        var iconTex = drewProfile ? null : LoadColorIcon(leaderColor);
+        if (drewProfile)
+        {
+            // DrawProfilePlateAvatar already built the circle and active-turn rim.
+        }
+        else if (iconTex != null)
         {
             var pivot = new Vector2(mirror ? 1f : 0f, 0.5f);
             // On the active player's turn the plate fills dark, so use the variant with a cyan rim
@@ -9131,6 +9205,54 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var stats = TextObject("Plate Stats", plate, $"LIFE {life}   ·   HAND {hand}   ·   DON {don}", 9, Ink, mirror ? TextAnchor.UpperRight : TextAnchor.UpperLeft, monoFont);
         stats.fontStyle = FontStyle.Bold;
         Stretch(stats.rectTransform, new Vector2(textMin.x, 0.10f), new Vector2(textMax.x, 0.44f), Vector2.zero, Vector2.zero);
+    }
+
+    private bool DrawProfilePlateAvatar(RectTransform plate, string cardId, float dotX, bool mirror, bool highlight)
+    {
+        var sprite = GetCardSprite(cardId);
+        if (sprite == null) return false; // CDN load was queued; the coalesced re-render retries.
+
+        var pivot = new Vector2(mirror ? 1f : 0f, 0.5f);
+        if (highlight)
+        {
+            var rim = PanelObject("Avatar Active Rim", plate, Accent);
+            rim.anchorMin = rim.anchorMax = new Vector2(dotX, 0.5f);
+            rim.pivot = pivot;
+            rim.sizeDelta = new Vector2(34f, 34f);
+            rim.anchoredPosition = Vector2.zero;
+            RoundCircle(rim);
+        }
+
+        var circle = PanelObject("Profile Avatar", plate, new Color32(11, 20, 32, 255));
+        circle.anchorMin = circle.anchorMax = new Vector2(dotX, 0.5f);
+        circle.pivot = pivot;
+        circle.sizeDelta = new Vector2(30f, 30f);
+        circle.anchoredPosition = Vector2.zero;
+        RoundCircle(circle);
+        var mask = circle.gameObject.AddComponent<Mask>();
+        mask.showMaskGraphic = true;
+
+        // Match the profile screen's face crop: show a square window spanning 42% of
+        // card height, centered on face-data's eye coordinate when one is available.
+        const float size = 30f, visH = 0.42f, cardAspect = 0.716f;
+        float fx = profileFaceX.TryGetValue(cardId, out var storedX) ? Mathf.Clamp(storedX, 0.15f, 0.85f) : 0.5f;
+        float fy = profileFaceY.TryGetValue(cardId, out var storedY) ? Mathf.Clamp(storedY, 0.08f, 0.5f) + 0.04f : 0.20f;
+        float artH = size / visH;
+        float artW = artH * cardAspect;
+        float visibleWidth = size / artW;
+        fx = Mathf.Clamp(fx, 0.075f + visibleWidth * 0.5f, 0.925f - visibleWidth * 0.5f);
+        fy = Mathf.Clamp(fy, 0.055f + visH * 0.5f, 0.965f - visH * 0.5f);
+
+        var art = new GameObject("Profile Art", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
+        art.SetParent(circle, false);
+        art.anchorMin = art.anchorMax = art.pivot = new Vector2(0.5f, 0.5f);
+        art.sizeDelta = new Vector2(artW, artH);
+        art.anchoredPosition = new Vector2(-(fx - 0.5f) * artW, (fy - 0.5f) * artH);
+        var image = art.GetComponent<Image>();
+        image.sprite = sprite;
+        image.preserveAspect = false;
+        image.raycastTarget = false;
+        return true;
     }
 
     private sealed class ChatMessage { public string Sender; public string Text; public bool Mine; }
@@ -16165,9 +16287,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
-
-
 
 
 

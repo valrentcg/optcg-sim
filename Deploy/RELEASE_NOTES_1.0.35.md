@@ -16,6 +16,11 @@
 - The sidebar now shows friends who are online as soon as the menu loads instead of reporting 0 online until the Friends list is opened.
 - Friend relationships and presence perform a background server resync after the account is restored, then continue updating live.
 
+## Player profiles
+
+- Human players now use their selected profile picture in the in-match player plate instead of the generic Leader-colour hex.
+- Each player's profile picture travels with the match-start data in Ranked, Casual, Custom, and Custom Sealed. Bots keep their existing hex icons.
+
 ## Sealed rematch flow
 
 - Change Deck now keeps both players in the same Custom lobby instead of returning either player to the main menu.
