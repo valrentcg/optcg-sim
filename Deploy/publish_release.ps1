@@ -84,11 +84,12 @@ Write-Output "Shipping bot boundary OK (frozen baseline; research remains under 
 # Packaging consumes an already-built Unity directory. Source safety alone is insufficient if that directory
 # predates this check and still contains an experimental Assembly-CSharp.dll. Require a rebuild whenever the
 # frozen player-bot sources are newer than the compiled player assembly.
-$playerAssembly = Join-Path $BuildDir "One Piece TCG Simulator_Data\Managed\Assembly-CSharp.dll"
-if (-not (Test-Path $playerAssembly)) {
-    Write-Error "Missing Unity player assembly: $playerAssembly. Make a fresh Windows build before publishing."
+$playerAssemblyPath = Join-Path $BuildDir "One Piece TCG Simulator_Data\Managed\Assembly-CSharp.dll"
+if (-not (Test-Path $playerAssemblyPath)) {
+    Write-Error "Missing Unity player assembly: $playerAssemblyPath. Make a fresh Windows build before publishing."
     exit 1
 }
+$playerAssembly = Get-Item -LiteralPath $playerAssemblyPath
 $newestBotSource = Get-ChildItem $botRoot -File -Filter '*.cs' |
     Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
 if ($playerAssembly.LastWriteTimeUtc -lt $newestBotSource.LastWriteTimeUtc) {
