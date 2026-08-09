@@ -450,6 +450,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Affiliation/attribute tags, e.g. ["Straw Hat Crew"], ["Supernovas"]. Optional in JSON.
         public string[] features = new string[0];
         public string feature = "";
+        public string rarity = "";      // pack collation / Sealed catalogue eligibility
         public string attribute = "";   // ＜Slash＞/＜Strike＞/… icon; drives battle-K.O.-immunity clauses
         public string block = "";       // regulation block number ("1".."5", "X", "-", "" ); drives format legality
     }
@@ -689,7 +690,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     NormalizeEffectText(card.effect),
                     NormalizeEffectText(card.trigger),
                     NormalizeFeatures(card),
-                    null,
+                    card.rarity,
                     card.attribute,
                     card.block);
             }
@@ -16164,7 +16165,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
 
 
 

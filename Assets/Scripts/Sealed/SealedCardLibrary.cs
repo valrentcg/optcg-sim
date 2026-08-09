@@ -51,7 +51,11 @@ namespace OnePieceTcg.Sealed
         /// concurrent callers share one load.</summary>
         public static Task EnsureLoadedAsync()
         {
-            if (Loaded || LooksLoaded()) { Loaded = true; return Task.CompletedTask; }
+            // Do not trust the cached flag on its own. The general match loader used to rewrite
+            // CardData after Sealed opened and erase rarity, leaving Loaded=true over a library
+            // that could no longer satisfy any pack collation. Validate the live data every time.
+            if (LooksLoaded()) { Loaded = true; return Task.CompletedTask; }
+            Loaded = false;
             return loading ??= LoadAsync();
         }
 
@@ -68,8 +72,11 @@ namespace OnePieceTcg.Sealed
                     return;
                 }
                 Parse(json);
-                Loaded = true;
-                Debug.Log($"[SealedCardLibrary] loaded {CardData.Library.Count} card definitions (with rarity).");
+                Loaded = LooksLoaded();
+                if (Loaded)
+                    Debug.Log($"[SealedCardLibrary] loaded {CardData.Library.Count} card definitions (with rarity).");
+                else
+                    Debug.LogError("[SealedCardLibrary] card JSON parsed, but no complete rarity-bearing booster set was found.");
             }
             catch (Exception e)
             {

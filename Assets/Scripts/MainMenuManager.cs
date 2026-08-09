@@ -1258,6 +1258,8 @@ public partial class MainMenuManager : MonoBehaviour
             {
                 "Change Deck now keeps both players in the same Custom lobby instead of returning either player to the main menu.",
                 "Both players leave the finished match together, their Ready checks reset, and the lobby owner goes straight to the pack carousel to choose the next set.",
+                "Fixed the set carousel becoming empty after a match rewrote the card library without its pack-rarity data.",
+                "Solo Play now marks Sealed as Ready and keeps its Open Packs action visibly selectable.",
             }),
         }),
         ("v1.0.34", "Online lobby connection hotfix", "Aug 8, 2026", new (string, string[])[]
@@ -8113,8 +8115,10 @@ public partial class MainMenuManager : MonoBehaviour
         // Puzzles is playable but still being expanded — show a DEV chip (same treatment as ranked/casual),
         // while keeping the mode itself launchable.
         BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Dev,   3, 5, 6f);
-        // Sealed / Pre-Release: open six seeded packs, build a 40-card deck, play it.
-        BuildMultiSubTile(subRow, "Sealed",      "sealed",     ModeStatus.Dev,   4, 5, 6f);
+        // Sealed / Pre-Release is a live mode: select it, then OPEN PACKS launches the local flow.
+        // Keep this in sync with modes[] above; a DEV badge made the tab look disabled even though
+        // the click path and full six-pack/deck-builder flow were already enabled.
+        BuildMultiSubTile(subRow, "Sealed",      "sealed",     ModeStatus.Ready, 4, 5, 6f);
     }
 
     // ── Multiplayer sub-tile (centered label + SOON chip below) ──────────────
