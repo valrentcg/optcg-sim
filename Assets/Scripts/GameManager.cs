@@ -9212,29 +9212,34 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var sprite = GetCardSprite(cardId);
         if (sprite == null) return false; // CDN load was queued; the coalesced re-render retries.
 
-        var pivot = new Vector2(mirror ? 1f : 0f, 0.5f);
+        const float rimSize = 34f;
+        const float portraitSize = 28f;
+        // dotX identifies the outside edge of the avatar slot. Put both differently-sized
+        // circles on the same explicit centre; sharing an edge pivot makes their centres drift.
+        var pivot = new Vector2(0.5f, 0.5f);
+        var centerOffset = new Vector2((mirror ? -1f : 1f) * rimSize * 0.5f, 0f);
         if (highlight)
         {
             var rim = PanelObject("Avatar Active Rim", plate, Accent);
             rim.anchorMin = rim.anchorMax = new Vector2(dotX, 0.5f);
             rim.pivot = pivot;
-            rim.sizeDelta = new Vector2(34f, 34f);
-            rim.anchoredPosition = Vector2.zero;
+            rim.sizeDelta = new Vector2(rimSize, rimSize);
+            rim.anchoredPosition = centerOffset;
             RoundCircle(rim);
         }
 
         var circle = PanelObject("Profile Avatar", plate, new Color32(11, 20, 32, 255));
         circle.anchorMin = circle.anchorMax = new Vector2(dotX, 0.5f);
         circle.pivot = pivot;
-        circle.sizeDelta = new Vector2(28f, 28f);
-        circle.anchoredPosition = Vector2.zero;
+        circle.sizeDelta = new Vector2(portraitSize, portraitSize);
+        circle.anchoredPosition = centerOffset;
         RoundCircle(circle);
         var mask = circle.gameObject.AddComponent<Mask>();
         mask.showMaskGraphic = true;
 
         // Match the profile screen's face crop: show a square window spanning 42% of
         // card height, centered on face-data's eye coordinate when one is available.
-        const float size = 28f, visH = 0.42f, cardAspect = 0.716f;
+        const float size = portraitSize, visH = 0.42f, cardAspect = 0.716f;
         float fx = profileFaceX.TryGetValue(cardId, out var storedX) ? Mathf.Clamp(storedX, 0.15f, 0.85f) : 0.5f;
         float fy = profileFaceY.TryGetValue(cardId, out var storedY) ? Mathf.Clamp(storedY, 0.08f, 0.5f) + 0.04f : 0.20f;
         float artH = size / visH;
@@ -16287,7 +16292,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
 
 
 
