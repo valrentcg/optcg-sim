@@ -9226,7 +9226,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var circle = PanelObject("Profile Avatar", plate, new Color32(11, 20, 32, 255));
         circle.anchorMin = circle.anchorMax = new Vector2(dotX, 0.5f);
         circle.pivot = pivot;
-        circle.sizeDelta = new Vector2(30f, 30f);
+        circle.sizeDelta = new Vector2(28f, 28f);
         circle.anchoredPosition = Vector2.zero;
         RoundCircle(circle);
         var mask = circle.gameObject.AddComponent<Mask>();
@@ -9234,7 +9234,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // Match the profile screen's face crop: show a square window spanning 42% of
         // card height, centered on face-data's eye coordinate when one is available.
-        const float size = 30f, visH = 0.42f, cardAspect = 0.716f;
+        const float size = 28f, visH = 0.42f, cardAspect = 0.716f;
         float fx = profileFaceX.TryGetValue(cardId, out var storedX) ? Mathf.Clamp(storedX, 0.15f, 0.85f) : 0.5f;
         float fy = profileFaceY.TryGetValue(cardId, out var storedY) ? Mathf.Clamp(storedY, 0.08f, 0.5f) + 0.04f : 0.20f;
         float artH = size / visH;
@@ -16287,7 +16287,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
 
 
 
