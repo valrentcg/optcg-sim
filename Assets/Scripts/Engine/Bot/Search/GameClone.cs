@@ -66,6 +66,8 @@ namespace OnePieceTcg.Engine.Bot.Search
             g.NoPlayFromHandThisTurn = new HashSet<string>(s.NoPlayFromHandThisTurn);
             g.CannotAttackLeaderThisTurn = new HashSet<string>(s.CannotAttackLeaderThisTurn);
             g.NoAddLifeToHandThisTurn = new HashSet<string>(s.NoAddLifeToHandThisTurn);
+            g.LifeRemovedThisTurn = new HashSet<string>(s.LifeRemovedThisTurn);
+            g.HandTrashedByEffectThisTurn = new HashSet<string>(s.HandTrashedByEffectThisTurn);
             g.NoSetDonActiveViaCharThisTurn = new HashSet<string>(s.NoSetDonActiveViaCharThisTurn);
             g.RestedKoProtectionPaid = new HashSet<string>(s.RestedKoProtectionPaid);
             g.BattleKoTrashSaveSeats = new HashSet<string>(s.BattleKoTrashSaveSeats);
@@ -154,7 +156,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             Cards = CloneCards(d.Cards), Ordered = CloneCards(d.Ordered),
             SearchMode = d.SearchMode, MaxCost = d.MaxCost, CardTypeFilter = d.CardTypeFilter, TrashRest = d.TrashRest,
             PlayMode = d.PlayMode, PlayRested = d.PlayRested, MaxPower = d.MaxPower, TrashSelected = d.TrashSelected,
-            RequireTrigger = d.RequireTrigger, SelectCount = d.SelectCount, ToTop = d.ToTop, LifeMode = d.LifeMode,
+            RequireTrigger = d.RequireTrigger, SelectCount = d.SelectCount, SelectedAny = d.SelectedAny, ToTop = d.ToTop, LifeMode = d.LifeMode,
             PostLookClause = d.PostLookClause,
         };
     }

@@ -447,6 +447,16 @@ namespace OnePieceTcg.Engine.Bot
                 return Try(blacklist, new GameCommand { Type = "resolveChoice", Seat = seat, Target = "B" });
             }
 
+            // A play-trigger can leave the ATTACKER's full-board replacement prompt open while the
+            // engine has already advanced an attack to the DEFENDER's block/counter prompt. The defense
+            // decision is the currently legal response; yielding to the unrelated replacement owner here
+            // makes both bots return null forever. Resolve the defender-owned battle prompt first, then the
+            // attacker can finish its replacement when the battle yields.
+            if (state.PendingCharReplace != null && state.PendingCharReplace.Seat != seat
+                && state.Battle != null && state.Battle.TargetSeat == seat
+                && (state.Battle.Step == "block" || state.Battle.Step == "counter"
+                    || state.Battle.Step == "damage" || state.Battle.Step == "trigger"))
+                return DecideDefense(state, seat, blacklist);
             if (state.PendingCharReplace != null && state.PendingCharReplace.Seat != seat) return null;
             if (state.PendingCharReplace != null && state.PendingCharReplace.Seat == seat)
                 return DecideCharReplace(state, seat, blacklist);

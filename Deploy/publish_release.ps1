@@ -102,7 +102,7 @@ Write-Output "Unity player assembly freshness OK."
 # predates those assets, otherwise the release silently falls back to procedural wrappers.
 $packArtDir = Join-Path $BuildDir "One Piece TCG Simulator_Data\StreamingAssets\Cards\Packs"
 $expectedPackArt = @(
-    (1..16 | ForEach-Object { "OP{0:D2}.png" -f $_ })
+    (1..17 | ForEach-Object { "OP{0:D2}.png" -f $_ })
     (1..4  | ForEach-Object { "EB{0:D2}.png" -f $_ })
 )
 $missingPackArt = @($expectedPackArt | Where-Object { -not (Test-Path (Join-Path $packArtDir $_)) })

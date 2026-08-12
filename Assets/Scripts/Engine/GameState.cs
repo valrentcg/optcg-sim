@@ -400,6 +400,9 @@ namespace OnePieceTcg.Engine
         // Per-seat self-restriction: this turn the seat cannot add Life cards to hand via their own effects
         // ("Then, you cannot add Life cards to your hand using your own effects during this turn" — OP02-004 etc.).
         public HashSet<string> NoAddLifeToHandThisTurn = new HashSet<string>();
+        // Per-seat turn facts used by hand-zone conditional costs/counters on preview cards.
+        public HashSet<string> LifeRemovedThisTurn = new HashSet<string>();
+        public HashSet<string> HandTrashedByEffectThisTurn = new HashSet<string>();
         // Per-seat self-restriction: this turn the seat cannot set DON!! active via a CHARACTER effect
         // ("Then, you cannot set DON!! cards as active using Character effects during this turn" — EB04-016/OP10-030).
         public HashSet<string> NoSetDonActiveViaCharThisTurn = new HashSet<string>();
@@ -516,6 +519,7 @@ namespace OnePieceTcg.Engine
         public bool TrashSelected;   // selected card goes to the TRASH ("trash up to N cards")
         public bool RequireTrigger;  // eligibility: card must have printed [Trigger] text
         public int SelectCount = 1;  // how many picks the select step allows
+        public bool SelectedAny;     // at least one looked card was added/played during this look
         public bool ToTop;           // rearranged cards go to the TOP of the deck (ST17-003)
         public bool LifeMode;        // cards came from LIFE; confirmed order writes back to Life (ST13-012 Makino)
         public string LifeTargetSeat; // whose Life the looked cards belong to (for opponent's-Life peeks, e.g. OP03-099 Katakuri); null/empty = the looker's own Life

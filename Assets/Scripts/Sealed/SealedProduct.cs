@@ -239,6 +239,7 @@ namespace OnePieceTcg.Sealed
                 ["OP14"] = ("Beyond the Dawn", "Mar 2026"),
                 ["OP15"] = ("Crown of Ambition", "Jun 2026"),
                 ["OP16"] = ("The Time of Battle", "Sep 2026"),
+                ["OP17"] = ("The World's Strongest Warriors", "Aug 2026"),
                 ["EB01"] = ("Memorial Collection", "May 2024"),
                 ["EB02"] = ("Anime 25th Collection", "May 2025"),
                 ["EB03"] = ("One Piece Heroines Edition", "Feb 2026"),

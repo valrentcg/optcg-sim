@@ -174,6 +174,19 @@ namespace OnePieceTcg.Engine.Bot.Search
                      + s.TurnNumber * 17 + (s.Phase == null ? 0 : s.Phase.GetHashCode()) + (s.ActiveSeat == null ? 0 : s.ActiveSeat.GetHashCode())
                      + (s.ActiveChoice != null ? 29 : 0) + (s.DeckLook == null ? 0 : s.DeckLook.Cards.Count * 37)
                      + (s.Battle == null || s.Battle.Step == null ? 0 : s.Battle.Step.GetHashCode()) + (s.Status == "finished" ? 999999999L : 0);
+            // Deck-look progress can change only the prompt step/order (for example, declining
+            // Lilith's optional reveal when none of the looked-at cards qualifies). Include those
+            // identities so the validator does not reject a real state transition as a no-op.
+            if (s.DeckLook != null)
+            {
+                h = h * 31 + (s.DeckLook.Seat?.GetHashCode() ?? 0);
+                h = h * 31 + (s.DeckLook.Step?.GetHashCode() ?? 0);
+                foreach (var card in s.DeckLook.Cards ?? new List<CardInstance>())
+                    h = h * 31 + (card?.InstanceId?.GetHashCode() ?? 0);
+                h = h * 31 + 97;
+                foreach (var card in s.DeckLook.Ordered ?? new List<CardInstance>())
+                    h = h * 31 + (card?.InstanceId?.GetHashCode() ?? 0);
+            }
             // Pending effects can advance without changing their COUNT: a target may receive a cost/keyword
             // modifier and a ". Then," remainder replaces the first clause with the second. Counting only the
             // queue made those perfectly legal target selections look like no-ops, so search could not reason

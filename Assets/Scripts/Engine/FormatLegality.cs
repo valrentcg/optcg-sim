@@ -53,7 +53,8 @@ namespace OnePieceTcg.Engine
         // The scraped per-card `block` field is NOT used — it's unreliable (dozens of OP05 = Block 2 cards were
         // mislabelled block 1). Set membership is the real rotation signal.
         //   Block 1: OP01–OP04, ST01–ST09     Block 2: OP05–OP08, EB01, ST10–ST14
-        //   Block 3: OP09–OP12, ST15–ST20     Block 4: OP13–OP16, ST21+, EB02+   (P-/PRB/unknown → legal)
+        //   Block 3: OP09–OP12, ST15–ST20     Block 4: OP13–OP16, ST21–ST30, EB02–EB04
+        //   Block 5: OP17+, ST31+, EB05+         (P-/PRB/unknown → legal)
         public static string BlockOf(string cardId)
         {
             string id = BaseId(cardId);
@@ -64,9 +65,9 @@ namespace OnePieceTcg.Engine
             if (!int.TryParse(m.Groups[2].Value, out int n)) return "0";
             switch (p)
             {
-                case "OP": return n <= 4 ? "1" : n <= 8 ? "2" : n <= 12 ? "3" : "4";
-                case "ST": return n <= 9 ? "1" : n <= 14 ? "2" : n <= 20 ? "3" : "4";
-                case "EB": return n <= 1 ? "2" : "4";
+                case "OP": return n <= 4 ? "1" : n <= 8 ? "2" : n <= 12 ? "3" : n <= 16 ? "4" : "5";
+                case "ST": return n <= 9 ? "1" : n <= 14 ? "2" : n <= 20 ? "3" : n <= 30 ? "4" : "5";
+                case "EB": return n <= 1 ? "2" : n <= 4 ? "4" : "5";
                 case "PRB": return "4";   // parallel/prize boosters are 2026 products
                 default:   return "0";    // unknown prefix → legal
             }
