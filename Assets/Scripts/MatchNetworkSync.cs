@@ -471,7 +471,10 @@ public static class MatchNetworkSync
         => SendJson(LobbyPeerStateMessage, payload, NetworkDelivery.ReliableSequenced);
 
     public static bool SendSealedBuildStart(SealedBuildStartPayload payload)
-        => SendJson(SealedBuildStartMessage, payload, NetworkDelivery.ReliableSequenced);
+        // This payload includes both players' identity, selected leaders, and the full Blitz
+        // configuration. It can exceed NGO's single-packet limit before either player even
+        // opens their packs, so it needs the same fragmented delivery as deck/match payloads.
+        => SendJson(SealedBuildStartMessage, payload, NetworkDelivery.ReliableFragmentedSequenced);
 
     public static void SendSealedBuildAcknowledgement(string seed) => SendString(SealedBuildAckMessage, seed);
 
@@ -510,7 +513,7 @@ public static class MatchNetworkSync
         try
         {
             string json = JsonUtility.ToJson(payload);
-            using var writer = new FastBufferWriter(json.Length * 2 + 32, Allocator.Temp);
+            using var writer = new FastBufferWriter(FastBufferWriter.GetWriteSize(json), Allocator.Temp);
             writer.WriteValueSafe(json);
             nm.CustomMessagingManager.SendNamedMessage(message, target.Value, writer, delivery);
             return true;

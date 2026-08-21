@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.35",
-  "buildNumber": 34,
+  "buildVersion": "1.0.36",
+  "buildNumber": 35,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "NEW CARDS\n\nAdded all 119 OP17 cards, 30 new cards from ST31 through ST36, and 38 newly announced promos with playable mechanics and compressed art. OP17 is also available in Sealed / Pre-Release.\n\nFORMATS\n\nOP17 and ST31 through ST36 are Block 5. The new cards are legal in Ranked, Casual, and Standard Custom matches.\n\nONLINE AND UI FIXES\n\nImproved player-name and profile-picture synchronization, friend presence, Custom Sealed rematches, and the scrollable update-notes screen.",
+  "notes": "CUSTOM SEALED\n\nFixed Custom Sealed rooms stalling after both players pressed Ready. The lobby now transfers larger match setup data safely and proceeds into pack opening and deck building.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
