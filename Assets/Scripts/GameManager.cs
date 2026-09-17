@@ -1305,6 +1305,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         PendingNetworkedRanked = false;
         networkedMode = PendingNetworkedMode;
         PendingNetworkedMode = null;
+        PopulationStore.SetActivity("match_" + (string.IsNullOrEmpty(networkedMode) ? "custom" : networkedMode));
         isNetworkedSealed = PendingNetworkedSealed;
         PendingNetworkedSealed = false;
         southProfileIcon = PendingSouthProfileIcon;
@@ -1487,6 +1488,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // networked matches — the same orientation ReplayStore's WinnerName implies.
     private void SaveFinishedMatchRecords()
     {
+        if (isNetworked) PopulationStore.SetActivity("menu");
         int durationSeconds = Mathf.Max(0, Mathf.RoundToInt(Time.realtimeSinceStartup - matchStartRealtime));
         var record = ReplayStore.Save(state, currentMatchConfig, durationSeconds, commandElapsedSeconds);
         if (record == null) return;
@@ -8940,6 +8942,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // (single-scene design — mirror of MainMenuManager.StartVersusSelfFlow).
     public void ReturnToMenu()
     {
+        PopulationStore.SetActivity("menu");
         // Leaving a live networked match counts as a SURRENDER: concede first (while still connected)
         // so it's recorded as a loss for us and — via the concede message, or the opponent's own
         // disconnect fallback — a win for them. Skipped once the match is already finished (normal end,
@@ -8993,6 +8996,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     {
         if (returningToLobby) return;
         returningToLobby = true;
+        PopulationStore.SetActivity("menu");
         PendingSouthDeckId = null;
         PendingNorthDeckId = null;
         MainMenuManager.PrepareCustomLobbyReturn(isNetworkedSealed);
@@ -9045,6 +9049,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // EnterNetworkedMatch but does NOT touch isNetworked/localSeat/names/subscriptions.
     private void RestartNetworkedMatch(string seed)
     {
+        PopulationStore.SetActivity("match_" + (string.IsNullOrEmpty(networkedMode) ? "custom" : networkedMode));
         var config = new MatchConfig { Seed = seed };
         if (currentMatchConfig?.SouthDeckDef != null) config.SouthDeckDef = currentMatchConfig.SouthDeckDef;
         if (currentMatchConfig?.NorthDeckDef != null) config.NorthDeckDef = currentMatchConfig.NorthDeckDef;

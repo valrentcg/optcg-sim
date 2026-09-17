@@ -35,24 +35,30 @@ public static class ChatStore
     [Serializable] private sealed class HistoryResponse { public ChatMessage[] messages; }
     [Serializable] private sealed class SendResponse { public bool ok; public long id; public long createdAt; }
     [Serializable] private sealed class PollResponse { public ChatUnreadEntry[] unread; public int total; }
+    [Serializable] private sealed class OkResponse { public bool ok; }
     [Serializable] private sealed class SendReq { public string toId; public string body; }
     [Serializable] private sealed class WithReq { public string withId; }
 
-    /// <summary>Conversation with `withId`, oldest-first, only messages newer than
-    /// `sinceId` (pass the highest id you already hold to tail cheaply; 0 for all).</summary>
-    public static async Task<List<ChatMessage>> HistoryAsync(string withId, long sinceId = 0)
+    /// <summary>Conversation with `withId`. A first load returns the newest page in
+    /// chronological order; `sinceId` tails newer messages and `beforeId` pages older ones.
+    /// Success is separate from an empty conversation so the UI can show a real error.</summary>
+    public static async Task<(bool ok, List<ChatMessage> messages)> HistoryAsync(
+        string withId, long sinceId = 0, long beforeId = 0)
     {
         var list = new List<ChatMessage>();
-        if (string.IsNullOrEmpty(withId)) return list;
-        string text = await SocialHttp.GetAsync($"/chat/history?withId={SocialHttp.Esc(withId)}&sinceId={sinceId}");
-        if (text == null) return list;
+        if (string.IsNullOrEmpty(withId)) return (false, list);
+        string text = await SocialHttp.GetAsync(
+            $"/chat/history?withId={SocialHttp.Esc(withId)}&sinceId={sinceId}&beforeId={beforeId}&limit=80");
+        if (text == null) return (false, list);
         try
         {
             var wrap = JsonUtility.FromJson<HistoryResponse>(text);
-            if (wrap?.messages != null) list.AddRange(wrap.messages);
+            if (wrap?.messages == null) return (false, list);
+            list.AddRange(wrap.messages);
+            return (true, list);
         }
         catch (Exception ex) { Debug.LogWarning($"Chat history parse failed: {ex.Message}"); }
-        return list;
+        return (false, list);
     }
 
     /// <summary>Send a message. Returns the stored message (with server id/timestamp) or
@@ -74,24 +80,29 @@ public static class ChatStore
     }
 
     /// <summary>Mark all messages from `withId` as read (clears their unread badge).</summary>
-    public static async Task MarkReadAsync(string withId)
+    public static async Task<bool> MarkReadAsync(string withId)
     {
-        if (string.IsNullOrEmpty(withId)) return;
-        await SocialHttp.PostAsync("/chat/read", JsonUtility.ToJson(new WithReq { withId = withId }));
+        if (string.IsNullOrEmpty(withId)) return false;
+        string text = await SocialHttp.PostAsync("/chat/read", JsonUtility.ToJson(new WithReq { withId = withId }));
+        if (text == null) return false;
+        try { return JsonUtility.FromJson<OkResponse>(text)?.ok == true; }
+        catch (Exception ex) { Debug.LogWarning($"Chat read parse failed: {ex.Message}"); return false; }
     }
 
-    /// <summary>Unread counts grouped by sender, for badges. Empty on failure/guest.</summary>
-    public static async Task<(List<ChatUnreadEntry> unread, int total)> PollUnreadAsync()
+    /// <summary>Unread counts grouped by sender, for badges. `ok` distinguishes a
+    /// successful empty inbox from a failed request, so badges do not vanish offline.</summary>
+    public static async Task<(bool ok, List<ChatUnreadEntry> unread, int total)> PollUnreadAsync()
     {
         var list = new List<ChatUnreadEntry>();
         string text = await SocialHttp.GetAsync("/chat/poll");
-        if (text == null) return (list, 0);
+        if (text == null) return (false, list, 0);
         try
         {
             var wrap = JsonUtility.FromJson<PollResponse>(text);
-            if (wrap?.unread != null) list.AddRange(wrap.unread);
-            return (list, wrap?.total ?? 0);
+            if (wrap?.unread == null) return (false, list, 0);
+            list.AddRange(wrap.unread);
+            return (true, list, wrap.total);
         }
-        catch (Exception ex) { Debug.LogWarning($"Chat poll parse failed: {ex.Message}"); return (list, 0); }
+        catch (Exception ex) { Debug.LogWarning($"Chat poll parse failed: {ex.Message}"); return (false, list, 0); }
     }
 }

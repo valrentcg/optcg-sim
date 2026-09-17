@@ -4,6 +4,7 @@
 // No prefabs, no UI Toolkit, no external packages.
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -248,6 +249,18 @@ public partial class MainMenuManager : MonoBehaviour
     private bool lobbyIsPrivate = true;
     private string joinCodeInput = "";
     private List<ISessionInfo> browsedLobbies = new List<ISessionInfo>();
+    private string lobbyBrowserFilter = "";
+    private float lobbyCreateScroll = 1f;
+    private float lobbyBrowserScroll = 1f;
+    private bool lobbyShowMoreRules;
+    private float lobbyBrowserHeight = 0.45f;
+    private bool lobbyBrowserHeightLoaded;
+    private float lobbyWaitingScroll = 1f;
+    private string lobbyErrorContext = "create";
+    private string lobbyInvitePlayerId;
+    private string lobbyInviteUsername;
+    private bool lobbyInviteSent;
+    private bool lobbyInviteFailed;
     private bool lobbyBusy;
     private string lobbyError;
     // Tracks which session we're currently subscribed to for live updates (player joins/
@@ -284,6 +297,12 @@ public partial class MainMenuManager : MonoBehaviour
     private List<FriendEntry> friendsList = new List<FriendEntry>();
     private List<FriendEntry> incomingRequests = new List<FriendEntry>();
     private List<FriendEntry> outgoingRequests = new List<FriendEntry>();
+    private string friendsSearchInput = "";
+    private float friendsScrollPosition = 1f;
+    private float requestsScrollPosition = 1f;
+    private float blockedScrollPosition = 1f;
+    private string friendOptionsId;
+    private string removeConfirmId;
     private bool friendsBootSyncInFlight;
     private bool friendsBootSyncComplete;
     // Blocked-players view: the right friends panel swaps to a "BLOCKED" list (with Unblock
@@ -321,6 +340,13 @@ public partial class MainMenuManager : MonoBehaviour
     private Canvas   canvas;
     private RectTransform menuRoot;
     private Text     clockText;
+    private Text     populationTrackedText;
+    private Text     populationOnlineText;
+    private Text     populationNetworkText;
+    private Image    populationNetworkDot;
+    private Text     duelQueueCountText;
+    private Text     duelMatchCountText;
+    private string   duelPopulationMode;
     private Font     font;
     private Font     monoFont;
 
@@ -438,6 +464,11 @@ public partial class MainMenuManager : MonoBehaviour
 
         FriendsManager.FriendsChanged -= OnFriendsChanged;
         FriendsManager.FriendsChanged += OnFriendsChanged;
+
+        PopulationStore.Changed -= OnPopulationChanged;
+        PopulationStore.Changed += OnPopulationChanged;
+        PopulationStore.SetActivity("menu");
+        PopulationStore.EnsureRunning();
 
         // Global social poll: unread-chat badges + incoming game invites, so a friend's
         // message or invite reaches the player anywhere in the menu (not only on the
@@ -929,9 +960,20 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void RenderMenu()
     {
+        var focused = EventSystem.current != null && EventSystem.current.currentSelectedGameObject != null
+            ? EventSystem.current.currentSelectedGameObject.GetComponent<InputField>() : null;
+        string focusName = focused != null ? focused.gameObject.name : null;
+        bool restoreSocialFocus = focusName == "Friend Search Input" ||
+            focusName == "Add Friend Input" ||
+            (focusName != null && focusName.StartsWith("Chat Composer ", StringComparison.Ordinal));
+        int caret = restoreSocialFocus ? focused.caretPosition : 0;
         for (int i = menuRoot.childCount - 1; i >= 0; i--)
             Destroy(menuRoot.GetChild(i).gameObject);
         clockText = null;
+        populationTrackedText = populationOnlineText = populationNetworkText = null;
+        populationNetworkDot = null;
+        duelQueueCountText = duelMatchCountText = null;
+        duelPopulationMode = null;
         tabOrder.Clear();
 
         BuildBackground();
@@ -953,6 +995,23 @@ public partial class MainMenuManager : MonoBehaviour
         if (pendingInvite != null) BuildInviteModal(menuRoot);
         if (showRestoreCode) BuildRestoreCodeModal(menuRoot);
         Canvas.ForceUpdateCanvases();
+        if (restoreSocialFocus) StartCoroutine(RestoreSocialInputFocus(focusName, caret));
+    }
+
+    private IEnumerator RestoreSocialInputFocus(string name, int caret)
+    {
+        // The old InputField is destroyed at the end of this frame. Select its
+        // replacement on the next frame so polling does not interrupt a draft.
+        yield return null;
+        if (this == null || menuRoot == null || EventSystem.current == null) yield break;
+        foreach (var input in menuRoot.GetComponentsInChildren<InputField>(true))
+        {
+            if (input.gameObject.name != name || !input.interactable) continue;
+            EventSystem.current.SetSelectedGameObject(input.gameObject);
+            input.ActivateInputField();
+            input.caretPosition = Mathf.Clamp(caret, 0, input.text.Length);
+            yield break;
+        }
     }
 
     private void SelectMode(string id)
@@ -967,6 +1026,35 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (clockText != null)
             clockText.text = DateTime.Now.ToString("HH:mm");
+    }
+
+    // Keep live counters current without rebuilding the menu: a full rebuild
+    // would interrupt anyone typing a room code, lobby name, or chat message.
+    private void OnPopulationChanged()
+    {
+        if (this == null || menuRoot == null) return;
+        RefreshPopulationLabels();
+    }
+
+    private void RefreshPopulationLabels()
+    {
+        var snapshot = PopulationStore.Snapshot;
+        bool live = snapshot != null && snapshot.IsAvailable;
+        if (populationTrackedText != null)
+            populationTrackedText.text = live ? snapshot.registered.ToString("N0") : "—";
+        if (populationOnlineText != null)
+            populationOnlineText.text = live ? snapshot.online.ToString("N0") : "—";
+        if (populationNetworkText != null)
+            populationNetworkText.text = live ? "Network online" : "Network unknown";
+        if (populationNetworkDot != null)
+            populationNetworkDot.color = live ? GoodGreen : Muted;
+
+        if (duelQueueCountText == null || duelMatchCountText == null) return;
+        bool ranked = duelPopulationMode == "ranked";
+        duelQueueCountText.text = live && snapshot.queue != null
+            ? (ranked ? snapshot.queue.ranked : snapshot.queue.casual).ToString("N0") : "—";
+        duelMatchCountText.text = live && snapshot.inMatch != null
+            ? (ranked ? snapshot.inMatch.ranked : snapshot.inMatch.casual).ToString("N0") : "—";
     }
 
     private MenuMode FindMode(string id)
@@ -1075,9 +1163,38 @@ public partial class MainMenuManager : MonoBehaviour
         wmText.fontStyle = FontStyle.Bold;
         Stretch(wmText.rectTransform, Vector2.zero, Vector2.one, new Vector2(34f, 0f), Vector2.zero);
 
+        // ── Live network and population banner ────────────────────────────
+        var population = PanelObject("Population Banner", bar, Color.clear);
+        Stretch(population, new Vector2(0.61f, 0f), new Vector2(0.885f, 1f),
+            Vector2.zero, Vector2.zero);
+        population.GetComponent<Image>().raycastTarget = false;
+        populationTrackedText = BuildHeaderPopulationStat(population, "Tracked Players",
+            "PLAYERS TRACKED", 0f, 0.29f);
+        populationOnlineText = BuildHeaderPopulationStat(population, "Online Players",
+            "ONLINE NOW", 0.30f, 0.52f);
+
+        var network = PanelObject("Network Status", population, new Color32(15, 35, 45, 255));
+        Stretch(network, new Vector2(0.56f, 0.18f), new Vector2(1f, 0.82f),
+            Vector2.zero, Vector2.zero);
+        Round(network);
+        AddRoundedCardBorder(network, MenuB, 1f);
+        var dot = PanelObject("Status Dot", network, Muted);
+        dot.anchorMin = dot.anchorMax = new Vector2(0f, 0.5f);
+        dot.pivot = new Vector2(0.5f, 0.5f);
+        dot.sizeDelta = new Vector2(7f, 7f);
+        dot.anchoredPosition = new Vector2(18f, 0f);
+        dot.GetComponent<Image>().raycastTarget = false;
+        populationNetworkDot = dot.GetComponent<Image>();
+        populationNetworkText = TextObject("Network Label", network, "Network unknown", 12,
+            Ink, TextAnchor.MiddleCenter);
+        populationNetworkText.fontStyle = FontStyle.Bold;
+        Stretch(populationNetworkText.rectTransform, Vector2.zero, Vector2.one,
+            new Vector2(27f, 0f), new Vector2(-5f, 0f));
+        RefreshPopulationLabels();
+
         // ── Right — clock + settings gear ──────────────────────────────────
         var rightGroup = PanelObject("Right Group", bar, new Color(0, 0, 0, 0));
-        Stretch(rightGroup, new Vector2(0.68f, 0f), Vector2.one, Vector2.zero, new Vector2(-16f, 0f));
+        Stretch(rightGroup, new Vector2(0.895f, 0f), Vector2.one, Vector2.zero, new Vector2(-16f, 0f));
 
         clockText = TextObject("Clock", rightGroup, DateTime.Now.ToString("HH:mm"),
             14, Ink, TextAnchor.MiddleRight, monoFont);
@@ -1115,6 +1232,25 @@ public partial class MainMenuManager : MonoBehaviour
 
         var exitBtn = exit.gameObject.AddComponent<Button>();
         exitBtn.onClick.AddListener(ShowExitConfirm);
+    }
+
+    private Text BuildHeaderPopulationStat(RectTransform parent, string name,
+        string label, float left, float right)
+    {
+        var slot = PanelObject(name, parent, Color.clear);
+        Stretch(slot, new Vector2(left, 0f), new Vector2(right, 1f),
+            Vector2.zero, Vector2.zero);
+        slot.GetComponent<Image>().raycastTarget = false;
+        var value = TextObject("Value", slot, "—", 18, Accent2, TextAnchor.LowerLeft, monoFont);
+        value.fontStyle = FontStyle.Bold;
+        Stretch(value.rectTransform, new Vector2(0f, 0.39f), Vector2.one,
+            Vector2.zero, new Vector2(-2f, -1f));
+        var caption = TextObject("Caption", slot, label, 10, Muted,
+            TextAnchor.UpperLeft, monoFont);
+        caption.fontStyle = FontStyle.Bold;
+        Stretch(caption.rectTransform, Vector2.zero, new Vector2(1f, 0.41f),
+            Vector2.zero, Vector2.zero);
+        return value;
     }
 
     // ── Exit confirmation ─────────────────────────────────────────────────────
@@ -1237,6 +1373,41 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.37", "Friends, rooms, and play menu", "Sep 16, 2026", new (string, string[])[]
+        {
+            ("Play menu", new[]
+            {
+                "Reworked the Play screen around the selected Duel deck and the actual Solo Play choices, with clearer Casual, Ranked, Custom, Versus Self, Versus A.I., and Sealed entry points.",
+                "Selected Leader cards use rounded in-game corners, angled card art, and a softer illustration backdrop. Solo seats are labeled Your Deck and Bot's Deck instead of North and South.",
+                "Casual and Ranked show live players-in-queue and players-in-match counts near the queue action when the population service is available.",
+            }),
+            ("Friends and chat", new[]
+            {
+                "Search and scroll the Friends list, see clearer invitations and requests, and confirm before removing or blocking a friend.",
+                "Open a conversation without losing your draft or input focus during a menu refresh. Chat now loads the latest messages first, can load older history, and keeps unread badges when a request fails.",
+                "Start a private room for a friend directly from Friends, customize it before creating it, and send the invitation automatically. Hosts can also invite or retry an invite from the waiting room.",
+            }),
+            ("Custom rooms", new[]
+            {
+                "Redesigned Create Room, Join by Code, and Find a Table as separate sections. Drag the Find a Table divider to give the browser more or less space.",
+                "Public rooms show their host, occupancy, selected Leader, and rules. Search by room, host, Leader name, or Leader card code.",
+                "The waiting room now puts both players side by side with names, profile pictures, selected decks or Leaders, and ready status. Room code, invitations, and match controls have more space.",
+                "Sealed setup shows its set, timing, and forgiveness choices without Constructed-only rule controls.",
+            }),
+            ("Online status", new[]
+            {
+                "The menu header reports network availability, players online, and players registered since live tracking began. Counts appear as unavailable if the service cannot be reached instead of showing an invented zero.",
+                "Queue and match counts refresh from recent authenticated activity; older game versions do not contribute to the live online count.",
+            }),
+        }),
+        ("v1.0.36", "Custom Sealed lobby fix", "Aug 21, 2026", new (string, string[])[]
+        {
+            ("Custom Sealed", new[]
+            {
+                "Fixed Custom Sealed rooms stalling after both players pressed Ready.",
+                "Larger lobby setup messages transfer safely so both players can proceed into pack opening and deck building.",
+            }),
+        }),
         ("v1.0.35", "OP17, new Starter Decks, promos, and online fixes", "Aug 11, 2026", new (string, string[])[]
         {
             ("New cards", new[]
@@ -4670,6 +4841,9 @@ public partial class MainMenuManager : MonoBehaviour
 
         const float rowH = 48f, gap = 8f;
         var content = MakeMenuScroll(listArea, blockedList.Count * (rowH + gap) - gap + 12f);
+        var scroll = listArea.GetComponent<ScrollRect>();
+        scroll.verticalNormalizedPosition = blockedScrollPosition;
+        scroll.onValueChanged.AddListener(p => blockedScrollPosition = p.y);
         for (int i = 0; i < blockedList.Count; i++)
         {
             var e = blockedList[i];
@@ -4725,6 +4899,7 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
 
         var nameField = MakeInput(panel, "Username", addFriendUsernameInput, s => addFriendUsernameInput = s, null);
+        nameField.gameObject.name = "Add Friend Input";
         Stretch(nameField, new Vector2(0f, 1f), new Vector2(0.68f, 1f), new Vector2(16f, -70f), new Vector2(0f, -46f));
 
         var addHolder = PanelObject("Add Holder", panel, new Color(0, 0, 0, 0));
@@ -4738,15 +4913,16 @@ public partial class MainMenuManager : MonoBehaviour
             Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -108f), new Vector2(-16f, -78f));
         }
 
-        var listHeader = TextObject("List Header", panel, "REQUESTS", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        var listHeader = TextObject("List Header", panel,
+            $"REQUESTS ({incomingRequests.Count + outgoingRequests.Count})", 11, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(listHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -136f), new Vector2(-16f, -116f));
 
         var listArea = PanelObject("Requests List", panel, new Color(0, 0, 0, 0));
         Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -142f));
 
         var allRequests = new List<(FriendEntry entry, bool incoming)>();
-        foreach (var r in incomingRequests) allRequests.Add((r, true));
-        foreach (var r in outgoingRequests) allRequests.Add((r, false));
+        foreach (var r in incomingRequests.OrderBy(r => r.Username, StringComparer.OrdinalIgnoreCase)) allRequests.Add((r, true));
+        foreach (var r in outgoingRequests.OrderBy(r => r.Username, StringComparer.OrdinalIgnoreCase)) allRequests.Add((r, false));
 
         if (allRequests.Count == 0)
         {
@@ -4755,12 +4931,15 @@ public partial class MainMenuManager : MonoBehaviour
             return;
         }
 
-        const float rowH = 48f, gap = 6f;
-        int shown = Mathf.Min(allRequests.Count, 8);
-        for (int i = 0; i < shown; i++)
+        const float rowH = 58f, gap = 6f;
+        var content = MakeMenuScroll(listArea, allRequests.Count * (rowH + gap) - gap + 6f);
+        var scroll = listArea.GetComponent<ScrollRect>();
+        scroll.verticalNormalizedPosition = requestsScrollPosition;
+        scroll.onValueChanged.AddListener(p => requestsScrollPosition = p.y);
+        for (int i = 0; i < allRequests.Count; i++)
         {
             var (entry, incoming) = allRequests[i];
-            var row = PanelObject("Request Row " + i, listArea, new Color32(14, 22, 32, 180));
+            var row = PanelObject("Request Row " + i, content, new Color32(14, 22, 32, 180));
             row.anchorMin = new Vector2(0f, 1f);
             row.anchorMax = new Vector2(1f, 1f);
             row.pivot = new Vector2(0.5f, 1f);
@@ -4775,14 +4954,15 @@ public partial class MainMenuManager : MonoBehaviour
         Round(row);
         AddRoundedCardBorder(row, MenuB, 1f);
 
-        var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.MiddleLeft);
-        Stretch(name.rectTransform, Vector2.zero, new Vector2(0.5f, 1f), new Vector2(12f, 0f), Vector2.zero);
+        var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.LowerLeft);
+        name.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.55f, 1f), new Vector2(12f, 0f), new Vector2(-4f, -4f));
 
         var tag = TextObject("Tag", row, incoming ? "wants to be friends" : "pending", 10, Muted, TextAnchor.MiddleLeft, monoFont);
-        Stretch(tag.rectTransform, new Vector2(0.5f, 0f), new Vector2(0.7f, 1f), Vector2.zero, Vector2.zero);
+        Stretch(tag.rectTransform, Vector2.zero, new Vector2(0.55f, 0.5f), new Vector2(12f, 5f), new Vector2(-4f, 0f));
 
         var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
-        Stretch(btnHolder, new Vector2(0.7f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
+        Stretch(btnHolder, new Vector2(0.55f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
         var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
         hlg.spacing = 6f;
         hlg.childAlignment = TextAnchor.MiddleRight;
@@ -4791,12 +4971,12 @@ public partial class MainMenuManager : MonoBehaviour
 
         if (incoming)
         {
-            AddButton(btnHolder, "Accept", () => RespondToRequestClicked(entry.PlayerId, true), !friendsBusy, false);
-            AddButton(btnHolder, "Decline", () => RespondToRequestClicked(entry.PlayerId, false), !friendsBusy, false);
+            AddButton(btnHolder, "Accept", () => RespondToRequestClicked(entry.PlayerId, true), !friendsBusy, false, false, 74f);
+            AddButton(btnHolder, "Decline", () => RespondToRequestClicked(entry.PlayerId, false), !friendsBusy, false, false, 74f);
         }
         else
         {
-            AddButton(btnHolder, "Cancel", () => CancelOutgoingClicked(entry.PlayerId), !friendsBusy, false);
+            AddButton(btnHolder, "Cancel", () => CancelOutgoingClicked(entry.PlayerId), !friendsBusy, false, false, 74f);
         }
     }
 
@@ -4808,30 +4988,58 @@ public partial class MainMenuManager : MonoBehaviour
         header.fontStyle = FontStyle.Bold;
         Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
 
-        var hint = TextObject("Chat Hint", panel, "Click a friend to chat  ·  Invite online friends to a game", 10, Muted, TextAnchor.UpperLeft, monoFont);
+        var hint = TextObject("Chat Hint", panel, "Select a friend to chat  ·  Invite online friends", 10, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -50f), new Vector2(-16f, -34f));
 
-        var listArea = PanelObject("Friends List Area", panel, new Color(0, 0, 0, 0));
-        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -62f));
-
-        if (friendsList.Count == 0)
+        var search = MakeInput(panel, "Search friends", friendsSearchInput, s =>
         {
-            var empty = TextObject("Empty", listArea, "No friends yet - add one by username.", 12, Muted, TextAnchor.UpperLeft, monoFont);
+            if (friendsSearchInput == s) return;
+            friendsSearchInput = s;
+            friendsScrollPosition = 1f;
+            RenderMenu();
+        }, null);
+        search.gameObject.name = "Friend Search Input";
+        Stretch(search, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -88f), new Vector2(-16f, -60f));
+
+        var listArea = PanelObject("Friends List Area", panel, new Color(0, 0, 0, 0));
+        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -98f));
+
+        var visible = friendsList
+            .Where(f => string.IsNullOrWhiteSpace(friendsSearchInput) ||
+                f.Username.IndexOf(friendsSearchInput.Trim(), StringComparison.OrdinalIgnoreCase) >= 0)
+            .OrderByDescending(f => chatUnread.TryGetValue(f.PlayerId, out var count) && count > 0)
+            .ThenByDescending(f => f.Online)
+            .ThenBy(f => f.Username, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (visible.Count == 0)
+        {
+            string message = friendsList.Count == 0 ? "No friends yet. Add one by username." : "No friends match that search.";
+            var empty = TextObject("Empty", listArea, message, 12, Muted, TextAnchor.UpperLeft, monoFont);
             Stretch(empty.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, new Vector2(0f, -24f));
             return;
         }
 
-        const float rowH = 48f, gap = 6f;
-        int shown = Mathf.Min(friendsList.Count, 10);
-        for (int i = 0; i < shown; i++)
+        const float baseH = 64f, expandedH = 122f, gap = 6f;
+        float totalH = 6f;
+        foreach (var entry in visible) totalH += (friendOptionsId == entry.PlayerId ? expandedH : baseH) + gap;
+        var content = MakeMenuScroll(listArea, totalH);
+        var scroll = listArea.GetComponent<ScrollRect>();
+        scroll.verticalNormalizedPosition = friendsScrollPosition;
+        scroll.onValueChanged.AddListener(p => friendsScrollPosition = p.y);
+        float top = 0f;
+        for (int i = 0; i < visible.Count; i++)
         {
-            var row = PanelObject("Friend Row " + i, listArea, new Color32(14, 22, 32, 180));
+            var entry = visible[i];
+            float rowH = friendOptionsId == entry.PlayerId ? expandedH : baseH;
+            var row = PanelObject("Friend Row " + i, content, new Color32(14, 22, 32, 180));
             row.anchorMin = new Vector2(0f, 1f);
             row.anchorMax = new Vector2(1f, 1f);
             row.pivot = new Vector2(0.5f, 1f);
             row.sizeDelta = new Vector2(0f, rowH);
-            row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
-            BuildFriendRow(row, friendsList[i]);
+            row.anchoredPosition = new Vector2(0f, -top);
+            BuildFriendRow(row, entry);
+            top += rowH + gap;
         }
     }
 
@@ -4840,66 +5048,93 @@ public partial class MainMenuManager : MonoBehaviour
         Round(row);
         AddRoundedCardBorder(row, MenuB, 1f);
 
-        // The row background is itself a button: clicking the name/dot area opens the chat
-        // conversation. The action chips on the right sit on top and handle their own clicks.
-        var rowBtn = row.gameObject.AddComponent<Button>();
+        var main = PanelObject("Friend Main", row, new Color(0f, 0f, 0f, 0f));
+        main.anchorMin = new Vector2(0f, 1f); main.anchorMax = new Vector2(1f, 1f);
+        main.pivot = new Vector2(0.5f, 1f);
+        main.sizeDelta = new Vector2(0f, 64f);
+        main.anchoredPosition = Vector2.zero;
+        // The name/presence side opens chat. The action buttons handle their own clicks.
+        var rowBtn = main.gameObject.AddComponent<Button>();
         rowBtn.transition = Selectable.Transition.None;
         rowBtn.onClick.AddListener(() => OpenChat(entry.PlayerId, entry.Username));
 
-        // Online = green dot + "online"; offline = grey dot + "offline". Driven by
-        // FriendEntry.Online (Unity Friends presence); FriendsManager.FriendsChanged fires
-        // on PresenceUpdated, so these repaint live as friends open/close their client.
-        var dot = PanelObject("Presence Dot", row, entry.Online ? GoodGreen : Muted);
+        var dot = PanelObject("Presence Dot", main, entry.Online ? GoodGreen : Muted);
         dot.anchorMin = dot.anchorMax = new Vector2(0f, 0.5f);
         dot.pivot = new Vector2(0f, 0.5f);
-        dot.sizeDelta = new Vector2(8f, 8f);
-        dot.anchoredPosition = new Vector2(12f, 0f);
+        dot.sizeDelta = new Vector2(10f, 10f);
+        dot.anchoredPosition = new Vector2(14f, 0f);
         RoundCircle(dot);
-        // Presentation elements must not eat the row click — let it fall through to rowBtn (chat).
         var dotImg = dot.GetComponent<Image>(); if (dotImg != null) dotImg.raycastTarget = false;
 
-        var name = TextObject("Name", row, entry.Username, 13, Ink, TextAnchor.LowerLeft);
+        var name = TextObject("Name", main, entry.Username, 14, Ink, TextAnchor.LowerLeft);
+        name.fontStyle = FontStyle.Bold;
         name.raycastTarget = false;
-        name.horizontalOverflow = HorizontalWrapMode.Overflow;
-        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.45f, 1f), new Vector2(28f, 0f), new Vector2(0f, -6f));
+        name.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.5f, 1f), new Vector2(32f, 0f), new Vector2(-4f, -5f));
 
-        // Presence line, with an unread-chat hint appended (accent-coloured) when this
-        // friend has sent messages the player hasn't read yet.
         int unread = chatUnread.TryGetValue(entry.PlayerId, out var uc) ? uc : 0;
         string presenceStr = entry.Online ? "online" : "offline";
-        if (unread > 0) presenceStr += $"  •  {unread} new";
-        var status = TextObject("Presence Label", row, presenceStr, 10,
+        if (unread > 0) presenceStr += $"  •  {unread} unread";
+        var status = TextObject("Presence Label", main, presenceStr, 11,
             unread > 0 ? Accent : (entry.Online ? GoodGreen : Muted), TextAnchor.UpperLeft, monoFont);
         status.raycastTarget = false;
-        Stretch(status.rectTransform, Vector2.zero, new Vector2(0.45f, 0.5f), new Vector2(28f, 6f), Vector2.zero);
+        Stretch(status.rectTransform, Vector2.zero, new Vector2(0.5f, 0.5f), new Vector2(32f, 5f), new Vector2(-4f, 0f));
 
-        // Compact action chips on the right. Fixed 118px chips (×4) overflowed the row off the
-        // screen edge — a friend once clipped the far-right Block chip by accident. These are narrow
-        // (66px, no accent dot) and the holder is widened, so the whole strip fits with margin.
-        var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
-        Stretch(btnHolder, new Vector2(0.46f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
+        var btnHolder = PanelObject("Buttons", main, new Color(0, 0, 0, 0));
+        Stretch(btnHolder, new Vector2(0.5f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
         var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        hlg.spacing = 5f;
+        hlg.spacing = 6f;
         hlg.childAlignment = TextAnchor.MiddleRight;
         hlg.childControlWidth = false;
         hlg.childControlHeight = false;
-        const float chipW = 66f;
-        // Chat opens by clicking the row itself (rowBtn above). Quick-invite only for an online friend.
         if (entry.Online)
-            AddButton(btnHolder, "Invite", () => InviteFriendClicked(entry.PlayerId, entry.Username), !inviteBusy && !lobbyBusy, false, false, chipW);
-        AddButton(btnHolder, "Matches", () => OpenCloudMatches(entry.Username), true, false, false, chipW);
-        AddButton(btnHolder, "Remove", () => RemoveFriendClicked(entry.PlayerId), !friendsBusy, false, false, chipW);
-        // Block is a TWO-STEP confirm: first tap arms it (chip reads "Sure?"), second tap blocks.
-        bool arming = blockConfirmId == entry.PlayerId;
-        AddButton(btnHolder, arming ? "Sure?" : "Block", () => BlockChipClicked(entry.PlayerId), !friendsBusy, false, false, chipW);
+            AddButton(btnHolder, row.rect.width > 400f ? "Play Together" : "Play",
+                () => OpenLobbyHubForFriend(entry.PlayerId, entry.Username),
+                !inviteBusy && !lobbyBusy, false, false, row.rect.width > 400f ? 94f : 66f);
+        AddButton(btnHolder, friendOptionsId == entry.PlayerId ? "Close" : "More",
+            () => ToggleFriendOptions(entry.PlayerId), !friendsBusy, false, false, 66f);
+
+        if (friendOptionsId != entry.PlayerId) return;
+        bool removing = removeConfirmId == entry.PlayerId;
+        bool blocking = blockConfirmId == entry.PlayerId;
+        string prompt = removing ? $"Remove {entry.Username} from friends?" :
+            blocking ? $"Block {entry.Username}? Friendship will end." :
+            $"Actions for {entry.Username}";
+        var note = TextObject("Action Prompt", row, prompt, 10,
+            removing || blocking ? RedAccent : Muted, TextAnchor.MiddleLeft, monoFont);
+        note.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(note.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(14f, 42f), new Vector2(-14f, 58f));
+
+        var actions = PanelObject("More Actions", row, new Color(0f, 0f, 0f, 0f));
+        Stretch(actions, Vector2.zero, new Vector2(1f, 0f), new Vector2(12f, 5f), new Vector2(-12f, 39f));
+        var layout = actions.gameObject.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 6f; layout.childAlignment = TextAnchor.MiddleRight;
+        layout.childControlWidth = false; layout.childControlHeight = false;
+        if (removing)
+        {
+            AddButton(actions, "Keep Friend", () => { removeConfirmId = null; RenderMenu(); }, true, false, false, 94f);
+            AddButton(actions, "Confirm Remove", () => { removeConfirmId = null; friendOptionsId = null; RemoveFriendClicked(entry.PlayerId); }, !friendsBusy, false, false, 122f);
+        }
+        else if (blocking)
+        {
+            AddButton(actions, "Cancel", () => { blockConfirmId = null; RenderMenu(); }, true, false, false, 76f);
+            AddButton(actions, "Confirm Block", () => { blockConfirmId = null; friendOptionsId = null; BlockFriendClicked(entry.PlayerId); }, !friendsBusy, false, false, 114f);
+        }
+        else
+        {
+            AddButton(actions, "Matches", () => OpenCloudMatches(entry.Username), true, false, false, 76f);
+            AddButton(actions, "Remove", () => { removeConfirmId = entry.PlayerId; RenderMenu(); }, !friendsBusy, false, false, 76f);
+            AddButton(actions, "Block", () => { blockConfirmId = entry.PlayerId; RenderMenu(); }, !friendsBusy, false, false, 76f);
+        }
     }
 
-    // Two-step guard on Block so a stray click can't instantly block a friend: the first click just
-    // arms the chip ("Sure?"), a second click on the armed chip actually blocks.
-    private void BlockChipClicked(string playerId)
+    private void ToggleFriendOptions(string playerId)
     {
-        if (blockConfirmId == playerId) { blockConfirmId = null; BlockFriendClicked(playerId); }
-        else { blockConfirmId = playerId; RenderMenu(); }
+        friendOptionsId = friendOptionsId == playerId ? null : playerId;
+        blockConfirmId = null;
+        removeConfirmId = null;
+        RenderMenu();
     }
 
     private async void AddFriendClicked()
@@ -5137,11 +5372,23 @@ public partial class MainMenuManager : MonoBehaviour
         public string Username;
         public readonly List<ChatMessage> Messages = new List<ChatMessage>();
         public long LastId;
+        public long OldestId;
         public bool Minimized;
         public string Draft = "";
         public string Error;
+        public string LoadError;
         public bool Busy;
+        public bool Loading;
+        public bool LoadingOlder;
         public bool Loaded;
+        public bool HasOlder;
+        public float ScrollPosition;
+        public bool StickToBottom = true;
+        public float ContentHeight;
+        public float ViewportHeight;
+        public bool PreserveOlderScroll;
+        public float OlderTopOffset;
+        public float OlderContentHeight;
     }
 
     // Left-to-right order along the dock. Newest-opened goes on the RIGHT (nearest the
@@ -5150,7 +5397,7 @@ public partial class MainMenuManager : MonoBehaviour
     private const int ChatDockMax = 4;          // beyond this, the least-recently-used closes
     private const float ChatWinW = 296f;
     private const float ChatHeadH = 34f;
-    private const float ChatOpenH = 320f;
+    private const float ChatOpenH = 420f;
     private bool chatDockPolling;
 
     private ChatWindow FindChatWindow(string playerId)
@@ -5176,10 +5423,8 @@ public partial class MainMenuManager : MonoBehaviour
             chatDock.Add(w);
             // Evict the least-recently-focused window rather than refusing to open a new one:
             // being unable to open a chat is a worse failure than losing the oldest tab.
-            while (chatDock.Count > ChatDockMax) chatDock.RemoveAt(0);
+            while (chatDock.Count > ChatCapacity()) chatDock.RemoveAt(0);
         }
-        chatUnread.Remove(playerId);
-        RecomputeChatUnreadTotal();
         RenderMenu();
         LoadWindowHistory(w, markRead: true);
         StartChatDockPoll();
@@ -5192,38 +5437,99 @@ public partial class MainMenuManager : MonoBehaviour
         RenderMenu();
     }
 
+    private int ChatCapacity()
+    {
+        float available = menuRoot != null && menuRoot.rect.width > 1f ? menuRoot.rect.width : Screen.width;
+        // Each open window needs a readable 180px body, plus 8px between windows.
+        return Mathf.Clamp(Mathf.FloorToInt((available - 24f + 8f) / 188f), 1, ChatDockMax);
+    }
+
     private void ToggleChatWindow(ChatWindow w)
     {
         if (w == null) return;
         w.Minimized = !w.Minimized;
         if (!w.Minimized)
         {
-            chatUnread.Remove(w.PlayerId);
-            RecomputeChatUnreadTotal();
             if (!w.Loaded) LoadWindowHistory(w, markRead: true);
-            else _ = ChatStore.MarkReadAsync(w.PlayerId);
+            else MarkChatRead(w);
         }
         RenderMenu();
     }
 
-    // Pulls messages newer than this window's LastId and appends them.
+    private async void MarkChatRead(ChatWindow w)
+    {
+        if (w == null) return;
+        bool ok = await ChatStore.MarkReadAsync(w.PlayerId);
+        if (!ok || this == null || menuRoot == null || !chatDock.Contains(w)) return;
+        if (chatUnread.Remove(w.PlayerId))
+        {
+            RecomputeChatUnreadTotal();
+            RenderMenu();
+        }
+    }
+
+    private bool AddChatMessages(ChatWindow w, List<ChatMessage> messages, bool older = false)
+    {
+        bool changed = false;
+        foreach (var message in messages)
+        {
+            if (w.Messages.Any(existing => existing.id == message.id)) continue;
+            w.Messages.Add(message);
+            changed = true;
+        }
+        if (!changed) return false;
+        w.Messages.Sort((a, b) => a.id.CompareTo(b.id));
+        w.OldestId = w.Messages[0].id;
+        w.LastId = w.Messages[w.Messages.Count - 1].id;
+        if (!older && w.StickToBottom) w.ScrollPosition = 0f;
+        return true;
+    }
+
+    // Initial load fetches the newest page; later calls tail from LastId.
     private async void LoadWindowHistory(ChatWindow w, bool markRead)
     {
-        if (w == null || string.IsNullOrEmpty(w.PlayerId)) return;
-        var msgs = await ChatStore.HistoryAsync(w.PlayerId, w.LastId);
+        if (w == null || string.IsNullOrEmpty(w.PlayerId) || w.Loading) return;
+        w.Loading = true;
+        w.LoadError = null;
+        RenderMenu();
+        var (ok, msgs) = await ChatStore.HistoryAsync(w.PlayerId, w.Loaded ? w.LastId : 0);
         // The window may have been closed or evicted while the request was in flight.
         if (this == null || menuRoot == null || !chatDock.Contains(w)) return;
-        w.Loaded = true;
-        if (msgs.Count > 0)
+        w.Loading = false;
+        if (!ok)
         {
-            w.Messages.AddRange(msgs);
-            w.LastId = w.Messages[w.Messages.Count - 1].id;
+            w.LoadError = "Couldn't load messages. Check your connection.";
+            RenderMenu();
+            return;
         }
+        if (!w.Loaded) w.HasOlder = msgs.Count >= 80;
+        w.Loaded = true;
+        AddChatMessages(w, msgs);
         if (markRead)
+            MarkChatRead(w);
+        RenderMenu();
+    }
+
+    private async void LoadOlderChatHistory(ChatWindow w)
+    {
+        if (w == null || w.LoadingOlder || !w.Loaded || !w.HasOlder || w.OldestId <= 0) return;
+        w.LoadingOlder = true;
+        w.LoadError = null;
+        RenderMenu();
+        var (ok, msgs) = await ChatStore.HistoryAsync(w.PlayerId, beforeId: w.OldestId);
+        if (this == null || menuRoot == null || !chatDock.Contains(w)) return;
+        w.LoadingOlder = false;
+        if (!ok) w.LoadError = "Couldn't load earlier messages. Try again.";
+        else
         {
-            chatUnread.Remove(w.PlayerId);
-            RecomputeChatUnreadTotal();
-            _ = ChatStore.MarkReadAsync(w.PlayerId);
+            w.HasOlder = msgs.Count >= 80;
+            if (msgs.Count > 0)
+            {
+                w.OlderTopOffset = (1f - w.ScrollPosition) * Mathf.Max(0f, w.ContentHeight - w.ViewportHeight);
+                w.OlderContentHeight = w.ContentHeight;
+                w.PreserveOlderScroll = true;
+                AddChatMessages(w, msgs, older: true);
+            }
         }
         RenderMenu();
     }
@@ -5242,27 +5548,26 @@ public partial class MainMenuManager : MonoBehaviour
             bool changed = false;
             // Snapshot: the list can be mutated by the UI (open/close) while we await.
             var open = new List<ChatWindow>();
-            for (int i = 0; i < chatDock.Count; i++) if (!chatDock[i].Minimized) open.Add(chatDock[i]);
+            for (int i = 0; i < chatDock.Count; i++)
+                if (!chatDock[i].Minimized && chatDock[i].Loaded) open.Add(chatDock[i]);
             foreach (var w in open)
             {
-                var msgs = await ChatStore.HistoryAsync(w.PlayerId, w.LastId);
+                var (ok, msgs) = await ChatStore.HistoryAsync(w.PlayerId, w.LastId);
                 if (this == null || menuRoot == null) { chatDockPolling = false; return; }
-                if (!chatDock.Contains(w) || msgs.Count == 0) continue;
-                w.Messages.AddRange(msgs);
-                w.LastId = w.Messages[w.Messages.Count - 1].id;
-                chatUnread.Remove(w.PlayerId);       // it is on screen, so it is read
-                _ = ChatStore.MarkReadAsync(w.PlayerId);
+                if (!chatDock.Contains(w) || !ok || !AddChatMessages(w, msgs)) continue;
+                MarkChatRead(w);     // only clear badges after the worker acknowledges
                 changed = true;
             }
-            if (changed) { RecomputeChatUnreadTotal(); RenderMenu(); }
+            if (changed) RenderMenu();
         }
         chatDockPolling = false;
     }
 
     private async void SendChatFor(ChatWindow w)
     {
-        if (w == null || string.IsNullOrWhiteSpace(w.Draft)) return;
+        if (w == null || w.Busy || string.IsNullOrWhiteSpace(w.Draft)) return;
         string body = w.Draft.Trim();
+        if (body.Length > 1000) { w.Error = "Messages can be at most 1,000 characters."; RenderMenu(); return; }
         w.Busy = true; w.Error = null;
         RenderMenu();
         try
@@ -5273,8 +5578,7 @@ public partial class MainMenuManager : MonoBehaviour
             if (sent != null)
             {
                 w.Draft = "";
-                w.Messages.Add(sent);
-                w.LastId = Math.Max(w.LastId, sent.id);
+                AddChatMessages(w, new List<ChatMessage> { sent });
             }
             else w.Error = "Couldn't send — check your connection.";
         }
@@ -5289,15 +5593,17 @@ public partial class MainMenuManager : MonoBehaviour
     private void BuildChatDock(RectTransform root)
     {
         if (chatDock.Count == 0) return;
+        while (chatDock.Count > ChatCapacity()) chatDock.RemoveAt(0);
 
-        float avail = root.rect.width > 1f ? root.rect.width : 1280f;
-        // Narrow windows: shrink rather than overflow off-screen.
-        float winW = Mathf.Min(ChatWinW, Mathf.Max(180f, (avail - 40f) / Mathf.Max(1, chatDock.Count)));
+        float avail = root.rect.width > 1f ? root.rect.width : Screen.width;
+        float availH = root.rect.height > 1f ? root.rect.height : Screen.height;
+        float winW = Mathf.Min(ChatWinW,
+            Mathf.Max(180f, (avail - 32f - 8f * (chatDock.Count - 1)) / chatDock.Count));
 
         for (int i = chatDock.Count - 1, slot = 0; i >= 0; i--, slot++)
         {
             var w = chatDock[i];
-            float h = w.Minimized ? ChatHeadH : ChatOpenH;
+            float h = w.Minimized ? ChatHeadH : Mathf.Min(ChatOpenH, Mathf.Max(260f, availH - 30f));
             float xRight = -(16f + slot * (winW + 8f));
 
             var win = PanelObject("Chat Win " + slot, root, new Color32(12, 20, 30, 252));
@@ -5325,6 +5631,7 @@ public partial class MainMenuManager : MonoBehaviour
                 caret + "  " + w.Username + (w.Minimized && unread > 0 ? $"  ({unread})" : ""),
                 13, unread > 0 && w.Minimized ? GoodGreen : Ink, TextAnchor.MiddleLeft);
             name.fontStyle = FontStyle.Bold;
+            name.horizontalOverflow = HorizontalWrapMode.Wrap;
             Stretch(name.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 1f), new Vector2(10f, 0f), new Vector2(-30f, 0f));
 
             var x = TextObject("X", head, "×", 16, Muted, TextAnchor.MiddleCenter);
@@ -5341,53 +5648,146 @@ public partial class MainMenuManager : MonoBehaviour
             // ── history ──
             var listArea = PanelObject("Msgs", win, new Color32(6, 12, 20, 210));
             Stretch(listArea, Vector2.zero, Vector2.one,
-                    new Vector2(8f, 46f), new Vector2(-8f, -(ChatHeadH + 6f)));
+                    new Vector2(8f, 64f), new Vector2(-8f, -(ChatHeadH + 6f)));
             Round(listArea);
+
+            if (!string.IsNullOrEmpty(w.LoadError))
+            {
+                var loadErr = TextObject("Load Error", listArea, w.LoadError, 10,
+                    RedAccent, TextAnchor.UpperLeft, monoFont);
+                loadErr.horizontalOverflow = HorizontalWrapMode.Wrap;
+                Stretch(loadErr.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                    new Vector2(10f, -26f), new Vector2(-10f, -5f));
+            }
 
             if (w.Messages.Count == 0)
             {
-                var empty = TextObject("Empty", listArea, w.Loaded ? "No messages yet. Say hi!" : "Loading…",
-                                       11, Muted, TextAnchor.UpperLeft, monoFont);
-                Stretch(empty.rectTransform, Vector2.zero, Vector2.one, new Vector2(9f, 0f), new Vector2(-9f, -9f));
+                string state = w.Loading ? "Loading messages…" :
+                    w.Loaded ? "No messages yet. Say hi!" :
+                    w.LoadError == null ? "Loading messages…" : "Messages are unavailable.";
+                var empty = TextObject("Empty", listArea, state, 12, Muted, TextAnchor.MiddleCenter, monoFont);
+                Stretch(empty.rectTransform, Vector2.zero, Vector2.one,
+                    new Vector2(10f, 32f), new Vector2(-10f, -32f));
+                if (!w.Loading && !w.Loaded)
+                {
+                    var retry = PanelObject("Retry Holder", listArea, new Color(0f, 0f, 0f, 0f));
+                    Stretch(retry, new Vector2(0.2f, 0f), new Vector2(0.8f, 0f),
+                        new Vector2(0f, 10f), new Vector2(0f, 44f));
+                    AddButton(retry, "Retry", () => LoadWindowHistory(wRef, true), true, false, true);
+                }
             }
             else
             {
-                const int maxShown = 8;
-                const float rowH = 26f, pad = 6f;
-                int start = Mathf.Max(0, w.Messages.Count - maxShown);
-                for (int m = start; m < w.Messages.Count; m++)
+                var history = PanelObject("History", listArea, new Color(0f, 0f, 0f, 0f));
+                Stretch(history, Vector2.zero, Vector2.one,
+                    new Vector2(0f, 0f), new Vector2(0f, string.IsNullOrEmpty(w.LoadError) ? 0f : -30f));
+                var content = MakeMenuScroll(history, 0f);
+                float top = 8f;
+                if (w.HasOlder)
+                {
+                    var older = PanelObject("Older Holder", content, new Color(0f, 0f, 0f, 0f));
+                    older.anchorMin = new Vector2(0f, 1f); older.anchorMax = new Vector2(1f, 1f);
+                    older.pivot = new Vector2(0.5f, 1f);
+                    older.sizeDelta = new Vector2(-20f, 30f);
+                    older.anchoredPosition = new Vector2(0f, -top);
+                    AddButton(older, w.LoadingOlder ? "Loading earlier…" : "Load earlier messages",
+                        () => LoadOlderChatHistory(wRef), !w.LoadingOlder, false, true);
+                    top += 38f;
+                }
+                float bubbleW = Mathf.Min(260f, Mathf.Max(128f, winW - 48f));
+                for (int m = 0; m < w.Messages.Count; m++)
                 {
                     var msg = w.Messages[m];
-                    var line = TextObject("M" + m, listArea,
-                        (msg.mine ? "You:  " : w.Username + ":  ") + msg.body, 11,
-                        msg.mine ? Ink : GoodGreen,
-                        msg.mine ? TextAnchor.UpperRight : TextAnchor.UpperLeft, monoFont);
+                    var bubble = PanelObject("Message " + msg.id, content,
+                        msg.mine ? new Color32(26, 60, 79, 245) : new Color32(22, 36, 52, 245));
+                    bubble.anchorMin = bubble.anchorMax = new Vector2(msg.mine ? 1f : 0f, 1f);
+                    bubble.pivot = new Vector2(msg.mine ? 1f : 0f, 1f);
+                    bubble.sizeDelta = new Vector2(bubbleW, 0f);
+                    bubble.anchoredPosition = new Vector2(msg.mine ? -8f : 8f, -top);
+                    Round(bubble);
+
+                    var label = TextObject("Sender and time", bubble,
+                        (msg.mine ? "You" : w.Username) + "  ·  " + ChatMessageTime(msg.createdAt),
+                        9, msg.mine ? Accent : GoodGreen, TextAnchor.UpperLeft, monoFont);
+                    label.raycastTarget = false;
+                    label.rectTransform.anchorMin = new Vector2(0f, 1f);
+                    label.rectTransform.anchorMax = new Vector2(1f, 1f);
+                    label.rectTransform.pivot = new Vector2(0.5f, 1f);
+                    label.rectTransform.sizeDelta = new Vector2(-20f, 15f);
+                    label.rectTransform.anchoredPosition = new Vector2(0f, -5f);
+
+                    var line = TextObject("Body", bubble, msg.body, 12,
+                        Ink, TextAnchor.UpperLeft);
+                    line.supportRichText = false;
                     line.horizontalOverflow = HorizontalWrapMode.Wrap;
-                    var rt = line.rectTransform;
-                    rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(1f, 1f);
-                    rt.pivot = new Vector2(0.5f, 1f);
-                    rt.sizeDelta = new Vector2(-14f, rowH);
-                    rt.anchoredPosition = new Vector2(0f, -(pad + (m - start) * rowH));
+                    line.verticalOverflow = VerticalWrapMode.Overflow;
+                    line.raycastTarget = false;
+                    line.rectTransform.anchorMin = line.rectTransform.anchorMax = new Vector2(0f, 1f);
+                    line.rectTransform.pivot = new Vector2(0f, 1f);
+                    line.rectTransform.sizeDelta = new Vector2(bubbleW - 20f, 0f);
+                    line.rectTransform.anchoredPosition = new Vector2(10f, -22f);
+                    float bodyH = Mathf.Max(20f, Mathf.Ceil(line.preferredHeight));
+                    line.rectTransform.sizeDelta = new Vector2(bubbleW - 20f, bodyH);
+                    float bubbleH = 22f + bodyH + 10f;
+                    bubble.sizeDelta = new Vector2(bubbleW, bubbleH);
+                    top += bubbleH + 7f;
                 }
+                content.sizeDelta = new Vector2(0f, top + 2f);
+                float viewportH = Mathf.Max(80f, h - ChatHeadH - 70f -
+                    (string.IsNullOrEmpty(w.LoadError) ? 0f : 30f));
+                if (w.PreserveOlderScroll)
+                {
+                    float travel = Mathf.Max(1f, top + 2f - viewportH);
+                    float added = Mathf.Max(0f, top + 2f - w.OlderContentHeight);
+                    w.ScrollPosition = Mathf.Clamp01(1f - (w.OlderTopOffset + added) / travel);
+                    w.PreserveOlderScroll = false;
+                }
+                w.ContentHeight = top + 2f;
+                w.ViewportHeight = viewportH;
+                var scroll = history.GetComponent<ScrollRect>();
+                scroll.verticalNormalizedPosition = w.ScrollPosition;
+                scroll.onValueChanged.AddListener(p =>
+                {
+                    wRef.ScrollPosition = p.y;
+                    wRef.StickToBottom = p.y < 0.07f;
+                });
             }
 
             if (!string.IsNullOrEmpty(w.Error))
             {
                 var err = TextObject("Err", win, w.Error, 9, RedAccent, TextAnchor.MiddleLeft, monoFont);
                 Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
-                        new Vector2(10f, 38f), new Vector2(-10f, 52f));
+                        new Vector2(10f, 51f), new Vector2(-10f, 63f));
             }
 
             // ── composer ──
-            var field = MakeInput(win, "Message…", w.Draft, s => wRef.Draft = s, _ => SendChatFor(wRef));
-            Stretch(field, new Vector2(0f, 0f), new Vector2(0.74f, 0f), new Vector2(8f, 8f), new Vector2(0f, 38f));
+            var field = MakeInput(win, "Message…", w.Draft, s => wRef.Draft = s, null);
+            field.gameObject.name = "Chat Composer " + w.PlayerId;
+            var input = field.GetComponent<InputField>();
+            input.characterLimit = 1000;
+            input.interactable = !w.Busy;
+            // onEndEdit also fires when focus leaves the field. Only Return or the
+            // explicit Send button submits a draft; a click away does not.
+            input.onEndEdit.AddListener(_ =>
+            {
+                if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter))
+                    SendChatFor(wRef);
+            });
+            Stretch(field, new Vector2(0f, 0f), new Vector2(0.72f, 0f), new Vector2(8f, 8f), new Vector2(0f, 50f));
 
             var sendHolder = PanelObject("SendHolder", win, new Color(0, 0, 0, 0));
-            Stretch(sendHolder, new Vector2(0.74f, 0f), new Vector2(1f, 0f), new Vector2(2f, 8f), new Vector2(-8f, 38f));
+            Stretch(sendHolder, new Vector2(0.72f, 0f), new Vector2(1f, 0f), new Vector2(2f, 8f), new Vector2(-8f, 50f));
             var slg = sendHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
             slg.childAlignment = TextAnchor.MiddleRight; slg.childControlWidth = false; slg.childControlHeight = false;
-            AddButton(sendHolder, w.Busy ? "…" : "Send", () => SendChatFor(wRef), !w.Busy, false);
+            AddButton(sendHolder, w.Busy ? "Sending…" : "Send", () => SendChatFor(wRef), !w.Busy, false, true);
         }
+    }
+
+    private static string ChatMessageTime(long unixMilliseconds)
+    {
+        if (unixMilliseconds <= 0) return "now";
+        try { return DateTimeOffset.FromUnixTimeMilliseconds(unixMilliseconds).ToLocalTime().ToString("MMM d, h:mm tt"); }
+        catch { return "now"; }
     }
 
     private void RecomputeChatUnreadTotal()
@@ -5597,15 +5997,23 @@ public partial class MainMenuManager : MonoBehaviour
             // Unread chat badges.
             try
             {
-                var (unread, total) = await ChatStore.PollUnreadAsync();
+                var (ok, unread, total) = await ChatStore.PollUnreadAsync();
                 if (this == null || menuRoot == null) { socialPollActive = false; return; }
-                chatUnread.Clear();
-                foreach (var u in unread)
-                    if (!string.IsNullOrEmpty(u.fromId)) chatUnread[u.fromId] = u.count;
-                if (total != chatUnreadTotal)
+                // A failed request is not an empty inbox. Retain the last reliable
+                // badges, and repaint when per-sender counts change even if the total
+                // happens to be the same (e.g. A was read while B sent a message).
+                if (ok)
                 {
+                    var next = new Dictionary<string, int>();
+                    foreach (var u in unread)
+                        if (!string.IsNullOrEmpty(u.fromId)) next[u.fromId] = u.count;
+                    bool changed = total != chatUnreadTotal ||
+                        next.Count != chatUnread.Count ||
+                        next.Any(kv => !chatUnread.TryGetValue(kv.Key, out var count) || count != kv.Value);
+                    chatUnread.Clear();
+                    foreach (var kv in next) chatUnread[kv.Key] = kv.Value;
                     chatUnreadTotal = total;
-                    if (showingFriends) RenderMenu();
+                    if (changed) RenderMenu();
                 }
             }
             catch { /* transient; next tick retries */ }
@@ -5663,10 +6071,50 @@ public partial class MainMenuManager : MonoBehaviour
         OnePieceTcg.Sealed.SealedManager.Open();
     }
 
-    private void OpenLobbyHub()
+    // Friends-row entry: choose a friend first, then configure the custom room.
+    // CreateLobbyClicked sends their invite only after UGS returns the session id.
+    private async void OpenLobbyHubForFriend(string playerId, string username)
     {
+        if (string.IsNullOrWhiteSpace(playerId)) return;
+        if (!AccountManager.HasClaimedIdentity)
+        {
+            showingAccountGate = true;
+            RenderMenu();
+            return;
+        }
+        if (!RankedStore.IsConfigured)
+        {
+            friendsError = "Invites aren't available yet.";
+            RenderMenu();
+            return;
+        }
+        if (LobbyManager.CurrentSession != null)
+        {
+            UnsubscribeFromSessionEvents();
+            await LobbyManager.LeaveCurrentAsync();
+            if (this == null || menuRoot == null) return;
+        }
+        lobbyInvitePlayerId = playerId;
+        lobbyInviteUsername = string.IsNullOrWhiteSpace(username) ? "your friend" : username.Trim();
+        lobbyInviteSent = lobbyInviteFailed = false;
+        lobbyIsPrivate = true;
+        lobbyNameInput = $"{AccountManager.DisplayName ?? "Captain"}'s game";
+        showingFriends = false;
+        OpenLobbyHub(true);
+    }
+
+    private void OpenLobbyHub(bool keepInviteTarget = false)
+    {
+        if (!keepInviteTarget)
+        {
+            lobbyInvitePlayerId = lobbyInviteUsername = null;
+            lobbyInviteSent = lobbyInviteFailed = false;
+        }
         showingLobbyHub = true;
         lobbyError = null;
+        lobbyErrorContext = "create";
+        lobbyShowMoreRules = false;
+        lobbyCreateScroll = lobbyBrowserScroll = lobbyWaitingScroll = 1f;
         lobbyMode = "custom";   // custom rooms are their own game type
         lobbyRanked = false;
         RenderMenu();
@@ -5675,6 +6123,8 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void CloseLobbyHub()
     {
+        lobbyInvitePlayerId = lobbyInviteUsername = null;
+        lobbyInviteSent = lobbyInviteFailed = false;
         showingLobbyHub = false;
         lobbyError = null;
         RenderMenu();
@@ -5690,14 +6140,24 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void BuildLobbyHub(RectTransform stage)
     {
-        const float titleH = 60f;
+        const float titleH = 72f;
+        if (!lobbyBrowserHeightLoaded)
+        {
+            lobbyBrowserHeight = Mathf.Clamp(PlayerPrefs.GetFloat("optcg.lobby.browserHeight", 0.45f), 0.27f, 0.55f);
+            lobbyBrowserHeightLoaded = true;
+        }
 
         var titleRow = PanelObject("Lobby Title Row", stage, new Color(0, 0, 0, 0));
         Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
 
-        var titleText = TextObject("Title", titleRow, "Private Room", 26, Ink, TextAnchor.MiddleLeft);
+        var titleText = TextObject("Title", titleRow, "Create a room", 28, Ink, TextAnchor.MiddleLeft);
         titleText.fontStyle = FontStyle.Bold;
-        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.5f, 1f), new Vector2(4f, 0f), Vector2.zero);
+        Stretch(titleText.rectTransform, new Vector2(0f, 0.38f), new Vector2(0.5f, 1f), new Vector2(4f, 0f), Vector2.zero);
+        var subtitle = TextObject("Subtitle", titleRow,
+            "Build a table for two, then invite a friend or welcome a rival.",
+            12, Muted, TextAnchor.MiddleLeft);
+        Stretch(subtitle.rectTransform, Vector2.zero, new Vector2(0.66f, 0.40f),
+            new Vector2(4f, 0f), Vector2.zero);
 
         // Restore Code affordance (moved here from the Solo portal): paste a replay position code and
         // play it out locally from that exact spot (see GameManager.Restore.cs).
@@ -5719,31 +6179,266 @@ public partial class MainMenuManager : MonoBehaviour
         backHlg.childAlignment = TextAnchor.MiddleRight;
         backHlg.childControlWidth = false;
         backHlg.childControlHeight = false;
-        AddButton(backHolder, "< Back", CloseLobbyHub, true, false);
+        AddButton(backHolder, "< Back to Play", CloseLobbyHub, true, false, false, 142f, 34f);
 
         var body = PanelObject("Lobby Body", stage, new Color(0, 0, 0, 0));
         Stretch(body, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
 
-        // Left half: create a lobby.
-        var createPanel = PanelObject("Create Panel", body, new Color32(8, 16, 24, 153));
-        Stretch(createPanel, Vector2.zero, new Vector2(0.48f, 1f), Vector2.zero, Vector2.zero);
+        // All three tasks remain visible. The narrow divider between the top panels and
+        // the real public-room list can be dragged to give the browser more or less space.
+        float topBottom = lobbyBrowserHeight + 0.02f;
+        var createPanel = PanelObject("Create Panel", body, new Color32(8, 20, 28, 235));
+        Stretch(createPanel, new Vector2(0f, topBottom), new Vector2(0.715f, 1f), Vector2.zero, Vector2.zero);
         Round(createPanel);
-        AddRoundedCardBorder(createPanel, MenuB, 1f);
-        BuildCreateLobbyPanel(createPanel);
+        AddRoundedCardBorder(createPanel, Accent, 1f);
+        var form = PanelObject("Create Form", createPanel, new Color(0, 0, 0, 0));
+        Stretch(form, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        BuildCreateLobbyPanel(form);
 
-        // Right half: join a lobby (by code, or browse public ones).
-        var joinPanel = PanelObject("Join Panel", body, new Color32(8, 16, 24, 153));
-        Stretch(joinPanel, new Vector2(0.52f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var joinPanel = PanelObject("Join Code Panel", body, new Color32(8, 20, 28, 235));
+        Stretch(joinPanel, new Vector2(0.728f, topBottom), Vector2.one, Vector2.zero, Vector2.zero);
         Round(joinPanel);
         AddRoundedCardBorder(joinPanel, MenuB, 1f);
-        BuildJoinLobbyPanel(joinPanel);
+        BuildJoinCodePanel(joinPanel);
+
+        var browserPanel = PanelObject("Public Lobby Panel", body, new Color32(8, 20, 28, 235));
+        Stretch(browserPanel, Vector2.zero, new Vector2(1f, lobbyBrowserHeight), Vector2.zero, Vector2.zero);
+        Round(browserPanel);
+        AddRoundedCardBorder(browserPanel, MenuB, 1f);
+        BuildPublicLobbyPanel(browserPanel);
+
+        var handle = PanelObject("Find Table Resize Handle", body, new Color(0f, 0f, 0f, 0f));
+        Stretch(handle, new Vector2(0f, lobbyBrowserHeight), new Vector2(1f, topBottom),
+            Vector2.zero, Vector2.zero);
+        handle.GetComponent<Image>().raycastTarget = true;
+        var grip = PanelObject("Resize Grip", handle, new Color32(23, 54, 66, 255));
+        grip.anchorMin = grip.anchorMax = new Vector2(0.5f, 0.5f);
+        grip.pivot = new Vector2(0.5f, 0.5f);
+        grip.sizeDelta = new Vector2(226f, 20f);
+        grip.anchoredPosition = Vector2.zero;
+        Round(grip);
+        AddRoundedCardBorder(grip, MenuB, 1f);
+        grip.GetComponent<Image>().raycastTarget = false;
+        var gripText = TextObject("Resize Label", grip, "DRAG TO RESIZE TABLE LIST", 10,
+            Accent2, TextAnchor.MiddleCenter, monoFont);
+        Stretch(gripText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        gripText.raycastTarget = false;
+
+        var trigger = handle.gameObject.AddComponent<EventTrigger>();
+        var drag = new EventTrigger.Entry { eventID = EventTriggerType.Drag };
+        drag.callback.AddListener(data =>
+        {
+            if (data is PointerEventData pointer)
+                ResizeLobbyBrowser(body, createPanel, joinPanel, browserPanel, handle, pointer);
+        });
+        trigger.triggers.Add(drag);
+        var endDrag = new EventTrigger.Entry { eventID = EventTriggerType.EndDrag };
+        endDrag.callback.AddListener(_ =>
+        {
+            PlayerPrefs.SetFloat("optcg.lobby.browserHeight", lobbyBrowserHeight);
+            PlayerPrefs.Save();
+        });
+        trigger.triggers.Add(endDrag);
+    }
+
+    private void ResizeLobbyBrowser(RectTransform body, RectTransform createPanel,
+        RectTransform joinPanel, RectTransform browserPanel, RectTransform handle,
+        PointerEventData pointer)
+    {
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                body, pointer.position, pointer.pressEventCamera, out var local)) return;
+        float next = Mathf.Clamp((local.y - body.rect.yMin) / Mathf.Max(1f, body.rect.height),
+            0.27f, 0.55f);
+        lobbyBrowserHeight = next;
+        float topBottom = next + 0.02f;
+        createPanel.anchorMin = new Vector2(0f, topBottom);
+        joinPanel.anchorMin = new Vector2(0.728f, topBottom);
+        browserPanel.anchorMax = new Vector2(1f, next);
+        handle.anchorMin = new Vector2(0f, next);
+        handle.anchorMax = new Vector2(1f, topBottom);
     }
 
     private void BuildCreateLobbyPanel(RectTransform panel)
     {
-        var header = TextObject("Header", panel, "HOST A LOBBY", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        if (lobbyShowMoreRules) BuildExpandedCreateLobbyPanel(panel);
+        else BuildCompactCreateLobbyPanel(panel);
+    }
+
+    private void BuildCompactCreateLobbyPanel(RectTransform panel)
+    {
+        var shell = panel;
+        var scrollArea = PanelObject("Compact Setup Scroll", shell, new Color(0f, 0f, 0f, 0f));
+        float footerHeight = !string.IsNullOrEmpty(lobbyError) && lobbyErrorContext == "create" ? 86f : 64f;
+        Stretch(scrollArea, Vector2.zero, Vector2.one, new Vector2(0f, footerHeight), Vector2.zero);
+        panel = MakeMenuScroll(scrollArea, lobbyCustomGame == "sealed" ? 332f : 316f);
+        var scroll = scrollArea.GetComponent<ScrollRect>();
+        scroll.verticalNormalizedPosition = lobbyCreateScroll;
+        scroll.onValueChanged.AddListener(v => lobbyCreateScroll = v.y);
+
+        var kicker = TextObject("Kicker", panel,
+            string.IsNullOrEmpty(lobbyInvitePlayerId) ? "HOST A CUSTOM MATCH" : $"HOST FOR {lobbyInviteUsername}",
+            10, Accent2, TextAnchor.UpperLeft, monoFont);
+        kicker.fontStyle = FontStyle.Bold;
+        Stretch(kicker.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -23f), new Vector2(-16f, -7f));
+        var heading = TextObject("Heading", panel, "Set up your table", 21, Ink, TextAnchor.UpperLeft);
+        heading.fontStyle = FontStyle.Bold;
+        Stretch(heading.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -53f), new Vector2(-16f, -22f));
+
+        var nameLabel = TextObject("Name Label", panel, "ROOM NAME", 10, Muted, TextAnchor.UpperLeft, monoFont);
+        nameLabel.fontStyle = FontStyle.Bold;
+        Stretch(nameLabel.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -75f), new Vector2(-16f, -59f));
+        var nameField = MakeInput(panel, "Give your room a name", lobbyNameInput,
+            s => lobbyNameInput = s, null);
+        Stretch(nameField, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -110f), new Vector2(-16f, -78f));
+
+        BuildCompactRuleLabel(panel, "VISIBILITY", false, -126f);
+        BuildCompactRuleLabel(panel, "GAME TYPE", true, -126f);
+        var visibility = BuildCompactRuleRow(panel, false, -145f);
+        BuildVisibilityOption(visibility, "Private", true);
+        BuildVisibilityOption(visibility, "Public", false);
+        var gameType = BuildCompactRuleRow(panel, true, -145f);
+        BuildCustomGameOption(gameType, "Constructed", "constructed");
+        BuildCustomGameOption(gameType, "Sealed", "sealed");
+
+        bool sealedSetup = lobbyCustomGame == "sealed";
+        BuildCompactRuleLabel(panel, sealedSetup ? "SEALED PRODUCT" : "CARD FORMAT", false, -193f);
+        BuildCompactRuleLabel(panel, "TIMING", true, -193f);
+        var format = BuildCompactRuleRow(panel, false, -212f);
+        if (sealedSetup)
+            AddButton(format, "SET: " + lobbySealedSet + "  (CHANGE)", PickLobbySealedSet,
+                !lobbyBusy, false, false, 190f, 30f);
+        else
+        {
+            BuildFormatOption(format, "Standard", "standard");
+            BuildFormatOption(format, "Extra Regulation", "extra");
+        }
+        var timing = BuildCompactRuleRow(panel, true, -212f);
+        BuildTimingOption(timing, "Untimed", "standard");
+        BuildTimingOption(timing, "Shared", "ranked");
+        BuildTimingOption(timing, "Blitz", "blitz");
+
+        if (sealedSetup)
+        {
+            BuildCompactRuleLabel(panel, "REWIND", false, -263f);
+            var rewind = BuildCompactRuleRow(panel, false, -282f);
+            BuildForgivenessOption(rewind, "Off", false);
+            BuildForgivenessOption(rewind, "Forgiveness", true);
+            var rewindHint = TextObject("Rewind Hint", panel,
+                "Each rewind needs your opponent's approval.", 10, Muted,
+                TextAnchor.MiddleLeft, monoFont);
+            Stretch(rewindHint.rectTransform, new Vector2(0.5f, 1f), Vector2.one,
+                new Vector2(8f, -316f), new Vector2(-16f, -274f));
+        }
+        else
+        {
+            var more = PanelObject("More Rules", panel, new Color32(17, 34, 45, 210));
+            Stretch(more, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(16f, -298f), new Vector2(-16f, -249f));
+            AddRoundedCardBorder(more, MenuB, 1f);
+            var moreTitle = TextObject("More Rules Title", more, "More rules", 12, Ink, TextAnchor.MiddleLeft);
+            moreTitle.fontStyle = FontStyle.Bold;
+            Stretch(moreTitle.rectTransform, new Vector2(0f, 0.42f), new Vector2(0.58f, 1f),
+                new Vector2(12f, 0f), Vector2.zero);
+            var moreDetail = TextObject("More Rules Detail", more,
+                $"Rewind {(lobbyForgiveness ? "on" : "off")} · Ban list {(lobbyIgnoreBans ? "ignored" : "enforced")}",
+                10, Muted, TextAnchor.MiddleLeft, monoFont);
+            Stretch(moreDetail.rectTransform, Vector2.zero, new Vector2(0.64f, 0.46f),
+                new Vector2(12f, 0f), Vector2.zero);
+            var editHolder = PanelObject("Edit Rules Holder", more, new Color(0f, 0f, 0f, 0f));
+            Stretch(editHolder, new Vector2(0.78f, 0f), Vector2.one,
+                new Vector2(0f, 9f), new Vector2(-9f, -9f));
+            AddButton(editHolder, "Edit rules", () =>
+            {
+                lobbyShowMoreRules = true;
+                lobbyCreateScroll = 1f;
+                RenderMenu();
+            }, true, false, true);
+        }
+
+        var summary = TextObject("Create Summary", shell,
+            sealedSetup
+                ? $"{(lobbyIsPrivate ? "PRIVATE" : "PUBLIC")} · SEALED {lobbySealedSet}\n{LobbyTimingSummary()} · Rewind {(lobbyForgiveness ? "on" : "off")}"
+                : $"{(lobbyIsPrivate ? "PRIVATE" : "PUBLIC")} · CONSTRUCTED · {(lobbyFormat == "extra" ? "EXTRA" : "STANDARD")}\n"
+                    + $"{LobbyTimingSummary()} · Rewind {(lobbyForgiveness ? "on" : "off")} · Ban list {(lobbyIgnoreBans ? "ignored" : "enforced")}",
+            10, Accent2, TextAnchor.MiddleLeft, monoFont);
+        summary.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(summary.rectTransform, Vector2.zero, new Vector2(0.66f, 0f),
+            new Vector2(16f, 10f), new Vector2(0f, 64f));
+
+        var createHolder = PanelObject("Create Holder", shell, new Color(0f, 0f, 0f, 0f));
+        Stretch(createHolder, new Vector2(0.67f, 0f), new Vector2(1f, 0f),
+            new Vector2(0f, 16f), new Vector2(-16f, 63f));
+        AddButton(createHolder,
+            lobbyBusy ? "Creating room..." : string.IsNullOrEmpty(lobbyInvitePlayerId) ? "Create lobby" : "Create & invite",
+            CreateLobbyClicked, !lobbyBusy, true, true);
+
+        if (!string.IsNullOrEmpty(lobbyError) && lobbyErrorContext == "create")
+        {
+            var error = TextObject("Create Error", shell, lobbyError, 10, RedAccent,
+                TextAnchor.UpperLeft, monoFont);
+            error.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(error.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+                new Vector2(16f, 64f), new Vector2(-16f, 86f));
+        }
+    }
+
+    private void BuildCompactRuleLabel(RectTransform panel, string label, bool right, float top)
+    {
+        var text = TextObject(label + " Label", panel, label, 10, Muted, TextAnchor.UpperLeft, monoFont);
+        text.fontStyle = FontStyle.Bold;
+        Stretch(text.rectTransform, new Vector2(right ? 0.5f : 0f, 1f),
+            new Vector2(right ? 1f : 0.5f, 1f),
+            new Vector2(right ? 8f : 16f, top - 16f),
+            new Vector2(right ? -16f : -8f, top));
+    }
+
+    private RectTransform BuildCompactRuleRow(RectTransform panel, bool right, float top)
+    {
+        var row = PanelObject(right ? "Right Rule Row" : "Left Rule Row", panel, new Color(0f, 0f, 0f, 0f));
+        Stretch(row, new Vector2(right ? 0.5f : 0f, 1f), new Vector2(right ? 1f : 0.5f, 1f),
+            new Vector2(right ? 8f : 16f, top - 34f),
+            new Vector2(right ? -16f : -8f, top));
+        var layout = row.gameObject.AddComponent<HorizontalLayoutGroup>();
+        layout.spacing = 8f;
+        layout.childAlignment = TextAnchor.MiddleLeft;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = false;
+        return row;
+    }
+
+    private void BuildExpandedCreateLobbyPanel(RectTransform panel)
+    {
+        // The rules can grow to five custom clock fields. Keep the action and live
+        // summary in a fixed footer while the form itself scrolls on short windows.
+        var shell = panel;
+        var scrollArea = PanelObject("Create Rules Scroll", shell, new Color(0, 0, 0, 0));
+        Stretch(scrollArea, Vector2.zero, Vector2.one, new Vector2(0f, 140f), Vector2.zero);
+        panel = MakeMenuScroll(scrollArea, 724f);
+        var formScroll = scrollArea.GetComponent<ScrollRect>();
+        formScroll.verticalNormalizedPosition = lobbyCreateScroll;
+        formScroll.onValueChanged.AddListener(v => lobbyCreateScroll = v.y);
+
+        var header = TextObject("Header", panel,
+            string.IsNullOrEmpty(lobbyInvitePlayerId) ? "HOST A LOBBY" : $"HOST A LOBBY FOR {lobbyInviteUsername}",
+            13, Muted, TextAnchor.UpperLeft, monoFont);
         header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+        Stretch(header.rectTransform, new Vector2(0f, 1f), new Vector2(0.65f, 1f),
+            new Vector2(16f, -34f), Vector2.zero);
+        var basicHolder = PanelObject("Basic Rules Holder", panel, new Color(0f, 0f, 0f, 0f));
+        Stretch(basicHolder, new Vector2(0.72f, 1f), Vector2.one,
+            new Vector2(0f, -41f), new Vector2(-16f, -9f));
+        AddButton(basicHolder, "Basic rules", () =>
+        {
+            lobbyShowMoreRules = false;
+            lobbyCreateScroll = 1f;
+            RenderMenu();
+        }, true, false, true);
 
         var nameLabel = TextObject("Name Label", panel, "Lobby name", 11, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(nameLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -62f), new Vector2(-16f, -46f));
@@ -5764,6 +6459,11 @@ public partial class MainMenuManager : MonoBehaviour
         visHlg.childControlHeight = false;
         BuildVisibilityOption(visRow, "Private", true);
         BuildVisibilityOption(visRow, "Public", false);
+        var visHint = TextObject("Visibility Hint", panel,
+            lobbyIsPrivate ? "Private rooms are joined by code or invitation." : "Public rooms also appear in the lobby browser.",
+            10, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(visHint.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -180f), new Vector2(-16f, -166f));
 
         // Game mode: Standard vs Forgiveness (adds an in-match rewind toggle — 1 turn / 1 action —
         // where either rewind needs the opponent's OK). Sent to both clients in the match-start payload.
@@ -5787,7 +6487,7 @@ public partial class MainMenuManager : MonoBehaviour
         var modeHlg = modeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         modeHlg.spacing = 8f; modeHlg.childAlignment = TextAnchor.MiddleLeft;
         modeHlg.childControlWidth = false; modeHlg.childControlHeight = false;
-        BuildForgivenessOption(modeRow, "Standard", false);
+        BuildForgivenessOption(modeRow, "Off", false);
         BuildForgivenessOption(modeRow, "Forgiveness", true);
         if (lobbyForgiveness)
         {
@@ -5805,8 +6505,8 @@ public partial class MainMenuManager : MonoBehaviour
         var timeHlg = timeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         timeHlg.spacing = 8f; timeHlg.childAlignment = TextAnchor.MiddleLeft;
         timeHlg.childControlWidth = false; timeHlg.childControlHeight = false;
-        BuildTimingOption(timeRow, "Standard", "standard");
-        BuildTimingOption(timeRow, "Ranked", "ranked");
+        BuildTimingOption(timeRow, "Untimed", "standard");
+        BuildTimingOption(timeRow, "Shared", "ranked");
         BuildTimingOption(timeRow, "Blitz", "blitz");
         if (lobbyTimingMode == "ranked")
         {
@@ -5852,13 +6552,14 @@ public partial class MainMenuManager : MonoBehaviour
             }
         }
 
-        // Card format: Standard (in-rotation blocks) vs Extra Regulation (the full card pool). Both players'
-        // deck pickers grey out decks that aren't legal for the chosen format. Bottom-anchored so it doesn't
-        // disturb the timing stack above.
-        var fmtLabel = TextObject("Format Label", panel, "Card format", 11, Muted, TextAnchor.LowerLeft, monoFont);
-        Stretch(fmtLabel.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 142f), new Vector2(-16f, 160f));
+        // Format follows timing in the scroll content instead of being anchored to
+        // the shell bottom, where custom Blitz fields could otherwise collide.
+        var fmtLabel = TextObject("Format Label", panel, "Card format", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(fmtLabel.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -632f), new Vector2(-16f, -614f));
         var fmtRow = PanelObject("Format Row", panel, new Color(0, 0, 0, 0));
-        Stretch(fmtRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 106f), new Vector2(-16f, 140f));
+        Stretch(fmtRow, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -670f), new Vector2(-16f, -636f));
         var fmtHlg = fmtRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         fmtHlg.spacing = 8f; fmtHlg.childAlignment = TextAnchor.MiddleLeft;
         fmtHlg.childControlWidth = false; fmtHlg.childControlHeight = false;
@@ -5866,16 +6567,26 @@ public partial class MainMenuManager : MonoBehaviour
         BuildFormatOption(fmtRow, "Extra Regulation", "extra");
         BuildIgnoreBansOption(fmtRow);
 
-        if (!string.IsNullOrEmpty(lobbyError))
+        if (!string.IsNullOrEmpty(lobbyError) && lobbyErrorContext == "create")
         {
-            var err = TextObject("Error", panel, lobbyError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
+            var err = TextObject("Error", shell, lobbyError, 11, RedAccent, TextAnchor.UpperLeft, monoFont);
             err.horizontalOverflow = HorizontalWrapMode.Wrap;
-            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 54f), new Vector2(-16f, 92f));
+            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 96f), new Vector2(-16f, 136f));
         }
 
-        var createHolder = PanelObject("Create Holder", panel, new Color(0, 0, 0, 0));
+        var summary = TextObject("Create Summary", shell,
+            $"{(lobbyIsPrivate ? "PRIVATE" : "PUBLIC")} · {(lobbyCustomGame == "sealed" ? "SEALED " + lobbySealedSet : "CONSTRUCTED")} · {(lobbyFormat == "extra" ? "EXTRA" : "STANDARD")}\n"
+                + $"{LobbyTimingSummary()} · Rewind {(lobbyForgiveness ? "on" : "off")} · Ban list {(lobbyIgnoreBans ? "ignored" : "on")}",
+            10, Accent2, TextAnchor.UpperLeft, monoFont);
+        summary.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(summary.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(16f, 54f), new Vector2(-16f, 94f));
+
+        var createHolder = PanelObject("Create Holder", shell, new Color(0, 0, 0, 0));
         Stretch(createHolder, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
-        AddButton(createHolder, lobbyBusy ? "Working..." : "Create Lobby", CreateLobbyClicked, !lobbyBusy, false);
+        AddButton(createHolder,
+            lobbyBusy ? "Creating room..." : string.IsNullOrEmpty(lobbyInvitePlayerId) ? "Create Lobby" : "Create & Invite",
+            CreateLobbyClicked, !lobbyBusy, false, true);
     }
 
     private void BuildVisibilityOption(RectTransform parent, string label, bool isPrivateOption)
@@ -6044,7 +6755,7 @@ public partial class MainMenuManager : MonoBehaviour
             new Vector2(offL, topOffset), new Vector2(offR, topOffset + 13f));
         var input = MakeInput(panel, value, value, onChanged, null);
         Stretch(input, new Vector2(aMinX, 1f), new Vector2(aMaxX, 1f),
-            new Vector2(offL, topOffset + 14f), new Vector2(offR, topOffset + 42f));
+            new Vector2(offL, topOffset - 29f), new Vector2(offR, topOffset - 2f));
     }
 
     private void BuildForgivenessOption(RectTransform parent, string label, bool forgivenessOption)
@@ -6090,6 +6801,14 @@ public partial class MainMenuManager : MonoBehaviour
         tile.gameObject.AddComponent<Button>().onClick.AddListener(() =>
         {
             lobbyCustomGame = game;
+            if (game == "sealed")
+            {
+                // Sealed has its own product picker and exposes timing/rewind only.
+                // Do not carry invisible Constructed-only format or ban switches into it.
+                lobbyShowMoreRules = false;
+                lobbyFormat = "standard";
+                lobbyIgnoreBans = false;
+            }
             localReady = peerReady = hostAutoStarted = false;
             MatchNetworkSync.SendReady(false);
             HostBroadcastLobbyState();
@@ -6108,6 +6827,7 @@ public partial class MainMenuManager : MonoBehaviour
                 lobbySealedSet = setCode;
                 localReady = peerReady = hostAutoStarted = false;
                 MatchNetworkSync.SendReady(false);
+                HostBroadcastLobbyState();
                 reopenLobbyAfterPicker = true;
                 EnsureMenu();
             },
@@ -6128,6 +6848,7 @@ public partial class MainMenuManager : MonoBehaviour
                 localReady = false;
                 MatchNetworkSync.SendReady(false);
                 MatchNetworkSync.SendSealedLeader(id);
+                HostBroadcastLobbyState();
                 reopenLobbyAfterPicker = true;
                 EnsureMenu();
             },
@@ -6136,228 +6857,403 @@ public partial class MainMenuManager : MonoBehaviour
         Destroy(gameObject);
     }
 
-    private void BuildJoinLobbyPanel(RectTransform panel)
+    private void BuildJoinCodePanel(RectTransform panel)
     {
-        var header = TextObject("Header", panel, "JOIN A LOBBY", 13, Muted, TextAnchor.UpperLeft, monoFont);
+        var header = TextObject("Header", panel, "HAVE AN INVITE?", 10, Accent2, TextAnchor.UpperLeft, monoFont);
         header.fontStyle = FontStyle.Bold;
-        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
+        Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -37f), new Vector2(-16f, -19f));
+        var title = TextObject("Title", panel, "Join by code", 21, Ink, TextAnchor.UpperLeft);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -69f), new Vector2(-16f, -38f));
+        var intro = TextObject("Intro", panel, "Paste the room code your friend sent you.",
+            12, Muted, TextAnchor.UpperLeft);
+        intro.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(intro.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -106f), new Vector2(-16f, -72f));
 
-        // Join-code row: field + a Join button that fills its slot and matches the field height.
-        var codeField = MakeInput(panel, "Enter join code", joinCodeInput, s => joinCodeInput = s, null);
-        Stretch(codeField, new Vector2(0f, 1f), new Vector2(0.72f, 1f), new Vector2(16f, -76f), new Vector2(-8f, -44f));
+        var codeField = MakeInput(panel, "Six-character code", joinCodeInput,
+            s => joinCodeInput = s, null);
+        Stretch(codeField, new Vector2(0f, 1f), new Vector2(0.70f, 1f),
+            new Vector2(16f, -148f), new Vector2(-5f, -113f));
 
         var joinCodeHolder = PanelObject("Join Code Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(joinCodeHolder, new Vector2(0.72f, 1f), new Vector2(1f, 1f), new Vector2(0f, -76f), new Vector2(-16f, -44f));
-        AddButton(joinCodeHolder, "Join", JoinLobbyByCodeClicked, !lobbyBusy, false, true);
+        Stretch(joinCodeHolder, new Vector2(0.70f, 1f), Vector2.one,
+            new Vector2(5f, -148f), new Vector2(-16f, -113f));
+        AddButton(joinCodeHolder, "Join room", JoinLobbyByCodeClicked, !lobbyBusy, false, true);
 
-        // Public-lobbies header + a Refresh button that fills its slot and matches the header height.
-        var listHeader = PanelObject("List Header Row", panel, new Color(0, 0, 0, 0));
-        Stretch(listHeader, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -112f), new Vector2(-16f, -84f));
-        var listHeaderText = TextObject("List Header", listHeader, "PUBLIC LOBBIES", 11, Muted, TextAnchor.MiddleLeft, monoFont);
-        Stretch(listHeaderText.rectTransform, Vector2.zero, new Vector2(0.66f, 1f), Vector2.zero, Vector2.zero);
-        var refreshHolder = PanelObject("Refresh Holder", listHeader, new Color(0, 0, 0, 0));
-        Stretch(refreshHolder, new Vector2(0.68f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
-        AddButton(refreshHolder, lobbyBusy ? "..." : "Refresh", RefreshLobbyBrowser, !lobbyBusy, false, true);
+        bool hasJoinError = !string.IsNullOrEmpty(lobbyError) && lobbyErrorContext == "join";
+        if (hasJoinError)
+        {
+            var err = TextObject("Join Error", panel, lobbyError, 10, RedAccent,
+                TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(16f, -210f), new Vector2(-16f, -154f));
+        }
+
+        var note = TextObject("Code Note", panel,
+            "Room codes appear after a host creates a lobby. A friend can also invite you directly from their room.",
+            11, Muted, TextAnchor.UpperLeft);
+        note.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(note.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, hasJoinError ? -291f : -240f),
+            new Vector2(-16f, hasJoinError ? -218f : -164f));
+
+        var friendCallout = PanelObject("Friend Invite Callout", panel, new Color32(17, 34, 45, 210));
+        Stretch(friendCallout, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, hasJoinError ? -365f : -314f),
+            new Vector2(-16f, hasJoinError ? -302f : -251f));
+        AddRoundedCardBorder(friendCallout, MenuB, 1f);
+        var friendText = TextObject("Friend Invite Text", friendCallout,
+            "Direct invitations appear in Friends & invites.", 11, Ink,
+            TextAnchor.MiddleLeft);
+        friendText.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(friendText.rectTransform, Vector2.zero, Vector2.one,
+            new Vector2(12f, 0f), new Vector2(-12f, 0f));
+
+        var friendsHolder = PanelObject("Friends Holder", panel, new Color(0f, 0f, 0f, 0f));
+        Stretch(friendsHolder, Vector2.zero, new Vector2(1f, 0f),
+            new Vector2(16f, 16f), new Vector2(-16f, 54f));
+        AddButton(friendsHolder, "Open friends & invites", OpenFriends, true, false, true);
+    }
+
+    private void BuildPublicLobbyPanel(RectTransform panel)
+    {
+        var header = TextObject("Header", panel,
+            $"PUBLIC LOBBIES · {browsedLobbies.Count}", 10, Accent2,
+            TextAnchor.UpperLeft, monoFont);
+        header.fontStyle = FontStyle.Bold;
+        Stretch(header.rectTransform, new Vector2(0f, 1f), new Vector2(0.64f, 1f),
+            new Vector2(16f, -35f), new Vector2(0f, -12f));
+        var title = TextObject("Title", panel, "Find a table", 20, Ink, TextAnchor.UpperLeft);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 1f), new Vector2(0.65f, 1f),
+            new Vector2(16f, -65f), new Vector2(0f, -36f));
+
+        var refreshHolder = PanelObject("Refresh Holder", panel, new Color(0, 0, 0, 0));
+        Stretch(refreshHolder, new Vector2(0.82f, 1f), Vector2.one,
+            new Vector2(0f, -63f), new Vector2(-16f, -25f));
+        AddButton(refreshHolder, lobbyBusy ? "Searching..." : "Refresh list", RefreshLobbyBrowser,
+            !lobbyBusy, false, true);
+
+        // Apply the filter with a separate button. Rebuilding the menu from InputField.onEndEdit
+        // destroys a clicked room/tab during pointer-down and can swallow its pointer-up action.
+        var searchField = MakeInput(panel, "Search room, host, leader name, or leader card code", lobbyBrowserFilter,
+            s => lobbyBrowserFilter = s, null);
+        Stretch(searchField, new Vector2(0f, 1f), new Vector2(0.88f, 1f),
+            new Vector2(16f, -105f), new Vector2(-5f, -72f));
+        var searchHolder = PanelObject("Search Holder", panel, new Color(0f, 0f, 0f, 0f));
+        Stretch(searchHolder, new Vector2(0.88f, 1f), Vector2.one,
+            new Vector2(5f, -105f), new Vector2(-16f, -72f));
+        AddButton(searchHolder, "Search", () => { lobbyBrowserScroll = 1f; RenderMenu(); },
+            true, false, true);
 
         var listArea = PanelObject("List Area", panel, new Color(0, 0, 0, 0));
-        Stretch(listArea, Vector2.zero, Vector2.one, new Vector2(16f, 16f), new Vector2(-16f, -118f));
+        Stretch(listArea, Vector2.zero, Vector2.one,
+            new Vector2(16f, 12f), new Vector2(-16f, -114f));
 
-        if (browsedLobbies.Count == 0)
+        if (!string.IsNullOrEmpty(lobbyError) && lobbyErrorContext == "browse")
         {
-            var empty = TextObject("Empty", listArea,
-                lobbyBusy ? "Searching..." : "No public lobbies right now.",
-                12, Muted, TextAnchor.UpperLeft, monoFont);
-            Stretch(empty.rectTransform, new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, new Vector2(0f, -24f));
+            var error = TextObject("Browse Error", listArea, lobbyError, 12,
+                RedAccent, TextAnchor.UpperLeft, monoFont);
+            error.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(error.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(0f, -62f), new Vector2(0f, -8f));
             return;
         }
 
-        const float rowH = 48f, gap = 6f;
-        int shown = Mathf.Min(browsedLobbies.Count, 8);
-        for (int i = 0; i < shown; i++)
+        var filtered = new List<ISessionInfo>();
+        string query = (lobbyBrowserFilter ?? "").Trim();
+        foreach (var info in browsedLobbies)
+            if (info != null && (query.Length == 0
+                || (info.Name ?? "").IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || LobbyManager.GetOwnerName(info).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || LobbyManager.GetCustomRules(info).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0
+                || LobbyPublicLeaderSearchText(info).IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0))
+                filtered.Add(info);
+
+        if (filtered.Count == 0)
         {
-            var info = browsedLobbies[i];
-            var row = PanelObject("Lobby Row " + i, listArea, new Color32(14, 22, 32, 180));
+            var empty = TextObject("Empty", listArea,
+                lobbyBusy ? "Searching..." : browsedLobbies.Count == 0
+                    ? "No public lobbies right now. Try a join code or host your own room."
+                    : "No rooms match that search.",
+                12, Muted, TextAnchor.UpperLeft, monoFont);
+            empty.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(empty.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(0f, -62f), new Vector2(0f, -8f));
+            return;
+        }
+
+        const float rowH = 82f, gap = 7f;
+        var listContent = MakeMenuScroll(listArea, filtered.Count * (rowH + gap) - gap + 8f);
+        var listScroll = listArea.GetComponent<ScrollRect>();
+        listScroll.verticalNormalizedPosition = lobbyBrowserScroll;
+        listScroll.onValueChanged.AddListener(v => lobbyBrowserScroll = v.y);
+        for (int i = 0; i < filtered.Count; i++)
+        {
+            var info = filtered[i];
+            var row = PanelObject("Lobby Row " + i, listContent, new Color32(14, 22, 32, 180));
             row.anchorMin = new Vector2(0f, 1f);
             row.anchorMax = new Vector2(1f, 1f);
             row.pivot = new Vector2(0.5f, 1f);
             row.sizeDelta = new Vector2(0f, rowH);
             row.anchoredPosition = new Vector2(0f, -(i * (rowH + gap)));
             Round(row);
+            AddRoundedCardBorder(row, MenuB, 1f);
 
             var name = TextObject("Name", row, string.IsNullOrEmpty(info.Name) ? "Untitled Lobby" : info.Name,
                 13, Ink, TextAnchor.UpperLeft);
             name.fontStyle = FontStyle.Bold;
-            Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.62f, 1f), new Vector2(10f, 0f), new Vector2(-4f, -4f));
+            Stretch(name.rectTransform, new Vector2(0f, 0.62f), new Vector2(0.75f, 1f),
+                new Vector2(10f, 0f), new Vector2(-4f, -4f));
 
             int playerCount = Mathf.Max(0, info.MaxPlayers - info.AvailableSlots);
-            var sub = TextObject("Sub", row, $"{LobbyManager.GetOwnerName(info)}  ·  {playerCount}/{info.MaxPlayers}",
+            var sub = TextObject("Sub", row,
+                $"{LobbyManager.GetOwnerName(info)}  ·  {playerCount}/{info.MaxPlayers}  ·  {LobbyPublicLeaderLabel(info)}",
                 10, Muted, TextAnchor.LowerLeft, monoFont);
-            Stretch(sub.rectTransform, new Vector2(0f, 0f), new Vector2(0.62f, 0.5f), new Vector2(10f, 4f), new Vector2(-4f, 0f));
+            Stretch(sub.rectTransform, new Vector2(0f, 0.38f), new Vector2(0.75f, 0.62f),
+                new Vector2(10f, 0f), new Vector2(-4f, 0f));
+
+            var rulesPreview = TextObject("Rules Preview", row, LobbyManager.GetCustomRules(info),
+                9, Accent2, TextAnchor.UpperLeft, monoFont);
+            rulesPreview.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(rulesPreview.rectTransform, Vector2.zero, new Vector2(0.75f, 0.38f),
+                new Vector2(10f, 4f), new Vector2(-4f, 0f));
 
             bool full = info.AvailableSlots <= 0;
             var joinHolder = PanelObject("Join Holder", row, new Color(0, 0, 0, 0));
-            Stretch(joinHolder, new Vector2(0.62f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-8f, 0f));
+            Stretch(joinHolder, new Vector2(0.76f, 0f), new Vector2(1f, 1f),
+                Vector2.zero, new Vector2(-8f, 0f));
             var jhlg = joinHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
             jhlg.childAlignment = TextAnchor.MiddleRight;
             jhlg.childControlWidth = false;
             jhlg.childControlHeight = false;
-            AddButton(joinHolder, full ? "Full" : "Join", () => JoinLobbyClicked(info), !full && !lobbyBusy, false);
+            AddButton(joinHolder, full ? "Full" : "Join", () => JoinLobbyClicked(info),
+                !full && !lobbyBusy, false, false, 96f, 34f);
         }
+    }
+
+    private static string LobbyPublicLeaderSearchText(ISessionInfo info)
+    {
+        string id = LobbyManager.GetHostLeaderId(info);
+        if (string.IsNullOrWhiteSpace(id)) return "";
+        var card = OnePieceTcg.Engine.CardData.GetCard(id);
+        return id + " " + (string.Equals(card?.Type, "leader", StringComparison.OrdinalIgnoreCase)
+            ? card.Name : "");
+    }
+
+    private static string LobbyPublicLeaderLabel(ISessionInfo info)
+    {
+        string id = LobbyManager.GetHostLeaderId(info);
+        if (string.IsNullOrWhiteSpace(id)) return "Leader not selected";
+        var card = OnePieceTcg.Engine.CardData.GetCard(id);
+        return string.Equals(card?.Type, "leader", StringComparison.OrdinalIgnoreCase)
+            ? $"Leader {card.Name} ({id})" : $"Leader {id}";
     }
 
     private void BuildLobbyWaitingRoom(RectTransform stage, ISession session)
     {
-        const float titleH = 60f;
+        const float titleH = 70f;
 
         var titleRow = PanelObject("Waiting Title Row", stage, new Color(0, 0, 0, 0));
         Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
         var titleText = TextObject("Title", titleRow,
-            string.IsNullOrEmpty(session.Name) ? "Lobby" : session.Name, 26, Ink, TextAnchor.MiddleLeft);
+            string.IsNullOrEmpty(session.Name) ? "Your table" : session.Name, 28, Ink, TextAnchor.MiddleLeft);
         titleText.fontStyle = FontStyle.Bold;
-        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.6f, 1f), new Vector2(4f, 0f), Vector2.zero);
+        Stretch(titleText.rectTransform, new Vector2(0f, 0.38f), new Vector2(0.72f, 1f), new Vector2(4f, 0f), Vector2.zero);
+        var titleSub = TextObject("Subtitle", titleRow,
+            "YOUR TABLE  /  SET UP THE MATCH", 10, Accent2, TextAnchor.MiddleLeft, monoFont);
+        titleSub.fontStyle = FontStyle.Bold;
+        Stretch(titleSub.rectTransform, Vector2.zero, new Vector2(0.72f, 0.42f), new Vector2(4f, 0f), Vector2.zero);
 
-        var panel = PanelObject("Waiting Panel", stage, new Color32(8, 16, 24, 153));
+        var panel = PanelObject("Waiting Panel", stage, new Color32(8, 22, 31, 245));
         Stretch(panel, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
         Round(panel);
         AddRoundedCardBorder(panel, MenuB, 1f);
 
+        var shell = panel;
         string vis = session.IsPrivate ? "Private" : "Public";
-        string info = $"{vis}  ·  Owner: {LobbyManager.GetOwnerName(session)}  ·  {session.PlayerCount}/{session.MaxPlayers} players";
-        var infoText = TextObject("Info", panel, info, 13, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(infoText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -40f), new Vector2(-16f, -16f));
+        var roomBar = PanelObject("Room Details", shell, new Color32(13, 34, 45, 255));
+        Stretch(roomBar, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -94f), new Vector2(-16f, -14f));
+        Round(roomBar);
+        AddRoundedCardBorder(roomBar, ZoneBorder, 1f);
+        var infoText = TextObject("Room Info", roomBar,
+            $"{vis.ToUpperInvariant()} ROOM   ·   HOST {LobbyManager.GetOwnerName(session)}   ·   {session.PlayerCount}/{session.MaxPlayers} PLAYERS",
+            11, Accent2, TextAnchor.MiddleLeft, monoFont);
+        infoText.fontStyle = FontStyle.Bold;
+        Stretch(infoText.rectTransform, new Vector2(0f, 0.48f), new Vector2(0.72f, 1f),
+            new Vector2(18f, 0f), Vector2.zero);
+        var codeText = TextObject("Join Code", roomBar,
+            string.IsNullOrEmpty(session.Code) ? "Share an invite to bring in a friend" : "JOIN CODE  " + session.Code,
+            12, string.IsNullOrEmpty(session.Code) ? Muted : Ink, TextAnchor.MiddleLeft, monoFont);
+        codeText.fontStyle = FontStyle.Bold;
+        Stretch(codeText.rectTransform, Vector2.zero, new Vector2(0.72f, 0.54f),
+            new Vector2(18f, 0f), Vector2.zero);
+        var roomActions = PanelObject("Room Actions", roomBar, Color.clear);
+        Stretch(roomActions, new Vector2(0.61f, 0f), Vector2.one,
+            Vector2.zero, new Vector2(-12f, 0f));
+        var roomActionsLayout = roomActions.gameObject.AddComponent<HorizontalLayoutGroup>();
+        roomActionsLayout.spacing = 8f;
+        roomActionsLayout.childAlignment = TextAnchor.MiddleRight;
+        roomActionsLayout.childControlWidth = false;
+        roomActionsLayout.childControlHeight = false;
+        if (session.IsHost && session.PlayerCount < session.MaxPlayers)
+            AddButton(roomActions, "Invite Friend", () => ShowWaitingInvitePicker(shell, session),
+                !lobbyBusy, false, false, 126f, 34f);
+        if (!string.IsNullOrEmpty(session.Code))
+            AddButton(roomActions, "Copy Code", () => GUIUtility.systemCopyBuffer = session.Code,
+                true, false, false, 112f, 34f);
 
-        float y = -70f;
-        // Join codes work for any session regardless of public/private - private just
-        // means it won't also show up in the public browse list.
-        if (session.IsHost && !string.IsNullOrEmpty(session.Code))
-        {
-            var codeLabel = TextObject("Code Label", panel, $"Join code: {session.Code}", 14, Accent, TextAnchor.UpperLeft, monoFont);
-            codeLabel.fontStyle = FontStyle.Bold;
-            Stretch(codeLabel.rectTransform, new Vector2(0f, 1f), new Vector2(0.7f, 1f), new Vector2(16f, y - 26f), new Vector2(-16f, y));
-
-            var copyHolder = PanelObject("Copy Holder", panel, new Color(0, 0, 0, 0));
-            Stretch(copyHolder, new Vector2(0.7f, 1f), new Vector2(1f, 1f), new Vector2(0f, y - 30f), new Vector2(-16f, y + 4f));
-            AddButton(copyHolder, "Copy Code", () => GUIUtility.systemCopyBuffer = session.Code, true, false);
-            y -= 40f;
-        }
-
-        var playersHeader = TextObject("Players Header", panel, "PLAYERS", 11, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(playersHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 20f), new Vector2(-16f, y));
-        y -= 26f;
-        foreach (var p in session.Players)
-        {
-            string role = p.Id == session.Host ? "Host" : "Guest";
-            string who = p.Id == session.CurrentPlayer?.Id ? $"{role} (You)" : role;
-            var pText = TextObject("Player " + p.Id, panel, who, 12, Ink, TextAnchor.UpperLeft);
-            Stretch(pText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 20f), new Vector2(-16f, y));
-            y -= 24f;
-        }
-
-        // session.PlayerCount is the LOBBY's view (session/matchmaking membership) - it can say
-        // 2/2 before Netcode's own Relay connection between host and guest has actually finished
-        // establishing. Gate Start Match on the real Netcode connection too, not just the lobby,
-        // so a click can't fire before there's an actual peer to send the match-start message to.
-        // ── Deck selection ── each player picks the deck they'll bring; the pick
-        // is shared with the peer (OptcgDeckShare) and both decks ride inside the
-        // match-start payload. No pick = that seat's starter default.
+        // Keep both seats visible while the editable rules scroll underneath.
+        // A deck pick remains the same network action as before; the card art is
+        // only a presentation of the selected leader and never changes readiness.
         SubscribeToSessionEvents(session);   // idempotent; re-attaches after a picker rebuild
         bool sealedLobby = lobbyCustomGame == "sealed";
         var myDeck = DeckStore.Get(lobbyDeckId);
         string myChoice = sealedLobby
-            ? (string.IsNullOrEmpty(lobbySealedLeader) ? "not selected" : OnePieceTcg.Engine.CardData.GetCard(lobbySealedLeader)?.Name ?? lobbySealedLeader)
-            : (myDeck != null ? myDeck.name
-                : (session.IsHost ? "Straw Hat Crew [ST01] (default)" : "Worst Generation [ST02] (default)"));
-        var myDeckText = TextObject("My Deck", panel,
-            $"YOUR {(sealedLobby ? "LEADER" : "DECK")}: {myChoice}", 12, Ink, TextAnchor.UpperLeft, monoFont);
-        Stretch(myDeckText.rectTransform, new Vector2(0f, 1f), new Vector2(0.6f, 1f), new Vector2(16f, y - 24f), new Vector2(-8f, y));
-        var pickHolder = PanelObject("Pick Deck Holder", panel, new Color(0, 0, 0, 0));
-        Stretch(pickHolder, new Vector2(0.6f, 1f), Vector2.one, new Vector2(0f, y - 30f), new Vector2(-16f, y + 4f));
-        AddButton(pickHolder, sealedLobby ? "Select Leader" : "Select Deck",
-            sealedLobby ? PickLobbySealedLeader : PickLobbyDeck, !lobbyBusy, false);
-        y -= 34f;
+            ? (string.IsNullOrEmpty(lobbySealedLeader) ? "Choose a leader" : OnePieceTcg.Engine.CardData.GetCard(lobbySealedLeader)?.Name ?? lobbySealedLeader)
+            : (myDeck != null ? myDeck.name : "Choose a deck");
         string peerChoice = sealedLobby
-            ? (string.IsNullOrEmpty(lobbyPeerSealedLeader) ? "not selected" : OnePieceTcg.Engine.CardData.GetCard(lobbyPeerSealedLeader)?.Name ?? lobbyPeerSealedLeader)
-            : (lobbyPeerDeck != null ? lobbyPeerDeck.name : "not chosen yet (starter default)");
-        var peerDeckText = TextObject("Peer Deck", panel,
-            $"OPPONENT {(sealedLobby ? "LEADER" : "DECK")}: {peerChoice}", 11, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(peerDeckText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 22f), new Vector2(-16f, y));
-        y -= 30f;
+            ? (string.IsNullOrEmpty(lobbyPeerSealedLeader) ? "Leader not selected" : OnePieceTcg.Engine.CardData.GetCard(lobbyPeerSealedLeader)?.Name ?? lobbyPeerSealedLeader)
+            : (lobbyPeerDeck != null ? lobbyPeerDeck.name : "Deck not selected");
+        bool peerPresent = session.Players.Any(p => p.Id != session.CurrentPlayer?.Id);
+        string peerName = !peerPresent ? "Waiting for a player"
+            : session.IsHost ? (string.IsNullOrWhiteSpace(lobbyPeerName) ? "Connecting player..." : lobbyPeerName)
+            : LobbyManager.GetOwnerName(session);
+        var seats = PanelObject("Player Seats", shell, Color.clear);
+        Stretch(seats, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -450f), new Vector2(-16f, -106f));
+        var leftSeat = PanelObject("Your Seat", seats, new Color32(13, 36, 47, 255));
+        Stretch(leftSeat, Vector2.zero, new Vector2(0.5f, 1f),
+            Vector2.zero, new Vector2(-6f, 0f));
+        BuildWaitingSeatPanel(leftSeat, AccountManager.DisplayName, true, true, localReady,
+            session.IsHost ? "HOST" : "GUEST", EffectiveProfileIconId(), myChoice,
+            sealedLobby ? lobbySealedLeader : myDeck?.leaderId,
+            sealedLobby, sealedLobby ? !string.IsNullOrEmpty(lobbySealedLeader) : !string.IsNullOrEmpty(lobbyDeckId),
+            sealedLobby ? (UnityEngine.Events.UnityAction)PickLobbySealedLeader : PickLobbyDeck);
+        var rightSeat = PanelObject("Opponent Seat", seats, new Color32(12, 29, 40, 255));
+        Stretch(rightSeat, new Vector2(0.5f, 0f), Vector2.one,
+            new Vector2(6f, 0f), Vector2.zero);
+        BuildWaitingSeatPanel(rightSeat, peerName, false, peerPresent, peerReady,
+            session.IsHost ? "GUEST" : "HOST", lobbyPeerIcon ?? lobbyPeerDeck?.profileIcon,
+            peerPresent ? peerChoice : "Open seat",
+            sealedLobby ? lobbyPeerSealedLeader : lobbyPeerDeck?.leader,
+            sealedLobby, peerPresent && (sealedLobby ? !string.IsNullOrEmpty(lobbyPeerSealedLeader) : lobbyPeerDeck != null),
+            null);
 
+        // Rules stay scrollable when Sealed or Blitz exposes extra settings; the
+        // player identities, join code and actions remain in view at all times.
+        var waitingArea = PanelObject("Waiting Rules Scroll", shell, new Color32(11, 28, 39, 245));
+        Stretch(waitingArea, Vector2.zero, Vector2.one,
+            new Vector2(16f, 144f), new Vector2(-16f, -462f));
+        Round(waitingArea);
+        AddRoundedCardBorder(waitingArea, ZoneBorder, 1f);
+        bool canEditRules = session.IsHost && lobbyMode == "custom";
+        int leftRuleRows = canEditRules ? (sealedLobby ? 1 : 3) : 0;
+        int rightRuleRows = canEditRules ? (lobbyTimingMode == "blitz" ? 3 : 2) : 0;
+        int ruleRows = Mathf.Max(leftRuleRows, rightRuleRows);
+        panel = MakeMenuScroll(waitingArea, canEditRules ? 138f + ruleRows * 40f : 152f);
+        var waitingScroll = waitingArea.GetComponent<ScrollRect>();
+        waitingScroll.verticalNormalizedPosition = lobbyWaitingScroll;
+        waitingScroll.onValueChanged.AddListener(v => lobbyWaitingScroll = v.y);
         // ── Match rules — the HOST edits them right here ────────────────────────────────────
         // Inviting a friend creates the session first and lands both players in this waiting room,
         // so the host never passes through the create-lobby panel where these normally live. The
         // same option builders are reused, and every change re-broadcasts to the guest, so an
         // invited game is as configurable as one hosted from the browser.
-        bool canEditRules = session.IsHost && lobbyMode == "custom";
         var rulesHeader = TextObject("Rules Header", panel,
-            canEditRules ? "MATCH RULES  ·  tap to change" : "MATCH RULES", 11, Muted, TextAnchor.UpperLeft, monoFont);
-        Stretch(rulesHeader.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 20f), new Vector2(-16f, y));
-        y -= 24f;
+            canEditRules ? "MATCH RULES   ·   HOST CAN EDIT" : "MATCH RULES", 11, Accent2, TextAnchor.UpperLeft, monoFont);
+        Stretch(rulesHeader.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, -32f), new Vector2(-16f, -12f));
 
         if (canEditRules)
         {
-            RectTransform RuleRow(string name, float h)
+            // Two compact columns keep each rule's label and choices together.
+            // The old full-width rows stretched their tiles across the room.
+            RectTransform RuleRow(string name, string label, bool right, int index)
             {
                 var row = PanelObject(name, panel, new Color(0, 0, 0, 0));
-                Stretch(row, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, y - h), new Vector2(-16f, y));
+                float top = -46f - index * 40f;
+                Stretch(row, new Vector2(right ? 0.5f : 0f, 1f), new Vector2(right ? 1f : 0.5f, 1f),
+                    new Vector2(right ? 12f : 16f, top - 30f), new Vector2(right ? -16f : -12f, top));
                 var hlg = row.gameObject.AddComponent<HorizontalLayoutGroup>();
                 hlg.spacing = 8f; hlg.childAlignment = TextAnchor.MiddleLeft;
-                hlg.childControlWidth = false; hlg.childControlHeight = false;
-                y -= h + 6f;
+                hlg.childControlWidth = true; hlg.childControlHeight = true;
+                hlg.childForceExpandWidth = false; hlg.childForceExpandHeight = false;
+                var labelText = TextObject("Label", row, label, 10, Muted,
+                    TextAnchor.MiddleLeft, monoFont);
+                SetPreferred(labelText.rectTransform, new Vector2(118f, 30f));
                 return row;
             }
 
-            var gameRow = RuleRow("WR Game Type Row", 30f);
-            BuildCustomGameOption(gameRow, "Constructed", "constructed");
-            BuildCustomGameOption(gameRow, "Sealed", "sealed");
-
+            int left = 0, right = 0;
             if (sealedLobby)
             {
-                var setRow = RuleRow("WR Sealed Set Row", 30f);
+                var setRow = RuleRow("WR Sealed Set Row", "SEALED PRODUCT", false, left++);
                 AddButton(setRow, "SET: " + lobbySealedSet + "  (CHANGE)", PickLobbySealedSet, true, false,
                     false, 190f, 30f);
             }
+            else
+            {
+                var gameRow = RuleRow("WR Game Type Row", "GAME TYPE", false, left++);
+                BuildCustomGameOption(gameRow, "Constructed", "constructed");
+                BuildCustomGameOption(gameRow, "Sealed", "sealed");
+                var fmtRow = RuleRow("WR Format Row", "CARD FORMAT", false, left++);
+                BuildFormatOption(fmtRow, "Standard", "standard");
+                BuildFormatOption(fmtRow, "Extra", "extra");
+                var forgRow = RuleRow("WR Forgiveness Row", "REWIND", false, left++);
+                BuildForgivenessOption(forgRow, "Off", false);
+                BuildForgivenessOption(forgRow, "Forgiveness", true);
+            }
 
-            var fmtRow = RuleRow("WR Format Row", 30f);
-            BuildFormatOption(fmtRow, "Standard", "standard");
-            BuildFormatOption(fmtRow, "Extra", "extra");
-
-            var forgRow = RuleRow("WR Forgiveness Row", 30f);
-            BuildForgivenessOption(forgRow, "Standard", false);
-            BuildForgivenessOption(forgRow, "Forgiveness", true);
-
-            var timeRow = RuleRow("WR Timing Row", 30f);
+            var timeRow = RuleRow("WR Timing Row", "CLOCK", true, right++);
             BuildTimingOption(timeRow, "Untimed", "standard");
-            BuildTimingOption(timeRow, "Ranked", "ranked");
+            BuildTimingOption(timeRow, "Shared", "ranked");
             BuildTimingOption(timeRow, "Blitz", "blitz");
 
             if (lobbyTimingMode == "blitz")
             {
-                var presetRow = RuleRow("WR Blitz Row", 28f);
+                var presetRow = RuleRow("WR Blitz Row", "BLITZ PRESET", true, right++);
                 BuildBlitzPresetOption(presetRow, "Bullet", "bullet", 84f);
                 BuildBlitzPresetOption(presetRow, "Blitz", "blitz", 84f);
                 BuildBlitzPresetOption(presetRow, "Rapid", "rapid", 84f);
             }
 
-            var banRow = RuleRow("WR Ban Row", 30f);
-            BuildIgnoreBansOption(banRow);
-            y -= 4f;
+            if (sealedLobby)
+            {
+                var forgRow = RuleRow("WR Forgiveness Row", "REWIND", true, right++);
+                BuildForgivenessOption(forgRow, "Off", false);
+                BuildForgivenessOption(forgRow, "Forgiveness", true);
+            }
+            else
+            {
+                var banRow = RuleRow("WR Ban Row", "BAN LIST", true, right++);
+                BuildIgnoreBansOption(banRow);
+            }
         }
+        float summaryTop = canEditRules ? -50f - ruleRows * 40f : -48f;
         string fmtName = (lobbyMode == "custom" && lobbyFormat == "extra") ? "Extra Regulation (all blocks)" : "Standard (Blocks 2–5)";
         string timingName = session.IsHost ? LobbyTimingSummary() : lobbyTimingSummary;
-        string rules = (sealedLobby ? $"Mode: SEALED     Set: {lobbySealedSet}     " : "Mode: CONSTRUCTED     ")
-            + $"Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}"
-            + (lobbyIgnoreBans ? "     Ban list: IGNORED" : "");
+        string rules = sealedLobby
+            ? $"Mode: SEALED     Set: {lobbySealedSet}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}"
+            : $"Mode: CONSTRUCTED     Format: {fmtName}     Rewind (Forgiveness): {(lobbyForgiveness ? "On" : "Off")}     Timing: {timingName}"
+                + (lobbyIgnoreBans ? "     Ban list: IGNORED" : "");
         var rulesText = TextObject("Rules", panel, rules, 11, Accent2, TextAnchor.UpperLeft, monoFont);
         rulesText.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(rulesText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 34f), new Vector2(-16f, y));
-        y -= 40f;
-        string banned = string.Join(", ", OnePieceTcg.Engine.FormatLegality.BannedCards.Select(kv => $"{kv.Value} ({kv.Key})"));
-        var banText = TextObject("BanNote", panel, "Ban list (both formats): " + banned + " · plus banned pairs.",
-            9, Muted, TextAnchor.UpperLeft, monoFont);
-        banText.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(banText.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, y - 30f), new Vector2(-16f, y));
-        y -= 34f;
+        Stretch(rulesText.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(16f, summaryTop - 36f), new Vector2(-16f, summaryTop));
+        if (!sealedLobby)
+        {
+            string banned = string.Join(", ", OnePieceTcg.Engine.FormatLegality.BannedCards.Select(kv => $"{kv.Value} ({kv.Key})"));
+            var banText = TextObject("BanNote", panel, "Ban list (both formats): " + banned + " · plus banned pairs.",
+                10, Muted, TextAnchor.UpperLeft, monoFont);
+            banText.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(banText.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(16f, summaryTop - 78f), new Vector2(-16f, summaryTop - 42f));
+        }
 
         bool bothPresent = session.PlayerCount >= session.MaxPlayers;
         bool networkReady = MatchNetworkSync.IsPeerConnected;
@@ -6372,29 +7268,242 @@ public partial class MainMenuManager : MonoBehaviour
         bool deckPicked = sealedLobby ? !string.IsNullOrEmpty(lobbySealedLeader) : lobbyDeckId != null;
 
         string noteMessage;
-        if (!bothPresent) noteMessage = "Waiting for another player to join...";
+        if (!bothPresent) noteMessage = !string.IsNullOrEmpty(lobbyInvitePlayerId) && lobbyBusy && !lobbyInviteSent
+            ? $"Lobby created. Sending invite to {lobbyInviteUsername}..."
+            : lobbyInviteSent ? $"Invite sent to {lobbyInviteUsername}. Waiting for them to join..."
+            : "Waiting for another player to join...";
         else if (!connected) noteMessage = "Both players are here. Finishing connection...";
         else if (!deckPicked) noteMessage = $"Select your {(sealedLobby ? "leader" : "deck")}, then hit Ready.";
         else noteMessage = $"You: {(localReady ? "READY ✓" : "not ready")}    ·    Opponent: {(peerReady ? "READY ✓" : "not ready")}"
             + (sealedLobby ? $"    ·    Agree on {lobbySealedSet}; both Ready starts pack opening."
                            : "    ·    The match starts automatically when both are ready.");
-        var noteText = TextObject("Note", panel, noteMessage,
+        var footer = PanelObject("Waiting Footer", shell, new Color32(10, 29, 40, 255));
+        Stretch(footer, Vector2.zero, new Vector2(1f, 0f),
+            new Vector2(16f, 12f), new Vector2(-16f, 136f));
+        Round(footer);
+        AddRoundedCardBorder(footer, ZoneBorder, 1f);
+        if (!string.IsNullOrEmpty(lobbyError))
+        {
+            var err = TextObject("Waiting Error", shell, lobbyError, 10, RedAccent,
+                TextAnchor.UpperLeft, monoFont);
+            err.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(err.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+                new Vector2(16f, 100f), new Vector2(-16f, 140f));
+        }
+        var noteText = TextObject("Note", footer, noteMessage,
             11, connected && localReady && peerReady ? GoodGreen : Muted, TextAnchor.UpperLeft, monoFont);
         noteText.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(noteText.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 56f), new Vector2(-16f, 96f));
+        Stretch(noteText.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(20f, 48f), new Vector2(-20f, 88f));
 
-        var actionRow = PanelObject("Action Row", panel, new Color(0, 0, 0, 0));
-        Stretch(actionRow, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(16f, 16f), new Vector2(-16f, 50f));
+        var actionRow = PanelObject("Action Row", footer, new Color(0, 0, 0, 0));
+        Stretch(actionRow, new Vector2(0f, 0f), new Vector2(1f, 0f),
+            new Vector2(20f, 12f), new Vector2(-20f, 46f));
         var ahlg = actionRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         ahlg.spacing = 8f;
         ahlg.childAlignment = TextAnchor.MiddleLeft;
         ahlg.childControlWidth = false;
         ahlg.childControlHeight = false;
-        AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false);
+        AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false, false, 132f, 34f);
         // Ready / Cancel — both players. Enabled once connected and a deck is picked. The host auto-commits the
         // match the instant both are ready (TryLobbyAutoStart); either player can Cancel to un-ready before then.
-        AddButton(actionRow, localReady ? "Cancel Ready" : "Ready",
-            ToggleLobbyReady, connected && deckPicked && !lobbyBusy, false);
+        AddButton(actionRow, localReady ? "Cancel Ready" : "Ready to Play",
+            ToggleLobbyReady, connected && deckPicked && !lobbyBusy, false, false, 150f, 34f);
+        if (session.IsHost && !bothPresent && lobbyInviteFailed && !string.IsNullOrEmpty(lobbyInvitePlayerId))
+            AddButton(actionRow, "Retry Invite", RetryLobbyInviteClicked, !lobbyBusy,
+                false, false, 138f, 34f);
+    }
+
+    // Waiting-room seats deliberately use the same cropped card illustration,
+    // masked full leader card and face icon language as the new Play portals.
+    // Only confirmed peer deck/profile data is shown; an empty seat stays empty.
+    private void BuildWaitingSeatPanel(RectTransform seat, string playerName, bool isMe,
+        bool occupied, bool ready, string role, string profileIcon, string deckName,
+        string leaderId, bool sealedLobby, bool selected,
+        UnityEngine.Events.UnityAction onPick)
+    {
+        Round(seat);
+        AddRoundedCardBorder(seat, isMe ? Accent : ZoneBorder, 1f);
+
+        var art = occupied && !string.IsNullOrEmpty(leaderId) ? LoadArt(leaderId) : null;
+        AddFadedLeaderIllustration(seat, art, "Seat Illustration",
+            new Vector2(0.36f, 0.02f), new Vector2(0.99f, 0.98f), 0.12f, -3f);
+        var scrim = PanelObject("Seat Text Gradient", seat, new Color32(5, 19, 28, 206));
+        Stretch(scrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        scrim.GetComponent<Image>().sprite = GetHGradientSprite();
+        scrim.GetComponent<Image>().raycastTarget = false;
+
+        BuildWaitingProfileIcon(seat, profileIcon, playerName, occupied);
+        var seatLabel = TextObject("Seat Label", seat,
+            isMe ? "YOUR SEAT  ·  " + role : "OPPONENT  ·  " + role,
+            10, Accent2, TextAnchor.MiddleLeft, monoFont);
+        seatLabel.fontStyle = FontStyle.Bold;
+        Stretch(seatLabel.rectTransform, new Vector2(0f, 1f), new Vector2(0.70f, 1f),
+            new Vector2(92f, -36f), new Vector2(0f, -14f));
+        var name = TextObject("Player Name", seat,
+            string.IsNullOrWhiteSpace(playerName) ? (isMe ? "You" : "Waiting for a player") : playerName,
+            20, Ink, TextAnchor.MiddleLeft);
+        name.fontStyle = FontStyle.Bold;
+        Stretch(name.rectTransform, new Vector2(0f, 1f), new Vector2(0.70f, 1f),
+            new Vector2(92f, -68f), new Vector2(0f, -35f));
+        var status = TextObject("Ready State", seat,
+            !occupied ? "○  OPEN SEAT" : ready ? "●  READY TO PLAY" : "○  NOT READY",
+            11, ready ? GoodGreen : Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(status.rectTransform, new Vector2(0f, 1f), new Vector2(0.64f, 1f),
+            new Vector2(20f, -105f), new Vector2(0f, -81f));
+
+        var deckLabel = TextObject("Deck Label", seat,
+            sealedLobby ? "SELECTED LEADER" : "SELECTED DECK", 10,
+            Accent2, TextAnchor.MiddleLeft, monoFont);
+        deckLabel.fontStyle = FontStyle.Bold;
+        Stretch(deckLabel.rectTransform, new Vector2(0f, 0f), new Vector2(0.67f, 0f),
+            new Vector2(20f, 102f), new Vector2(0f, 122f));
+        var deck = TextObject("Deck Name", seat, deckName, 17,
+            occupied ? Ink : Muted, TextAnchor.MiddleLeft);
+        deck.fontStyle = FontStyle.Bold;
+        deck.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(deck.rectTransform, new Vector2(0f, 0f), new Vector2(0.67f, 0f),
+            new Vector2(20f, 56f), new Vector2(0f, 102f));
+        if (isMe && onPick != null)
+        {
+            var pick = PanelObject("Pick Deck", seat, Color.clear);
+            // Align the control directly under the deck/leader name.
+            pick.anchorMin = pick.anchorMax = Vector2.zero;
+            pick.pivot = Vector2.zero;
+            pick.sizeDelta = new Vector2(150f, 34f);
+            pick.anchoredPosition = new Vector2(20f, 16f);
+            AddButton(pick, selected ? (sealedLobby ? "Change Leader" : "Change Deck")
+                    : (sealedLobby ? "Select Leader" : "Select Deck"),
+                onPick, !lobbyBusy, false, true);
+        }
+        else if (occupied && !selected)
+        {
+            var waiting = TextObject("Deck Pending", seat,
+                "Waiting for their selection", 10, Muted, TextAnchor.MiddleLeft, monoFont);
+            Stretch(waiting.rectTransform, Vector2.zero, new Vector2(0.65f, 0f),
+                new Vector2(20f, 18f), new Vector2(0f, 42f));
+        }
+
+        var card = PanelObject("Leader Card", seat, new Color32(5, 15, 24, 255));
+        card.anchorMin = card.anchorMax = new Vector2(1f, 0.5f);
+        card.pivot = new Vector2(1f, 0.5f);
+        card.sizeDelta = new Vector2(168f, 235f);
+        card.anchoredPosition = new Vector2(-20f, -14f);
+        var cardImage = card.GetComponent<Image>();
+        cardImage.raycastTarget = false;
+        if (art != null)
+        {
+            cardImage.sprite = art;
+            cardImage.color = Color.white;
+            cardImage.preserveAspect = false;
+        }
+        RoundedCardMask.ApplyTo(cardImage);
+        if (art == null)
+        {
+            var symbol = TextObject("Empty Leader Card", card, "◇", 48, occupied ? Accent : Muted,
+                TextAnchor.MiddleCenter);
+            Stretch(symbol.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+    }
+
+    private void BuildWaitingProfileIcon(RectTransform seat, string iconId, string playerName, bool occupied)
+    {
+        const float size = 62f;
+        var circle = PanelObject("Profile Picture", seat, new Color32(15, 39, 51, 255));
+        circle.anchorMin = circle.anchorMax = new Vector2(0f, 1f);
+        circle.pivot = new Vector2(0f, 1f);
+        circle.sizeDelta = new Vector2(size, size);
+        circle.anchoredPosition = new Vector2(20f, -16f);
+        SetAvatarCircle(circle, GetAvatarCircleSprite());
+        var mask = circle.gameObject.AddComponent<Mask>();
+        mask.showMaskGraphic = true;
+        if (!string.IsNullOrEmpty(iconId)) { EnsureMenuCardLibrary(); EnsureMenuFaceData(); }
+        var iconCard = MenuCard(iconId);
+        if (iconCard != null) BuildCircleFaceArt(circle, iconCard, size);
+        else
+        {
+            string initial = !occupied ? "◇" : string.IsNullOrWhiteSpace(playerName)
+                ? "?" : playerName.Trim().Substring(0, 1).ToUpperInvariant();
+            var fallback = TextObject("Initial", circle, initial, 24, Ink, TextAnchor.MiddleCenter);
+            fallback.fontStyle = FontStyle.Bold;
+            Stretch(fallback.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+        AddAvatarEdgeRing(circle, ZoneBorder);
+    }
+
+    private void ShowWaitingInvitePicker(RectTransform shell, ISession session)
+    {
+        var overlay = PanelObject("Waiting Invite Overlay", shell, new Color(0f, 0f, 0f, 0.64f));
+        Stretch(overlay, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        overlay.gameObject.AddComponent<Button>().onClick.AddListener(() => Destroy(overlay.gameObject));
+        var modal = PanelObject("Invite Friends", overlay, new Color32(13, 34, 45, 255));
+        modal.anchorMin = modal.anchorMax = new Vector2(0.5f, 0.5f);
+        modal.pivot = new Vector2(0.5f, 0.5f);
+        modal.sizeDelta = new Vector2(410f, 350f);
+        modal.anchoredPosition = Vector2.zero;
+        Round(modal);
+        AddRoundedCardBorder(modal, Accent, 1f);
+        modal.gameObject.AddComponent<Button>(); // absorb clicks inside the modal
+        var heading = TextObject("Heading", modal, "Invite a friend", 22, Ink, TextAnchor.MiddleLeft);
+        heading.fontStyle = FontStyle.Bold;
+        Stretch(heading.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(22f, -56f), new Vector2(-22f, -12f));
+        var hint = TextObject("Hint", modal, "Send an invite to this room.", 12, Muted, TextAnchor.MiddleLeft);
+        Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(22f, -80f), new Vector2(-22f, -54f));
+        var list = PanelObject("Friends", modal, Color.clear);
+        Stretch(list, Vector2.zero, Vector2.one,
+            new Vector2(20f, 64f), new Vector2(-20f, -94f));
+        var online = friendsList.Where(f => f.Online).ToArray();
+        if (online.Length == 0)
+        {
+            var none = TextObject("No Friends Online", list,
+                "No friends online right now. Share the room code instead.",
+                12, Muted, TextAnchor.MiddleCenter);
+            none.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(none.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+        var listContent = online.Length > 0 ? MakeMenuScroll(list, online.Length * 54f + 4f) : list;
+        for (int i = 0; i < online.Length; i++)
+        {
+            var friend = online[i];
+            var row = PanelObject("Friend " + friend.PlayerId, listContent, new Color32(18, 45, 57, 255));
+            Stretch(row, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(0f, -51f - i * 54f), new Vector2(0f, -4f - i * 54f));
+            Round(row);
+            var friendName = TextObject("Name", row, friend.Username, 13, Ink, TextAnchor.MiddleLeft);
+            friendName.fontStyle = FontStyle.Bold;
+            Stretch(friendName.rectTransform, Vector2.zero, new Vector2(0.66f, 1f),
+                new Vector2(12f, 0f), Vector2.zero);
+            var buttonHolder = PanelObject("Action", row, Color.clear);
+            Stretch(buttonHolder, new Vector2(0.66f, 0f), Vector2.one,
+                Vector2.zero, new Vector2(-8f, 0f));
+            AddButton(buttonHolder, "Invite", () => InviteFromWaitingRoomClicked(session, friend.PlayerId, friend.Username),
+                true, false, false, 90f, 30f);
+        }
+        var closeHolder = PanelObject("Close Holder", modal, Color.clear);
+        Stretch(closeHolder, Vector2.zero, new Vector2(1f, 0f),
+            new Vector2(20f, 16f), new Vector2(-20f, 52f));
+        AddButton(closeHolder, "Close", () => Destroy(overlay.gameObject), true, false, false, 108f, 32f);
+    }
+
+    private async void InviteFromWaitingRoomClicked(ISession session, string playerId, string username)
+    {
+        if (session == null || LobbyManager.CurrentSession?.Id != session.Id || !session.IsHost) return;
+        lobbyInvitePlayerId = playerId;
+        lobbyInviteUsername = username;
+        lobbyInviteSent = lobbyInviteFailed = false;
+        lobbyBusy = true;
+        RenderMenu();
+        try { await SendSelectedLobbyInviteAsync(session); }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                lobbyBusy = false;
+                RenderMenu();
+            }
+        }
     }
 
     // Opens the deck-builder hex roster as a one-shot picker for this online match.
@@ -6416,6 +7525,7 @@ public partial class MainMenuManager : MonoBehaviour
                 reopenLobbyAfterPicker = true;
                 localReady = false; MatchNetworkSync.SendReady(false);   // changing decks un-readies you
                 ShareLobbyDeck();
+                HostBroadcastLobbyState();
                 EnsureMenu();
             },
             () => { reopenLobbyAfterPicker = true; EnsureMenu(); },
@@ -6471,13 +7581,41 @@ public partial class MainMenuManager : MonoBehaviour
         };
     }
 
+    // Only the selected leader's public card ID is advertised. The deck list,
+    // join code, and selected invite target stay out of UGS session properties.
+    private static string LobbyPublicHostLeaderId()
+    {
+        string id = lobbyCustomGame == "sealed"
+            ? lobbySealedLeader : DeckStore.Get(lobbyDeckId)?.leaderId;
+        if (string.IsNullOrWhiteSpace(id)) return null;
+        var card = OnePieceTcg.Engine.CardData.GetCard(id);
+        if (OnePieceTcg.Engine.CardData.OfficialLibraryLoaded
+            && !string.Equals(card?.Type, "leader", StringComparison.OrdinalIgnoreCase)) return null;
+        return id.Trim();
+    }
+
+    // Short public browser preview of match settings.
+    private string LobbyPublicRulesSummary()
+    {
+        string game = lobbyCustomGame == "sealed" ? "Sealed " + lobbySealedSet : "Constructed";
+        string format = lobbyFormat == "extra" ? "Extra" : "Standard";
+        string clock = lobbyTimingMode switch
+        {
+            "ranked" => "Shared clock",
+            "blitz" => lobbyBlitzPreset == "custom" ? "Custom clocks" : "Blitz " + lobbyBlitzPreset,
+            _ => "Untimed",
+        };
+        return $"{game} · {format} · {clock} · {(lobbyForgiveness ? "Rewind" : "No rewind")} · {(lobbyIgnoreBans ? "Bans off" : "Bans on")}";
+    }
+
     // Host: push the lobby's rules + our ready state to the guest (called once the guest is connected).
     private void HostBroadcastLobbyState()
     {
         if (lobbyMode != "custom" || LobbyManager.CurrentSession == null || !LobbyManager.CurrentSession.IsHost) return;
+        _ = LobbyManager.UpdatePublicPreviewAsync(LobbyPublicRulesSummary(), LobbyPublicHostLeaderId());
         MatchNetworkSync.SendLobbySettings(new LobbySettingsPayload
         {
-            format = lobbyFormat,
+            format = lobbyCustomGame == "sealed" ? "standard" : lobbyFormat,
             forgiveness = lobbyForgiveness,
             timing = LobbyTimingSummary(),
             ignoreBans = lobbyIgnoreBans,
@@ -6623,6 +7761,7 @@ public partial class MainMenuManager : MonoBehaviour
     // Toggle our own ready state, tell the peer, and (host) try to auto-start.
     private void ToggleLobbyReady()
     {
+        lobbyError = null;
         localReady = !localReady;
         // Re-share our deck alongside readying so the peer definitely has our real pick before the match
         // commits (guards the "selected a deck but got the starter default" race).
@@ -6671,7 +7810,7 @@ public partial class MainMenuManager : MonoBehaviour
             southIcon = AccountManager.ProfileIconId ?? AccountManager.CachedProfileIconId,
             northIcon = lobbyPeerIcon,
             forgiveness = lobbyForgiveness,
-            format = lobbyFormat,
+            format = "standard",
             blitz = LobbyBlitzConfig(),
         };
         pendingSealedBuildAttempts = 0;
@@ -7358,12 +8497,14 @@ public partial class MainMenuManager : MonoBehaviour
         MatchNetworkSync.SealedBuildAcknowledged -= OnSealedBuildAcknowledged;
         CancelInvoke(nameof(RetryPendingSealedBuild));
         FriendsManager.FriendsChanged -= OnFriendsChanged;
+        PopulationStore.Changed -= OnPopulationChanged;
     }
 
     private async void RefreshLobbyBrowser()
     {
         lobbyBusy = true;
         lobbyError = null;
+        lobbyErrorContext = "browse";
         RenderMenu();
         try
         {
@@ -7390,13 +8531,21 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyBusy = true;
         lobbyError = null;
+        lobbyErrorContext = "create";
         ResetPeerLobbyState();   // fresh lobby (P2)
         RenderMenu();
         try
         {
-            var session = await LobbyManager.CreateLobbyAsync(lobbyNameInput, lobbyIsPrivate, AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName);
+            var session = await LobbyManager.CreateLobbyAsync(lobbyNameInput, lobbyIsPrivate,
+                AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? AccountManager.GuestDisplayName ?? DefaultPlayerName,
+                LobbyPublicRulesSummary(), LobbyPublicHostLeaderId());
             if (this == null || menuRoot == null) return;
             SubscribeToSessionEvents(session);
+            if (!string.IsNullOrEmpty(lobbyInvitePlayerId))
+            {
+                RenderMenu(); // show the created waiting room while the invitation is sent
+                await SendSelectedLobbyInviteAsync(session);
+            }
         }
         catch (Exception ex)
         {
@@ -7415,9 +8564,16 @@ public partial class MainMenuManager : MonoBehaviour
 
     private async void JoinLobbyByCodeClicked()
     {
-        if (string.IsNullOrWhiteSpace(joinCodeInput)) { lobbyError = "Enter a join code first."; RenderMenu(); return; }
+        if (string.IsNullOrWhiteSpace(joinCodeInput))
+        {
+            lobbyErrorContext = "join";
+            lobbyError = "Enter a join code first.";
+            RenderMenu();
+            return;
+        }
         lobbyBusy = true;
         lobbyError = null;
+        lobbyErrorContext = "join";
         ResetPeerLobbyState();   // fresh lobby (P2)
         RenderMenu();
         try
@@ -7445,6 +8601,7 @@ public partial class MainMenuManager : MonoBehaviour
     {
         lobbyBusy = true;
         lobbyError = null;
+        lobbyErrorContext = "join";
         ResetPeerLobbyState();   // fresh lobby (P2)
         RenderMenu();
         try
@@ -7478,7 +8635,53 @@ public partial class MainMenuManager : MonoBehaviour
         {
             UnsubscribeFromSessionEvents();
             await LobbyManager.LeaveCurrentAsync();
+            lobbyInvitePlayerId = lobbyInviteUsername = null;
+            lobbyInviteSent = lobbyInviteFailed = false;
         }
+        finally
+        {
+            if (this != null && menuRoot != null)
+            {
+                lobbyBusy = false;
+                RenderMenu();
+            }
+        }
+    }
+
+    // An invite failure must never tear down a successfully created lobby. Keep
+    // the target so the host can retry from the waiting room without a code.
+    private async Task SendSelectedLobbyInviteAsync(ISession session)
+    {
+        if (session == null || string.IsNullOrEmpty(lobbyInvitePlayerId)) return;
+        lobbyErrorContext = "waiting";
+        try
+        {
+            string myName = AccountManager.CurrentUsername ?? AccountManager.CachedUsername ?? DefaultPlayerName;
+            string inviteId = await InviteStore.SendAsync(lobbyInvitePlayerId, session.Id, session.Name, myName);
+            if (this == null || menuRoot == null) return;
+            lobbyInviteSent = inviteId != null;
+            lobbyInviteFailed = !lobbyInviteSent;
+            lobbyError = lobbyInviteFailed
+                ? $"Lobby created, but the invite to {lobbyInviteUsername} was not sent. Retry Invite below."
+                : null;
+        }
+        catch (Exception ex)
+        {
+            if (this == null || menuRoot == null) return;
+            lobbyInviteSent = false;
+            lobbyInviteFailed = true;
+            lobbyError = $"Lobby created, but the invite to {lobbyInviteUsername} failed: {ex.Message}. Retry Invite below.";
+        }
+    }
+
+    private async void RetryLobbyInviteClicked()
+    {
+        var session = LobbyManager.CurrentSession;
+        if (session == null || !session.IsHost || string.IsNullOrEmpty(lobbyInvitePlayerId)) return;
+        lobbyBusy = true;
+        lobbyError = null;
+        RenderMenu();
+        try { await SendSelectedLobbyInviteAsync(session); }
         finally
         {
             if (this != null && menuRoot != null)
@@ -7653,21 +8856,33 @@ public partial class MainMenuManager : MonoBehaviour
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Stage: title → portals → launch bar
+    // Stage: page heading → card showcase and the actual Duel / Solo controls
     // ══════════════════════════════════════════════════════════════════════════
 
     private void BuildStage(RectTransform stage)
     {
-        const float titleH = 60f;
+        const float titleH = 96f;
 
         // Title row (pinned to top)
         var titleRow = PanelObject("Title Row", stage, new Color(0, 0, 0, 0));
         Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
 
+        var kicker = TextObject("Kicker", titleRow,
+            "PLAY  ·  GAME MODES", 10, Accent2, TextAnchor.MiddleLeft, monoFont);
+        kicker.fontStyle = FontStyle.Bold;
+        Stretch(kicker.rectTransform, new Vector2(0f, 0.70f), new Vector2(0.75f, 1f),
+            new Vector2(4f, 0f), Vector2.zero);
+
         var titleText = TextObject("Title", titleRow,
-            "Choose your battle", 26, Ink, TextAnchor.MiddleLeft);
+            "Choose your battle", 30, Ink, TextAnchor.MiddleLeft);
         titleText.fontStyle = FontStyle.Bold;
-        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.75f, 1f),
+        Stretch(titleText.rectTransform, new Vector2(0f, 0.28f), new Vector2(0.75f, 0.76f),
+            new Vector2(4f, 0f), Vector2.zero);
+
+        var subtitle = TextObject("Subtitle", titleRow,
+            "Pick one deck for Duel, or set both seats for Solo Play.",
+            12, Muted, TextAnchor.MiddleLeft);
+        Stretch(subtitle.rectTransform, Vector2.zero, new Vector2(0.95f, 0.33f),
             new Vector2(4f, 0f), Vector2.zero);
 
         // Portal row fills everything under the title — deck picks, CTAs and mode
@@ -7679,27 +8894,166 @@ public partial class MainMenuManager : MonoBehaviour
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // Portal row: Duel (left) + Solo Play (right)
+    // Portal row: integrated Duel card showcase and a full-width Solo seat view
     // ══════════════════════════════════════════════════════════════════════════
 
     private void BuildPortalRow(RectTransform row)
     {
-        var portalBg = new Color32(8, 14, 24, 200);
-        const float halfGap = 8f;
+        var portalBg = new Color32(12, 29, 39, 246);
 
-        // Duel portal
         var duel = PanelObject("Duel Portal", row, portalBg);
-        Stretch(duel, Vector2.zero, new Vector2(0.5f, 1f), Vector2.zero, new Vector2(-halfGap, 0f));
+        Stretch(duel, Vector2.zero, new Vector2(0.5f, 1f),
+            Vector2.zero, new Vector2(-8f, 0f));
         RoundBig(duel);
         AddRoundedCardBorder(duel, ZoneBorder, 1f);
         BuildDuelPortal(duel);
 
-        // Solo portal
         var solo = PanelObject("Solo Portal", row, portalBg);
-        Stretch(solo, new Vector2(0.5f, 0f), Vector2.one, new Vector2(halfGap, 0f), Vector2.zero);
+        Stretch(solo, new Vector2(0.5f, 0f), Vector2.one,
+            new Vector2(8f, 0f), Vector2.zero);
         RoundBig(solo);
         AddRoundedCardBorder(solo, ZoneBorder, 1f);
         BuildSoloPortal(solo);
+    }
+
+    // A full, masked leader card sits over a separate illustration-only crop.
+    // Cropping before fading keeps power and rules text out of the backdrop.
+    private void BuildPlayDeckShowcase(RectTransform portal)
+    {
+        EnsureDeckPicksLoaded();
+        var shownDeck = DeckStore.Get(duelDeckId);
+        var playableDeck = ResolveMenuDeck(duelDeckId);
+        var art = shownDeck != null ? LoadArt(shownDeck.leaderId) : null;
+
+        var artField = PanelObject("Showcase Art Field", portal, new Color32(11, 38, 52, 255));
+        Stretch(artField, Vector2.zero, Vector2.one,
+            new Vector2(1f, 1f), new Vector2(-1f, -1f));
+        artField.GetComponent<Image>().raycastTarget = false;
+        artField.gameObject.AddComponent<RectMask2D>();
+
+        var gradient = PanelObject("Showcase Gradient", artField, new Color32(4, 15, 24, 220));
+        Stretch(gradient, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        var gradientImage = gradient.GetComponent<Image>();
+        gradientImage.sprite = GetVGradientSprite();
+        gradientImage.raycastTarget = false;
+        AddFadedLeaderIllustration(artField, art, "Duel Illustration",
+            Vector2.zero, Vector2.one, 0.18f, -5f);
+        var textScrim = PanelObject("Showcase Text Scrim", artField,
+            new Color32(5, 20, 28, 190));
+        Stretch(textScrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        textScrim.GetComponent<Image>().sprite = GetHGradientSprite();
+        textScrim.GetComponent<Image>().raycastTarget = false;
+        var aura = AddRadialGlow(artField, new Color(Accent.r, Accent.g, Accent.b, 0.24f),
+            new Vector2(0.12f, 0.09f), new Vector2(0.88f, 0.96f));
+        aura.GetComponent<Image>().raycastTarget = false;
+        var warmAura = AddRadialGlow(artField, new Color(Gold.r, Gold.g, Gold.b, 0.09f),
+            new Vector2(0.30f, 0.25f), new Vector2(1.10f, 1.05f));
+        warmAura.GetComponent<Image>().raycastTarget = false;
+
+        // The illustration has bright patches under the copy. Give the whole
+        // text column a quiet, consistent value instead of relying on the
+        // left-edge gradient, which has nearly faded out by the detail line.
+        var copyPlate = PanelObject("Showcase Copy Plate", artField,
+            new Color32(5, 18, 26, 158));
+        Stretch(copyPlate, new Vector2(0.025f, 0.30f), new Vector2(0.53f, 0.89f),
+            Vector2.zero, Vector2.zero);
+        Round(copyPlate);
+        copyPlate.GetComponent<Image>().raycastTarget = false;
+
+        var cardEdge = PanelObject("Showcase Card Edge", artField, Accent);
+        cardEdge.anchorMin = cardEdge.anchorMax = new Vector2(0.75f, 0.50f);
+        cardEdge.pivot = new Vector2(0.5f, 0.5f);
+        cardEdge.sizeDelta = new Vector2(278f, 389f);
+        cardEdge.localRotation = Quaternion.Euler(0f, 0f, -3.5f);
+        RoundedCardMask.ApplyTo(cardEdge.GetComponent<Image>());
+        cardEdge.gameObject.AddComponent<Button>().onClick.AddListener(PickDuelDeck);
+
+        var card = PanelObject("Showcase Card", cardEdge, new Color32(7, 19, 29, 255));
+        Stretch(card, Vector2.zero, Vector2.one, new Vector2(2f, 2f), new Vector2(-2f, -2f));
+        var cardImage = card.GetComponent<Image>();
+        cardImage.raycastTarget = false;
+        if (art != null)
+        {
+            cardImage.sprite = art;
+            cardImage.color = Color.white;
+            cardImage.preserveAspect = false;
+        }
+        RoundedCardMask.ApplyTo(cardImage);
+        if (art == null)
+        {
+            var emblem = TextObject("Empty Card Emblem", card, "◇", 64, Accent,
+                TextAnchor.MiddleCenter);
+            Stretch(emblem.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        }
+
+        var kicker = TextObject("Showcase Label", portal, "YOUR DECK", 11,
+            Accent2, TextAnchor.MiddleLeft, monoFont);
+        kicker.fontStyle = FontStyle.Bold;
+        Stretch(kicker.rectTransform, new Vector2(0f, 0.71f), new Vector2(0.47f, 0.87f),
+            new Vector2(28f, 0f), Vector2.zero);
+
+        var deckName = TextObject("Showcase Deck Name", portal,
+            shownDeck != null ? shownDeck.name : "Choose a deck", 26,
+            Ink, TextAnchor.MiddleLeft);
+        deckName.fontStyle = FontStyle.Bold;
+        Stretch(deckName.rectTransform, new Vector2(0f, 0.49f), new Vector2(0.48f, 0.73f),
+            new Vector2(28f, 0f), Vector2.zero);
+
+        string status = shownDeck == null ? "Pick a deck before you enter Duel."
+            : playableDeck == null ? "This deck needs changes before it can be played."
+            : shownDeck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal
+                ? "Standard legal  ·  Ready for Casual or Ranked"
+                : "Not Standard legal  ·  Custom format may allow it";
+        var detail = TextObject("Showcase Detail", portal, status, 14,
+            new Color32(220, 232, 238, 255),
+            TextAnchor.MiddleLeft);
+        Stretch(detail.rectTransform, new Vector2(0f, 0.32f), new Vector2(0.48f, 0.51f),
+            new Vector2(28f, 0f), Vector2.zero);
+
+        var change = PanelObject("Change Duel Deck", portal, new Color32(13, 34, 45, 255));
+        Stretch(change, new Vector2(0f, 0.19f), new Vector2(0.45f, 0.29f),
+            new Vector2(28f, 0f), Vector2.zero);
+        Round(change);
+        AddRoundedCardBorder(change, Accent, 1f);
+        var changeText = TextObject("Label", change,
+            shownDeck == null ? "CHOOSE DECK  ›" : "CHANGE DECK  ›", 11,
+            Ink, TextAnchor.MiddleCenter, monoFont);
+        changeText.fontStyle = FontStyle.Bold;
+        Stretch(changeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        change.gameObject.AddComponent<Button>().onClick.AddListener(PickDuelDeck);
+    }
+
+    // OPTCG leader scans contain printed stats at the top and rules text below
+    // the illustration. Show only the safe inner artwork window in a clipped,
+    // low-opacity viewport, independently of the full card's rounded mask.
+    private RectTransform AddFadedLeaderIllustration(RectTransform parent, Sprite art,
+        string name, Vector2 anchorMin, Vector2 anchorMax, float opacity, float angle)
+    {
+        if (art == null) return null;
+        var viewport = PanelObject(name + " Viewport", parent, Color.clear);
+        Stretch(viewport, anchorMin, anchorMax, Vector2.zero, Vector2.zero);
+        viewport.GetComponent<Image>().raycastTarget = false;
+        viewport.gameObject.AddComponent<RectMask2D>();
+
+        var cropGo = new GameObject(name + " Art", typeof(RectTransform), typeof(RawImage));
+        var crop = cropGo.GetComponent<RectTransform>();
+        crop.SetParent(viewport, false);
+        Stretch(crop, new Vector2(-0.10f, -0.10f), new Vector2(1.10f, 1.10f),
+            Vector2.zero, Vector2.zero);
+        crop.localRotation = Quaternion.Euler(0f, 0f, angle);
+        var image = cropGo.GetComponent<RawImage>();
+        image.texture = art.texture;
+        var source = art.textureRect;
+        // Source image coordinates start at the bottom; this is x 8–92% and
+        // y 10–54% from the TOP, safely within the printed card illustration.
+        image.uvRect = new Rect(
+            (source.x + source.width * 0.08f) / art.texture.width,
+            (source.y + source.height * 0.46f) / art.texture.height,
+            source.width * 0.84f / art.texture.width,
+            source.height * 0.44f / art.texture.height);
+        image.color = new Color(0.68f, 0.88f, 0.90f, opacity);
+        image.raycastTarget = false;
+        return viewport;
     }
 
     // Soft cyan aura that spills just past a selected tile's edges, rendered
@@ -7770,82 +9124,128 @@ public partial class MainMenuManager : MonoBehaviour
     private void BuildDuelPortal(RectTransform portal)
     {
         EnsureDeckPicksLoaded();
-        // (re-checks per build: cheap, and re-restores after async account login)
         AddTopHighlight(portal);
 
-        // Header: portal title + description
+        var kicker = TextObject("Kicker", portal, "ONLINE PLAY", 10,
+            Accent2, TextAnchor.MiddleLeft, monoFont);
+        kicker.fontStyle = FontStyle.Bold;
+        Stretch(kicker.rectTransform, new Vector2(0f, 0.944f), Vector2.one,
+            new Vector2(24f, 0f), new Vector2(-20f, -8f));
+
         var portalTitle = TextObject("Portal Title", portal, "Duel", 30,
-            new Color32(245, 250, 252, 255), TextAnchor.UpperLeft);
+            Ink, TextAnchor.MiddleLeft);
         portalTitle.fontStyle = FontStyle.Bold;
-        Stretch(portalTitle.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(18f, -52f), new Vector2(-18f, -12f));
+        Stretch(portalTitle.rectTransform, new Vector2(0f, 0.879f), new Vector2(1f, 0.950f),
+            new Vector2(24f, 0f), new Vector2(-20f, 0f));
 
         var desc = TextObject("Desc", portal,
-            "Find an opponent and play for rank, or set your own table.",
-            12, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
-        desc.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(desc.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(18f, -78f), new Vector2(-18f, -52f));
+            "Find an opponent and play for rank, or set your own table.", 12,
+            Muted, TextAnchor.MiddleLeft);
+        Stretch(desc.rectTransform, new Vector2(0f, 0.827f), new Vector2(1f, 0.882f),
+            new Vector2(24f, 0f), new Vector2(-20f, 0f));
 
-        // Deck panel — pick your queue deck FIRST, before entering any mode.
-        var deck = ResolveMenuDeck(duelDeckId);
-        BuildDeckPanel(portal, new Vector2(0.028f, 0.225f), new Vector2(0.972f, 0.90f),
-            "YOUR DECK", duelDeckId, PickDuelDeck, enterAlert && deck == null);
+        var hero = PanelObject("Duel Deck Showcase", portal, new Color32(9, 32, 43, 255));
+        Stretch(hero, new Vector2(0.025f, 0.248f), new Vector2(0.975f, 0.824f),
+            Vector2.zero, Vector2.zero);
+        Round(hero);
+        AddRoundedCardBorder(hero, ZoneBorder, 1f);
+        BuildPlayDeckShowcase(hero);
 
-        // Casual/Ranked require a Standard-legal deck (Custom chooses its format in the lobby). Reflect it
-        // in the caption + CTA so an illegal persisted deck reads as blocked here, not only on click.
-        bool queueIsCustom = selectedId == "privateRoom";
-        bool deckLegalForMode = deck != null
-            && (queueIsCustom || deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal);
-
-        // Status caption under the panel.
-        var cap = TextObject("Deck Caption", portal,
-            deck == null ? "Select a deck to continue"
-                : !deckLegalForMode ? deck.name + " — not Standard-legal (Casual/Ranked need a Standard deck)"
-                : deck.name + " — ready to queue",
-            10, deckLegalForMode ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
-        Stretch(cap.rectTransform, new Vector2(0f, 0.185f), new Vector2(1f, 0.222f),
-            new Vector2(12f, 0f), new Vector2(-12f, 0f));
-
-        // Primary CTA reflects the selected duel tab: QUEUE MATCH for Casual/Ranked
-        // (the independent auto-queue — never touches the Custom lobby screen), or
-        // VIEW LOBBIES for Custom (the create/join-a-room flow). Casual and Ranked are
-        // separate queues from each other and from Custom.
-        bool deckReady = deck != null;
         string duelMode = (selectedId == "casual" || selectedId == "ranked" || selectedId == "privateRoom")
             ? selectedId : "casual";
+        BuildPlayModeTab(portal, 0.025f, 0.335f, "Casual", ModeStatus.Dev,
+            duelMode == "casual", () => SelectMode("casual"));
+        BuildPlayModeTab(portal, 0.345f, 0.655f, "Ranked", ModeStatus.Dev,
+            duelMode == "ranked", () => SelectMode("ranked"));
+        BuildPlayModeTab(portal, 0.665f, 0.975f, "Custom", ModeStatus.Ready,
+            duelMode == "privateRoom", () => SelectMode("privateRoom"));
+
+        // The deck is shown once, in the showcase. This line reports only the
+        // selected mode's availability, not a second copy of the deck name.
+        var deck = ResolveMenuDeck(duelDeckId);
         bool isCustom = duelMode == "privateRoom";
-        BuildPortalCta(portal, (isCustom ? "VIEW LOBBIES" : "QUEUE MATCH") + "  ▸", deckReady,
-            new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.178f), () =>
+        bool deckLegalForMode = deck != null &&
+            (isCustom || deck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal);
+        string status = deck == null ? "Choose a deck to continue."
+            : !deckLegalForMode ? "Casual and Ranked require a Standard-legal deck."
+            : isCustom ? "Custom opens the lobby list to join a public room or create one."
+            : "Ready for the " + (duelMode == "ranked" ? "Ranked" : "Casual") + " queue.";
+        if (!isCustom)
+        {
+            duelPopulationMode = duelMode;
+            duelQueueCountText = BuildDuelPopulationStat(portal, "Players In Queue",
+                "IN QUEUE", 0.025f, 0.29f);
+            duelMatchCountText = BuildDuelPopulationStat(portal, "Players In Match",
+                "IN MATCH", 0.71f, 0.975f);
+            RefreshPopulationLabels();
+        }
+        var cap = TextObject("Duel Status", portal, status, 11,
+            deckLegalForMode ? Accent2 : Muted, TextAnchor.MiddleCenter);
+        cap.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(cap.rectTransform, new Vector2(isCustom ? 0f : 0.30f, 0.199f),
+            new Vector2(isCustom ? 1f : 0.70f, 0.244f),
+            new Vector2(24f, 0f), new Vector2(-20f, 0f));
+
+        BuildPortalCta(portal, (isCustom ? "VIEW LOBBIES" : "QUEUE MATCH") + "  ▸",
+            deckLegalForMode, new Vector2(0.025f, 0.121f), new Vector2(0.975f, 0.190f), () =>
             {
                 if (ResolveMenuDeck(duelDeckId) == null) { enterAlert = true; RenderMenu(); return; }
                 lobbyDeckId = duelDeckId;   // queue/lobby with the chosen deck
                 if (isCustom) OpenLobbyHub();
                 else StartQueue(duelMode);
             });
+    }
 
-        // Mode tabs (Casual / Ranked / Custom) — selected tab gets the accent border.
-        var subRow = PanelObject("Sub Row", portal, new Color(0f, 0f, 0f, 0f));
-        Stretch(subRow, new Vector2(0f, 0f), new Vector2(1f, 0.09f),
-            new Vector2(12f, 10f), new Vector2(-12f, 0f));
+    private Text BuildDuelPopulationStat(RectTransform portal, string name,
+        string label, float left, float right)
+    {
+        var stat = PanelObject(name, portal, new Color32(10, 32, 42, 238));
+        Stretch(stat, new Vector2(left, 0.196f), new Vector2(right, 0.247f),
+            Vector2.zero, Vector2.zero);
+        Round(stat);
+        AddRoundedCardBorder(stat, ZoneBorder, 1f);
+        var value = TextObject("Count", stat, "—", 19, Accent2,
+            TextAnchor.MiddleCenter, monoFont);
+        value.fontStyle = FontStyle.Bold;
+        Stretch(value.rectTransform, Vector2.zero, new Vector2(0.36f, 1f),
+            new Vector2(7f, 0f), Vector2.zero);
+        var caption = TextObject("Label", stat, label, 11, Muted,
+            TextAnchor.MiddleLeft, monoFont);
+        caption.fontStyle = FontStyle.Bold;
+        Stretch(caption.rectTransform, new Vector2(0.36f, 0f), Vector2.one,
+            Vector2.zero, new Vector2(-5f, 0f));
+        return value;
+    }
 
-        var duelSubs = new (string label, string modeId)[]
-        {
-            ("Casual",  "casual"),
-            ("Ranked",  "ranked"),
-            ("Custom",  "privateRoom"),
-        };
+    private void BuildPlayModeTab(RectTransform portal, float xMin, float xMax,
+        string label, ModeStatus status, bool selected,
+        UnityEngine.Events.UnityAction onClick)
+    {
+        var row = PanelObject(label + " Mode Tab", portal,
+            selected ? new Color32(28, 65, 75, 255) : new Color32(13, 30, 40, 255));
+        Stretch(row, new Vector2(xMin, 0.022f), new Vector2(xMax, 0.110f),
+            Vector2.zero, Vector2.zero);
+        Round(row);
+        AddRoundedCardBorder(row, selected ? Accent : ZoneBorder, selected ? 1.7f : 1f);
 
-        for (int i = 0; i < duelSubs.Length; i++)
-        {
-            // Casual/Ranked are playable but still being proofed out — show a DEV chip
-            // so players know. Their MenuMode.Status stays Ready so QUEUE MATCH works;
-            // this only changes the badge shown on the tab.
-            var chipStatus = (duelSubs[i].modeId == "casual" || duelSubs[i].modeId == "ranked")
-                ? ModeStatus.Dev : FindMode(duelSubs[i].modeId).Status;
-            BuildMultiSubTile(subRow, duelSubs[i].label, duelSubs[i].modeId,
-                chipStatus, i, duelSubs.Length, 9f);
-        }
+        var title = TextObject("Title", row, label, label.Length > 9 ? 12 : 14,
+            Ink, TextAnchor.MiddleCenter);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 0.44f), Vector2.one,
+            new Vector2(5f, 0f), new Vector2(-5f, 0f));
+
+        var chip = PanelObject("Status Chip", row,
+            status == ModeStatus.Dev ? new Color32(61, 46, 27, 255) : Accent);
+        Stretch(chip, new Vector2(0.17f, 0.08f), new Vector2(0.83f, 0.37f),
+            Vector2.zero, Vector2.zero);
+        Round(chip);
+        chip.GetComponent<Image>().raycastTarget = false;
+        var chipText = TextObject("Status", chip,
+            status == ModeStatus.Dev ? "DEV" : "READY", 9,
+            status == ModeStatus.Dev ? Gold : BadgeInk, TextAnchor.MiddleCenter, monoFont);
+        chipText.fontStyle = FontStyle.Bold;
+        Stretch(chipText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        row.gameObject.AddComponent<Button>().onClick.AddListener(onClick);
     }
 
     // Resolve a menu deck id to a DeckStore deck (falling back to the active deck
@@ -7990,14 +9390,14 @@ public partial class MainMenuManager : MonoBehaviour
     private void BuildPortalCta(RectTransform portal, string label, bool enabled,
         Vector2 aMin, Vector2 aMax, UnityEngine.Events.UnityAction onClick)
     {
-        var btnBg = enabled ? (Color)new Color32(14, 30, 44, 235) : (Color)new Color32(10, 18, 26, 160);
+        var btnBg = enabled ? Accent : (Color)new Color32(10, 18, 26, 190);
         var cta = PanelObject("Portal CTA", portal, btnBg);
         Stretch(cta, aMin, aMax, new Vector2(12f, 0f), new Vector2(-12f, 0f));
         Round(cta);
-        AddRoundedCardBorder(cta, enabled ? Accent : MenuB, enabled ? 1.4f : 1f);
+        AddRoundedCardBorder(cta, enabled ? Accent2 : MenuB, enabled ? 1.4f : 1f);
 
-        var txt = TextObject("Text", cta, label, 12,
-            enabled ? new Color32(207, 236, 244, 255) : new Color32(96, 116, 132, 255),
+        var txt = TextObject("Text", cta, label, 13,
+            enabled ? BadgeInk : new Color32(96, 116, 132, 255),
             TextAnchor.MiddleCenter, monoFont);
         txt.fontStyle = FontStyle.Bold;
         Stretch(txt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -8014,162 +9414,199 @@ public partial class MainMenuManager : MonoBehaviour
         EnsureAiDifficultyLoaded();
         AddTopHighlight(portal);
 
-        // Header: portal title + description
+        var kicker = TextObject("Kicker", portal, "LOCAL PLAY", 10,
+            Accent2, TextAnchor.MiddleLeft, monoFont);
+        kicker.fontStyle = FontStyle.Bold;
+        Stretch(kicker.rectTransform, new Vector2(0f, 0.944f), Vector2.one,
+            new Vector2(24f, 0f), new Vector2(-20f, -8f));
+
         var portalTitle = TextObject("Portal Title", portal, "Solo Play", 30,
-            new Color32(245, 250, 252, 255), TextAnchor.UpperLeft);
+            Ink, TextAnchor.MiddleLeft);
         portalTitle.fontStyle = FontStyle.Bold;
-        Stretch(portalTitle.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(18f, -52f), new Vector2(-18f, -12f));
+        Stretch(portalTitle.rectTransform, new Vector2(0f, 0.879f), new Vector2(1f, 0.950f),
+            new Vector2(24f, 0f), new Vector2(-20f, 0f));
 
         var desc = TextObject("Desc", portal,
-            "Practice lines and goldfish new builds at your own pace.",
-            12, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
-        desc.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(desc.rectTransform, new Vector2(0f, 1f), Vector2.one,
-            new Vector2(18f, -78f), new Vector2(-18f, -52f));
+            "Practice lines and goldfish new builds at your own pace.", 12,
+            Muted, TextAnchor.MiddleLeft);
+        Stretch(desc.rectTransform, new Vector2(0f, 0.827f), new Vector2(1f, 0.882f),
+            new Vector2(24f, 0f), new Vector2(-20f, 0f));
 
-        // Timing cycle (Standard → Bullet → Blitz → Rapid): applies to Versus Self (hotseat) and Versus A.I.
-        // only, so Blitz is locally testable. NOT shown for Puzzles (single-turn, untimed) or Sandbox
-        // (free-form editing) — a game-mode clock is meaningless there. See GameManager.Blitz.cs / BlitzConfig.
-        if (selectedId != "soloPuzzle" && selectedId != "soloSandbox" && selectedId != "sealed")
+        string soloMode = (selectedId == "soloAi" || selectedId == "soloSandbox" ||
+            selectedId == "soloPuzzle" || selectedId == "sealed") ? selectedId : "soloSelf";
+        bool aiMode = soloMode == "soloAi";
+        bool sandboxMode = soloMode == "soloSandbox";
+        bool puzzleMode = soloMode == "soloPuzzle";
+        bool sealedMode = soloMode == "sealed";
+        BuildPlayModeTab(portal, 0.025f, 0.210f, "Versus Self", ModeStatus.Ready,
+            soloMode == "soloSelf", () => SelectMode("soloSelf"));
+        BuildPlayModeTab(portal, 0.217f, 0.402f, "Versus A.I.", ModeStatus.Ready,
+            aiMode, () => SelectMode("soloAi"));
+        BuildPlayModeTab(portal, 0.409f, 0.594f, "Sandbox", ModeStatus.Dev,
+            sandboxMode, () => SelectMode("soloSandbox"));
+        BuildPlayModeTab(portal, 0.601f, 0.786f, "Puzzles", ModeStatus.Dev,
+            puzzleMode, () => SelectMode("soloPuzzle"));
+        BuildPlayModeTab(portal, 0.793f, 0.978f, "Sealed", ModeStatus.Ready,
+            sealedMode, () => SelectMode("sealed"));
+
+        // The local clock applies only to Versus Self and Versus A.I.
+        if (!sandboxMode && !puzzleMode && !sealedMode)
         {
             bool timed = soloTimingPreset != "standard";
-            var timeBtn = PanelObject("Timing Btn", portal, timed ? new Color(0.62f, 0.42f, 0.12f, 0.85f) : (Color)new Color32(10, 22, 32, 220));
-            timeBtn.anchorMin = timeBtn.anchorMax = new Vector2(1f, 1f);
-            timeBtn.pivot = new Vector2(1f, 1f);
-            timeBtn.sizeDelta = new Vector2(158f, 30f);
-            timeBtn.anchoredPosition = new Vector2(-16f, -16f);
-            Round(timeBtn);
-            AddRoundedCardBorder(timeBtn, timed ? Gold : MenuB, 1.2f);
-            var tbT = TextObject("t", timeBtn, "⏱ " + SoloTimingLabel(), 11, timed ? Gold : Muted, TextAnchor.MiddleCenter, monoFont);
-            tbT.fontStyle = FontStyle.Bold;
-            Stretch(tbT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-            timeBtn.gameObject.AddComponent<Button>().onClick.AddListener(CycleSoloTiming);
+            var timing = PanelObject("Solo Timing", portal,
+                timed ? new Color32(85, 63, 30, 255) : new Color32(17, 37, 47, 255));
+            Stretch(timing, new Vector2(0.73f, 0.937f), new Vector2(0.97f, 0.976f),
+                Vector2.zero, Vector2.zero);
+            Round(timing);
+            AddRoundedCardBorder(timing, timed ? Gold : ZoneBorder, 1f);
+            var timingText = TextObject("Label", timing, SoloTimingLabel(), 10,
+                timed ? Gold : Muted, TextAnchor.MiddleCenter, monoFont);
+            timingText.fontStyle = FontStyle.Bold;
+            Stretch(timingText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            timing.gameObject.AddComponent<Button>().onClick.AddListener(CycleSoloTiming);
         }
 
-        // Two stacked deck panels. Versus Self: NORTH/SOUTH (both yours).
-        // Versus A.I.: BASIC BOT (top, AI-piloted) / YOUR DECK (bottom).
-        bool aiMode = selectedId == "soloAi";
-        bool sandboxMode = selectedId == "soloSandbox";
-        bool puzzleMode = selectedId == "soloPuzzle";
-        // Sealed builds its pool from packs, so it needs NO deck selection here — without its own
-        // branch it fell through to the generic two-deck layout and the CTA started a Versus Self match.
-        bool sealedMode = selectedId == "sealed";
+        var config = PanelObject("Solo Configuration", portal,
+            (puzzleMode || sealedMode) ? (Color)new Color32(8, 22, 32, 235) : Color.clear);
+        Stretch(config, new Vector2(0.025f, 0.248f), new Vector2(0.975f, 0.824f),
+            Vector2.zero, Vector2.zero);
+        config.GetComponent<Image>().raycastTarget = false;
+        if (puzzleMode || sealedMode)
+        {
+            Round(config);
+            AddRoundedCardBorder(config, ZoneBorder, 1f);
+        }
+
         var northDeck = DeckStore.Get(aiMode ? aiDeckId : p2DeckId);
         var southDeck = DeckStore.Get(p1DeckId);
         if (sealedMode)
-        {
-            var sealDev = TextObject("Sealed Dev Flag", portal,
-                "EARLY DEVELOPMENT  —  Sealed / Pre-Release is brand new. Right-click any card to report a bug.",
-                11, Accent2, TextAnchor.UpperLeft);
-            sealDev.fontStyle = FontStyle.Bold;
-            sealDev.horizontalOverflow = HorizontalWrapMode.Wrap;
-            sealDev.verticalOverflow = VerticalWrapMode.Overflow;
-            Stretch(sealDev.rectTransform, new Vector2(0.028f, 0.78f), new Vector2(0.972f, 0.90f),
-                Vector2.zero, Vector2.zero);
-
-            var sealBody = TextObject("Sealed Body", portal,
-                "Pick a set, open six seeded packs, and build a 40-card deck from exactly what you pull."
-                + "\n\n•  Sealed rules: no colour restriction, no copy limit, 40 cards instead of 50."
-                + "\n•  Two Leader formats: Rainbow Luffy, or free select from any legal Leader."
-                + "\n•  Share your seed and anyone opens the same six packs."
-                + "\n\nNo deck selection here — your pool comes out of the packs.",
-                12, new Color32(174, 190, 203, 255), TextAnchor.UpperLeft);
-            sealBody.horizontalOverflow = HorizontalWrapMode.Wrap;
-            sealBody.verticalOverflow = VerticalWrapMode.Overflow;
-            Stretch(sealBody.rectTransform, new Vector2(0.028f, 0.30f), new Vector2(0.972f, 0.77f),
-                Vector2.zero, Vector2.zero);
-        }
+            BuildPlaySoloExplanation(config, "SEALED / PRE-RELEASE",
+                "Choose a set, open six seeded packs, and build a 40-card deck from your own pool. " +
+                "No deck is selected here; the cards come from your packs.");
         else if (puzzleMode)
-        {
-            var puzDev = TextObject("Puzzle Dev Flag", portal,
-                "EARLY DEVELOPMENT  —  Puzzles is a new mode still being built and tuned. Expect rough edges and " +
-                "the occasional bad puzzle. Right-click any card to report a bug — it helps a lot.",
-                11, Accent2, TextAnchor.UpperLeft);
-            puzDev.fontStyle = FontStyle.Bold;
-            puzDev.horizontalOverflow = HorizontalWrapMode.Wrap;
-            puzDev.verticalOverflow = VerticalWrapMode.Overflow;
-            Stretch(puzDev.rectTransform, new Vector2(0.028f, 0.74f), new Vector2(0.972f, 0.90f),
-                new Vector2(8f, 0f), new Vector2(-8f, -8f));
-
-            var puzDesc = TextObject("Puzzle Desc", portal,
-                "Brain teasers\n\nEach puzzle is a real board where a forced win exists this turn - find the line. " +
-                "The opponent always plays its best surviving defense, so a sloppy line loses. Stuck? Three levels " +
-                "of hints: the first is a nudge, the second points at a card, the third spells out the move.",
-                14, Ink, TextAnchor.UpperLeft);
-            puzDesc.horizontalOverflow = HorizontalWrapMode.Wrap;
-            puzDesc.verticalOverflow = VerticalWrapMode.Overflow;
-            Stretch(puzDesc.rectTransform, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.72f),
-                new Vector2(8f, 0f), new Vector2(-8f, -8f));
-        }
-        else if (aiMode)
-        {
-            // Shrink the bot's deck panel slightly (0.610 vs 0.575) to free a thin band for
-            // the difficulty toggle, sandwiched between it and YOUR DECK below.
-            BuildDeckPanel(portal, new Vector2(0.028f, 0.610f), new Vector2(0.972f, 0.90f),
-                AiDifficultyLabel(aiDifficulty) + " BOT", aiDeckId, PickAiDeck, enterAlert && northDeck == null);
-            BuildAiDifficultyToggle(portal, new Vector2(0.028f, 0.560f), new Vector2(0.972f, 0.605f));
-            BuildDeckPanel(portal, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.560f),
-                "YOUR DECK", p1DeckId, () => PickPlayerDeck(1), enterAlert && southDeck == null);
-        }
+            BuildPlaySoloExplanation(config, "PUZZLE BOARDS",
+                "Each puzzle starts from a preset board with a forced win this turn. " +
+                "Find the line; three hint levels are available. No deck is needed.");
         else
         {
-            BuildDeckPanel(portal, new Vector2(0.028f, 0.575f), new Vector2(0.972f, 0.90f),
-                "NORTH", p2DeckId, () => PickPlayerDeck(2), enterAlert && northDeck == null);
-            BuildDeckPanel(portal, new Vector2(0.028f, 0.235f), new Vector2(0.972f, 0.560f),
-                "SOUTH", p1DeckId, () => PickPlayerDeck(1), enterAlert && southDeck == null);
+            if (aiMode)
+            {
+                BuildPlaySeatPicker(config, 0.592f, 1f,
+                    "BOT'S DECK", aiDeckId,
+                    PickAiDeck, enterAlert && northDeck == null);
+                BuildAiDifficultyToggle(config, new Vector2(0.018f, 0.485f),
+                    new Vector2(0.982f, 0.575f));
+                BuildPlaySeatPicker(config, 0f, 0.462f,
+                    "YOUR DECK", p1DeckId, () => PickPlayerDeck(1),
+                    enterAlert && southDeck == null);
+            }
+            else
+            {
+                BuildPlaySeatPicker(config, 0.514f, 1f, "OPPONENT DECK", p2DeckId,
+                    () => PickPlayerDeck(2), !sandboxMode && enterAlert && northDeck == null);
+                BuildPlaySeatPicker(config, 0f, 0.486f, "YOUR DECK", p1DeckId,
+                    () => PickPlayerDeck(1), !sandboxMode && enterAlert && southDeck == null);
+            }
         }
 
-        // Status caption
         bool bothReady = northDeck != null && southDeck != null;
         string capText = sealedMode
-            ? "Six packs, 40-card deck, your pool only"
+            ? "Six packs · 40-card deck · your pool only"
             : puzzleMode
-            ? "Preset boards — no deck needed. Find the forced win."
+            ? "Preset board · no deck needed"
             : sandboxMode
-            ? "Decks optional — they just stock each side's deck zone. Enter with a blank board either way."
+            ? "Decks optional · enter with a blank board"
             : bothReady
-            ? (aiMode ? $"Ready — {AiDifficultyLabel(aiDifficulty)} Bot pilots the top deck" : "Both seats ready")
-            : (northDeck == null && southDeck == null) ? "Select 2 decks to begin"
-            : "Select 1 more deck to begin";
-        var cap = TextObject("Deck Caption", portal, capText, 10,
-            (sealedMode || puzzleMode || sandboxMode || bothReady) ? Accent : Muted, TextAnchor.MiddleCenter, monoFont);
-        cap.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(cap.rectTransform, new Vector2(0f, 0.195f), new Vector2(1f, 0.232f),
-            new Vector2(12f, 0f), new Vector2(-12f, 0f));
+            ? (aiMode ? "Bot and player decks ready" : "Both seats ready")
+            : (northDeck == null && southDeck == null) ? "Select two decks to begin"
+            : "Select one more deck to begin";
+        var cap = TextObject("Solo Status", portal, capText, 10,
+            (sealedMode || puzzleMode || sandboxMode || bothReady) ? Accent2 : Muted,
+            TextAnchor.MiddleCenter, monoFont);
+        Stretch(cap.rectTransform, new Vector2(0f, 0.199f), new Vector2(1f, 0.244f),
+            new Vector2(24f, 0f), new Vector2(-20f, 0f));
 
-        // Primary CTA. Sandbox + Puzzles are always launchable (no deck needed).
         if (sealedMode)
             BuildPortalCta(portal, "OPEN PACKS  ▸", true,
-                new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterSealed);
+                new Vector2(0.025f, 0.121f), new Vector2(0.975f, 0.190f), EnterSealed);
         else if (puzzleMode)
             BuildPortalCta(portal, "PLAY PUZZLES  ▸", true,
-                new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterPuzzle);
+                new Vector2(0.025f, 0.121f), new Vector2(0.975f, 0.190f), EnterPuzzle);
         else if (sandboxMode)
             BuildPortalCta(portal, "ENTER SANDBOX  ▸", true,
-                new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f), EnterSandbox);
+                new Vector2(0.025f, 0.121f), new Vector2(0.975f, 0.190f), EnterSandbox);
         else
             BuildPortalCta(portal, "START MATCH  ▸", bothReady,
-                new Vector2(0.028f, 0.105f), new Vector2(0.972f, 0.188f),
+                new Vector2(0.025f, 0.121f), new Vector2(0.975f, 0.190f),
                 aiMode ? (UnityEngine.Events.UnityAction)EnterVersusAi : EnterVersusSelf);
+    }
 
-        // Mode tabs (Versus Self / Versus A.I. / Sandbox / Puzzles) — four even slots.
-        var subRow = PanelObject("Sub Row", portal, new Color(0f, 0f, 0f, 0f));
-        Stretch(subRow, new Vector2(0f, 0f), new Vector2(1f, 0.09f),
-            new Vector2(12f, 10f), new Vector2(-12f, 0f));
+    private void BuildPlaySoloExplanation(RectTransform config, string title, string body)
+    {
+        var label = TextObject("Explanation Label", config, title, 10,
+            Accent2, TextAnchor.MiddleLeft, monoFont);
+        label.fontStyle = FontStyle.Bold;
+        Stretch(label.rectTransform, new Vector2(0f, 0.74f), new Vector2(1f, 0.95f),
+            new Vector2(16f, 0f), new Vector2(-16f, 0f));
+        var copy = TextObject("Explanation", config, body, 13,
+            Ink, TextAnchor.UpperLeft);
+        Stretch(copy.rectTransform, new Vector2(0f, 0.12f), new Vector2(1f, 0.75f),
+            new Vector2(16f, 0f), new Vector2(-16f, 0f));
+    }
 
-        BuildMultiSubTile(subRow, "Versus Self", "soloSelf",   ModeStatus.Ready, 0, 5, 6f);
-        BuildMultiSubTile(subRow, "Versus A.I.", "soloAi",     ModeStatus.Ready, 1, 5, 6f);
-        // Sandbox is a free-form testing board, not a play mode — DEV chip so it reads as a tool.
-        // Still launchable, same as Puzzles and Sealed below.
-        BuildMultiSubTile(subRow, "Sandbox",     "soloSandbox", ModeStatus.Dev,   2, 5, 6f);
-        // Puzzles is playable but still being expanded — show a DEV chip (same treatment as ranked/casual),
-        // while keeping the mode itself launchable.
-        BuildMultiSubTile(subRow, "Puzzles",     "soloPuzzle", ModeStatus.Dev,   3, 5, 6f);
-        // Sealed / Pre-Release is a live mode: select it, then OPEN PACKS launches the local flow.
-        // Keep this in sync with modes[] above; a DEV badge made the tab look disabled even though
-        // the click path and full six-pack/deck-builder flow were already enabled.
-        BuildMultiSubTile(subRow, "Sealed",      "sealed",     ModeStatus.Ready, 4, 5, 6f);
+    // Each local seat has a full-size, independently pickable leader card.
+    private void BuildPlaySeatPicker(RectTransform config, float yMin, float yMax,
+        string label, string deckId, UnityEngine.Events.UnityAction onPick, bool flagged)
+    {
+        var deck = DeckStore.Get(deckId);
+        var row = PanelObject(label + " Deck Pick", config, new Color32(14, 34, 44, 255));
+        Stretch(row, new Vector2(0f, yMin), new Vector2(1f, yMax),
+            new Vector2(10f, 0f), new Vector2(-10f, 0f));
+        Round(row);
+        AddRoundedCardBorder(row, flagged ? RedAccent : ZoneBorder, flagged ? 1.5f : 1f);
+
+        var art = deck != null ? LoadArt(deck.leaderId) : null;
+        AddFadedLeaderIllustration(row, art, label + " Illustration",
+            new Vector2(0.39f, 0.05f), new Vector2(0.97f, 0.95f), 0.10f, -4f);
+
+        var thumb = PanelObject("Leader Card", row, new Color32(7, 17, 27, 255));
+        thumb.anchorMin = thumb.anchorMax = new Vector2(1f, 0.5f);
+        thumb.pivot = new Vector2(1f, 0.5f);
+        thumb.sizeDelta = new Vector2(138f, 193f);
+        thumb.anchoredPosition = new Vector2(-16f, 0f);
+        var thumbImage = thumb.GetComponent<Image>();
+        if (art != null)
+        {
+            thumbImage.sprite = art;
+            thumbImage.color = Color.white;
+            thumbImage.preserveAspect = false;
+        }
+        thumbImage.raycastTarget = false;
+        RoundedCardMask.ApplyTo(thumbImage);
+        if (art == null)
+        {
+            var diamond = TextObject("Empty Leader", thumb, "◇", 46, Accent,
+                TextAnchor.MiddleCenter);
+            Stretch(diamond.rectTransform, Vector2.zero, Vector2.one,
+                Vector2.zero, Vector2.zero);
+        }
+
+        var seat = TextObject("Seat", row, label, 10, Accent2,
+            TextAnchor.MiddleLeft, monoFont);
+        seat.fontStyle = FontStyle.Bold;
+        Stretch(seat.rectTransform, new Vector2(0f, 0.69f), new Vector2(0.74f, 0.92f),
+            new Vector2(24f, 0f), Vector2.zero);
+        var name = TextObject("Deck", row, deck != null ? deck.name : "Choose a deck",
+            22, Ink, TextAnchor.MiddleLeft);
+        name.fontStyle = FontStyle.Bold;
+        Stretch(name.rectTransform, new Vector2(0f, 0.38f), new Vector2(0.74f, 0.70f),
+            new Vector2(24f, 0f), Vector2.zero);
+        var hint = TextObject("Hint", row,
+            deck != null ? "Tap to change deck  ›" : "Tap to choose a deck  ›",
+            13, new Color32(190, 207, 216, 255), TextAnchor.MiddleLeft, monoFont);
+        Stretch(hint.rectTransform, new Vector2(0f, 0.17f), new Vector2(0.74f, 0.39f),
+            new Vector2(24f, 0f), Vector2.zero);
+        row.gameObject.AddComponent<Button>().onClick.AddListener(onPick);
     }
 
     // ── Multiplayer sub-tile (centered label + SOON chip below) ──────────────
@@ -8286,7 +9723,7 @@ public partial class MainMenuManager : MonoBehaviour
         Round(pill);
         if (!selected) AddRoundedCardBorder(pill, MenuB, 1f);
 
-        var t = TextObject("t", pill, label, 7, selected ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
+        var t = TextObject("t", pill, label, 10, selected ? BadgeInk : Muted, TextAnchor.MiddleCenter, monoFont);
         t.fontStyle = FontStyle.Bold;
         Stretch(t.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 

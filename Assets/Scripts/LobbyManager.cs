@@ -8,6 +8,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using Unity.Netcode;
 using Unity.Services.Authentication;
@@ -18,6 +19,8 @@ using UnityEngine;
 public static class LobbyManager
 {
     private const string OwnerNameKey = "ownerName";
+    private const string CustomRulesKey = "customRules";
+    private const string HostLeaderKey = "hostLeaderId";
     // 1v1 for now; spectator slots are a later addition once match networking exists.
     private const int DefaultMaxPlayers = 2;
 
@@ -29,6 +32,10 @@ public static class LobbyManager
     // Every subsequent create/join/queue entry awaits this shared task so the old leave cannot
     // finish late and shut down the NEW session's NetworkManager underneath it.
     private static Task _leaveTask = Task.CompletedTask;
+    private static readonly SemaphoreSlim _rulesSaveGate = new SemaphoreSlim(1, 1);
+    private static ISession _rulesPublishedSession;
+    private static string _rulesPublishedValue;
+    private static string _leaderPublishedValue;
 
     // AuthenticationService.Instance throws ("Singleton is not initialized") if touched
     // before UnityServices.InitializeAsync() has completed, so that must always run first
@@ -70,7 +77,8 @@ public static class LobbyManager
         // Sessions SDK's Netcode handler needs NetworkManager.Singleton.
     }
 
-    public static async Task<IHostSession> CreateLobbyAsync(string lobbyName, bool isPrivate, string ownerDisplayName)
+    public static async Task<IHostSession> CreateLobbyAsync(string lobbyName, bool isPrivate,
+        string ownerDisplayName, string publicRulesSummary = null, string publicHostLeaderId = null)
     {
         await LeaveCurrentAsync();
         await EnsureSignedInAsync();
@@ -85,9 +93,16 @@ public static class LobbyManager
         }.WithRelayNetwork();
         options.SessionProperties[OwnerNameKey] = new SessionProperty(
             string.IsNullOrWhiteSpace(ownerDisplayName) ? "Captain" : ownerDisplayName.Trim());
+        if (!isPrivate && !string.IsNullOrWhiteSpace(publicRulesSummary))
+            options.SessionProperties[CustomRulesKey] = new SessionProperty(publicRulesSummary.Trim());
+        if (!isPrivate && !string.IsNullOrWhiteSpace(publicHostLeaderId))
+            options.SessionProperties[HostLeaderKey] = new SessionProperty(publicHostLeaderId.Trim());
 
         var session = await MultiplayerService.Instance.CreateSessionAsync(options);
         CurrentSession = session;
+        _rulesPublishedSession = session;
+        _rulesPublishedValue = !isPrivate ? publicRulesSummary?.Trim() : null;
+        _leaderPublishedValue = !isPrivate ? publicHostLeaderId?.Trim() : null;
         return session;
     }
 
@@ -123,6 +138,46 @@ public static class LobbyManager
 
     public static string GetOwnerName(ISession session) =>
         session?.Properties != null && session.Properties.TryGetValue(OwnerNameKey, out var prop) ? prop.Value : "Unknown";
+
+    public static string GetCustomRules(ISessionInfo info) =>
+        info?.Properties != null && info.Properties.TryGetValue(CustomRulesKey, out var prop)
+            && !string.IsNullOrWhiteSpace(prop?.Value)
+            ? prop.Value : "Custom rules set by host";
+
+    public static string GetHostLeaderId(ISessionInfo info) =>
+        info?.Properties != null && info.Properties.TryGetValue(HostLeaderKey, out var prop)
+            && !string.IsNullOrWhiteSpace(prop?.Value)
+            ? prop.Value : null;
+
+    // Public previews expose rules and the host's chosen leader ID, never a deck
+    // list. Serialize changes so a fast sequence of host choices cannot save
+    // older metadata after newer metadata. Failures never interrupt NGO play.
+    public static async Task UpdatePublicPreviewAsync(string publicRulesSummary, string hostLeaderId)
+    {
+        var session = CurrentSession;
+        if (session == null || !session.IsHost || session.IsPrivate) return;
+        await _rulesSaveGate.WaitAsync();
+        try
+        {
+            if (CurrentSession != session) return;
+            var host = session.AsHost();
+            string rules = string.IsNullOrWhiteSpace(publicRulesSummary) ? null : publicRulesSummary.Trim();
+            string leader = string.IsNullOrWhiteSpace(hostLeaderId) ? null : hostLeaderId.Trim();
+            if (_rulesPublishedSession == session && _rulesPublishedValue == rules
+                && _leaderPublishedValue == leader) return;
+            host.SetProperty(CustomRulesKey, rules == null ? null : new SessionProperty(rules));
+            host.SetProperty(HostLeaderKey, leader == null ? null : new SessionProperty(leader));
+            await host.SavePropertiesAsync();
+            _rulesPublishedSession = session;
+            _rulesPublishedValue = rules;
+            _leaderPublishedValue = leader;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Could not update public lobby preview: {ex.Message}");
+        }
+        finally { _rulesSaveGate.Release(); }
+    }
 
     /// <summary>The opponent's UGS player id in the current 1v1 session (the player
     /// that isn't us), or null if unavailable. Used to bind a ranked match report to

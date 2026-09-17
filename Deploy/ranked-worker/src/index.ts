@@ -25,6 +25,7 @@ import {
   handleInviteSend, handleInvitePoll, handleInviteRespond, handleInviteStatus, handleInviteCancel,
   sweepExpiredInvites,
 } from "./social";
+import { heartbeatPopulation, populationSnapshot } from "./population";
 
 export interface Env {
   DB: D1Database;
@@ -326,6 +327,17 @@ async function handleSocialRoute(req: Request, url: URL, env: Env): Promise<Resp
   }
 }
 
+async function handlePopulationRoute(req: Request, url: URL, env: Env): Promise<Response> {
+  let playerId: string;
+  try { ({ playerId } = await verifyUnityToken(req.headers.get("Authorization"))); }
+  catch (e: any) { return json({ error: "unauthorized", detail: String(e?.message ?? e) }, 401); }
+  if (url.pathname === "/population/heartbeat" && req.method === "POST")
+    return json(await heartbeatPopulation(env, playerId, await req.json<any>().catch(() => ({}))));
+  if (url.pathname === "/population/snapshot" && req.method === "GET")
+    return json(await populationSnapshot(env));
+  return json({ error: "not found" }, 404);
+}
+
 async function handleLeaderboard(url: URL, env: Env): Promise<Response> {
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "100", 10) || 100, 1), 200);
   // A profile row can carry a NULL username: it was written before both sides were named at
@@ -392,6 +404,7 @@ export default {
       if (url.pathname.startsWith("/queue/")) return await handleQueueRoute(req, url, env);
       if (url.pathname.startsWith("/chat/") || url.pathname.startsWith("/invite/"))
         return await handleSocialRoute(req, url, env);
+      if (url.pathname.startsWith("/population/")) return await handlePopulationRoute(req, url, env);
       if (req.method === "POST" && url.pathname === "/report") return await handleReport(req, env);
       if (req.method === "GET" && url.pathname === "/profile") return await handleProfile(url, env);
       if (req.method === "GET" && url.pathname === "/leaderboard") return await handleLeaderboard(url, env);

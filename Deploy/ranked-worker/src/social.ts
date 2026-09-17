@@ -30,20 +30,29 @@ export async function handleChatSend(env: Env, me: string, body: any): Promise<a
   return { ok: true, id: res.meta.last_row_id, createdAt: now };
 }
 
-/// GET /chat/history?withId&sinceId&limit → messages between me and withId (both
-/// directions) with id > sinceId, oldest-first. sinceId lets the client tail the
-/// conversation cheaply (send the highest id it already has).
+/// GET /chat/history?withId&sinceId&beforeId&limit → chronological messages.
+/// The first page is the newest conversation history; sinceId tails newer messages,
+/// while beforeId pages older messages. The client never has to poll through years
+/// of old messages before it can display the current conversation.
 export async function handleChatHistory(env: Env, me: string, url: URL): Promise<any> {
   const withId = url.searchParams.get("withId")?.trim();
   if (!withId) return { error: "withId required" };
-  const sinceId = parseInt(url.searchParams.get("sinceId") ?? "0", 10) || 0;
+  const sinceId = Math.max(0, parseInt(url.searchParams.get("sinceId") ?? "0", 10) || 0);
+  const beforeId = Math.max(0, parseInt(url.searchParams.get("beforeId") ?? "0", 10) || 0);
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "80", 10) || 80, 1), 200);
-  const rows = await env.DB.prepare(
-    `SELECT id, from_id, to_id, body, created_at, read_at FROM dm_messages
-      WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?)) AND id > ?
-      ORDER BY id ASC LIMIT ?`,
-  ).bind(me, withId, withId, me, sinceId, limit).all<any>();
-  const messages = (rows.results ?? []).map((r: any) => ({
+  const base = `SELECT id, from_id, to_id, body, created_at, read_at FROM dm_messages
+    WHERE ((from_id = ? AND to_id = ?) OR (from_id = ? AND to_id = ?))`;
+  const rows = beforeId > 0
+    ? await env.DB.prepare(`${base} AND id < ? ORDER BY id DESC LIMIT ?`)
+        .bind(me, withId, withId, me, beforeId, limit).all<any>()
+    : sinceId > 0
+      ? await env.DB.prepare(`${base} AND id > ? ORDER BY id ASC LIMIT ?`)
+          .bind(me, withId, withId, me, sinceId, limit).all<any>()
+      : await env.DB.prepare(`${base} ORDER BY id DESC LIMIT ?`)
+          .bind(me, withId, withId, me, limit).all<any>();
+  const ordered = (beforeId > 0 || sinceId === 0)
+    ? [...(rows.results ?? [])].reverse() : (rows.results ?? []);
+  const messages = ordered.map((r: any) => ({
     id: r.id, fromId: r.from_id, toId: r.to_id, body: r.body,
     createdAt: r.created_at, readAt: r.read_at, mine: r.from_id === me,
   }));

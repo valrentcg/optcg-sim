@@ -58,6 +58,22 @@ CREATE TABLE IF NOT EXISTS queue (
 );
 CREATE INDEX IF NOT EXISTS idx_queue_waiting ON queue (mode, proposal_id, mmr);
 
+-- ── Population (authenticated registry + short-lived activity heartbeats) ───
+-- This starts counting registrations when the migration is applied. It deliberately
+-- does not infer total players from ranked_profiles: players who never play ranked
+-- must not disappear from the product-wide count.
+CREATE TABLE IF NOT EXISTS player_registry (
+  player_id       TEXT PRIMARY KEY,
+  first_seen_at   INTEGER NOT NULL,
+  last_seen_at    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS player_presence (
+  player_id       TEXT PRIMARY KEY,
+  activity        TEXT NOT NULL DEFAULT 'menu', -- menu | match_ranked | match_casual | match_custom
+  last_seen_at    INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_presence_activity_seen ON player_presence (activity, last_seen_at);
+
 -- A proposed match awaiting the ready check (accept/decline within READY_SECS).
 CREATE TABLE IF NOT EXISTS proposals (
   id         TEXT PRIMARY KEY,

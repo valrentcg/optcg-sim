@@ -64,8 +64,16 @@ foreach ($line in (Get-Content $botBaseline)) {
     if ($parts.Count -ne 2) { $botErrors += "Malformed baseline row: $trimmed"; continue }
     $source = Join-Path $botRoot $parts[0]
     if (-not (Test-Path $source)) { $botErrors += "Missing shipping bot file: $($parts[0])"; continue }
-    $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash.ToLowerInvariant()
-    if ($actual -ne $parts[1].ToLowerInvariant()) { $botErrors += "Changed shipping bot file: $($parts[0])" }
+    # Older baseline rows were recorded with mixed checkout line endings. Accept
+    # the raw hash or LF-normalized hash, but no change to source content.
+    $rawHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $source).Hash.ToLowerInvariant()
+    $sourceText = [System.IO.File]::ReadAllText($source)
+    $sourceBytes = [System.Text.Encoding]::UTF8.GetBytes($sourceText.Replace("`r`n", "`n"))
+    $lfHash = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($sourceBytes)).ToLowerInvariant()
+    $expectedHash = $parts[1].ToLowerInvariant()
+    if ($rawHash -ne $expectedHash -and $lfHash -ne $expectedHash) {
+        $botErrors += "Changed shipping bot file: $($parts[0])"
+    }
 }
 $approvedBotNames = @(Get-Content $botBaseline | Where-Object {
     $_.Trim() -and -not $_.Trim().StartsWith('#')
