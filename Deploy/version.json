@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.37",
-  "buildNumber": 36,
+  "buildVersion": "1.0.38",
+  "buildNumber": 37,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "FRIENDS AND CHAT\n\nSearch friends, manage requests, keep chat drafts and unread state, and create and invite a friend to a customizable private room.\n\nCUSTOM ROOMS\n\nRedesigned room creation, join by code, public browser, and two-player waiting room. Search public rooms by host or Leader and resize the browser. Sealed rooms show only relevant settings.\n\nPLAY AND LIVE STATUS\n\nUpdated Duel and Solo layouts, selected Leader art, live network status, tracked-player and online counts, and Casual/Ranked queue and match counts.",
+  "notes": "SOCIAL PANEL\n\nOpen friends and conversations from menus, deck building, or a match. Search friends, view profiles, keep message history and drafts, and see unread messages or pending requests on the collapsed panel. Game invitations use compact accept and decline controls and wait until you return to a main menu if you are already playing.\n\nPLAY AND ROOMS\n\nRefined full-bleed Leader artwork, deck information, queue and match counts, display settings, navigation colors, room controls, rule scrolling, and the resizable public-table browser.\n\nUPDATER\n\nThe update screen now keeps the complete release notes inside a responsive scrollable panel with a visible scrollbar whenever the notes overflow.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

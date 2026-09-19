@@ -1422,6 +1422,39 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.38", "Persistent social panel and menu polish", "Sep 19, 2026", new (string, string[])[]
+        {
+            ("Friends and messages", new[]
+            {
+                "Added a persistent Social panel inspired by modern competitive games. Open friends and conversations from the main menus, deck builder, Sealed deck builder, or during a match without leaving what you are doing.",
+                "Search friends, filter by online status, open player profiles, and keep several conversations available. Message history, unread counts, drafts, and the active conversation survive menu changes and panel refreshes.",
+                "The collapsed Social button shows unread messages, friend requests, and pending game invitations so new activity remains visible without occupying the screen.",
+                "Friend messages remain available during a match alongside opponent chat. Game invitations stay queued while a match is active and can be accepted after returning to a main menu.",
+            }),
+            ("Invitations and requests", new[]
+            {
+                "Friend requests and room invitations now live in the Social panel with compact accept and decline controls instead of covering the screen with a popup.",
+                "Room invitations show the sender and room details, update the pending badge, and use the same join flow as the room browser. Hosts can quickly invite a friend from room creation or the waiting room.",
+                "Removing or blocking a friend uses a clear confirmation step, and failed social requests keep their unread state so an item is not lost before it succeeds.",
+            }),
+            ("Play screen", new[]
+            {
+                "Refined the Duel deck showcase with deck information above the illustration, full-width faded Leader art, the card's in-game corner mask, and a repositioned Change Deck action.",
+                "Solo Play deck illustrations now fill their panels vertically. Your Deck and Bot's Deck remain clear while difficulty, timing, and match actions use the available space more consistently.",
+                "Casual and Ranked place players-in-queue and players-in-match counts on either side of the queue action. Header population labels no longer collide with their values.",
+            }),
+            ("Rooms and navigation", new[]
+            {
+                "Polished Create Room and the two-player waiting room with tighter grouping, clearer player and deck presentation, better rule spacing, and a visible scrollbar when more rule choices are below the fold.",
+                "The public-table browser uses the standard resize-grip symbol. Restore Code sits with Back to Play, and sidebar destinations work from room creation without leaving two menu items selected.",
+                "Back buttons use a muted magenta treatment for quick recognition, while Exit uses red. Windowed mode responds to its available client area, and display and cursor settings can be opened while playing.",
+            }),
+            ("Updater", new[]
+            {
+                "The launch-time update panel measures the complete release notes and keeps every section inside a responsive scroll view.",
+                "A visible scrollbar appears whenever the notes overflow. Use the mouse wheel or drag the bar to read from the first heading through the final bullet without clipping.",
+            }),
+        }),
         ("v1.0.37", "Friends, rooms, and play menu", "Sep 16, 2026", new (string, string[])[]
         {
             ("Play menu", new[]
