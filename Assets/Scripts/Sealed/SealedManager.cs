@@ -107,6 +107,7 @@ namespace OnePieceTcg.Sealed
 
         private void Boot()
         {
+            SocialOverlayController.SetContext(SocialSurfaceContext.Sealed);
             SealedLeaderRules.EnsureRegistered();
 
             canvas = gameObject.AddComponent<Canvas>();

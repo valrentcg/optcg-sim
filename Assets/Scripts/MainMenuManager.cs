@@ -309,6 +309,7 @@ public partial class MainMenuManager : MonoBehaviour
     private float blockedScrollPosition = 1f;
     private string friendOptionsId;
     private string removeConfirmId;
+    private string selectedFriendProfileId;
     private bool friendsBootSyncInFlight;
     private bool friendsBootSyncComplete;
     // Blocked-players view: the right friends panel swaps to a "BLOCKED" list (with Unblock
@@ -470,16 +471,19 @@ public partial class MainMenuManager : MonoBehaviour
 
         FriendsManager.FriendsChanged -= OnFriendsChanged;
         FriendsManager.FriendsChanged += OnFriendsChanged;
+        SocialOverlayController.EnsureCreated();
+        SocialOverlayController.SetContext(SocialSurfaceContext.MainMenu);
+        SocialOverlayController.StateChanged -= OnSocialOverlayChanged;
+        SocialOverlayController.StateChanged += OnSocialOverlayChanged;
 
         PopulationStore.Changed -= OnPopulationChanged;
         PopulationStore.Changed += OnPopulationChanged;
         PopulationStore.SetActivity("menu");
         PopulationStore.EnsureRunning();
 
-        // Global social poll: unread-chat badges + incoming game invites, so a friend's
-        // message or invite reaches the player anywhere in the menu (not only on the
-        // Friends stage). Dies with this object; the rebuilt menu after a match restarts it.
-        StartSocialPoll();
+        // The persistent overlay owns DMs, unread state and game-invite polling.
+        // This menu still hydrates its expanded Friends workspace from the live graph.
+        RefreshFriendsAtBoot();
 
         CheckAccountGateOnBoot();
     }
@@ -490,6 +494,11 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (this == null || menuRoot == null) return;
         RefreshFriendsLists();
+    }
+
+    private void OnSocialOverlayChanged()
+    {
+        if (this != null && menuRoot != null) RenderMenu();
     }
 
     private async void CheckAccountGateOnBoot()
@@ -993,12 +1002,8 @@ public partial class MainMenuManager : MonoBehaviour
         if (showingAccountGate) BuildAccountGateModal(menuRoot);
         if (rankedQueueActive) BuildRankedQueueModal(menuRoot);
         if (showSaveConfirm) BuildSaveConfirmModal(menuRoot);
-        // The chat dock and the incoming game-invite popup render over the whole menu, so they
-        // are reachable from any stage. The dock is NOT a modal — it does not blank the screen
-        // behind it and it persists across menu navigation, which is the point of docking it.
-        // The invite popup sits on top.
-        BuildChatDock(menuRoot);
-        if (pendingInvite != null) BuildInviteModal(menuRoot);
+        // Persistent friend conversations and invite notifications live on their
+        // own DontDestroyOnLoad canvas so they survive every screen transition.
         if (showRestoreCode) BuildRestoreCodeModal(menuRoot);
         Canvas.ForceUpdateCanvases();
         if (restoreSocialFocus) StartCoroutine(RestoreSocialInputFocus(focusName, caret));
@@ -4712,7 +4717,9 @@ public partial class MainMenuManager : MonoBehaviour
     private string FriendsOnlineSubtitle()
     {
         int online = friendsList.Count(f => f.Online);
-        return online == 1 ? "1 online" : $"{online} online";
+        int unread = SocialOverlayController.UnreadTotal;
+        string text = online == 1 ? "1 online" : $"{online} online";
+        return unread > 0 ? $"{text}  ·  {unread} unread" : text;
     }
 
     private void OpenFriends()
@@ -4757,6 +4764,8 @@ public partial class MainMenuManager : MonoBehaviour
             friendsList = friends;
             incomingRequests = incoming;
             outgoingRequests = outgoing;
+            if (!string.IsNullOrEmpty(selectedFriendProfileId) && !friendsList.Any(f => f.PlayerId == selectedFriendProfileId))
+                selectedFriendProfileId = null;
             RenderMenu();
         }
         catch (Exception ex)
@@ -4769,16 +4778,23 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void BuildFriendsStage(RectTransform stage)
     {
-        const float titleH = 60f;
+        const float titleH = 82f;
 
         var titleRow = PanelObject("Friends Title Row", stage, new Color(0, 0, 0, 0));
         Stretch(titleRow, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -titleH), Vector2.zero);
-        var titleText = TextObject("Title", titleRow, showingBlockedList ? "Blocked" : "Friends", 26, Ink, TextAnchor.MiddleLeft);
+        var titleText = TextObject("Title", titleRow, showingBlockedList ? "Blocked players" : "Friends & messages", 29, Ink, TextAnchor.LowerLeft);
         titleText.fontStyle = FontStyle.Bold;
-        Stretch(titleText.rectTransform, Vector2.zero, new Vector2(0.42f, 1f), new Vector2(4f, 0f), Vector2.zero);
+        Stretch(titleText.rectTransform, new Vector2(0f, 0.46f), new Vector2(0.45f, 1f), new Vector2(4f, 0f), Vector2.zero);
+
+        int online = friendsList.Count(f => f.Online);
+        var subtitle = TextObject("Subtitle", titleRow,
+            showingBlockedList ? "Manage the players you no longer want to hear from." :
+            $"{online} ONLINE  ·  {friendsList.Count} FRIENDS  ·  {SocialOverlayController.UnreadTotal} UNREAD",
+            10, SocialOverlayController.UnreadTotal > 0 ? Accent : Muted, TextAnchor.UpperLeft, monoFont);
+        Stretch(subtitle.rectTransform, Vector2.zero, new Vector2(0.55f, 0.28f), new Vector2(5f, 4f), Vector2.zero);
 
         var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
-        Stretch(backHolder, new Vector2(0.42f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        Stretch(backHolder, new Vector2(0.45f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
         var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
         backHlg.childAlignment = TextAnchor.MiddleRight;
         backHlg.childControlWidth = false;
@@ -4798,7 +4814,7 @@ public partial class MainMenuManager : MonoBehaviour
         if (AccountManager.IsGuest)
         {
             var panelG = PanelObject("Friends Guest Panel", stage, new Color32(8, 16, 24, 153));
-            Stretch(panelG, Vector2.zero, new Vector2(0.5f, 1f), Vector2.zero, new Vector2(0f, -titleH));
+            Stretch(panelG, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
             Round(panelG);
             AddRoundedCardBorder(panelG, MenuB, 1f);
             var msg = TextObject("Guest Msg", panelG,
@@ -4812,20 +4828,163 @@ public partial class MainMenuManager : MonoBehaviour
         var body = PanelObject("Friends Body", stage, new Color(0, 0, 0, 0));
         Stretch(body, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
 
-        // Left: add by username + incoming/outgoing requests.
-        var requestsPanel = PanelObject("Requests Panel", body, new Color32(8, 16, 24, 153));
-        Stretch(requestsPanel, Vector2.zero, new Vector2(0.42f, 1f), Vector2.zero, Vector2.zero);
-        Round(requestsPanel);
-        AddRoundedCardBorder(requestsPanel, MenuB, 1f);
-        BuildFriendRequestsPanel(requestsPanel);
+        if (showingBlockedList)
+        {
+            var blocked = PanelObject("Blocked Panel", body, new Color32(8, 16, 24, 216));
+            Stretch(blocked, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            RoundBig(blocked); AddRoundedCardBorder(blocked, MenuB, 1f);
+            BuildBlockedListPanel(blocked);
+            return;
+        }
 
-        // Right: friends list.
-        var friendsPanel = PanelObject("Friends Panel", body, new Color32(8, 16, 24, 153));
-        Stretch(friendsPanel, new Vector2(0.46f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
-        Round(friendsPanel);
-        AddRoundedCardBorder(friendsPanel, MenuB, 1f);
-        if (showingBlockedList) BuildBlockedListPanel(friendsPanel);
-        else BuildFriendsListPanel(friendsPanel);
+        // Expanded social workspace: online-first roster, selected player profile,
+        // then requests + the persistent conversation inbox. Every column has a job;
+        // there is no longer a half-screen empty request box.
+        var friendsPanel = PanelObject("Friends Roster", body, new Color32(8, 16, 24, 216));
+        Stretch(friendsPanel, Vector2.zero, new Vector2(0.365f, 1f), Vector2.zero, new Vector2(-8f, 0f));
+        RoundBig(friendsPanel); AddRoundedCardBorder(friendsPanel, ZoneBorder, 1f);
+        BuildFriendsListPanel(friendsPanel);
+
+        var profilePanel = PanelObject("Friend Profile", body, new Color32(8, 20, 31, 230));
+        Stretch(profilePanel, new Vector2(0.365f, 0f), new Vector2(0.69f, 1f), new Vector2(8f, 0f), new Vector2(-8f, 0f));
+        RoundBig(profilePanel); AddRoundedCardBorder(profilePanel, ZoneBorder, 1f);
+        BuildFriendProfilePanel(profilePanel);
+
+        var activityPanel = PanelObject("Social Activity", body, new Color(0, 0, 0, 0));
+        Stretch(activityPanel, new Vector2(0.69f, 0f), Vector2.one, new Vector2(8f, 0f), Vector2.zero);
+        BuildSocialActivityPanel(activityPanel);
+    }
+
+    private FriendEntry? SelectedFriendEntry()
+    {
+        if (!string.IsNullOrEmpty(selectedFriendProfileId))
+            foreach (var friend in friendsList) if (friend.PlayerId == selectedFriendProfileId) return friend;
+        var first = friendsList.OrderByDescending(f => f.Online).ThenBy(f => f.Username, StringComparer.OrdinalIgnoreCase).FirstOrDefault();
+        return string.IsNullOrEmpty(first.PlayerId) ? (FriendEntry?)null : first;
+    }
+
+    private void BuildFriendProfilePanel(RectTransform panel)
+    {
+        var selected = SelectedFriendEntry();
+        if (!selected.HasValue)
+        {
+            var empty = TextObject("Profile Empty", panel,
+                "YOUR CREW\n\nAdd a player by exact username, then select them here to view their profile, message them, or set up a game.",
+                12, Muted, TextAnchor.MiddleCenter, monoFont);
+            empty.horizontalOverflow = HorizontalWrapMode.Wrap;
+            Stretch(empty.rectTransform, Vector2.zero, Vector2.one, new Vector2(34f, 34f), new Vector2(-34f, -34f));
+            return;
+        }
+        var friend = selected.Value;
+        selectedFriendProfileId = friend.PlayerId;
+
+        var hero = PanelObject("Profile Hero", panel, new Color32(18, 39, 55, 235));
+        Stretch(hero, new Vector2(0f, 0.76f), Vector2.one, new Vector2(14f, 0f), new Vector2(-14f, -14f));
+        RoundBig(hero); AddRoundedCardBorder(hero, friend.Online ? Accent : ZoneBorder, 1.2f);
+        BuildCircleFaceIcon(hero, friend.ProfileIconId, 84f, new Vector2(18f, 0f), friend.Username);
+        var tag = TextObject("Tag", hero, friend.Online ? "ONLINE  ·  AVAILABLE" : "OFFLINE", 9,
+            friend.Online ? GoodGreen : Muted, TextAnchor.LowerLeft, monoFont);
+        Stretch(tag.rectTransform, new Vector2(0f, 0.46f), Vector2.one, new Vector2(112f, 0f), new Vector2(-14f, -18f));
+        var name = TextObject("Name", hero, friend.Username, 23, Ink, TextAnchor.UpperLeft);
+        name.fontStyle = FontStyle.Bold;
+        Stretch(name.rectTransform, new Vector2(0f, 0.18f), Vector2.one, new Vector2(112f, 14f), new Vector2(-14f, 0f));
+
+        var actions = PanelObject("Primary Actions", panel, new Color(0, 0, 0, 0));
+        Stretch(actions, new Vector2(0f, 0.65f), new Vector2(1f, 0.74f), new Vector2(14f, 0f), new Vector2(-14f, 0f));
+        var hlg = actions.gameObject.AddComponent<HorizontalLayoutGroup>();
+        hlg.spacing = 8f; hlg.childAlignment = TextAnchor.MiddleCenter; hlg.childControlWidth = false; hlg.childControlHeight = false;
+        string pid = friend.PlayerId, username = friend.Username;
+        AddButton(actions, "Message", () => OpenChat(pid, username), true, false, true, 116f, 38f);
+        AddButton(actions, "Invite to game", () => OpenLobbyHubForFriend(pid, username),
+            friend.Online && SocialInviteActionsAvailable, false, false, 126f, 38f);
+
+        var overview = PanelObject("Profile Overview", panel, new Color32(12, 27, 41, 220));
+        Stretch(overview, new Vector2(0f, 0.24f), new Vector2(1f, 0.62f), new Vector2(14f, 0f), new Vector2(-14f, 0f));
+        Round(overview); AddRoundedCardBorder(overview, MenuB, 1f);
+        var overviewTitle = TextObject("Overview Title", overview, "PLAYER PROFILE", 10, Muted, TextAnchor.UpperLeft, monoFont);
+        overviewTitle.fontStyle = FontStyle.Bold;
+        Stretch(overviewTitle.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(14f, -30f), new Vector2(-14f, -10f));
+        var overviewBody = TextObject("Overview Body", overview,
+            (friend.Online ? "Ready to receive messages and game invites." : "Messages will be waiting next time they sign in.") +
+            "\n\nOpen their public match record to scout recent decks and results.",
+            11, Ink, TextAnchor.UpperLeft);
+        overviewBody.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(overviewBody.rectTransform, Vector2.zero, Vector2.one, new Vector2(14f, 52f), new Vector2(-14f, -42f));
+        var matches = PanelObject("Matches Holder", overview, new Color(0, 0, 0, 0));
+        Stretch(matches, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(14f, 10f), new Vector2(-14f, 46f));
+        AddButton(matches, "View public match history  ›", () => OpenCloudMatches(username), true, false, false);
+
+        var safety = PanelObject("Safety Actions", panel, new Color(0, 0, 0, 0));
+        Stretch(safety, Vector2.zero, Vector2.one, new Vector2(14f, 12f), new Vector2(-14f, -14f));
+        var slg = safety.gameObject.AddComponent<HorizontalLayoutGroup>();
+        slg.spacing = 8f; slg.childAlignment = TextAnchor.LowerCenter; slg.childControlWidth = false; slg.childControlHeight = false;
+        bool removing = removeConfirmId == pid, blocking = blockConfirmId == pid;
+        if (removing)
+        {
+            AddButton(safety, "Keep friend", () => { removeConfirmId = null; RenderMenu(); }, true, false, false, 110f, 34f);
+            AddButton(safety, "Confirm remove", () => { removeConfirmId = null; RemoveFriendClicked(pid); }, !friendsBusy,
+                false, false, 124f, 34f, MenuButtonTone.Danger);
+        }
+        else if (blocking)
+        {
+            AddButton(safety, "Cancel", () => { blockConfirmId = null; RenderMenu(); }, true, false, false, 90f, 34f);
+            AddButton(safety, "Confirm block", () => { blockConfirmId = null; BlockFriendClicked(pid); }, !friendsBusy,
+                false, false, 120f, 34f, MenuButtonTone.Danger);
+        }
+        else
+        {
+            AddButton(safety, "Remove friend", () => { removeConfirmId = pid; RenderMenu(); }, !friendsBusy,
+                false, false, 112f, 34f, MenuButtonTone.Back);
+            AddButton(safety, "Block", () => { blockConfirmId = pid; RenderMenu(); }, !friendsBusy,
+                false, false, 88f, 34f, MenuButtonTone.Danger);
+        }
+    }
+
+    private void BuildSocialActivityPanel(RectTransform panel)
+    {
+        var requests = PanelObject("Requests Card", panel, new Color32(8, 16, 24, 216));
+        Stretch(requests, new Vector2(0f, 0.48f), Vector2.one, Vector2.zero, Vector2.zero);
+        RoundBig(requests); AddRoundedCardBorder(requests, ZoneBorder, 1f);
+        BuildFriendRequestsPanel(requests);
+
+        var inbox = PanelObject("Recent Messages Card", panel, new Color32(8, 16, 24, 216));
+        Stretch(inbox, Vector2.zero, new Vector2(1f, 0.48f), Vector2.zero, new Vector2(0f, -12f));
+        RoundBig(inbox); AddRoundedCardBorder(inbox, ZoneBorder, 1f);
+        var title = TextObject("Title", inbox, "RECENT MESSAGES", 11, Muted, TextAnchor.UpperLeft, monoFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -12f));
+        var open = PanelObject("Open Inbox", inbox, new Color(0, 0, 0, 0));
+        Stretch(open, new Vector2(0.58f, 1f), Vector2.one, new Vector2(0f, -46f), new Vector2(-14f, -12f));
+        AddButton(open, "Open social inbox", () => SocialOverlayController.OpenDrawer("messages"), true, false, false);
+
+        var summaries = SocialOverlayController.ConversationSummaries.Take(4).ToList();
+        if (summaries.Count == 0)
+        {
+            var empty = TextObject("Empty", inbox, "No conversations yet.\nSelect a friend to start one.", 11, Muted, TextAnchor.MiddleCenter, monoFont);
+            Stretch(empty.rectTransform, Vector2.zero, Vector2.one, new Vector2(16f, 24f), new Vector2(-16f, -54f));
+            return;
+        }
+        float rowH = 54f, top = 58f;
+        for (int i = 0; i < summaries.Count; i++)
+        {
+            var summary = summaries[i];
+            var friend = friendsList.FirstOrDefault(f => f.PlayerId == summary.peerId);
+            string username = string.IsNullOrWhiteSpace(friend.Username) ? "Captain" : friend.Username;
+            var row = PanelObject("Conversation " + i, inbox, new Color32(16, 31, 46, 220));
+            row.anchorMin = new Vector2(0f, 1f); row.anchorMax = new Vector2(1f, 1f); row.pivot = new Vector2(0.5f, 1f);
+            row.sizeDelta = new Vector2(-28f, rowH); row.anchoredPosition = new Vector2(0f, -(top + i * (rowH + 6f)));
+            Round(row); AddRoundedCardBorder(row, summary.unreadCount > 0 ? Accent : MenuB, 1f);
+            string id = summary.peerId, uname = username;
+            row.gameObject.AddComponent<Button>().onClick.AddListener(() => OpenChat(id, uname));
+            var nm = TextObject("Name", row, username + (summary.unreadCount > 0 ? $"  ({summary.unreadCount})" : ""), 11,
+                summary.unreadCount > 0 ? Accent : Ink, TextAnchor.UpperLeft);
+            nm.fontStyle = FontStyle.Bold;
+            Stretch(nm.rectTransform, new Vector2(0f, 0.45f), Vector2.one, new Vector2(12f, 2f), new Vector2(-10f, -4f));
+            string preview = (summary.lastMine ? "You: " : "") + summary.lastBody;
+            if (preview.Length > 42) preview = preview.Substring(0, 42) + "…";
+            var pv = TextObject("Preview", row, preview, 9, Muted, TextAnchor.UpperLeft);
+            Stretch(pv.rectTransform, Vector2.zero, new Vector2(1f, 0.5f), new Vector2(12f, 5f), new Vector2(-10f, 0f));
+        }
     }
 
     // Flip the right panel to the Blocked list (lazy-loading the block list the first time),
@@ -5023,12 +5182,13 @@ public partial class MainMenuManager : MonoBehaviour
     private void BuildFriendsListPanel(RectTransform panel)
     {
         string headerText = $"FRIENDS ({friendsList.Count})";
-        if (chatUnreadTotal > 0) headerText += $"   •   {chatUnreadTotal} unread";
-        var header = TextObject("Header", panel, headerText, 13, chatUnreadTotal > 0 ? Accent : Muted, TextAnchor.UpperLeft, monoFont);
+        int globalUnread = SocialOverlayController.UnreadTotal;
+        if (globalUnread > 0) headerText += $"   •   {globalUnread} unread";
+        var header = TextObject("Header", panel, headerText, 13, globalUnread > 0 ? Accent : Muted, TextAnchor.UpperLeft, monoFont);
         header.fontStyle = FontStyle.Bold;
         Stretch(header.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -34f), new Vector2(-16f, -14f));
 
-        var hint = TextObject("Chat Hint", panel, "Select a friend to chat  ·  Invite online friends", 10, Muted, TextAnchor.UpperLeft, monoFont);
+        var hint = TextObject("Chat Hint", panel, "Online first  ·  Select a player to view profile", 10, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(hint.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -50f), new Vector2(-16f, -34f));
 
         var search = MakeInput(panel, "Search friends", friendsSearchInput, s =>
@@ -5047,7 +5207,7 @@ public partial class MainMenuManager : MonoBehaviour
         var visible = friendsList
             .Where(f => string.IsNullOrWhiteSpace(friendsSearchInput) ||
                 f.Username.IndexOf(friendsSearchInput.Trim(), StringComparison.OrdinalIgnoreCase) >= 0)
-            .OrderByDescending(f => chatUnread.TryGetValue(f.PlayerId, out var count) && count > 0)
+            .OrderByDescending(f => SocialOverlayController.UnreadFor(f.PlayerId) > 0)
             .ThenByDescending(f => f.Online)
             .ThenBy(f => f.Username, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -5060,9 +5220,8 @@ public partial class MainMenuManager : MonoBehaviour
             return;
         }
 
-        const float baseH = 64f, expandedH = 122f, gap = 6f;
-        float totalH = 6f;
-        foreach (var entry in visible) totalH += (friendOptionsId == entry.PlayerId ? expandedH : baseH) + gap;
+        const float baseH = 72f, gap = 7f;
+        float totalH = 6f + visible.Count * (baseH + gap);
         var content = MakeMenuScroll(listArea, totalH);
         var scroll = listArea.GetComponent<ScrollRect>();
         scroll.verticalNormalizedPosition = friendsScrollPosition;
@@ -5071,102 +5230,55 @@ public partial class MainMenuManager : MonoBehaviour
         for (int i = 0; i < visible.Count; i++)
         {
             var entry = visible[i];
-            float rowH = friendOptionsId == entry.PlayerId ? expandedH : baseH;
             var row = PanelObject("Friend Row " + i, content, new Color32(14, 22, 32, 180));
             row.anchorMin = new Vector2(0f, 1f);
             row.anchorMax = new Vector2(1f, 1f);
             row.pivot = new Vector2(0.5f, 1f);
-            row.sizeDelta = new Vector2(0f, rowH);
+            row.sizeDelta = new Vector2(0f, baseH);
             row.anchoredPosition = new Vector2(0f, -top);
             BuildFriendRow(row, entry);
-            top += rowH + gap;
+            top += baseH + gap;
         }
     }
 
     private void BuildFriendRow(RectTransform row, FriendEntry entry)
     {
         Round(row);
-        AddRoundedCardBorder(row, MenuB, 1f);
+        bool selected = selectedFriendProfileId == entry.PlayerId;
+        row.GetComponent<Image>().color = selected ? new Color32(25, 60, 78, 235) : new Color32(14, 22, 32, 210);
+        AddRoundedCardBorder(row, selected ? Accent : MenuB, selected ? 1.5f : 1f);
+        string pid = entry.PlayerId, username = entry.Username;
+        var rowBtn = row.gameObject.AddComponent<Button>();
+        rowBtn.transition = Selectable.Transition.ColorTint;
+        rowBtn.onClick.AddListener(() => { selectedFriendProfileId = pid; removeConfirmId = blockConfirmId = null; RenderMenu(); });
 
-        var main = PanelObject("Friend Main", row, new Color(0f, 0f, 0f, 0f));
-        main.anchorMin = new Vector2(0f, 1f); main.anchorMax = new Vector2(1f, 1f);
-        main.pivot = new Vector2(0.5f, 1f);
-        main.sizeDelta = new Vector2(0f, 64f);
-        main.anchoredPosition = Vector2.zero;
-        // The name/presence side opens chat. The action buttons handle their own clicks.
-        var rowBtn = main.gameObject.AddComponent<Button>();
-        rowBtn.transition = Selectable.Transition.None;
-        rowBtn.onClick.AddListener(() => OpenChat(entry.PlayerId, entry.Username));
+        BuildCircleFaceIcon(row, entry.ProfileIconId, 46f, new Vector2(10f, 0f), entry.Username);
 
-        var dot = PanelObject("Presence Dot", main, entry.Online ? GoodGreen : Muted);
-        dot.anchorMin = dot.anchorMax = new Vector2(0f, 0.5f);
-        dot.pivot = new Vector2(0f, 0.5f);
-        dot.sizeDelta = new Vector2(10f, 10f);
-        dot.anchoredPosition = new Vector2(14f, 0f);
-        RoundCircle(dot);
-        var dotImg = dot.GetComponent<Image>(); if (dotImg != null) dotImg.raycastTarget = false;
-
-        var name = TextObject("Name", main, entry.Username, 14, Ink, TextAnchor.LowerLeft);
+        var name = TextObject("Name", row, entry.Username, 14, Ink, TextAnchor.LowerLeft);
         name.fontStyle = FontStyle.Bold;
         name.raycastTarget = false;
         name.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.5f, 1f), new Vector2(32f, 0f), new Vector2(-4f, -5f));
+        Stretch(name.rectTransform, new Vector2(0f, 0.5f), new Vector2(0.64f, 1f), new Vector2(68f, 0f), new Vector2(-4f, -5f));
 
-        int unread = chatUnread.TryGetValue(entry.PlayerId, out var uc) ? uc : 0;
-        string presenceStr = entry.Online ? "online" : "offline";
+        int unread = SocialOverlayController.UnreadFor(entry.PlayerId);
+        string presenceStr = entry.Online ? "ONLINE · AVAILABLE" : "OFFLINE";
         if (unread > 0) presenceStr += $"  •  {unread} unread";
-        var status = TextObject("Presence Label", main, presenceStr, 11,
+        var status = TextObject("Presence Label", row, presenceStr, 9,
             unread > 0 ? Accent : (entry.Online ? GoodGreen : Muted), TextAnchor.UpperLeft, monoFont);
         status.raycastTarget = false;
-        Stretch(status.rectTransform, Vector2.zero, new Vector2(0.5f, 0.5f), new Vector2(32f, 5f), new Vector2(-4f, 0f));
+        Stretch(status.rectTransform, Vector2.zero, new Vector2(0.7f, 0.5f), new Vector2(68f, 5f), new Vector2(-4f, 0f));
 
-        var btnHolder = PanelObject("Buttons", main, new Color(0, 0, 0, 0));
-        Stretch(btnHolder, new Vector2(0.5f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-10f, 0f));
+        var btnHolder = PanelObject("Buttons", row, new Color(0, 0, 0, 0));
+        Stretch(btnHolder, new Vector2(0.70f, 0f), new Vector2(1f, 1f), Vector2.zero, new Vector2(-8f, 0f));
         var hlg = btnHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        hlg.spacing = 6f;
+        hlg.spacing = 5f;
         hlg.childAlignment = TextAnchor.MiddleRight;
         hlg.childControlWidth = false;
         hlg.childControlHeight = false;
+        AddButton(btnHolder, "Message", () => OpenChat(pid, username), true, false, false, 74f, 30f);
         if (entry.Online)
-            AddButton(btnHolder, row.rect.width > 400f ? "Play Together" : "Play",
-                () => OpenLobbyHubForFriend(entry.PlayerId, entry.Username),
-                !inviteBusy && !lobbyBusy, false, false, row.rect.width > 400f ? 94f : 66f);
-        AddButton(btnHolder, friendOptionsId == entry.PlayerId ? "Close" : "More",
-            () => ToggleFriendOptions(entry.PlayerId), !friendsBusy, false, false, 66f);
-
-        if (friendOptionsId != entry.PlayerId) return;
-        bool removing = removeConfirmId == entry.PlayerId;
-        bool blocking = blockConfirmId == entry.PlayerId;
-        string prompt = removing ? $"Remove {entry.Username} from friends?" :
-            blocking ? $"Block {entry.Username}? Friendship will end." :
-            $"Actions for {entry.Username}";
-        var note = TextObject("Action Prompt", row, prompt, 10,
-            removing || blocking ? RedAccent : Muted, TextAnchor.MiddleLeft, monoFont);
-        note.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(note.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
-            new Vector2(14f, 42f), new Vector2(-14f, 58f));
-
-        var actions = PanelObject("More Actions", row, new Color(0f, 0f, 0f, 0f));
-        Stretch(actions, Vector2.zero, new Vector2(1f, 0f), new Vector2(12f, 5f), new Vector2(-12f, 39f));
-        var layout = actions.gameObject.AddComponent<HorizontalLayoutGroup>();
-        layout.spacing = 6f; layout.childAlignment = TextAnchor.MiddleRight;
-        layout.childControlWidth = false; layout.childControlHeight = false;
-        if (removing)
-        {
-            AddButton(actions, "Keep Friend", () => { removeConfirmId = null; RenderMenu(); }, true, false, false, 94f);
-            AddButton(actions, "Confirm Remove", () => { removeConfirmId = null; friendOptionsId = null; RemoveFriendClicked(entry.PlayerId); }, !friendsBusy, false, false, 122f);
-        }
-        else if (blocking)
-        {
-            AddButton(actions, "Cancel", () => { blockConfirmId = null; RenderMenu(); }, true, false, false, 76f);
-            AddButton(actions, "Confirm Block", () => { blockConfirmId = null; friendOptionsId = null; BlockFriendClicked(entry.PlayerId); }, !friendsBusy, false, false, 114f);
-        }
-        else
-        {
-            AddButton(actions, "Matches", () => OpenCloudMatches(entry.Username), true, false, false, 76f);
-            AddButton(actions, "Remove", () => { removeConfirmId = entry.PlayerId; RenderMenu(); }, !friendsBusy, false, false, 76f);
-            AddButton(actions, "Block", () => { blockConfirmId = entry.PlayerId; RenderMenu(); }, !friendsBusy, false, false, 76f);
-        }
+            AddButton(btnHolder, "Invite", () => OpenLobbyHubForFriend(pid, username),
+                SocialInviteActionsAvailable, false, false, 62f, 30f);
     }
 
     private void ToggleFriendOptions(string playerId)
@@ -5450,24 +5562,7 @@ public partial class MainMenuManager : MonoBehaviour
     // Open, or focus if already docked. Never opens a duplicate window for the same friend.
     private void OpenChat(string playerId, string username)
     {
-        if (string.IsNullOrEmpty(playerId) || !AccountManager.HasClaimedIdentity) return;
-        var w = FindChatWindow(playerId);
-        if (w != null)
-        {
-            w.Minimized = false;
-            chatDock.Remove(w); chatDock.Add(w);      // re-focus → move to the near end
-        }
-        else
-        {
-            w = new ChatWindow { PlayerId = playerId, Username = username };
-            chatDock.Add(w);
-            // Evict the least-recently-focused window rather than refusing to open a new one:
-            // being unable to open a chat is a worse failure than losing the oldest tab.
-            while (chatDock.Count > ChatCapacity()) chatDock.RemoveAt(0);
-        }
-        RenderMenu();
-        LoadWindowHistory(w, markRead: true);
-        StartChatDockPoll();
+        SocialOverlayController.OpenConversation(playerId, username);
     }
 
     private void CloseChatWindow(ChatWindow w)
@@ -5880,6 +5975,32 @@ public partial class MainMenuManager : MonoBehaviour
         }
     }
 
+    public bool SocialInviteActionsAvailable => canvas != null && canvas.gameObject.activeInHierarchy &&
+        LobbyManager.CurrentSession == null && !rankedQueueActive && !lobbyBusy && !showingAccountGate;
+
+    public void AcceptInviteFromSocialOverlay(GameInvite invite)
+    {
+        if (!SocialInviteActionsAvailable || invite == null) return;
+        pendingInvite = invite;
+        AcceptInviteClicked();
+    }
+
+    public void BeginFriendInviteFromSocial(string playerId, string username)
+    {
+        if (!SocialInviteActionsAvailable) return;
+        OpenLobbyHubForFriend(playerId, username);
+    }
+
+    public void ShowFriendProfileFromSocial(string playerId)
+    {
+        if (string.IsNullOrEmpty(playerId)) return;
+        ClearPrimaryMenuStage();
+        showingFriends = true;
+        selectedFriendProfileId = playerId;
+        RenderMenu();
+        ForceRefreshFriends();
+    }
+
     private void BuildInviteModal(RectTransform root)
     {
         var inv = pendingInvite;
@@ -5949,6 +6070,7 @@ public partial class MainMenuManager : MonoBehaviour
         }
         finally
         {
+            SocialOverlayController.InviteActionFinished(inv?.id);
             if (this != null && menuRoot != null) { inviteBusy = false; RenderMenu(); }
         }
     }
@@ -8557,6 +8679,7 @@ public partial class MainMenuManager : MonoBehaviour
         MatchNetworkSync.SealedBuildAcknowledged -= OnSealedBuildAcknowledged;
         CancelInvoke(nameof(RetryPendingSealedBuild));
         FriendsManager.FriendsChanged -= OnFriendsChanged;
+        SocialOverlayController.StateChanged -= OnSocialOverlayChanged;
         PopulationStore.Changed -= OnPopulationChanged;
     }
 

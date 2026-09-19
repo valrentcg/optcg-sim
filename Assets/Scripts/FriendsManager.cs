@@ -60,12 +60,14 @@ public readonly struct FriendEntry
     public string PlayerId { get; }
     public string Username { get; }
     public bool Online { get; }
+    public string ProfileIconId { get; }
 
-    public FriendEntry(string playerId, string username, bool online)
+    public FriendEntry(string playerId, string username, bool online, string profileIconId = null)
     {
         PlayerId = playerId;
         Username = username;
         Online = online;
+        ProfileIconId = profileIconId;
     }
 }
 
@@ -297,19 +299,20 @@ public static class FriendsManager
         // current player's perspective, so no filtering-out-yourself is needed here.
         var others = relationships.Select(rel => rel.Member).ToList();
 
-        var usernames = await LookupUsernamesAsync(others.Select(m => m.Id).ToList());
+        var directory = await LookupUsernamesAsync(others.Select(m => m.Id).ToList());
 
         var result = new List<FriendEntry>(others.Count);
         foreach (var m in others)
         {
-            usernames.TryGetValue(m.Id, out var name);
+            directory.usernames.TryGetValue(m.Id, out var name);
+            directory.profileIcons.TryGetValue(m.Id, out var profileIcon);
             // Presence rides along on the Relationship snapshot; anything other than a
             // concrete Online availability (null presence, Offline, Invisible, service
             // hiccup) renders as offline - the safe default for the menu's dot.
             bool online = false;
             try { online = m.Presence != null && m.Presence.Availability == Availability.Online; }
             catch (Exception) { /* degrade to offline */ }
-            result.Add(new FriendEntry(m.Id, name ?? "(unknown)", online));
+            result.Add(new FriendEntry(m.Id, name ?? "(unknown)", online, profileIcon));
         }
         return result;
     }
@@ -321,21 +324,31 @@ public static class FriendsManager
     {
         public bool ok;
         public Dictionary<string, string> usernames;
+        public Dictionary<string, string> profileIcons;
     }
 
-    private static async Task<Dictionary<string, string>> LookupUsernamesAsync(List<string> playerIds)
+    private static async Task<GetUsernamesResponse> LookupUsernamesAsync(List<string> playerIds)
     {
-        if (playerIds.Count == 0) return new Dictionary<string, string>();
+        if (playerIds.Count == 0) return EmptyDirectory();
         try
         {
             var response = await CloudCodeService.Instance.CallEndpointAsync<GetUsernamesResponse>(
                 "GetUsernamesForPlayers", new Dictionary<string, object> { ["playerIds"] = playerIds });
-            return response.usernames ?? new Dictionary<string, string>();
+            response ??= EmptyDirectory();
+            response.usernames ??= new Dictionary<string, string>();
+            response.profileIcons ??= new Dictionary<string, string>();
+            return response;
         }
         catch (RequestFailedException ex)
         {
             Debug.LogWarning($"GetUsernamesForPlayers failed: {ex.Message}");
-            return new Dictionary<string, string>();
+            return EmptyDirectory();
         }
     }
+
+    private static GetUsernamesResponse EmptyDirectory() => new GetUsernamesResponse
+    {
+        usernames = new Dictionary<string, string>(),
+        profileIcons = new Dictionary<string, string>(),
+    };
 }

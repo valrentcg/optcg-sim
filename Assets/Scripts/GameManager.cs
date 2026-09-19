@@ -465,6 +465,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void Awake()
     {
         UiSfx.Ensure();          // global button click feedback (survives scene changes)
+        SocialOverlayController.SetContext(PendingReplayLoad != null
+            ? SocialSurfaceContext.Replay : SocialSurfaceContext.Match);
         font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         if (font == null) font = Resources.GetBuiltinResource<Font>("Arial.ttf");
         // Techy/mono faces to approximate the design mock (Chakra Petch / JetBrains Mono). Falls back
@@ -618,7 +620,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         // While the chat input has keyboard focus, keystrokes must never reach game handling.
-        if (ChatInputFocused) return;
+        if (ChatInputFocused || SocialOverlayController.InputFocused) return;
 
         var keyboard = UnityEngine.InputSystem.Keyboard.current;
         if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame)

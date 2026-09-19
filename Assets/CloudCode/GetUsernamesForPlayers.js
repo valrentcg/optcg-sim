@@ -22,7 +22,7 @@ module.exports = async ({ params, context, logger }) => {
   const playerIds = Array.isArray(params.playerIds) ? params.playerIds.slice(0, MAX_BATCH) : [];
 
   if (playerIds.length === 0) {
-    return { ok: true, usernames: {} };
+    return { ok: true, usernames: {}, profileIcons: {} };
   }
 
   const cloudSaveApi = new DataApi(context);
@@ -33,7 +33,21 @@ module.exports = async ({ params, context, logger }) => {
     usernames[item.key] = item.value.username;
   }
 
-  return { ok: true, usernames };
+  // The profile icon is an ordinary per-player Cloud Save value. Cloud Code
+  // uses its service token to read the public-facing choice for relationship
+  // members; old accounts and old deployments simply fall back to initials.
+  const profileIcons = {};
+  await Promise.all(playerIds.map(async (playerId) => {
+    try {
+      const profile = await cloudSaveApi.getItems(projectId, playerId, ["profileIcon"]);
+      const value = profile?.data?.results?.find((item) => item.key === "profileIcon")?.value;
+      if (typeof value === "string" && value.trim().length > 0) profileIcons[playerId] = value.trim();
+    } catch (err) {
+      logger.info(`Profile icon lookup failed for ${playerId}: ${err.message}`);
+    }
+  }));
+
+  return { ok: true, usernames, profileIcons };
 };
 
 module.exports.params = {

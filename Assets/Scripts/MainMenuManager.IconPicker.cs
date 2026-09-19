@@ -344,7 +344,7 @@ public partial class MainMenuManager
     /// <summary>Left-center anchored circular avatar for panels (top bar,
     /// current-pick chip, profile header). Falls back to a steel circle with
     /// the player's/character's initial when no icon or art exists.</summary>
-    private void BuildCircleFaceIcon(RectTransform parent, string cardId, float size, Vector2 pos)
+    private void BuildCircleFaceIcon(RectTransform parent, string cardId, float size, Vector2 pos, string fallbackName = null)
     {
         var circle = PanelObject("Avatar Circle", parent, new Color32(11, 20, 32, 255));
         circle.anchorMin = circle.anchorMax = new Vector2(0f, 0.5f);
@@ -369,7 +369,7 @@ public partial class MainMenuManager
         }
 
         // Fallback: steel gradient + initial (player initial when no icon set).
-        string who = AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? "?";
+        string who = fallbackName ?? AccountManager.CurrentUsername ?? AccountManager.GuestDisplayName ?? "?";
         var init = TextObject("Init", circle, who.Substring(0, 1).ToUpperInvariant(),
             Mathf.RoundToInt(size * 0.45f), new Color(0.914f, 0.941f, 0.969f, 0.94f), TextAnchor.MiddleCenter);
         init.fontStyle = FontStyle.Bold;
