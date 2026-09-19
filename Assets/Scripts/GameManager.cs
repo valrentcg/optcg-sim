@@ -437,6 +437,62 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             new GameObject("GameManager").AddComponent<GameManager>();
     }
 
+    private static GameManager ActiveManager => Object.FindAnyObjectByType<GameManager>();
+
+    public static bool MatchChatAvailable
+    {
+        get
+        {
+            var manager = ActiveManager;
+            return manager != null && manager.isNetworked && !manager.isReplayMode;
+        }
+    }
+
+    public static bool MatchChatOpen
+    {
+        get
+        {
+            var manager = ActiveManager;
+            return manager != null && manager.chatOpen && manager.isNetworked && !manager.isReplayMode;
+        }
+    }
+
+    public static bool MatchChatUnread
+    {
+        get
+        {
+            var manager = ActiveManager;
+            return manager != null && manager.chatUnread;
+        }
+    }
+
+    public static bool TryOpenMatchChatFromSocial()
+    {
+        var manager = ActiveManager;
+        if (manager == null || !manager.isNetworked || manager.isReplayMode) return false;
+        manager.chatOpen = true;
+        manager.chatUnread = false;
+        manager.matchSettingsOpen = false;
+        SocialOverlayController.CloseDrawerForMatchChat();
+        manager.Render();
+        return true;
+    }
+
+    public static void CloseMatchChatForSocial()
+    {
+        var manager = ActiveManager;
+        if (manager == null || !manager.chatOpen) return;
+        manager.chatOpen = false;
+        manager.Render();
+    }
+
+    private void CloseMatchChatToDock()
+    {
+        chatOpen = false;
+        Render();
+        SocialOverlayController.ShowDock();
+    }
+
     [System.Serializable]
     private sealed class OfficialCardPayload
     {
@@ -8831,7 +8887,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(actionPanel, new Vector2(0.085f, 0.35f), new Vector2(0.915f, 0.852f), Vector2.zero, Vector2.zero);
         DrawContextActions(actionPanel);
 
-        // Networked matches use the left-edge match chat panel (DrawMatchChatPanel) instead.
+        // Networked matches use the unified fixed communications drawer (DrawMatchChatPanel) instead.
         if (!isNetworked) DrawChatPanel();
         DrawPlayerPlate(sideRoot, state.Players.ContainsKey(BottomSeat) ? state.Players[BottomSeat] : null, BottomSeat, state.ActiveSeat == BottomSeat, new Vector2(0.06f, 0.094f), new Vector2(0.94f, 0.138f));
         AddEndTurnPanel();
@@ -9539,6 +9595,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         chatMessages.Add(new ChatMessage { Sender = DisplayName(opponentSeat), Text = text, Mine = false });
         TrimChatHistory();
         if (!chatOpen) chatUnread = true;
+        SocialOverlayController.RefreshSurface();
         // Never rebuild mid-drag (Render() would destroy the dragged object under the
         // EventSystem) — the coalesced refresh in Update() picks it up instead.
         if (isDraggingHandCard || isDraggingAttack) _artRefreshQueued = true;
@@ -9766,53 +9823,51 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void DrawMatchChatPanel()
     {
-        // Collapsed tab (always present so the panel can be re-opened).
-        var tab = PanelObject("Chat Tab", boardRoot, chatOpen ? Accent : (Color)new Color32(34, 58, 78, 235));
-        tab.anchorMin = new Vector2(0f, 0.5f);
-        tab.anchorMax = new Vector2(0f, 0.5f);
-        tab.pivot = new Vector2(0f, 0.5f);
-        tab.sizeDelta = new Vector2(26f, 92f);
-        tab.anchoredPosition = new Vector2(0f, 0f);
-        Round(tab);
-        AddRoundedCardBorder(tab, chatOpen ? Accent2 : MenuB, 1f);
-        var tabText = TextObject("Chat Tab Text", tab, "C\nH\nA\nT", 10, chatOpen ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
-        tabText.fontStyle = FontStyle.Bold;
-        Stretch(tabText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        if (chatUnread && !chatOpen)
-        {
-            var dot = PanelObject("Chat Unread Dot", tab, (Color)RedAccent);
-            dot.anchorMin = dot.anchorMax = new Vector2(0.82f, 0.92f);
-            dot.pivot = new Vector2(0.5f, 0.5f);
-            dot.sizeDelta = new Vector2(8f, 8f);
-            dot.anchoredPosition = Vector2.zero;
-            RoundCircle(dot);
-        }
-        var tabButton = tab.gameObject.AddComponent<Button>();
-        tabButton.onClick.AddListener(() => { chatOpen = !chatOpen; if (chatOpen) chatUnread = false; Render(); });
-
         if (!chatOpen) return;
 
         var panel = PanelObject("Match Chat Panel", boardRoot, (Color)new Color32(14, 30, 46, 246));
-        panel.anchorMin = new Vector2(0f, 0.5f);
-        panel.anchorMax = new Vector2(0f, 0.5f);
-        panel.pivot = new Vector2(0f, 0.5f);
-        panel.sizeDelta = new Vector2(300f, 420f);
-        panel.anchoredPosition = new Vector2(30f, 0f);
+        float rootWidth = boardRoot.rect.width > 1f ? boardRoot.rect.width : 1600f;
+        float rootHeight = boardRoot.rect.height > 1f ? boardRoot.rect.height : 900f;
+        panel.anchorMin = panel.anchorMax = Vector2.one;
+        panel.pivot = Vector2.one;
+        panel.sizeDelta = new Vector2(
+            Mathf.Min(520f, Mathf.Max(420f, rootWidth * 0.31f)),
+            Mathf.Max(430f, Mathf.Min(740f, rootHeight - 126f)));
+        panel.anchoredPosition = new Vector2(-18f, -96f);
         RoundBig(panel);
         AddRoundedCardBorder(panel, MenuB, 1.2f);
 
-        var title = TextObject("Match Chat Title", panel, "MATCH CHAT", 10, Muted, TextAnchor.MiddleLeft, monoFont);
-        Stretch(title.rectTransform, new Vector2(0.05f, 0.93f), new Vector2(0.95f, 0.99f), Vector2.zero, Vector2.zero);
+        var title = TextObject("Match Chat Title", panel, "COMMUNICATIONS", 17, Ink, TextAnchor.MiddleLeft, titleFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0.04f, 0.925f), new Vector2(0.75f, 0.985f), Vector2.zero, Vector2.zero);
+        var close = PanelObject("Match Chat Close", panel, new Color32(34, 58, 78, 235));
+        Stretch(close, new Vector2(0.90f, 0.935f), new Vector2(0.965f, 0.98f), Vector2.zero, Vector2.zero);
+        Round(close);
+        AddRoundedCardBorder(close, MenuB, 1f);
+        var closeText = TextObject("Match Chat Close Text", close, "—", 14, Ink, TextAnchor.MiddleCenter, monoFont);
+        Stretch(closeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        close.gameObject.AddComponent<Button>().onClick.AddListener(CloseMatchChatToDock);
+
+        var tabs = PanelObject("Match Communications Tabs", panel, Color.clear);
+        Stretch(tabs, new Vector2(0.035f, 0.855f), new Vector2(0.965f, 0.915f), Vector2.zero, Vector2.zero);
+        AddMatchCommsTab(tabs, "MATCH CHAT", 0f, 0.25f, true, null, chatUnread ? 1 : 0);
+        AddMatchCommsTab(tabs, "MESSAGES", 0.255f, 0.50f, false,
+            () => SocialOverlayController.OpenDrawer("messages"));
+        AddMatchCommsTab(tabs, "FRIENDS", 0.505f, 0.75f, false,
+            () => SocialOverlayController.OpenDrawer("friends"));
+        AddMatchCommsTab(tabs, "REQUESTS", 0.755f, 1f, false,
+            () => SocialOverlayController.OpenDrawer("requests"));
+
         // Copy the whole conversation to the clipboard (the input itself already supports
         // native Ctrl+C/V paste; this covers copying the received messages/history).
-        AddCopyChip(panel, "Copy", BuildChatText, new Vector2(0.70f, 0.925f), new Vector2(0.95f, 0.99f));
+        AddCopyChip(panel, "COPY", BuildChatText, new Vector2(0.735f, 0.79f), new Vector2(0.96f, 0.84f));
 
         // Per-match mute, right where the abuse is being read. Deliberately one click and reachable
         // without leaving the match: the alternative escape was to quit, which concedes.
         bool muted = matchChatMuted || MatchAutomationSettings.MuteMatchChat;
         var muteChip = PanelObject("Match Chat Mute", panel,
             muted ? (Color)RedAccent : (Color)new Color32(34, 58, 78, 235));
-        Stretch(muteChip, new Vector2(0.44f, 0.925f), new Vector2(0.68f, 0.99f), Vector2.zero, Vector2.zero);
+        Stretch(muteChip, new Vector2(0.505f, 0.79f), new Vector2(0.725f, 0.84f), Vector2.zero, Vector2.zero);
         Round(muteChip);
         var muteText = TextObject("Match Chat Mute Text", muteChip, muted ? "MUTED" : "MUTE", 9,
             muted ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
@@ -9822,9 +9877,13 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // single bad match can't silently turn chat off forever.
         muteBtn.onClick.AddListener(() => { matchChatMuted = !matchChatMuted; Render(); });
 
+        var context = TextObject("Match Chat Context", panel, "OPPONENT CHAT  ·  THIS MATCH", 9, Muted,
+            TextAnchor.MiddleLeft, monoFont);
+        Stretch(context.rectTransform, new Vector2(0.04f, 0.79f), new Vector2(0.49f, 0.84f), Vector2.zero, Vector2.zero);
+
         // Scrollable message list (same viewport/ScrollRect pattern as the combat log).
         var viewport = PanelObject("Match Chat Viewport", panel, new Color(0, 0, 0, 0));
-        Stretch(viewport, new Vector2(0.04f, 0.12f), new Vector2(0.96f, 0.92f), Vector2.zero, Vector2.zero);
+        Stretch(viewport, new Vector2(0.04f, 0.13f), new Vector2(0.96f, 0.775f), Vector2.zero, Vector2.zero);
         viewport.gameObject.AddComponent<RectMask2D>();
 
         var content = new GameObject("Match Chat Content").AddComponent<RectTransform>();
@@ -9862,7 +9921,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var fieldGo = new GameObject("Match Chat Input", typeof(RectTransform), typeof(Image), typeof(InputField));
         var fieldRt = fieldGo.GetComponent<RectTransform>();
         fieldRt.SetParent(panel, false);
-        Stretch(fieldRt, new Vector2(0.04f, 0.015f), new Vector2(0.74f, 0.105f), Vector2.zero, Vector2.zero);
+        Stretch(fieldRt, new Vector2(0.04f, 0.025f), new Vector2(0.745f, 0.105f), Vector2.zero, Vector2.zero);
         fieldGo.GetComponent<Image>().color = new Color32(20, 34, 50, 235);
         Round(fieldRt);
         AddRoundedCardBorder(fieldRt, MenuB, 1f);
@@ -9885,12 +9944,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         chatInputField = field;
 
         var sendGo = PanelObject("Match Chat Send", panel, Accent);
-        Stretch(sendGo, new Vector2(0.77f, 0.015f), new Vector2(0.96f, 0.105f), Vector2.zero, Vector2.zero);
+        Stretch(sendGo, new Vector2(0.765f, 0.025f), new Vector2(0.96f, 0.105f), Vector2.zero, Vector2.zero);
         Round(sendGo);
         var sendTxt = TextObject("Match Chat Send Text", sendGo, "Send", 11, BadgeInk, TextAnchor.MiddleCenter, titleFont);
         Stretch(sendTxt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var sendBtn = sendGo.gameObject.AddComponent<Button>();
         sendBtn.onClick.AddListener(() => { var t = field.text; field.text = ""; SendChat(t); });
+    }
+
+    private void AddMatchCommsTab(RectTransform parent, string label, float x0, float x1,
+        bool selected, UnityEngine.Events.UnityAction action, int badge = 0)
+    {
+        var tab = PanelObject(label + " Tab", parent,
+            selected ? (Color)new Color32(38, 92, 111, 255) : (Color)new Color32(22, 42, 60, 220));
+        Stretch(tab, new Vector2(x0, 0f), new Vector2(x1, 1f), new Vector2(2f, 1f), new Vector2(-2f, -1f));
+        Round(tab);
+        AddRoundedCardBorder(tab, selected ? Accent : MenuB, selected ? 1.2f : 0.7f);
+        var value = badge > 0 ? $"{label} {badge}" : label;
+        var text = TextObject(label + " Tab Text", tab, value, 9, selected ? Ink : Muted,
+            TextAnchor.MiddleCenter, monoFont);
+        text.fontStyle = FontStyle.Bold;
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(3f, 0f), new Vector2(-3f, 0f));
+        if (action != null) tab.gameObject.AddComponent<Button>().onClick.AddListener(action);
     }
 
     private void DrawChatPanel()
