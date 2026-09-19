@@ -996,9 +996,9 @@ public partial class MainMenuManager : MonoBehaviour
         BuildBody();
         // Account gate renders as a modal over the whole menu (top bar included) so the
         // menu stays visible-but-locked behind it instead of the stage being hijacked.
-        // Incoming friend-request side toasts (non-blocking) — on any stage except Friends,
-        // where they're already listed. Drawn before the modals so a modal dim sits on top.
-        if (!showingFriends && !AccountManager.IsGuest) BuildFriendRequestToasts(menuRoot);
+        // Friend and game requests are consolidated in the persistent Social
+        // drawer. The collapsed dock carries their badges without covering the
+        // status bar or page-level controls.
         if (showingAccountGate) BuildAccountGateModal(menuRoot);
         if (rankedQueueActive) BuildRankedQueueModal(menuRoot);
         if (showSaveConfirm) BuildSaveConfirmModal(menuRoot);
@@ -4887,7 +4887,8 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(tag.rectTransform, new Vector2(0f, 0.46f), Vector2.one, new Vector2(112f, 0f), new Vector2(-14f, -18f));
         var name = TextObject("Name", hero, friend.Username, 23, Ink, TextAnchor.UpperLeft);
         name.fontStyle = FontStyle.Bold;
-        Stretch(name.rectTransform, new Vector2(0f, 0.18f), Vector2.one, new Vector2(112f, 14f), new Vector2(-14f, 0f));
+        Stretch(name.rectTransform, new Vector2(0f, 0.18f), Vector2.one,
+            new Vector2(112f, 14f), new Vector2(-14f, -10f));
 
         var actions = PanelObject("Primary Actions", panel, new Color(0, 0, 0, 0));
         Stretch(actions, new Vector2(0f, 0.65f), new Vector2(1f, 0.74f), new Vector2(14f, 0f), new Vector2(-14f, 0f));

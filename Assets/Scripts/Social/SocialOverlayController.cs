@@ -145,6 +145,12 @@ public sealed class SocialOverlayController : MonoBehaviour
     private bool _inviteBusy;
     private Vector2 _lastScreen;
 
+    // Game invitations stay queued while a match/replay is active, but they do
+    // not render over the board or advertise themselves in the match dock.
+    // Returning to a menu reveals the same pending rows in Social > Requests.
+    private bool InviteSurfaceVisible => _context != SocialSurfaceContext.Match &&
+        _context != SocialSurfaceContext.Replay;
+
     private void Awake()
     {
         if (Instance != null && Instance != this) { Destroy(gameObject); return; }
@@ -559,21 +565,50 @@ public sealed class SocialOverlayController : MonoBehaviour
     private void BuildDockButton()
     {
         bool match = _context == SocialSurfaceContext.Match || _context == SocialSurfaceContext.Replay;
+        bool compact = match || _context == SocialSurfaceContext.DeckBuilder || _context == SocialSurfaceContext.Sealed;
+        int visibleInvites = InviteSurfaceVisible ? _invites.Count : 0;
         var dock = Panel("Social Dock", _root, Panel2, true);
-        dock.anchorMin = dock.anchorMax = new Vector2(1f, match ? 1f : 0f);
-        dock.pivot = new Vector2(1f, match ? 1f : 0f);
-        dock.sizeDelta = new Vector2(258f, 46f);
-        dock.anchoredPosition = new Vector2(-18f, match ? -18f : 18f);
-        AddBorder(dock, _unreadTotal > 0 ? Accent : Border, 1.2f);
+        if (compact)
+        {
+            // The match HUD and deck-building screens use every edge of the
+            // window. A small tab on the content/action-rail seam stays reachable
+            // without covering the clock, End Turn, deck cards, or footer actions.
+            dock.anchorMin = dock.anchorMax = new Vector2(match ? 0.83f : 1f, 0.5f);
+            dock.pivot = new Vector2(1f, 0.5f);
+            dock.sizeDelta = new Vector2(48f, 48f);
+            dock.anchoredPosition = new Vector2(match ? -6f : -12f, 0f);
+            AddBorder(dock, visibleInvites > 0 ? Gold : _unreadTotal > 0 ? Accent : Border, 1.2f);
+            var compactButton = dock.gameObject.AddComponent<Button>();
+            compactButton.transition = Selectable.Transition.ColorTint;
+            compactButton.onClick.AddListener(() => { _drawerOpen = true; Render(); });
+            var compactTitle = Label("Title", dock, "S", 16, Ink, TextAnchor.MiddleCenter, true, _mono);
+            Stretch(compactTitle.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            int badgeCount = visibleInvites > 0 ? visibleInvites : _unreadTotal;
+            if (badgeCount > 0) Badge(dock, badgeCount.ToString(), new Vector2(7f, 7f), visibleInvites > 0 ? Gold : Accent);
+            return;
+        }
+
+        // Main-menu stages reserve the lower half of the navigation rail. Dock
+        // Social there so it never sits over Play tiles, lobby controls, or page content.
+        dock.anchorMin = dock.anchorMax = Vector2.zero;
+        dock.pivot = Vector2.zero;
+        dock.sizeDelta = new Vector2(196f, 42f);
+        dock.anchoredPosition = new Vector2(30f, 18f);
+        AddBorder(dock, visibleInvites > 0 ? Gold : _incoming.Count > 0 || _unreadTotal > 0 ? Accent : Border, 1.2f);
         var button = dock.gameObject.AddComponent<Button>();
         button.transition = Selectable.Transition.ColorTint;
         button.onClick.AddListener(() => { _drawerOpen = true; Render(); });
-        var title = Label("Title", dock, _unreadTotal > 0 ? $"SOCIAL   {_unreadTotal}" : "SOCIAL", 13,
-            _unreadTotal > 0 ? Accent : Ink, TextAnchor.MiddleLeft, true);
-        Stretch(title.rectTransform, Vector2.zero, Vector2.one, new Vector2(16f, 0f), new Vector2(-96f, 0f));
-        var status = Label("Status", dock, $"{OnlineCount} ONLINE", 9, OnlineCount > 0 ? Green : Muted,
+        var title = Label("Title", dock, "SOCIAL", 13, Ink, TextAnchor.MiddleLeft, true);
+        Stretch(title.rectTransform, Vector2.zero, Vector2.one, new Vector2(16f, 0f), new Vector2(-132f, 0f));
+        string statusText = visibleInvites > 0
+            ? $"{visibleInvites} INVITE{(visibleInvites == 1 ? "" : "S")}"
+            : _incoming.Count > 0 ? $"{_incoming.Count} REQUEST{(_incoming.Count == 1 ? "" : "S")}"
+            : _unreadTotal > 0 ? $"{_unreadTotal} UNREAD" : $"{OnlineCount} ONLINE";
+        Color statusColor = visibleInvites > 0 ? Gold : _incoming.Count > 0 || _unreadTotal > 0
+            ? Accent : OnlineCount > 0 ? Green : Muted;
+        var status = Label("Status", dock, statusText, 9, statusColor,
             TextAnchor.MiddleRight, false, _mono);
-        Stretch(status.rectTransform, Vector2.zero, Vector2.one, new Vector2(80f, 0f), new Vector2(-15f, 0f));
+        Stretch(status.rectTransform, Vector2.zero, Vector2.one, new Vector2(96f, 0f), new Vector2(-15f, 0f));
     }
 
     private void BuildDrawer()
@@ -593,21 +628,28 @@ public sealed class SocialOverlayController : MonoBehaviour
         Stretch(head, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -64f), Vector2.zero);
         var title = Label("Title", head, "SOCIAL", 19, Ink, TextAnchor.LowerLeft, true);
         Stretch(title.rectTransform, new Vector2(0f, 0.35f), new Vector2(0.5f, 1f), new Vector2(18f, 0f), Vector2.zero);
-        var subtitle = Label("Subtitle", head, $"{OnlineCount} online  ·  {_friends.Count} friends  ·  {_unreadTotal} unread", 10,
-            _unreadTotal > 0 ? Accent : Muted, TextAnchor.UpperLeft, false, _mono);
+        int visibleInvites = InviteSurfaceVisible ? _invites.Count : 0;
+        string subtitleText = $"{OnlineCount} online  ·  {_friends.Count} friends  ·  {_unreadTotal} unread";
+        if (visibleInvites > 0)
+            subtitleText += $"  ·  {visibleInvites} game invite{(visibleInvites == 1 ? "" : "s")}";
+        var subtitle = Label("Subtitle", head, subtitleText, 10,
+            visibleInvites > 0 ? Gold : _unreadTotal > 0 ? Accent : Muted, TextAnchor.UpperLeft, false, _mono);
         Stretch(subtitle.rectTransform, Vector2.zero, new Vector2(0.72f, 0.42f), new Vector2(18f, 2f), Vector2.zero);
         AddButton(head, "—", () => { _drawerOpen = false; Render(); }, true,
-            new Vector2(1f, 0.5f), new Vector2(34f, 32f), new Vector2(-52f, 0f), false);
-        AddButton(head, "×", () => { _drawerOpen = false; Render(); }, true,
-            new Vector2(1f, 0.5f), new Vector2(34f, 32f), new Vector2(-12f, 0f), false);
+            new Vector2(1f, 0.5f), new Vector2(38f, 32f), new Vector2(-14f, 0f), false);
 
         var nav = Panel("Navigation", drawer, Panel2, false);
-        Stretch(nav, Vector2.zero, new Vector2(0.35f, 1f), new Vector2(0f, 0f), new Vector2(-4f, -68f));
+        bool requestWorkspace = _tab == "requests";
+        Stretch(nav, Vector2.zero, new Vector2(requestWorkspace ? 1f : 0.35f, 1f),
+            new Vector2(0f, 0f), new Vector2(requestWorkspace ? 0f : -4f, -68f));
         BuildSocialNavigation(nav);
 
-        var detail = Panel("Conversation", drawer, new Color32(8, 18, 29, 255), false);
-        Stretch(detail, new Vector2(0.35f, 0f), Vector2.one, new Vector2(4f, 0f), new Vector2(0f, -68f));
-        BuildConversation(detail);
+        if (!requestWorkspace)
+        {
+            var detail = Panel("Conversation", drawer, new Color32(8, 18, 29, 255), false);
+            Stretch(detail, new Vector2(0.35f, 0f), Vector2.one, new Vector2(4f, 0f), new Vector2(0f, -68f));
+            BuildConversation(detail);
+        }
     }
 
     private void BuildSocialNavigation(RectTransform nav)
@@ -616,7 +658,8 @@ public sealed class SocialOverlayController : MonoBehaviour
         Stretch(tabs, new Vector2(0f, 1f), Vector2.one, new Vector2(10f, -48f), new Vector2(-10f, -10f));
         AddTab(tabs, "MESSAGES", "messages", 0f, 0.36f, _unreadTotal);
         AddTab(tabs, "FRIENDS", "friends", 0.37f, 0.69f, 0);
-        AddTab(tabs, "REQUESTS", "requests", 0.70f, 1f, _incoming.Count);
+        int requestCount = _incoming.Count + (InviteSurfaceVisible ? _invites.Count : 0);
+        AddTab(tabs, "REQUESTS", "requests", 0.70f, 1f, requestCount);
 
         float searchTop = _tab == "friends" ? 94f : 62f;
         if (_tab == "friends")
@@ -709,28 +752,66 @@ public sealed class SocialOverlayController : MonoBehaviour
         var rows = new List<(FriendEntry entry, bool incoming)>();
         rows.AddRange(_incoming.Select(x => (x, true)));
         rows.AddRange(_outgoing.Select(x => (x, false)));
-        if (rows.Count == 0) { Empty(area, "No pending friend requests."); return; }
-        var content = Scroll(area, rows.Count * 88f + 8f);
-        for (int i = 0; i < rows.Count; i++)
+        int gameInviteCount = InviteSurfaceVisible ? _invites.Count : 0;
+        if (rows.Count + gameInviteCount == 0) { Empty(area, "No pending requests."); return; }
+        var content = Scroll(area, (rows.Count + gameInviteCount) * 88f + 8f);
+        int rowIndex = 0;
+        if (InviteSurfaceVisible)
+        {
+            foreach (var invite in _invites) BuildGameInviteRow(content, invite, rowIndex++);
+        }
+        for (int i = 0; i < rows.Count; i++, rowIndex++)
         {
             var item = rows[i];
-            var row = Row(content, i, 82f, 6f, false);
+            var row = Row(content, rowIndex, 82f, 6f, false);
             Avatar(row, item.entry.Username, 34f, new Vector2(10f, -27f), false);
             var name = Label("Name", row, item.entry.Username, 12, Ink, TextAnchor.MiddleLeft, true);
-            Stretch(name.rectTransform, new Vector2(0f, 0.45f), Vector2.one, new Vector2(54f, 0f), new Vector2(-8f, -3f));
+            Stretch(name.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(54f, -34f), new Vector2(-210f, -8f));
             var state = Label("State", row, item.incoming ? "WANTS TO JOIN YOUR CREW" : "REQUEST SENT", 8,
                 item.incoming ? Accent : Muted, TextAnchor.MiddleLeft, false, _mono);
-            Stretch(state.rectTransform, new Vector2(0f, 0.52f), Vector2.one, new Vector2(54f, 0f), new Vector2(-8f, 13f));
+            Stretch(state.rectTransform, new Vector2(0f, 1f), Vector2.one,
+                new Vector2(54f, -59f), new Vector2(-210f, -35f));
             string id = item.entry.PlayerId;
             if (item.incoming)
             {
                 AddButton(row, "ACCEPT", () => RespondRequest(id, true), !_busy,
-                    new Vector2(0f, 0f), new Vector2(82f, 26f), new Vector2(56f, 8f), true, AccentSoft);
+                    new Vector2(1f, 0.5f), new Vector2(88f, 30f), new Vector2(-106f, 0f), true, AccentSoft);
                 AddButton(row, "DECLINE", () => RespondRequest(id, false), !_busy,
-                    new Vector2(0f, 0f), new Vector2(82f, 26f), new Vector2(144f, 8f), true);
+                    new Vector2(1f, 0.5f), new Vector2(88f, 30f), new Vector2(-12f, 0f), true);
             }
             else AddButton(row, "CANCEL", () => CancelRequest(id), !_busy,
-                new Vector2(0f, 0f), new Vector2(82f, 26f), new Vector2(56f, 8f), true);
+                new Vector2(1f, 0.5f), new Vector2(88f, 30f), new Vector2(-12f, 0f), true);
+        }
+    }
+
+    private void BuildGameInviteRow(RectTransform content, GameInvite invite, int index)
+    {
+        var row = Row(content, index, 82f, 6f, false);
+        AddBorder(row, Gold, 1f);
+        string who = string.IsNullOrWhiteSpace(invite.fromName) ? "Friend" : invite.fromName;
+        Avatar(row, who, 34f, new Vector2(10f, -27f), true);
+        var name = Label("Name", row, who, 12, Ink, TextAnchor.MiddleLeft, true);
+        Stretch(name.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(54f, -34f), new Vector2(-100f, -8f));
+        string lobby = string.IsNullOrWhiteSpace(invite.lobbyName) ? "CUSTOM GAME" : invite.lobbyName.ToUpperInvariant();
+        bool canAccept = CanAcceptInvite(out _);
+        var state = Label("State", row, canAccept ? $"GAME INVITE  ·  {lobby}" : "PENDING  ·  RETURN TO MAIN MENU",
+            8, canAccept ? Gold : Muted, TextAnchor.MiddleLeft, false, _mono);
+        state.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(state.rectTransform, new Vector2(0f, 1f), Vector2.one,
+            new Vector2(54f, -59f), new Vector2(-100f, -35f));
+        var accept = AddButton(row, "✓", () => AcceptInvite(invite), canAccept && !_inviteBusy,
+            new Vector2(1f, 0.5f), new Vector2(30f, 30f), new Vector2(-46f, 0f), true,
+            new Color32(32, 92, 73, 255));
+        var decline = AddButton(row, "×", () => DeclineInvite(invite), !_inviteBusy,
+            new Vector2(1f, 0.5f), new Vector2(30f, 30f), new Vector2(-10f, 0f), true,
+            new Color32(86, 40, 50, 255));
+        foreach (var label in new[] { accept.GetComponentInChildren<Text>(), decline.GetComponentInChildren<Text>() })
+        {
+            if (label == null) continue;
+            label.font = _font;
+            label.fontSize = 15;
         }
     }
 
@@ -833,40 +914,8 @@ public sealed class SocialOverlayController : MonoBehaviour
 
     private void BuildNotifications()
     {
-        float y = -18f;
-        if (_invites.Count > 0)
-        {
-            BuildInviteToast(_invites[0], y);
-            y -= 166f;
-        }
-        if (_toastUntil > Time.unscaledTime && !_drawerOpen && !string.IsNullOrEmpty(_toastPeerId)) BuildMessageToast(y);
-    }
-
-    private void BuildInviteToast(GameInvite invite, float y)
-    {
-        var toast = Panel("Invite Toast", _root, PanelBg, true);
-        toast.anchorMin = toast.anchorMax = new Vector2(1f, 1f); toast.pivot = new Vector2(1f, 1f);
-        toast.sizeDelta = new Vector2(430f, 150f); toast.anchoredPosition = new Vector2(-18f, y);
-        AddBorder(toast, Gold, 1.4f);
-        Avatar(toast, string.IsNullOrWhiteSpace(invite.fromName) ? "Friend" : invite.fromName, 48f, new Vector2(16f, -43f), true);
-        var kicker = Label("Kicker", toast, "GAME INVITATION", 9, Gold, TextAnchor.MiddleLeft, true, _mono);
-        Stretch(kicker.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(80f, -30f), new Vector2(-14f, -10f));
-        string who = string.IsNullOrWhiteSpace(invite.fromName) ? "A friend" : invite.fromName;
-        var title = Label("Title", toast, who, 16, Ink, TextAnchor.MiddleLeft, true);
-        Stretch(title.rectTransform, new Vector2(0f, 0.54f), Vector2.one, new Vector2(80f, 0f), new Vector2(-14f, -34f));
-        string lobby = string.IsNullOrWhiteSpace(invite.lobbyName) ? "Custom game" : invite.lobbyName;
-        var sub = Label("Sub", toast, lobby, 10, Muted, TextAnchor.MiddleLeft, false);
-        Stretch(sub.rectTransform, new Vector2(0f, 0.39f), new Vector2(1f, 0.62f), new Vector2(80f, 0f), new Vector2(-14f, 0f));
-        bool canAccept = CanAcceptInvite(out _);
-        if (!canAccept)
-        {
-            var note = Label("Rule", toast, "Return to the main menu to accept", 9, Accent, TextAnchor.MiddleLeft, false, _mono);
-            Stretch(note.rectTransform, Vector2.zero, new Vector2(0.54f, 0.32f), new Vector2(16f, 7f), Vector2.zero);
-        }
-        AddButton(toast, "DECLINE", () => DeclineInvite(invite), !_inviteBusy,
-            new Vector2(1f, 0f), new Vector2(90f, 32f), new Vector2(-112f, 12f), true);
-        AddButton(toast, _inviteBusy ? "…" : "ACCEPT", () => AcceptInvite(invite), canAccept && !_inviteBusy,
-            new Vector2(1f, 0f), new Vector2(90f, 32f), new Vector2(-14f, 12f), true, AccentSoft);
+        if (_toastUntil > Time.unscaledTime && !_drawerOpen && !string.IsNullOrEmpty(_toastPeerId))
+            BuildMessageToast(-18f);
     }
 
     private void BuildMessageToast(float y)
@@ -1045,9 +1094,9 @@ public sealed class SocialOverlayController : MonoBehaviour
         return _circle;
     }
 
-    private void Badge(Transform parent, string value, Vector2 pos)
+    private void Badge(Transform parent, string value, Vector2 pos, Color? fill = null)
     {
-        var badge = Panel("Badge", parent, Accent, true);
+        var badge = Panel("Badge", parent, fill ?? Accent, true);
         badge.anchorMin = badge.anchorMax = new Vector2(1f, 1f); badge.pivot = new Vector2(1f, 1f);
         badge.sizeDelta = new Vector2(28f, 20f); badge.anchoredPosition = pos;
         var text = Label("Text", badge, value, 9, new Color32(6, 32, 44, 255), TextAnchor.MiddleCenter, true, _mono);
