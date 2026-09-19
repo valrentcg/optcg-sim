@@ -175,12 +175,18 @@ public partial class MainMenuManager
         var header = PanelObject("IP Header", stage, new Color(0, 0, 0, 0));
         Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -78f), Vector2.zero);
 
-        var back = TextObject("Back", header, "‹ BACK TO PROFILE", 12, Accent, TextAnchor.UpperLeft, monoFont);
-        back.fontStyle = FontStyle.Bold;
-        back.raycastTarget = true;
-        Stretch(back.rectTransform, new Vector2(0f, 1f), new Vector2(0.3f, 1f), new Vector2(4f, -22f), Vector2.zero);
+        var back = PanelObject("Back To Profile", header, BackFill);
+        back.anchorMin = back.anchorMax = new Vector2(0f, 1f);
+        back.pivot = new Vector2(0f, 1f);
+        back.sizeDelta = new Vector2(164f, 24f);
+        back.anchoredPosition = new Vector2(4f, -1f);
+        Round(back);
+        AddRoundedCardBorder(back, BackBorder, 1.1f);
+        var backText = TextObject("Text", back, "‹ BACK TO PROFILE", 11, BackText,
+            TextAnchor.MiddleCenter, monoFont);
+        backText.fontStyle = FontStyle.Bold;
+        Stretch(backText.rectTransform, Vector2.zero, Vector2.one, new Vector2(6f, 0f), new Vector2(-6f, 0f));
         var backBtn = back.gameObject.AddComponent<Button>();
-        backBtn.transition = Selectable.Transition.None;
         backBtn.onClick.AddListener(CloseProfileIconPicker);
 
         var title = TextObject("Title", header, "Profile Icon", 26, Ink, TextAnchor.UpperLeft);

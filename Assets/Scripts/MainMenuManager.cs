@@ -33,11 +33,17 @@ public partial class MainMenuManager : MonoBehaviour
     private static readonly Color ZoneBorder = new Color32(120, 180, 220,  66);
     private static readonly Color Gold       = new Color32(226, 190, 102, 255);
     private static readonly Color RedAccent  = new Color32(230,  84,  84, 255);
+    private static readonly Color BackFill   = new Color32( 65,  38,  61, 235);
+    private static readonly Color BackBorder = new Color32(176,  94, 153, 210);
+    private static readonly Color BackText   = new Color32(240, 207, 232, 255);
+    private static readonly Color DangerFill = new Color32( 92,  30,  37, 235);
+    private static readonly Color DangerText = new Color32(255, 220, 220, 255);
     private static readonly Color MatTop     = new Color32( 13,  33,  60, 255);
     private static readonly Color MatBottom  = new Color32( 13,  38,  50, 255);
 
     // ── Mode data model ────────────────────────────────────────────────────────
     private enum ModeStatus { Ready, Dev, Soon }
+    private enum MenuButtonTone { Standard, Back, Danger }
 
     private sealed class MenuMode
     {
@@ -1217,16 +1223,16 @@ public partial class MainMenuManager : MonoBehaviour
 
         // ── Exit game button, left of the gear. Plain "EXIT" text — the ⏻ power
         // glyph isn't in the runtime fonts and renders as a blank box. ─────────
-        var exit = PanelObject("Exit Btn", rightGroup, LogBgDark);
+        var exit = PanelObject("Exit Btn", rightGroup, DangerFill);
         exit.anchorMin = new Vector2(1f, 0.5f);
         exit.anchorMax = new Vector2(1f, 0.5f);
         exit.pivot     = new Vector2(1f, 0.5f);
         exit.sizeDelta = new Vector2(56f, 40f);
         exit.anchoredPosition = new Vector2(-48f, 0f);
         Round(exit);
-        AddRoundedCardBorder(exit, MenuB, 1f);
+        AddRoundedCardBorder(exit, RedAccent, 1.2f);
 
-        var exitLabel = TextObject("Exit Label", exit, "EXIT", 11, Muted, TextAnchor.MiddleCenter, monoFont);
+        var exitLabel = TextObject("Exit Label", exit, "EXIT", 11, DangerText, TextAnchor.MiddleCenter, monoFont);
         exitLabel.fontStyle = FontStyle.Bold;
         Stretch(exitLabel.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
 
@@ -1241,14 +1247,21 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(slot, new Vector2(left, 0f), new Vector2(right, 1f),
             Vector2.zero, Vector2.zero);
         slot.GetComponent<Image>().raycastTarget = false;
-        var value = TextObject("Value", slot, "—", 18, Accent2, TextAnchor.LowerLeft, monoFont);
+        var value = TextObject("Value", slot, "—", 18, Accent2, TextAnchor.MiddleLeft, monoFont);
         value.fontStyle = FontStyle.Bold;
-        Stretch(value.rectTransform, new Vector2(0f, 0.39f), Vector2.one,
-            Vector2.zero, new Vector2(-2f, -1f));
+        value.resizeTextForBestFit = true;
+        value.resizeTextMinSize = 13;
+        value.resizeTextMaxSize = 18;
+        value.horizontalOverflow = HorizontalWrapMode.Overflow;
+        value.verticalOverflow = VerticalWrapMode.Truncate;
+        Stretch(value.rectTransform, new Vector2(0f, 0.50f), new Vector2(1f, 0.90f),
+            Vector2.zero, new Vector2(-2f, 0f));
         var caption = TextObject("Caption", slot, label, 10, Muted,
-            TextAnchor.UpperLeft, monoFont);
+            TextAnchor.MiddleLeft, monoFont);
         caption.fontStyle = FontStyle.Bold;
-        Stretch(caption.rectTransform, Vector2.zero, new Vector2(1f, 0.41f),
+        caption.horizontalOverflow = HorizontalWrapMode.Overflow;
+        caption.verticalOverflow = VerticalWrapMode.Truncate;
+        Stretch(caption.rectTransform, new Vector2(0f, 0.10f), new Vector2(1f, 0.38f),
             Vector2.zero, Vector2.zero);
         return value;
     }
@@ -2741,14 +2754,14 @@ public partial class MainMenuManager : MonoBehaviour
         var header = PanelObject("MD Header", stage, new Color(0, 0, 0, 0));
         Stretch(header, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -44f), Vector2.zero);
 
-        var back = PanelObject("Back", header, new Color32(34, 58, 78, 230));
+        var back = PanelObject("Back", header, BackFill);
         back.anchorMin = new Vector2(0f, 0.5f); back.anchorMax = new Vector2(0f, 0.5f);
         back.pivot = new Vector2(0f, 0.5f);
         back.sizeDelta = new Vector2(84f, 32f);
         back.anchoredPosition = new Vector2(0f, 0f);
         Round(back);
-        AddRoundedCardBorder(back, ZoneBorder, 1f);
-        var backT = TextObject("t", back, "‹ BACK", 11, Ink, TextAnchor.MiddleCenter, monoFont);
+        AddRoundedCardBorder(back, BackBorder, 1.1f);
+        var backT = TextObject("t", back, "‹ BACK", 11, BackText, TextAnchor.MiddleCenter, monoFont);
         backT.fontStyle = FontStyle.Bold;
         Stretch(backT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var backBtn = back.gameObject.AddComponent<Button>();
@@ -3244,7 +3257,8 @@ public partial class MainMenuManager : MonoBehaviour
         hlg.spacing = 10f; hlg.childAlignment = TextAnchor.MiddleCenter;
         hlg.childControlWidth = false; hlg.childControlHeight = false;
         AddButton(btnRow, "CONFIRM", ConfirmSaveMatchDeck, target != null, false, false);
-        AddButton(btnRow, "Back", CancelSaveMatchDeck, true, false, false);
+        AddButton(btnRow, "Back", CancelSaveMatchDeck, true, false, false,
+            0f, 0f, MenuButtonTone.Back);
     }
 
     private void ConfirmSaveMatchDeck()
@@ -3388,12 +3402,14 @@ public partial class MainMenuManager : MonoBehaviour
         if (!darkLeft) grad.localScale = new Vector3(-1f, 1f, 1f);
     }
 
-    // Minimal vertical scroll (viewport + RectMask2D + fixed-height content) —
-    // the menu variant of DeckBuilderManager.MakeScroll, without the scrollbar.
-    private RectTransform MakeMenuScroll(RectTransform area, float contentHeight)
+    // Minimal vertical scroll (viewport + RectMask2D + fixed-height content).
+    // Long rule forms can opt into a persistent, conventional right-side bar so
+    // players can see that more controls continue below the fold.
+    private RectTransform MakeMenuScroll(RectTransform area, float contentHeight, bool showScrollbar = false)
     {
         var viewport = PanelObject("Viewport", area, new Color(0f, 0f, 0f, 0.001f));
-        Stretch(viewport, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        Stretch(viewport, Vector2.zero, Vector2.one, Vector2.zero,
+            showScrollbar ? new Vector2(-14f, 0f) : Vector2.zero);
         viewport.gameObject.AddComponent<RectMask2D>();
 
         var content = new GameObject("Content").AddComponent<RectTransform>();
@@ -3412,6 +3428,30 @@ public partial class MainMenuManager : MonoBehaviour
         sr.vertical = true;
         sr.movementType = ScrollRect.MovementType.Clamped;
         sr.scrollSensitivity = 26f;
+
+        if (showScrollbar)
+        {
+            var track = PanelObject("Vertical Scrollbar", area, new Color32(20, 39, 51, 210));
+            Stretch(track, new Vector2(1f, 0f), Vector2.one,
+                new Vector2(-10f, 4f), new Vector2(-3f, -4f));
+            Round(track);
+            AddRoundedCardBorder(track, MenuB, 1f);
+
+            var slidingArea = PanelObject("Sliding Area", track, Color.clear);
+            Stretch(slidingArea, Vector2.zero, Vector2.one,
+                new Vector2(1f, 3f), new Vector2(-1f, -3f));
+            var handle = PanelObject("Handle", slidingArea, new Color(Accent.r, Accent.g, Accent.b, 0.70f));
+            Stretch(handle, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+            Round(handle);
+
+            var scrollbar = track.gameObject.AddComponent<Scrollbar>();
+            scrollbar.handleRect = handle;
+            scrollbar.targetGraphic = handle.GetComponent<Image>();
+            scrollbar.direction = Scrollbar.Direction.BottomToTop;
+            sr.verticalScrollbar = scrollbar;
+            sr.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+            sr.verticalScrollbarSpacing = 4f;
+        }
         return content;
     }
 
@@ -3583,8 +3623,8 @@ public partial class MainMenuManager : MonoBehaviour
     {
         if (string.IsNullOrWhiteSpace(username)) return;
         username = username.Trim();
-        showingAccountSettings = false; showingFriends = false; showingProfile = false; showingLeaderboard = false;
-        showingReplays = false; importReplayError = null;
+        ClearPrimaryMenuStage();
+        importReplayError = null;
         showingLocalReplays = true;
         cloudSearchActiveUsername = username;
         cloudSearchUsernameInput = username;
@@ -3686,7 +3726,7 @@ public partial class MainMenuManager : MonoBehaviour
             cloudSearchResults = null;
             cloudSearchError = null;
             RenderMenu();
-        }, true, false);
+        }, true, false, false, 0f, 0f, MenuButtonTone.Back);
 
         if (cloudSearchBusy)
         {
@@ -3873,7 +3913,7 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void OpenAccountSettings()
     {
-        showingProfile = false; showingLeaderboard = false; showingPatchNotes = false;
+        ClearPrimaryMenuStage();
         showingAccountSettings = true;
         accountError = null;
         signOutArmed = false;
@@ -4057,7 +4097,8 @@ public partial class MainMenuManager : MonoBehaviour
         backHlg.childAlignment = TextAnchor.MiddleRight;
         backHlg.childControlWidth = false;
         backHlg.childControlHeight = false;
-        AddButton(backHolder, "< Back", CloseAccountSettings, true, false);
+        AddButton(backHolder, "< Back", CloseAccountSettings, true, false, false,
+            0f, 0f, MenuButtonTone.Back);
 
         // Guest view spreads across the full stage width; the account forms keep
         // the narrower half-width column that suits stacked input fields.
@@ -4675,10 +4716,7 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void OpenFriends()
     {
-        showingAccountSettings = false;
-        showingReplays = false;
-        showingLocalReplays = false;
-        showingProfile = false; showingLeaderboard = false; showingPatchNotes = false;
+        ClearPrimaryMenuStage();
         showingFriends = true;
         showingBlockedList = false; blockConfirmId = null;   // always open on the friends list
         friendsError = null;
@@ -4752,7 +4790,8 @@ public partial class MainMenuManager : MonoBehaviour
         // list that went stale after a match). Disabled for guests (no relationships).
         if (!AccountManager.IsGuest)
             AddButton(backHolder, "Refresh", ForceRefreshFriends, true, false);
-        AddButton(backHolder, "< Back", CloseFriends, true, false);
+        AddButton(backHolder, "< Back", CloseFriends, true, false, false,
+            0f, 0f, MenuButtonTone.Back);
 
         // Guests have no account identity - no relationships to load or invite.
         if (AccountManager.IsGuest)
@@ -6110,6 +6149,7 @@ public partial class MainMenuManager : MonoBehaviour
             lobbyInvitePlayerId = lobbyInviteUsername = null;
             lobbyInviteSent = lobbyInviteFailed = false;
         }
+        ClearPrimaryMenuStage();
         showingLobbyHub = true;
         lobbyError = null;
         lobbyErrorContext = "create";
@@ -6159,13 +6199,23 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(subtitle.rectTransform, Vector2.zero, new Vector2(0.66f, 0.40f),
             new Vector2(4f, 0f), Vector2.zero);
 
-        // Restore Code affordance (moved here from the Solo portal): paste a replay position code and
-        // play it out locally from that exact spot (see GameManager.Restore.cs).
-        var restoreBtn = PanelObject("Restore Code Btn", titleRow, new Color32(10, 22, 32, 220));
-        restoreBtn.anchorMin = restoreBtn.anchorMax = new Vector2(0.8f, 0.5f);
-        restoreBtn.pivot = new Vector2(1f, 0.5f);
-        restoreBtn.sizeDelta = new Vector2(150f, 30f);
-        restoreBtn.anchoredPosition = new Vector2(-12f, 0f);
+        // Keep the two navigation actions together instead of anchoring Restore Code
+        // independently at a resolution-dependent point in the title row.
+        var titleActions = PanelObject("Title Actions", titleRow, Color.clear);
+        Stretch(titleActions, new Vector2(0.62f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
+        var actionsLayout = titleActions.gameObject.AddComponent<HorizontalLayoutGroup>();
+        actionsLayout.spacing = 10f;
+        actionsLayout.childAlignment = TextAnchor.MiddleRight;
+        actionsLayout.childControlWidth = false;
+        actionsLayout.childControlHeight = false;
+        actionsLayout.childForceExpandWidth = false;
+        actionsLayout.childForceExpandHeight = false;
+
+        // Restore Code affordance: paste a replay position code and play it out
+        // locally from that exact spot (see GameManager.Restore.cs).
+        var restoreBtn = PanelObject("Restore Code Btn", titleActions, new Color32(10, 22, 32, 220));
+        restoreBtn.sizeDelta = new Vector2(150f, 34f);
+        SetPreferred(restoreBtn, new Vector2(150f, 34f));
         Round(restoreBtn);
         AddRoundedCardBorder(restoreBtn, Accent, 1.2f);
         var rbT = TextObject("t", restoreBtn, "↺ Restore Code", 11, Accent, TextAnchor.MiddleCenter, monoFont);
@@ -6173,13 +6223,8 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(rbT.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         restoreBtn.gameObject.AddComponent<Button>().onClick.AddListener(() => { showRestoreCode = true; restoreCodeError = null; RenderMenu(); });
 
-        var backHolder = PanelObject("Back Holder", titleRow, new Color(0, 0, 0, 0));
-        Stretch(backHolder, new Vector2(0.8f, 0f), Vector2.one, Vector2.zero, Vector2.zero);
-        var backHlg = backHolder.gameObject.AddComponent<HorizontalLayoutGroup>();
-        backHlg.childAlignment = TextAnchor.MiddleRight;
-        backHlg.childControlWidth = false;
-        backHlg.childControlHeight = false;
-        AddButton(backHolder, "< Back to Play", CloseLobbyHub, true, false, false, 142f, 34f);
+        AddButton(titleActions, "< Back to Play", CloseLobbyHub, true, false, false,
+            142f, 34f, MenuButtonTone.Back);
 
         var body = PanelObject("Lobby Body", stage, new Color(0, 0, 0, 0));
         Stretch(body, Vector2.zero, Vector2.one, Vector2.zero, new Vector2(0f, -titleH));
@@ -6214,15 +6259,21 @@ public partial class MainMenuManager : MonoBehaviour
         var grip = PanelObject("Resize Grip", handle, new Color32(23, 54, 66, 255));
         grip.anchorMin = grip.anchorMax = new Vector2(0.5f, 0.5f);
         grip.pivot = new Vector2(0.5f, 0.5f);
-        grip.sizeDelta = new Vector2(226f, 20f);
+        grip.sizeDelta = new Vector2(44f, 16f);
         grip.anchoredPosition = Vector2.zero;
         Round(grip);
         AddRoundedCardBorder(grip, MenuB, 1f);
         grip.GetComponent<Image>().raycastTarget = false;
-        var gripText = TextObject("Resize Label", grip, "DRAG TO RESIZE TABLE LIST", 10,
-            Accent2, TextAnchor.MiddleCenter, monoFont);
-        Stretch(gripText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        gripText.raycastTarget = false;
+        for (int i = -1; i <= 1; i++)
+        {
+            var bar = PanelObject("Grip Bar " + (i + 2), grip,
+                new Color(Accent2.r, Accent2.g, Accent2.b, 0.82f));
+            bar.anchorMin = bar.anchorMax = new Vector2(0.5f, 0.5f);
+            bar.pivot = new Vector2(0.5f, 0.5f);
+            bar.sizeDelta = new Vector2(22f, 1.5f);
+            bar.anchoredPosition = new Vector2(0f, i * 4f);
+            bar.GetComponent<Image>().raycastTarget = false;
+        }
 
         var trigger = handle.gameObject.AddComponent<EventTrigger>();
         var drag = new EventTrigger.Entry { eventID = EventTriggerType.Drag };
@@ -6270,7 +6321,7 @@ public partial class MainMenuManager : MonoBehaviour
         var scrollArea = PanelObject("Compact Setup Scroll", shell, new Color(0f, 0f, 0f, 0f));
         float footerHeight = !string.IsNullOrEmpty(lobbyError) && lobbyErrorContext == "create" ? 86f : 64f;
         Stretch(scrollArea, Vector2.zero, Vector2.one, new Vector2(0f, footerHeight), Vector2.zero);
-        panel = MakeMenuScroll(scrollArea, lobbyCustomGame == "sealed" ? 332f : 316f);
+        panel = MakeMenuScroll(scrollArea, lobbyCustomGame == "sealed" ? 332f : 316f, true);
         var scroll = scrollArea.GetComponent<ScrollRect>();
         scroll.verticalNormalizedPosition = lobbyCreateScroll;
         scroll.onValueChanged.AddListener(v => lobbyCreateScroll = v.y);
@@ -6419,7 +6470,7 @@ public partial class MainMenuManager : MonoBehaviour
         var shell = panel;
         var scrollArea = PanelObject("Create Rules Scroll", shell, new Color(0, 0, 0, 0));
         Stretch(scrollArea, Vector2.zero, Vector2.one, new Vector2(0f, 140f), Vector2.zero);
-        panel = MakeMenuScroll(scrollArea, 724f);
+        panel = MakeMenuScroll(scrollArea, 724f, true);
         var formScroll = scrollArea.GetComponent<ScrollRect>();
         formScroll.verticalNormalizedPosition = lobbyCreateScroll;
         formScroll.onValueChanged.AddListener(v => lobbyCreateScroll = v.y);
@@ -6438,7 +6489,7 @@ public partial class MainMenuManager : MonoBehaviour
             lobbyShowMoreRules = false;
             lobbyCreateScroll = 1f;
             RenderMenu();
-        }, true, false, true);
+        }, true, false, true, 0f, 0f, MenuButtonTone.Back);
 
         var nameLabel = TextObject("Name Label", panel, "Lobby name", 11, Muted, TextAnchor.UpperLeft, monoFont);
         Stretch(nameLabel.rectTransform, new Vector2(0f, 1f), Vector2.one, new Vector2(16f, -62f), new Vector2(-16f, -46f));
@@ -6455,8 +6506,10 @@ public partial class MainMenuManager : MonoBehaviour
         var visHlg = visRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         visHlg.spacing = 8f;
         visHlg.childAlignment = TextAnchor.MiddleLeft;
-        visHlg.childControlWidth = false;
-        visHlg.childControlHeight = false;
+        visHlg.childControlWidth = true;
+        visHlg.childControlHeight = true;
+        visHlg.childForceExpandWidth = false;
+        visHlg.childForceExpandHeight = false;
         BuildVisibilityOption(visRow, "Private", true);
         BuildVisibilityOption(visRow, "Public", false);
         var visHint = TextObject("Visibility Hint", panel,
@@ -6473,7 +6526,8 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(typeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -234f), new Vector2(-16f, -200f));
         var typeHlg = typeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         typeHlg.spacing = 8f; typeHlg.childAlignment = TextAnchor.MiddleLeft;
-        typeHlg.childControlWidth = false; typeHlg.childControlHeight = false;
+        typeHlg.childControlWidth = true; typeHlg.childControlHeight = true;
+        typeHlg.childForceExpandWidth = false; typeHlg.childForceExpandHeight = false;
         BuildCustomGameOption(typeRow, "Constructed", "constructed");
         BuildCustomGameOption(typeRow, "Sealed", "sealed");
         if (lobbyCustomGame == "sealed")
@@ -6486,7 +6540,8 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(modeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -310f), new Vector2(-16f, -276f));
         var modeHlg = modeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         modeHlg.spacing = 8f; modeHlg.childAlignment = TextAnchor.MiddleLeft;
-        modeHlg.childControlWidth = false; modeHlg.childControlHeight = false;
+        modeHlg.childControlWidth = true; modeHlg.childControlHeight = true;
+        modeHlg.childForceExpandWidth = false; modeHlg.childForceExpandHeight = false;
         BuildForgivenessOption(modeRow, "Off", false);
         BuildForgivenessOption(modeRow, "Forgiveness", true);
         if (lobbyForgiveness)
@@ -6504,7 +6559,8 @@ public partial class MainMenuManager : MonoBehaviour
         Stretch(timeRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -414f), new Vector2(-16f, -380f));
         var timeHlg = timeRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         timeHlg.spacing = 8f; timeHlg.childAlignment = TextAnchor.MiddleLeft;
-        timeHlg.childControlWidth = false; timeHlg.childControlHeight = false;
+        timeHlg.childControlWidth = true; timeHlg.childControlHeight = true;
+        timeHlg.childForceExpandWidth = false; timeHlg.childForceExpandHeight = false;
         BuildTimingOption(timeRow, "Untimed", "standard");
         BuildTimingOption(timeRow, "Shared", "ranked");
         BuildTimingOption(timeRow, "Blitz", "blitz");
@@ -6521,7 +6577,8 @@ public partial class MainMenuManager : MonoBehaviour
             Stretch(presetRow, new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(16f, -452f), new Vector2(-16f, -418f));
             var pHlg = presetRow.gameObject.AddComponent<HorizontalLayoutGroup>();
             pHlg.spacing = 6f; pHlg.childAlignment = TextAnchor.MiddleLeft;
-            pHlg.childControlWidth = false; pHlg.childControlHeight = false;
+            pHlg.childControlWidth = true; pHlg.childControlHeight = true;
+            pHlg.childForceExpandWidth = false; pHlg.childForceExpandHeight = false;
             BuildBlitzPresetOption(presetRow, "Bullet", "bullet", 84f);
             BuildBlitzPresetOption(presetRow, "Blitz", "blitz", 84f);
             BuildBlitzPresetOption(presetRow, "Rapid", "rapid", 84f);
@@ -6562,7 +6619,8 @@ public partial class MainMenuManager : MonoBehaviour
             new Vector2(16f, -670f), new Vector2(-16f, -636f));
         var fmtHlg = fmtRow.gameObject.AddComponent<HorizontalLayoutGroup>();
         fmtHlg.spacing = 8f; fmtHlg.childAlignment = TextAnchor.MiddleLeft;
-        fmtHlg.childControlWidth = false; fmtHlg.childControlHeight = false;
+        fmtHlg.childControlWidth = true; fmtHlg.childControlHeight = true;
+        fmtHlg.childForceExpandWidth = false; fmtHlg.childForceExpandHeight = false;
         BuildFormatOption(fmtRow, "Standard", "standard");
         BuildFormatOption(fmtRow, "Extra Regulation", "extra");
         BuildIgnoreBansOption(fmtRow);
@@ -7155,7 +7213,7 @@ public partial class MainMenuManager : MonoBehaviour
         int leftRuleRows = canEditRules ? (sealedLobby ? 1 : 3) : 0;
         int rightRuleRows = canEditRules ? (lobbyTimingMode == "blitz" ? 3 : 2) : 0;
         int ruleRows = Mathf.Max(leftRuleRows, rightRuleRows);
-        panel = MakeMenuScroll(waitingArea, canEditRules ? 138f + ruleRows * 40f : 152f);
+        panel = MakeMenuScroll(waitingArea, canEditRules ? 138f + ruleRows * 40f : 152f, true);
         var waitingScroll = waitingArea.GetComponent<ScrollRect>();
         waitingScroll.verticalNormalizedPosition = lobbyWaitingScroll;
         waitingScroll.onValueChanged.AddListener(v => lobbyWaitingScroll = v.y);
@@ -7304,7 +7362,8 @@ public partial class MainMenuManager : MonoBehaviour
         ahlg.childAlignment = TextAnchor.MiddleLeft;
         ahlg.childControlWidth = false;
         ahlg.childControlHeight = false;
-        AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false, false, 132f, 34f);
+        AddButton(actionRow, "Leave Lobby", LeaveLobbyClicked, !lobbyBusy, false, false,
+            132f, 34f, MenuButtonTone.Back);
         // Ready / Cancel — both players. Enabled once connected and a deck is picked. The host auto-commits the
         // match the instant both are ready (TryLobbyAutoStart); either player can Cancel to un-ready before then.
         AddButton(actionRow, localReady ? "Cancel Ready" : "Ready to Play",
@@ -8752,36 +8811,48 @@ public partial class MainMenuManager : MonoBehaviour
         // Nav rows
         var rows = new (string title, string subtitle, string tag, bool active)[]
         {
-            ("Play",     "Game modes",          null,       !showingReplays && !showingLocalReplays && !showingFriends && !showingProfile && !showingLeaderboard && !showingPatchNotes),
+            ("Play",     "Game modes",          null,       !showingAccountSettings && !showingReplays && !showingLocalReplays && !showingFriends && !showingProfile && !showingProfileIcon && !showingLeaderboard && !showingPatchNotes),
             ("Decks",    "Build & edit",        null,       false),
             ("Match History", "Watch past matches", null,   showingReplays),
             ("Replays",  "Local files & import", null,      showingLocalReplays),
             ("Friends",  "Crew & invites",      FriendsOnlineSubtitle(), showingFriends),
             ("Most Wanted", "Bounty leaderboard", null,     showingLeaderboard),
             ("Patch Notes", "What's new",       null,       showingPatchNotes),
-            ("Settings", "Preferences & audio", null,       false),
+            ("Settings", "Preferences & audio", null,       showingAccountSettings),
         };
 
         UnityEngine.Events.UnityAction[] actions =
         {
-            () => { showingAccountSettings = false; showingFriends = false; showingReplays = false;
-                    showingLocalReplays = false; showingProfile = false; showingLeaderboard = false; showingPatchNotes = false; RenderMenu(); },
+            () => { ClearPrimaryMenuStage(); RenderMenu(); },
             () => OpenDeckBuilder(),
-            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false; showingLeaderboard = false; showingPatchNotes = false;
-                    showingLocalReplays = false;
+            () => { ClearPrimaryMenuStage();
                     showingReplays = true; selectedMatchId = null; matchHistory = null; RenderMenu(); },
-            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false; showingLeaderboard = false; showingPatchNotes = false;
-                    showingReplays = false; importReplayError = null; cloudSearchActiveUsername = null;
+            () => { ClearPrimaryMenuStage(); importReplayError = null; cloudSearchActiveUsername = null;
                     showingLocalReplays = true; RenderMenu(); },
             OpenFriends,
             OpenLeaderboard,
-            () => { showingAccountSettings = false; showingFriends = false; showingProfile = false; showingLeaderboard = false;
-                    showingReplays = false; showingLocalReplays = false; showingPatchNotes = true; RenderMenu(); },
+            () => { ClearPrimaryMenuStage(); showingPatchNotes = true; RenderMenu(); },
             OpenAccountSettings,
         };
 
         for (int i = 0; i < rows.Length; i++)
             BuildNavRow(content, rows[i].title, rows[i].subtitle, rows[i].tag, rows[i].active, actions[i]);
+    }
+
+    // The main stage flags are mutually exclusive. Keeping that invariant in one place prevents
+    // a newly added screen from remaining selected behind another one, and ensures navigation can
+    // leave the lobby hub without tearing down an active network session.
+    private void ClearPrimaryMenuStage()
+    {
+        showingAccountSettings = false;
+        showingFriends = false;
+        showingProfileIcon = false;
+        showingProfile = false;
+        showingReplays = false;
+        showingLocalReplays = false;
+        showingLobbyHub = false;
+        showingLeaderboard = false;
+        showingPatchNotes = false;
     }
 
     private void BuildNavRow(RectTransform parent, string title, string subtitle,
@@ -8925,9 +8996,11 @@ public partial class MainMenuManager : MonoBehaviour
         var playableDeck = ResolveMenuDeck(duelDeckId);
         var art = shownDeck != null ? LoadArt(shownDeck.leaderId) : null;
 
+        // Deck identity lives in a calm information band above the artwork. This
+        // keeps all copy readable without placing an opaque box over the image.
         var artField = PanelObject("Showcase Art Field", portal, new Color32(11, 38, 52, 255));
-        Stretch(artField, Vector2.zero, Vector2.one,
-            new Vector2(1f, 1f), new Vector2(-1f, -1f));
+        Stretch(artField, new Vector2(0f, 0.01f), new Vector2(1f, 0.68f),
+            new Vector2(1f, 0f), new Vector2(-1f, 0f));
         artField.GetComponent<Image>().raycastTarget = false;
         artField.gameObject.AddComponent<RectMask2D>();
 
@@ -8938,11 +9011,6 @@ public partial class MainMenuManager : MonoBehaviour
         gradientImage.raycastTarget = false;
         AddFadedLeaderIllustration(artField, art, "Duel Illustration",
             Vector2.zero, Vector2.one, 0.18f, -5f);
-        var textScrim = PanelObject("Showcase Text Scrim", artField,
-            new Color32(5, 20, 28, 190));
-        Stretch(textScrim, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        textScrim.GetComponent<Image>().sprite = GetHGradientSprite();
-        textScrim.GetComponent<Image>().raycastTarget = false;
         var aura = AddRadialGlow(artField, new Color(Accent.r, Accent.g, Accent.b, 0.24f),
             new Vector2(0.12f, 0.09f), new Vector2(0.88f, 0.96f));
         aura.GetComponent<Image>().raycastTarget = false;
@@ -8950,20 +9018,10 @@ public partial class MainMenuManager : MonoBehaviour
             new Vector2(0.30f, 0.25f), new Vector2(1.10f, 1.05f));
         warmAura.GetComponent<Image>().raycastTarget = false;
 
-        // The illustration has bright patches under the copy. Give the whole
-        // text column a quiet, consistent value instead of relying on the
-        // left-edge gradient, which has nearly faded out by the detail line.
-        var copyPlate = PanelObject("Showcase Copy Plate", artField,
-            new Color32(5, 18, 26, 158));
-        Stretch(copyPlate, new Vector2(0.025f, 0.30f), new Vector2(0.53f, 0.89f),
-            Vector2.zero, Vector2.zero);
-        Round(copyPlate);
-        copyPlate.GetComponent<Image>().raycastTarget = false;
-
         var cardEdge = PanelObject("Showcase Card Edge", artField, Accent);
-        cardEdge.anchorMin = cardEdge.anchorMax = new Vector2(0.75f, 0.50f);
+        cardEdge.anchorMin = cardEdge.anchorMax = new Vector2(0.77f, 0.50f);
         cardEdge.pivot = new Vector2(0.5f, 0.5f);
-        cardEdge.sizeDelta = new Vector2(278f, 389f);
+        cardEdge.sizeDelta = new Vector2(220f, 308f);
         cardEdge.localRotation = Quaternion.Euler(0f, 0f, -3.5f);
         RoundedCardMask.ApplyTo(cardEdge.GetComponent<Image>());
         cardEdge.gameObject.AddComponent<Button>().onClick.AddListener(PickDuelDeck);
@@ -8986,17 +9044,25 @@ public partial class MainMenuManager : MonoBehaviour
             Stretch(emblem.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         }
 
-        var kicker = TextObject("Showcase Label", portal, "YOUR DECK", 11,
+        var infoBand = PanelObject("Showcase Info Band", portal, new Color32(10, 27, 37, 255));
+        Stretch(infoBand, new Vector2(0f, 0.70f), Vector2.one,
+            new Vector2(1f, 0f), new Vector2(-1f, -1f));
+        infoBand.GetComponent<Image>().raycastTarget = false;
+        var bandLine = PanelObject("Info Divider", infoBand, new Color(Accent.r, Accent.g, Accent.b, 0.42f));
+        Stretch(bandLine, Vector2.zero, new Vector2(1f, 0f), Vector2.zero, new Vector2(0f, 1f));
+        bandLine.GetComponent<Image>().raycastTarget = false;
+
+        var kicker = TextObject("Showcase Label", infoBand, "YOUR DECK", 11,
             Accent2, TextAnchor.MiddleLeft, monoFont);
         kicker.fontStyle = FontStyle.Bold;
-        Stretch(kicker.rectTransform, new Vector2(0f, 0.71f), new Vector2(0.47f, 0.87f),
+        Stretch(kicker.rectTransform, new Vector2(0f, 0.68f), new Vector2(0.69f, 0.96f),
             new Vector2(28f, 0f), Vector2.zero);
 
-        var deckName = TextObject("Showcase Deck Name", portal,
+        var deckName = TextObject("Showcase Deck Name", infoBand,
             shownDeck != null ? shownDeck.name : "Choose a deck", 26,
             Ink, TextAnchor.MiddleLeft);
         deckName.fontStyle = FontStyle.Bold;
-        Stretch(deckName.rectTransform, new Vector2(0f, 0.49f), new Vector2(0.48f, 0.73f),
+        Stretch(deckName.rectTransform, new Vector2(0f, 0.32f), new Vector2(0.69f, 0.70f),
             new Vector2(28f, 0f), Vector2.zero);
 
         string status = shownDeck == null ? "Pick a deck before you enter Duel."
@@ -9004,15 +9070,16 @@ public partial class MainMenuManager : MonoBehaviour
             : shownDeck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal
                 ? "Standard legal  ·  Ready for Casual or Ranked"
                 : "Not Standard legal  ·  Custom format may allow it";
-        var detail = TextObject("Showcase Detail", portal, status, 14,
+        var detail = TextObject("Showcase Detail", infoBand, status, 13,
             new Color32(220, 232, 238, 255),
             TextAnchor.MiddleLeft);
-        Stretch(detail.rectTransform, new Vector2(0f, 0.32f), new Vector2(0.48f, 0.51f),
+        detail.horizontalOverflow = HorizontalWrapMode.Wrap;
+        Stretch(detail.rectTransform, new Vector2(0f, 0.04f), new Vector2(0.70f, 0.34f),
             new Vector2(28f, 0f), Vector2.zero);
 
-        var change = PanelObject("Change Duel Deck", portal, new Color32(13, 34, 45, 255));
-        Stretch(change, new Vector2(0f, 0.19f), new Vector2(0.45f, 0.29f),
-            new Vector2(28f, 0f), Vector2.zero);
+        var change = PanelObject("Change Duel Deck", infoBand, new Color32(13, 34, 45, 255));
+        Stretch(change, new Vector2(0.74f, 0.34f), new Vector2(0.97f, 0.68f),
+            Vector2.zero, Vector2.zero);
         Round(change);
         AddRoundedCardBorder(change, Accent, 1f);
         var changeText = TextObject("Label", change,
@@ -10243,10 +10310,28 @@ public partial class MainMenuManager : MonoBehaviour
 
     private void AddButton(RectTransform parent, string label,
         UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true, bool fill = false,
-        float width = 0f, float height = 0f)
+        float width = 0f, float height = 0f, MenuButtonTone tone = MenuButtonTone.Standard)
     {
+        Color enabledFill = tone switch
+        {
+            MenuButtonTone.Back => BackFill,
+            MenuButtonTone.Danger => DangerFill,
+            _ => new Color32(34, 58, 78, 235),
+        };
+        Color enabledBorder = tone switch
+        {
+            MenuButtonTone.Back => BackBorder,
+            MenuButtonTone.Danger => RedAccent,
+            _ => MenuB,
+        };
+        Color enabledText = tone switch
+        {
+            MenuButtonTone.Back => BackText,
+            MenuButtonTone.Danger => DangerText,
+            _ => Ink,
+        };
         var root = PanelObject(label + " Button", parent,
-            enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
+            enabled ? enabledFill : new Color32(24, 34, 44, 170));
         if (fill)
         {
             // Stretch to the holder instead of the default fixed 118x34 chip -
@@ -10262,8 +10347,8 @@ public partial class MainMenuManager : MonoBehaviour
         }
         Round(root);
         AddRoundedCardBorder(root,
-            enabled ? MenuB : (Color)new Color32(50, 58, 74, 80), 1.1f);
-        Color textColor = enabled ? Ink : (Color)new Color32(120, 130, 146, 160);
+            enabled ? enabledBorder : (Color)new Color32(50, 58, 74, 80), 1.1f);
+        Color textColor = enabled ? enabledText : (Color)new Color32(120, 130, 146, 160);
         if (dot)
         {
             var d = PanelObject("Dot", root,

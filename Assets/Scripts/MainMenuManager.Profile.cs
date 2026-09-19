@@ -78,11 +78,7 @@ public partial class MainMenuManager
 
     private void OpenMyProfile()
     {
-        showingAccountSettings = false;
-        showingFriends = false;
-        showingReplays = false;
-        showingLocalReplays = false;
-        showingLeaderboard = false;
+        ClearPrimaryMenuStage();
         showingProfile = true;
         // Opening resets to Overview / no deck / Casual, per the handoff.
         profileTab = "overview";
@@ -840,12 +836,12 @@ public partial class MainMenuManager
         Stretch(record.rectTransform, new Vector2(0.18f, 0.12f), new Vector2(0.7f, 0.45f),
             Vector2.zero, Vector2.zero);
 
-        var back = PanelObject("Back To Deck Summary", head, new Color(1f, 1f, 1f, 0.05f));
+        var back = PanelObject("Back To Deck Summary", head, BackFill);
         Stretch(back, new Vector2(0.76f, 0.24f), new Vector2(0.98f, 0.76f), Vector2.zero, Vector2.zero);
         Round(back);
-        AddRoundedCardBorder(back, MenuB, 1f);
+        AddRoundedCardBorder(back, BackBorder, 1.1f);
         var backText = TextObject("Text", back, "‹  DECK SUMMARY",
-            9, Accent, TextAnchor.MiddleCenter, monoFont);
+            9, BackText, TextAnchor.MiddleCenter, monoFont);
         backText.fontStyle = FontStyle.Bold;
         Stretch(backText.rectTransform, Vector2.zero, Vector2.one,
             new Vector2(5f, 0f), new Vector2(-5f, 0f));
@@ -1673,12 +1669,7 @@ public partial class MainMenuManager
 
     private void OpenLeaderboard()
     {
-        showingAccountSettings = false;
-        showingFriends = false;
-        showingReplays = false;
-        showingLocalReplays = false;
-        showingProfile = false;
-        showingProfileIcon = false;
+        ClearPrimaryMenuStage();
         showingLeaderboard = true;
         leaderboardEntries = null; // force a fresh pull
         RenderMenu();
