@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.39",
+  "buildVersion": "1.0.40",
   "buildNumber": 38,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "CARD REVEALS AND GAMEPLAY\n\nRequired hand, Life, and deck reveals now stay face-up in their real location and in the right-side action panel until confirmation. Exact-card privacy is enforced, A.I. confirms automatically, and opponent cards no longer leak playability through hover glow. OP17, Life, DON!! payment, full-board, optional-effect, replay, and multi-choice interactions received another correction pass.\n\nCARDS AND DECKS\n\nRefreshed OP17 and ST31-ST36 artwork, added 16 requested promo cards and a cleaner Rainbow Luffy, and expanded the Starter Deck hex roster for ST31-ST36.\n\nSEALED\n\nChoose a build-timer duration, control card reveal speed, and use the cleaner pack and completion layouts with Practice vs A.I., Export Decklist, New Run, and Menu.\n\nSOCIAL\n\nThe movable Social panel remembers its position, improves tabs and spacing, can copy whole conversations and paste text into the composer, queues game invites during matches, and adds normalized sounds for messages and lobby invitations.",
+  "notes": "CHAT AND SOCIAL\n\nIn-game chat now opens as a fixed communications drawer instead of a floating bubble. Switch between Match Chat, Messages, Friends, and Requests without leaving the match, while only one communications surface is open at a time.\n\nLAYOUT POLISH\n\nThe main-menu Social launcher is locked in the upper-right. Profile images, player names, status text, tabs, borders, and scroll rows now use consistent spacing and remain inside their panels at supported window sizes.\n\nNOTIFICATIONS\n\nCollapsed Social continues to show unread messages, friend requests, and pending lobby invitations. Invitations remain queued and unavailable for acceptance until the active match ends.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

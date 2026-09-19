@@ -1422,6 +1422,21 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.40", "Unified match chat and social navigation", "Sep 19, 2026", new (string, string[])[]
+        {
+            ("In-game communications", new[]
+            {
+                "In-game chat now opens as a fixed communications drawer instead of a floating bubble or edge tab.",
+                "Switch between Match Chat, Messages, Friends, and Requests without leaving the match. Opening one communications surface closes the other while message history and drafts remain available.",
+                "Game invitations remain queued during active matches and can be accepted after returning to the main menus.",
+            }),
+            ("Social layout", new[]
+            {
+                "The main-menu Social launcher is locked in the upper-right so it stays predictable across menu screens and supported window sizes.",
+                "Corrected profile-image, player-name, status, and tab spacing throughout Social. Inner borders, conversation rows, and scroll content now remain inside their panels instead of clipping at the edges.",
+                "Unread messages, friend requests, and pending lobby invitations remain visible on the collapsed launcher.",
+            }),
+        }),
         ("v1.0.39", "Card reveals, Sealed polish, and content refresh", "Sep 19, 2026", new (string, string[])[]
         {
             ("Reveals and hidden information", new[]
