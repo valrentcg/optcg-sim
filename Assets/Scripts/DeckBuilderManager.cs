@@ -985,7 +985,7 @@ public partial class DeckBuilderManager : MonoBehaviour
         var scaler = go.AddComponent<CanvasScaler>();
         scaler.uiScaleMode          = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution  = new Vector2(1920, 1080);
-        scaler.matchWidthOrHeight   = 0.5f;
+        scaler.screenMatchMode      = CanvasScaler.ScreenMatchMode.Expand;
         scaler.dynamicPixelsPerUnit = 4f;
 
         root = Panel("Root", canvas.transform, MatTop);

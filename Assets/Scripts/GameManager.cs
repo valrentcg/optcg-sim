@@ -283,6 +283,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private CardInstance previewLockCard;   // last left-clicked card, shown in the docked left preview
     private bool menuOpen;                   // game menu (upper-right) open/closed
     private bool soundMenuOpen;              // sound settings panel (opened from the game menu)
+    private bool settingsMenuOpen;           // display/cursor/audio settings, available without leaving a match
+    private RectTransform settingsOverlay;   // canvas-level modal; rebuilt safely with the board
     private bool surrenderConfirmOpen;       // "are you sure you want to surrender?" confirm modal
     private RectTransform deckLookOverlay;    // full-screen search/look overlay (lives on the canvas)
     private RectTransform trashOverlay;       // trash-viewer popup (confined to the local play area)
@@ -617,6 +619,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         // While the chat input has keyboard focus, keystrokes must never reach game handling.
         if (ChatInputFocused) return;
+
+        var keyboard = UnityEngine.InputSystem.Keyboard.current;
+        if (keyboard != null && keyboard.escapeKey.wasPressedThisFrame)
+        {
+            if (settingsMenuOpen) settingsMenuOpen = false;
+            else if (matchSettingsOpen) matchSettingsOpen = false;
+            else if (soundMenuOpen) soundMenuOpen = false;
+            else if (surrenderConfirmOpen) surrenderConfirmOpen = false;
+            else menuOpen = !menuOpen;
+            Render();
+            return;
+        }
 
         if (selectedDonIds.Count == 0) return;
 
@@ -2196,7 +2210,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var scaler = canvasGo.AddComponent<CanvasScaler>();
         scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution = new Vector2(1600, 900);
-        scaler.matchWidthOrHeight = 0.5f;
+        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.Expand;
         // Rasterize dynamic-font text (and other generated UI bitmaps) at higher resolution so the
         // small labels render crisp instead of blurry.
         scaler.dynamicPixelsPerUnit = 4f;
@@ -2314,6 +2328,12 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // Tear it down every Render and let the result block below recreate it only while it's needed —
         // otherwise it both stacks a fresh copy each frame and lingers on screen after a re-match.
         if (resultPeekChip != null) { Destroy(resultPeekChip.gameObject); resultPeekChip = null; }
+        if (settingsOverlay != null)
+        {
+            settingsOverlay.gameObject.SetActive(false);
+            Destroy(settingsOverlay.gameObject);
+            settingsOverlay = null;
+        }
         handCardRects.Clear();
         boardDeckPileRects.Clear();
         leaderZoneRects.Clear();
@@ -2346,9 +2366,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var _sc = canvas != null ? canvas.GetComponent<CanvasScaler>() : null;
         float _refW = _sc != null ? _sc.referenceResolution.x : 1600f;
         float _refH = _sc != null ? _sc.referenceResolution.y : 900f;
-        float _match = _sc != null ? _sc.matchWidthOrHeight : 0.5f;
         float _sw = Mathf.Max(1, Screen.width), _sh = Mathf.Max(1, Screen.height);
-        float _scale = Mathf.Pow(2f, Mathf.Lerp(Mathf.Log(_sw / _refW, 2f), Mathf.Log(_sh / _refH, 2f), _match));
+        // CanvasScaler uses Expand, whose scale is the smaller axis ratio. Keep the card-size
+        // calculation on the same formula so fixed-size card art and anchored UI agree after a resize.
+        float _scale = Mathf.Min(_sw / _refW, _sh / _refH);
         float _canvasH = _sh / Mathf.Max(_scale, 0.0001f);
         float _ch = (_canvasH * 0.5f) * 0.28f;
         boardCardSize = new Vector2(_ch * CardAspect, _ch);
@@ -2436,6 +2457,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         CaptureAndAnimateCardMoves();
         MaybeShowTurnBanner();
         MaybePlayCardFlipSfx();
+        if (settingsMenuOpen) DrawInGameSettingsPanel();
         // (Roaming rim sparkles removed — the push/pull bar's active-half glow is the turn cue now.)
     }
 
@@ -8801,8 +8823,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         else           items.Add((isSandbox ? "New Sandbox" : "New Match",
                                   () => { menuOpen = false; if (isSandbox) NewSandbox(); else NewMatch(); }));
         if (showOptions)
-            items.Add(("Match Options", () => { menuOpen = false; matchSettingsOpen = true; Render(); }));
-        items.Add(("Sound", () => { menuOpen = false; soundMenuOpen = true; Render(); }));
+            items.Add(("Match Options", () =>
+            {
+                menuOpen = false; settingsMenuOpen = false; soundMenuOpen = false;
+                matchSettingsOpen = true; Render();
+            }));
+        items.Add(("Settings", () =>
+        {
+            menuOpen = false; matchSettingsOpen = false; soundMenuOpen = false;
+            settingsMenuOpen = true; Render();
+        }));
         items.Add(("Close", () => { menuOpen = false; Render(); }));
 
         // Height tracks the item count so rows keep a consistent size instead of being squeezed.
@@ -8896,7 +8926,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // a centred 100×100 block, which is exactly what made the first version explode.
     private void BuildSfxSlider(RectTransform parent, Vector2 min, Vector2 max, Text percentReadout)
     {
-        var track = PanelObject("SFX Track", parent, new Color(1f, 1f, 1f, 0.10f));
+        BuildValueSlider(parent, "SFX", min, max, 0f, 1f, SfxVolume, false, v =>
+        {
+            SfxVolume = v;
+            if (percentReadout != null) percentReadout.text = Mathf.RoundToInt(v * 100f) + "%";
+            PlayCardDrawSfx();
+        });
+    }
+
+    private void BuildValueSlider(RectTransform parent, string name, Vector2 min, Vector2 max,
+        float minValue, float maxValue, float value, bool wholeNumbers, System.Action<float> changed)
+    {
+        var track = PanelObject(name + " Track", parent, new Color(1f, 1f, 1f, 0.10f));
         Stretch(track, min, max, Vector2.zero, Vector2.zero);
         Round(track);
 
@@ -8927,15 +8968,158 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         slider.transition = Selectable.Transition.None;
         slider.fillRect = fill;
         slider.handleRect = handle;
-        slider.minValue = 0f;
-        slider.maxValue = 1f;
-        slider.value = SfxVolume;
-        slider.onValueChanged.AddListener(v =>
+        slider.minValue = minValue;
+        slider.maxValue = maxValue;
+        slider.wholeNumbers = wholeNumbers;
+        slider.value = Mathf.Clamp(value, minValue, maxValue);
+        slider.onValueChanged.AddListener(v => changed?.Invoke(v));
+    }
+
+    // Display, custom-cursor and sound controls remain reachable during a match. This modal is
+    // parented to the canvas so it also covers the left/right play columns and blocks stray input.
+    private void DrawInGameSettingsPanel()
+    {
+        if (!settingsMenuOpen || canvas == null) return;
+
+        settingsOverlay = PanelObject("In-Game Settings Overlay", canvas.transform,
+            new Color32(6, 10, 16, 220));
+        Stretch(settingsOverlay, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        settingsOverlay.SetAsLastSibling();
+        settingsOverlay.gameObject.AddComponent<Button>().onClick.AddListener(() =>
         {
-            SfxVolume = v;
-            if (percentReadout != null) percentReadout.text = Mathf.RoundToInt(v * 100f) + "%";
-            PlayCardDrawSfx();   // instant feedback at the new volume
+            settingsMenuOpen = false;
+            Render();
         });
+
+        var panel = PanelObject("In-Game Settings Panel", settingsOverlay,
+            new Color32(14, 30, 46, 255));
+        Stretch(panel, new Vector2(0.26f, 0.14f), new Vector2(0.74f, 0.86f),
+            Vector2.zero, Vector2.zero);
+        RoundBig(panel);
+        AddRoundedCardBorder(panel, Accent, 1.6f);
+        panel.gameObject.AddComponent<Button>().transition = Selectable.Transition.None;
+
+        var title = TextObject("Settings Title", panel, "SETTINGS", 20, Ink,
+            TextAnchor.MiddleLeft, titleFont);
+        title.fontStyle = FontStyle.Bold;
+        Stretch(title.rectTransform, new Vector2(0.06f, 0.90f), new Vector2(0.94f, 0.98f),
+            Vector2.zero, Vector2.zero);
+        var hint = TextObject("Settings Hint", panel,
+            "Display, cursor, and audio changes apply immediately.", 10, Muted,
+            TextAnchor.MiddleLeft, monoFont);
+        Stretch(hint.rectTransform, new Vector2(0.06f, 0.855f), new Vector2(0.94f, 0.91f),
+            Vector2.zero, Vector2.zero);
+
+        AddSettingsSectionLabel(panel, "DISPLAY", 0.80f, 0.85f);
+        bool fullscreen = DisplaySettings.Fullscreen;
+        AddSettingsChoice(panel, "FULLSCREEN", fullscreen,
+            new Vector2(0.06f, 0.715f), new Vector2(0.34f, 0.79f), () =>
+            {
+                DisplaySettings.ApplyMode(true);
+                Render();
+            });
+        AddSettingsChoice(panel, "WINDOWED FIT", !fullscreen,
+            new Vector2(0.36f, 0.715f), new Vector2(0.65f, 0.79f), () =>
+            {
+                DisplaySettings.ApplyMode(false);
+                Render();
+            });
+        var modes = DisplaySettings.Available();
+        var currentMode = modes[Mathf.Clamp(DisplaySettings.CurrentIndex(), 0, modes.Count - 1)];
+        string resolutionLabel = fullscreen
+            ? currentMode.w + "×" + currentMode.h + "  ›"
+            : "FIT " + Screen.width + "×" + Screen.height + "  ›";
+        AddSettingsChoice(panel, resolutionLabel, false,
+            new Vector2(0.67f, 0.715f), new Vector2(0.94f, 0.79f), () =>
+            {
+                var choices = DisplaySettings.Available();
+                int next = (DisplaySettings.CurrentIndex() + 1) % choices.Count;
+                DisplaySettings.ApplyResolution(choices[next].w, choices[next].h);
+                Render();
+            });
+
+        AddSettingsSectionLabel(panel, "CURSOR", 0.635f, 0.685f);
+        var cursorSize = TextObject("Cursor Size Label", panel,
+            "SIZE                                      " + CursorSettings.SizePx + "px", 10,
+            Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(cursorSize.rectTransform, new Vector2(0.06f, 0.585f), new Vector2(0.94f, 0.635f),
+            Vector2.zero, Vector2.zero);
+        BuildValueSlider(panel, "Cursor Size", new Vector2(0.06f, 0.535f),
+            new Vector2(0.94f, 0.57f), CursorSettings.MinSize, CursorSettings.MaxSize,
+            CursorSettings.SizePx, true, v =>
+            {
+                CursorSettings.SizePx = Mathf.RoundToInt(v);
+                cursorSize.text = "SIZE                                      " + CursorSettings.SizePx + "px";
+                CursorManager.Apply();
+            });
+
+        var rotateLabel = TextObject("Cursor Rotate Label", panel, "ROTATION", 10,
+            Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(rotateLabel.rectTransform, new Vector2(0.06f, 0.445f), new Vector2(0.30f, 0.51f),
+            Vector2.zero, Vector2.zero);
+        AddSettingsChoice(panel, "◄", false, new Vector2(0.30f, 0.445f),
+            new Vector2(0.40f, 0.51f), () =>
+            {
+                CursorSettings.NudgeRotation(1); CursorManager.Apply(); Render();
+            });
+        AddSettingsChoice(panel, Mathf.RoundToInt(CursorSettings.RotationDegrees) + "°", false,
+            new Vector2(0.415f, 0.445f), new Vector2(0.535f, 0.51f), () => { });
+        AddSettingsChoice(panel, "►", false, new Vector2(0.55f, 0.445f),
+            new Vector2(0.65f, 0.51f), () =>
+            {
+                CursorSettings.NudgeRotation(-1); CursorManager.Apply(); Render();
+            });
+        AddSettingsChoice(panel, CursorSettings.ColorName.ToUpperInvariant() + "  ›", false,
+            new Vector2(0.67f, 0.445f), new Vector2(0.94f, 0.51f), () =>
+            {
+                CursorSettings.CycleColor(); CursorManager.Apply(); Render();
+            });
+
+        AddSettingsSectionLabel(panel, "AUDIO", 0.335f, 0.385f);
+        var audioValue = TextObject("Audio Value", panel,
+            "SFX VOLUME                              " + Mathf.RoundToInt(SfxVolume * 100f) + "%",
+            10, Muted, TextAnchor.MiddleLeft, monoFont);
+        Stretch(audioValue.rectTransform, new Vector2(0.06f, 0.285f), new Vector2(0.94f, 0.335f),
+            Vector2.zero, Vector2.zero);
+        BuildValueSlider(panel, "Settings SFX", new Vector2(0.06f, 0.235f),
+            new Vector2(0.94f, 0.27f), 0f, 1f, SfxVolume, false, v =>
+            {
+                SfxVolume = v;
+                audioValue.text = "SFX VOLUME                              " +
+                    Mathf.RoundToInt(v * 100f) + "%";
+            });
+
+        AddSettingsChoice(panel, "CLOSE", true, new Vector2(0.32f, 0.065f),
+            new Vector2(0.68f, 0.145f), () =>
+            {
+                settingsMenuOpen = false;
+                Render();
+            });
+    }
+
+    private void AddSettingsSectionLabel(RectTransform parent, string label, float bottom, float top)
+    {
+        var text = TextObject(label + " Section", parent, label, 10, Accent2,
+            TextAnchor.MiddleLeft, monoFont);
+        text.fontStyle = FontStyle.Bold;
+        Stretch(text.rectTransform, new Vector2(0.06f, bottom), new Vector2(0.94f, top),
+            Vector2.zero, Vector2.zero);
+    }
+
+    private void AddSettingsChoice(RectTransform parent, string label, bool active,
+        Vector2 min, Vector2 max, UnityEngine.Events.UnityAction action)
+    {
+        var buttonRoot = PanelObject("Setting " + label, parent,
+            active ? (Color)Accent : (Color)new Color32(24, 48, 65, 245));
+        Stretch(buttonRoot, min, max, Vector2.zero, Vector2.zero);
+        Round(buttonRoot);
+        AddRoundedCardBorder(buttonRoot, active ? Accent2 : MenuB, active ? 1.4f : 1f);
+        var text = TextObject("Label", buttonRoot, label, 10,
+            active ? BadgeInk : Ink, TextAnchor.MiddleCenter, monoFont);
+        text.fontStyle = FontStyle.Bold;
+        Stretch(text.rectTransform, Vector2.zero, Vector2.one, new Vector2(4f, 0f),
+            new Vector2(-4f, 0f));
+        buttonRoot.gameObject.AddComponent<Button>().onClick.AddListener(action);
     }
 
     // Tears down the board and rebuilds the main menu in this same scene

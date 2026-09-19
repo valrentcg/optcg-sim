@@ -952,7 +952,7 @@ public partial class MainMenuManager : MonoBehaviour
         var scaler = canvasGo.AddComponent<CanvasScaler>();
         scaler.uiScaleMode          = CanvasScaler.ScaleMode.ScaleWithScreenSize;
         scaler.referenceResolution  = new Vector2(1920, 1080);
-        scaler.matchWidthOrHeight   = 0.5f;
+        scaler.screenMatchMode      = CanvasScaler.ScreenMatchMode.Expand;
         scaler.dynamicPixelsPerUnit = 4f;
 
         menuRoot = PanelObject("Menu Root", canvas.transform, MatTop);
@@ -4143,7 +4143,8 @@ public partial class MainMenuManager : MonoBehaviour
         AddDisplayModePill(displayRow, "WINDOWED", !isFullscreen, () => SetDisplayMode(false));
         var modes = DisplaySettings.Available();
         var (cw, ch) = modes[Mathf.Clamp(DisplaySettings.CurrentIndex(), 0, modes.Count - 1)];
-        AddDisplayModePill(displayRow, $"{cw}x{ch}", false, () =>
+        string resolutionLabel = isFullscreen ? $"{cw}x{ch}" : $"FIT {Screen.width}x{Screen.height}";
+        AddDisplayModePill(displayRow, resolutionLabel, false, () =>
         {
             var list = DisplaySettings.Available();
             int next = (DisplaySettings.CurrentIndex() + 1) % list.Count;
@@ -8993,35 +8994,21 @@ public partial class MainMenuManager : MonoBehaviour
     {
         EnsureDeckPicksLoaded();
         var shownDeck = DeckStore.Get(duelDeckId);
-        var playableDeck = ResolveMenuDeck(duelDeckId);
         var art = shownDeck != null ? LoadArt(shownDeck.leaderId) : null;
 
-        // Deck identity lives in a calm information band above the artwork. This
-        // keeps all copy readable without placing an opaque box over the image.
+        // The hero is artwork only. Deck identity and its action live in the
+        // portal header above, leaving this image uninterrupted edge to edge.
         var artField = PanelObject("Showcase Art Field", portal, new Color32(11, 38, 52, 255));
-        Stretch(artField, new Vector2(0f, 0.01f), new Vector2(1f, 0.68f),
-            new Vector2(1f, 0f), new Vector2(-1f, 0f));
+        Stretch(artField, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         artField.GetComponent<Image>().raycastTarget = false;
         artField.gameObject.AddComponent<RectMask2D>();
-
-        var gradient = PanelObject("Showcase Gradient", artField, new Color32(4, 15, 24, 220));
-        Stretch(gradient, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        var gradientImage = gradient.GetComponent<Image>();
-        gradientImage.sprite = GetVGradientSprite();
-        gradientImage.raycastTarget = false;
         AddFadedLeaderIllustration(artField, art, "Duel Illustration",
-            Vector2.zero, Vector2.one, 0.18f, -5f);
-        var aura = AddRadialGlow(artField, new Color(Accent.r, Accent.g, Accent.b, 0.24f),
-            new Vector2(0.12f, 0.09f), new Vector2(0.88f, 0.96f));
-        aura.GetComponent<Image>().raycastTarget = false;
-        var warmAura = AddRadialGlow(artField, new Color(Gold.r, Gold.g, Gold.b, 0.09f),
-            new Vector2(0.30f, 0.25f), new Vector2(1.10f, 1.05f));
-        warmAura.GetComponent<Image>().raycastTarget = false;
+            Vector2.zero, Vector2.one, 0.20f, -5f);
 
         var cardEdge = PanelObject("Showcase Card Edge", artField, Accent);
-        cardEdge.anchorMin = cardEdge.anchorMax = new Vector2(0.77f, 0.50f);
+        cardEdge.anchorMin = cardEdge.anchorMax = new Vector2(0.75f, 0.50f);
         cardEdge.pivot = new Vector2(0.5f, 0.5f);
-        cardEdge.sizeDelta = new Vector2(220f, 308f);
+        cardEdge.sizeDelta = new Vector2(278f, 389f);
         cardEdge.localRotation = Quaternion.Euler(0f, 0f, -3.5f);
         RoundedCardMask.ApplyTo(cardEdge.GetComponent<Image>());
         cardEdge.gameObject.AddComponent<Button>().onClick.AddListener(PickDuelDeck);
@@ -9044,50 +9031,6 @@ public partial class MainMenuManager : MonoBehaviour
             Stretch(emblem.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         }
 
-        var infoBand = PanelObject("Showcase Info Band", portal, new Color32(10, 27, 37, 255));
-        Stretch(infoBand, new Vector2(0f, 0.70f), Vector2.one,
-            new Vector2(1f, 0f), new Vector2(-1f, -1f));
-        infoBand.GetComponent<Image>().raycastTarget = false;
-        var bandLine = PanelObject("Info Divider", infoBand, new Color(Accent.r, Accent.g, Accent.b, 0.42f));
-        Stretch(bandLine, Vector2.zero, new Vector2(1f, 0f), Vector2.zero, new Vector2(0f, 1f));
-        bandLine.GetComponent<Image>().raycastTarget = false;
-
-        var kicker = TextObject("Showcase Label", infoBand, "YOUR DECK", 11,
-            Accent2, TextAnchor.MiddleLeft, monoFont);
-        kicker.fontStyle = FontStyle.Bold;
-        Stretch(kicker.rectTransform, new Vector2(0f, 0.68f), new Vector2(0.69f, 0.96f),
-            new Vector2(28f, 0f), Vector2.zero);
-
-        var deckName = TextObject("Showcase Deck Name", infoBand,
-            shownDeck != null ? shownDeck.name : "Choose a deck", 26,
-            Ink, TextAnchor.MiddleLeft);
-        deckName.fontStyle = FontStyle.Bold;
-        Stretch(deckName.rectTransform, new Vector2(0f, 0.32f), new Vector2(0.69f, 0.70f),
-            new Vector2(28f, 0f), Vector2.zero);
-
-        string status = shownDeck == null ? "Pick a deck before you enter Duel."
-            : playableDeck == null ? "This deck needs changes before it can be played."
-            : shownDeck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal
-                ? "Standard legal  ·  Ready for Casual or Ranked"
-                : "Not Standard legal  ·  Custom format may allow it";
-        var detail = TextObject("Showcase Detail", infoBand, status, 13,
-            new Color32(220, 232, 238, 255),
-            TextAnchor.MiddleLeft);
-        detail.horizontalOverflow = HorizontalWrapMode.Wrap;
-        Stretch(detail.rectTransform, new Vector2(0f, 0.04f), new Vector2(0.70f, 0.34f),
-            new Vector2(28f, 0f), Vector2.zero);
-
-        var change = PanelObject("Change Duel Deck", infoBand, new Color32(13, 34, 45, 255));
-        Stretch(change, new Vector2(0.74f, 0.34f), new Vector2(0.97f, 0.68f),
-            Vector2.zero, Vector2.zero);
-        Round(change);
-        AddRoundedCardBorder(change, Accent, 1f);
-        var changeText = TextObject("Label", change,
-            shownDeck == null ? "CHOOSE DECK  ›" : "CHANGE DECK  ›", 11,
-            Ink, TextAnchor.MiddleCenter, monoFont);
-        changeText.fontStyle = FontStyle.Bold;
-        Stretch(changeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
-        change.gameObject.AddComponent<Button>().onClick.AddListener(PickDuelDeck);
     }
 
     // OPTCG leader scans contain printed stats at the top and rules text below
@@ -9118,7 +9061,9 @@ public partial class MainMenuManager : MonoBehaviour
             (source.y + source.height * 0.46f) / art.texture.height,
             source.width * 0.84f / art.texture.width,
             source.height * 0.44f / art.texture.height);
-        image.color = new Color(0.68f, 0.88f, 0.90f, opacity);
+        // Neutral colour preserves the source palette. The previous cyan tint
+        // made pale artwork look like a synthetic glow even without an aura.
+        image.color = new Color(1f, 1f, 1f, opacity);
         image.raycastTarget = false;
         return viewport;
     }
@@ -9193,29 +9138,47 @@ public partial class MainMenuManager : MonoBehaviour
         EnsureDeckPicksLoaded();
         AddTopHighlight(portal);
 
-        var kicker = TextObject("Kicker", portal, "ONLINE PLAY", 10,
+        var shownDeck = DeckStore.Get(duelDeckId);
+        var playableDeck = ResolveMenuDeck(duelDeckId);
+        var kicker = TextObject("Kicker", portal, "ONLINE PLAY  ·  DUEL  ·  YOUR DECK", 10,
             Accent2, TextAnchor.MiddleLeft, monoFont);
         kicker.fontStyle = FontStyle.Bold;
         Stretch(kicker.rectTransform, new Vector2(0f, 0.944f), Vector2.one,
             new Vector2(24f, 0f), new Vector2(-20f, -8f));
 
-        var portalTitle = TextObject("Portal Title", portal, "Duel", 30,
+        var portalTitle = TextObject("Portal Title", portal,
+            shownDeck != null ? shownDeck.name : "Choose a deck", 30,
             Ink, TextAnchor.MiddleLeft);
         portalTitle.fontStyle = FontStyle.Bold;
         Stretch(portalTitle.rectTransform, new Vector2(0f, 0.879f), new Vector2(1f, 0.950f),
             new Vector2(24f, 0f), new Vector2(-20f, 0f));
 
-        var desc = TextObject("Desc", portal,
-            "Find an opponent and play for rank, or set your own table.", 12,
-            Muted, TextAnchor.MiddleLeft);
+        string deckStatus = shownDeck == null ? "Pick a deck before you enter Duel."
+            : playableDeck == null ? "This deck needs changes before it can be played."
+            : shownDeck.Check(OnePieceTcg.Engine.GameFormat.Standard).Legal
+                ? "Standard legal  ·  Ready for Casual or Ranked"
+                : "Not Standard legal  ·  Custom format may allow it";
+        var desc = TextObject("Desc", portal, deckStatus, 12,
+            shownDeck != null && playableDeck != null ? new Color32(220, 232, 238, 255) : Muted,
+            TextAnchor.MiddleLeft);
         Stretch(desc.rectTransform, new Vector2(0f, 0.827f), new Vector2(1f, 0.882f),
-            new Vector2(24f, 0f), new Vector2(-20f, 0f));
+            new Vector2(24f, 0f), new Vector2(-250f, 0f));
+
+        var change = PanelObject("Change Duel Deck", portal, new Color32(13, 34, 45, 255));
+        Stretch(change, new Vector2(0.72f, 0.848f), new Vector2(0.975f, 0.925f),
+            Vector2.zero, Vector2.zero);
+        Round(change);
+        AddRoundedCardBorder(change, Accent, 1f);
+        var changeText = TextObject("Label", change,
+            shownDeck == null ? "CHOOSE DECK  ›" : "CHANGE DECK  ›", 11,
+            Ink, TextAnchor.MiddleCenter, monoFont);
+        changeText.fontStyle = FontStyle.Bold;
+        Stretch(changeText.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
+        change.gameObject.AddComponent<Button>().onClick.AddListener(PickDuelDeck);
 
         var hero = PanelObject("Duel Deck Showcase", portal, new Color32(9, 32, 43, 255));
-        Stretch(hero, new Vector2(0.025f, 0.248f), new Vector2(0.975f, 0.824f),
+        Stretch(hero, new Vector2(0f, 0.248f), new Vector2(1f, 0.824f),
             Vector2.zero, Vector2.zero);
-        Round(hero);
-        AddRoundedCardBorder(hero, ZoneBorder, 1f);
         BuildPlayDeckShowcase(hero);
 
         string duelMode = (selectedId == "casual" || selectedId == "ranked" || selectedId == "privateRoom")
@@ -9633,8 +9596,9 @@ public partial class MainMenuManager : MonoBehaviour
         AddRoundedCardBorder(row, flagged ? RedAccent : ZoneBorder, flagged ? 1.5f : 1f);
 
         var art = deck != null ? LoadArt(deck.leaderId) : null;
-        AddFadedLeaderIllustration(row, art, label + " Illustration",
-            new Vector2(0.39f, 0.05f), new Vector2(0.97f, 0.95f), 0.10f, -4f);
+        var illustration = AddFadedLeaderIllustration(row, art, label + " Illustration",
+            new Vector2(0.39f, 0f), new Vector2(1f, 1f), 0.12f, -4f);
+        if (illustration != null) illustration.SetAsFirstSibling();
 
         var thumb = PanelObject("Leader Card", row, new Color32(7, 17, 27, 255));
         thumb.anchorMin = thumb.anchorMax = new Vector2(1f, 0.5f);

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
 /// <summary>
@@ -19,6 +20,55 @@ public static class DisplaySettings
     {
         (1280, 720), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (3840, 2160),
     };
+
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int left, top, right, bottom; }
+
+    private const uint SpiGetWorkArea = 0x0030;
+    private const int SmCxSizeFrame = 32;
+    private const int SmCySizeFrame = 33;
+    private const int SmCyCaption = 4;
+    private const int SmCxPaddedBorder = 92;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SystemParametersInfo(uint action, uint param, out NativeRect rect, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
+#endif
+
+    // A requested Unity window size is the CLIENT area; Windows then adds the title bar and
+    // resize frame. Fit the client to the desktop work area (which already excludes the taskbar)
+    // so a 1920x1080 preference never creates an outer window taller than a 1080p desktop.
+    private static (int w, int h) FitWindowed(int requestedW, int requestedH)
+    {
+        int maxClientW = Mathf.Max(640, Screen.currentResolution.width);
+        int maxClientH = Mathf.Max(360, Screen.currentResolution.height - 48);
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+        try
+        {
+            if (SystemParametersInfo(SpiGetWorkArea, 0, out var work, 0))
+            {
+                int frameX = Mathf.Max(0, GetSystemMetrics(SmCxSizeFrame)) +
+                             Mathf.Max(0, GetSystemMetrics(SmCxPaddedBorder));
+                int frameY = Mathf.Max(0, GetSystemMetrics(SmCySizeFrame)) +
+                             Mathf.Max(0, GetSystemMetrics(SmCxPaddedBorder));
+                int caption = Mathf.Max(0, GetSystemMetrics(SmCyCaption));
+                maxClientW = Mathf.Max(640, work.right - work.left - frameX * 2 - 2);
+                maxClientH = Mathf.Max(360, work.bottom - work.top - frameY * 2 - caption - 2);
+            }
+        }
+        catch { /* Conservative cross-platform fallback above remains valid. */ }
+#endif
+        requestedW = Mathf.Max(640, requestedW);
+        requestedH = Mathf.Max(360, requestedH);
+        float scale = Mathf.Min(1f, Mathf.Min(maxClientW / (float)requestedW,
+                                              maxClientH / (float)requestedH));
+        int fittedW = Mathf.Max(640, Mathf.FloorToInt(requestedW * scale / 2f) * 2);
+        int fittedH = Mathf.Max(360, Mathf.FloorToInt(requestedH * scale / 2f) * 2);
+        return (fittedW, fittedH);
+    }
 
     /// <summary>The 16:9 resolutions that fit the current display (always at least one).</summary>
     public static List<(int w, int h)> Available()
@@ -64,7 +114,13 @@ public static class DisplaySettings
         PlayerPrefs.SetInt(KeyResW, w);
         PlayerPrefs.SetInt(KeyResH, h);
         PlayerPrefs.Save();
-        Screen.SetResolution(w, h, Mode(Fullscreen));
+        if (Fullscreen)
+            Screen.SetResolution(w, h, Mode(true));
+        else
+        {
+            var fit = FitWindowed(w, h);
+            Screen.SetResolution(fit.w, fit.h, Mode(false));
+        }
     }
 
     /// <summary>The resolution to go fullscreen AT.
@@ -87,7 +143,7 @@ public static class DisplaySettings
     {
         PlayerPrefs.SetInt(KeyFullscreen, fullscreen ? 1 : 0);
         PlayerPrefs.Save();
-        var (w, h) = fullscreen ? FullscreenTarget() : Current();
+        var (w, h) = fullscreen ? FullscreenTarget() : FitWindowed(Current().w, Current().h);
         Screen.SetResolution(w, h, Mode(fullscreen));
     }
 
@@ -97,7 +153,17 @@ public static class DisplaySettings
         var mode = Mode(Fullscreen);
         int w = PlayerPrefs.GetInt(KeyResW, 0);
         int h = PlayerPrefs.GetInt(KeyResH, 0);
-        if (w > 0 && h > 0) Screen.SetResolution(w, h, mode);
-        else Screen.fullScreenMode = mode;
+        if (Fullscreen)
+        {
+            if (w > 0 && h > 0) Screen.SetResolution(w, h, mode);
+            else Screen.fullScreenMode = mode;
+        }
+        else
+        {
+            int requestedW = w > 0 ? w : Mathf.Max(Screen.width, 1280);
+            int requestedH = h > 0 ? h : Mathf.Max(Screen.height, 720);
+            var fit = FitWindowed(requestedW, requestedH);
+            Screen.SetResolution(fit.w, fit.h, mode);
+        }
     }
 }
