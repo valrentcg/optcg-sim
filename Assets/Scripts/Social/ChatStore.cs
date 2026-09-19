@@ -29,15 +29,47 @@ public sealed class ChatUnreadEntry
     public long lastId;
 }
 
+[Serializable]
+public sealed class ChatConversationSummary
+{
+    public string peerId;
+    public long lastId;
+    public string lastBody;
+    public long lastCreatedAt;
+    public bool lastMine;
+    public int unreadCount;
+}
+
 public static class ChatStore
 {
     // ── JsonUtility response wrappers (no top-level arrays/dictionaries) ──
     [Serializable] private sealed class HistoryResponse { public ChatMessage[] messages; }
+    [Serializable] private sealed class ConversationsResponse { public ChatConversationSummary[] conversations; }
     [Serializable] private sealed class SendResponse { public bool ok; public long id; public long createdAt; }
     [Serializable] private sealed class PollResponse { public ChatUnreadEntry[] unread; public int total; }
     [Serializable] private sealed class OkResponse { public bool ok; }
     [Serializable] private sealed class SendReq { public string toId; public string body; }
     [Serializable] private sealed class WithReq { public string withId; }
+
+    /// <summary>Newest-first inbox index. Each item is the latest message exchanged with
+    /// one player plus that conversation's unread count. `ok` distinguishes a successful
+    /// empty inbox from an unavailable backend.</summary>
+    public static async Task<(bool ok, List<ChatConversationSummary> conversations)> ConversationsAsync(int limit = 50)
+    {
+        var list = new List<ChatConversationSummary>();
+        limit = Mathf.Clamp(limit, 1, 100);
+        string text = await SocialHttp.GetAsync($"/chat/conversations?limit={limit}");
+        if (text == null) return (false, list);
+        try
+        {
+            var wrap = JsonUtility.FromJson<ConversationsResponse>(text);
+            if (wrap?.conversations == null) return (false, list);
+            list.AddRange(wrap.conversations);
+            return (true, list);
+        }
+        catch (Exception ex) { Debug.LogWarning($"Chat conversations parse failed: {ex.Message}"); }
+        return (false, list);
+    }
 
     /// <summary>Conversation with `withId`. A first load returns the newest page in
     /// chronological order; `sinceId` tails newer messages and `beforeId` pages older ones.

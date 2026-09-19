@@ -21,7 +21,7 @@ import {
   handleQueueJoin, handleQueuePoll, handleQueueReady, handleQueueHostReady, handleQueueCancel,
 } from "./matchmaking";
 import {
-  handleChatSend, handleChatHistory, handleChatRead, handleChatPoll,
+  handleChatSend, handleChatHistory, handleChatRead, handleChatPoll, handleChatConversations,
   handleInviteSend, handleInvitePoll, handleInviteRespond, handleInviteStatus, handleInviteCancel,
   sweepExpiredInvites,
 } from "./social";
@@ -318,6 +318,7 @@ async function handleSocialRoute(req: Request, url: URL, env: Env): Promise<Resp
     case "/chat/history":   return json(await handleChatHistory(env, playerId, url));
     case "/chat/read":      return json(await handleChatRead(env, playerId, body));
     case "/chat/poll":      return json(await handleChatPoll(env, playerId));
+    case "/chat/conversations": return json(await handleChatConversations(env, playerId, url));
     case "/invite/send":    return json(await handleInviteSend(env, playerId, body));
     case "/invite/poll":    return json(await handleInvitePoll(env, playerId));
     case "/invite/respond": return json(await handleInviteRespond(env, playerId, body));

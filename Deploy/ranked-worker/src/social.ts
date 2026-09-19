@@ -11,7 +11,7 @@
 interface Env { DB: D1Database; }
 
 const MAX_MSG_LEN = 1000;      // per-message body cap
-export const INVITE_TTL_MS = 60_000;  // a pending invite auto-expires after this
+export const INVITE_TTL_MS = 30 * 60_000;  // a pending invite auto-expires after this
 
 // ── Chat ──────────────────────────────────────────────────────────────────────
 
@@ -83,6 +83,43 @@ export async function handleChatPoll(env: Env, me: string): Promise<any> {
   return { unread, total };
 }
 
+/// GET /chat/conversations?limit -> one newest-first summary per person I have
+/// exchanged a message with. This is the inexpensive inbox index: the client loads
+/// full history only after the player opens a conversation.
+export async function handleChatConversations(env: Env, me: string, url: URL): Promise<any> {
+  const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "50", 10) || 50, 1), 100);
+  const rows = await env.DB.prepare(
+    `WITH conversation_messages AS (
+       SELECT id, to_id AS peer_id, body, created_at, 1 AS mine, 0 AS unread
+         FROM dm_messages WHERE from_id = ?
+       UNION ALL
+       SELECT id, from_id AS peer_id, body, created_at, 0 AS mine,
+              CASE WHEN read_at IS NULL THEN 1 ELSE 0 END AS unread
+         FROM dm_messages WHERE to_id = ?
+     ), latest AS (
+       SELECT peer_id, MAX(id) AS last_id, SUM(unread) AS unread_count
+         FROM conversation_messages
+        GROUP BY peer_id
+     )
+     SELECT m.peer_id, m.id AS last_id, m.body AS last_body,
+            m.created_at AS last_created_at, m.mine, l.unread_count
+       FROM latest l
+       JOIN conversation_messages m
+         ON m.peer_id = l.peer_id AND m.id = l.last_id
+      ORDER BY m.id DESC
+      LIMIT ?`,
+  ).bind(me, me, limit).all<any>();
+  const conversations = (rows.results ?? []).map((r: any) => ({
+    peerId: r.peer_id,
+    lastId: r.last_id,
+    lastBody: r.last_body,
+    lastCreatedAt: r.last_created_at,
+    lastMine: r.mine === 1,
+    unreadCount: r.unread_count,
+  }));
+  return { conversations };
+}
+
 // ── Invites ─────────────────────────────────────────────────────────────────
 
 /// POST /invite/send { toId, sessionId, lobbyName, fromName } → invite toId into my
@@ -141,8 +178,35 @@ export async function handleInviteRespond(env: Env, me: string, body: any): Prom
   if (!inv) return { error: "not found" };
   if (inv.to_id !== me) return { error: "not your invite" };
   if (inv.status !== "pending") return { status: inv.status, sessionId: inv.session_id };
+
+  // Poll hides stale rows immediately, but a client can still respond to an invite it
+  // rendered earlier. Enforce the same boundary here so that stale UI can never join an
+  // expired room. Responding is already a write path, so persisting the derived state does
+  // not create the idle write amplification avoided in handleInvitePoll.
+  const now = Date.now();
+  if (inv.created_at < now - INVITE_TTL_MS) {
+    const expired = await env.DB.prepare(
+      "UPDATE game_invites SET status = 'expired' WHERE id = ? AND status = 'pending'",
+    ).bind(inviteId).run();
+    if (expired.meta.changes !== 1) {
+      const current = await env.DB.prepare(
+        "SELECT status FROM game_invites WHERE id = ?",
+      ).bind(inviteId).first<{ status: string }>();
+      return { status: current?.status ?? "unknown", sessionId: inv.session_id };
+    }
+    return { status: "expired", sessionId: inv.session_id };
+  }
+
   const newStatus = accept ? "accepted" : "declined";
-  await env.DB.prepare("UPDATE game_invites SET status = ? WHERE id = ?").bind(newStatus, inviteId).run();
+  const changed = await env.DB.prepare(
+    "UPDATE game_invites SET status = ? WHERE id = ? AND status = 'pending' AND created_at >= ?",
+  ).bind(newStatus, inviteId, now - INVITE_TTL_MS).run();
+  if (changed.meta.changes !== 1) {
+    const current = await env.DB.prepare(
+      "SELECT status FROM game_invites WHERE id = ?",
+    ).bind(inviteId).first<{ status: string }>();
+    return { status: current?.status ?? "unknown", sessionId: inv.session_id };
+  }
   return { ok: true, status: newStatus, sessionId: inv.session_id };
 }
 
@@ -152,9 +216,11 @@ export async function handleInviteStatus(env: Env, me: string, url: URL): Promis
   const inviteId = url.searchParams.get("inviteId")?.trim();
   if (!inviteId) return { error: "inviteId required" };
   const inv = await env.DB.prepare(
-    "SELECT from_id, to_id, status FROM game_invites WHERE id = ?",
+    "SELECT from_id, to_id, status, created_at FROM game_invites WHERE id = ?",
   ).bind(inviteId).first<any>();
   if (!inv || inv.from_id !== me) return { status: "unknown" };
+  if (inv.status === "pending" && inv.created_at < Date.now() - INVITE_TTL_MS)
+    return { status: "expired" };
   return { status: inv.status };
 }
 
