@@ -25,7 +25,7 @@ namespace OnePieceTcg.Sealed
                 "Swipe the wheel, stop on a set, then open a fresh randomized six-pack kit.",
                 13, SealedUI.Muted, TextAnchor.UpperCenter);
             SealedUI.Stretch(sub.rectTransform, new Vector2(0.18f, 0.875f), new Vector2(0.82f, 0.915f));
-            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.BackAction, SealedUI.Ink, ExitToMenu)
                 .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
 
             if (SealedCatalog.Available().Count == 0)
@@ -41,16 +41,7 @@ namespace OnePieceTcg.Sealed
 
             var start = SealedUI.Button(screenRoot, "OPEN 6 PACKS", SealedUI.Accent,
                 SealedUI.BadgeInk, StartRun, 18);
-            SealedUI.Stretch(start, new Vector2(0.70f, 0.025f), new Vector2(0.94f, 0.09f));
-
-            var saved = SealedStore.All();
-            if (saved.Count > 0)
-            {
-                var latest = saved[0];
-                var resume = SealedUI.Button(screenRoot, $"CONTINUE  {latest.Label}", SealedUI.ChipOff,
-                    SealedUI.Ink, () => ResumeRun(latest), 11, false);
-                SealedUI.Stretch(resume, new Vector2(0.06f, 0.035f), new Vector2(0.30f, 0.082f));
-            }
+            SealedUI.Stretch(start, new Vector2(0.38f, 0.025f), new Vector2(0.62f, 0.09f));
         }
 
         private void ShowProductPicker()
@@ -66,7 +57,7 @@ namespace OnePieceTcg.Sealed
                 13, SealedUI.Muted, TextAnchor.UpperCenter);
             SealedUI.Stretch(sub.rectTransform, new Vector2(0.15f, 0.875f), new Vector2(0.85f, 0.915f));
 
-            var close = SealedUI.Button(screenRoot, "CANCEL", SealedUI.ChipOff, SealedUI.Ink, () =>
+            var close = SealedUI.Button(screenRoot, "CANCEL", SealedUI.BackAction, SealedUI.Ink, () =>
             {
                 productPickerCancelled?.Invoke();
                 Destroy(gameObject);
@@ -167,11 +158,30 @@ namespace OnePieceTcg.Sealed
             AddDifficulty("INTERMEDIATE", "intermediate", 0.456f, 0.548f);
             AddDifficulty("ADVANCED", "advanced", 0.552f, 0.635f);
 
-            var timer = SealedUI.Button(panel, timedBuild ? "BUILD TIMER  50:00" : "BUILD TIMER  OFF",
+            var timerHeading = SealedUI.Label(panel, "Build Timer Heading", "BUILD TIMER", 10,
+                SealedUI.Muted, TextAnchor.MiddleCenter, true);
+            SealedUI.Stretch(timerHeading.rectTransform, new Vector2(0.36f, 0.34f), new Vector2(0.64f, 0.45f));
+
+            var timer = SealedUI.Button(panel,
+                timedBuild ? $"ON  ·  {buildTimerMinutes}:00" : "OFF",
                 timedBuild ? SealedUI.Accent : SealedUI.ChipOff,
                 timedBuild ? SealedUI.BadgeInk : SealedUI.Ink,
                 () => { timedBuild = !timedBuild; ShowPicker(); }, 11, timedBuild);
-            SealedUI.Stretch(timer, new Vector2(0.405f, 0.16f), new Vector2(0.595f, 0.34f));
+            SealedUI.Stretch(timer, new Vector2(0.44f, 0.16f), new Vector2(0.56f, 0.33f));
+            SealedUI.Round(timer);
+
+            if (timedBuild)
+            {
+                var less = SealedUI.Button(panel, "− 5 MIN", SealedUI.ChipOff, SealedUI.Ink,
+                    () => AdjustBuildTimer(-BuildTimerStepMinutes), 10);
+                SealedUI.Stretch(less, new Vector2(0.36f, 0.16f), new Vector2(0.43f, 0.33f));
+                SealedUI.Round(less);
+
+                var more = SealedUI.Button(panel, "+ 5 MIN", SealedUI.ChipOff, SealedUI.Ink,
+                    () => AdjustBuildTimer(BuildTimerStepMinutes), 10);
+                SealedUI.Stretch(more, new Vector2(0.57f, 0.16f), new Vector2(0.64f, 0.33f));
+                SealedUI.Round(more);
+            }
 
             void AddDifficulty(string label, string value, float minX, float maxX)
             {
@@ -182,6 +192,13 @@ namespace OnePieceTcg.Sealed
                 SealedUI.Stretch(button, new Vector2(minX, 0.48f), new Vector2(maxX, 0.66f));
                 SealedUI.Round(button);
             }
+        }
+
+        private void AdjustBuildTimer(int deltaMinutes)
+        {
+            buildTimerMinutes = Mathf.Clamp(buildTimerMinutes + deltaMinutes,
+                MinBuildTimerMinutes, MaxBuildTimerMinutes);
+            ShowPicker();
         }
 
         private void BuildLeaderSelector(RectTransform parent, string heading, bool player, Vector2 min, Vector2 max)

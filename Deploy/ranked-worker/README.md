@@ -26,6 +26,16 @@ keep randos off the endpoint; the real security is the per-player token.
 | GET    | `/profile`     | secret               | `?playerId=` → `{ profile }` |
 | GET    | `/leaderboard` | secret               | `?limit=` (≤200) → `{ entries[] }` ordered by bounty |
 | GET    | `/health`      | secret               | `{ ok: true }` |
+| POST   | `/population/heartbeat` | UGS Bearer + secret | Registers a seen identity and refreshes its 90-second presence/activity. |
+| GET    | `/population/snapshot` | UGS Bearer + secret | `{ registered, online, queue, inMatch, ttlSeconds }`. `registered` starts with this rollout, so it is a tracked-player count, not a historic account total. |
+
+The menu population display requires both the `player_registry` and
+`player_presence` tables in `schema.sql` and the matching Worker deployment.
+Apply the additive schema on D1 before deploying the Worker. Older clients do
+not send heartbeats, so online, queue, and match counts cover upgraded clients
+seen in the last 90 seconds. A failed snapshot is displayed as unavailable,
+never as zero. A 404 from `/population/snapshot` means the route is not deployed;
+with the route deployed, a request without a Unity bearer token returns 401.
 
 ## Deploy (one-time)
 

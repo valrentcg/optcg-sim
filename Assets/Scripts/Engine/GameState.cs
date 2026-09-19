@@ -79,6 +79,55 @@ namespace OnePieceTcg.Engine
         public bool ByBattleKo;
     }
 
+    /// <summary>
+    /// One card currently being shown publicly from a normally hidden zone.  InstanceId is the
+    /// authoritative identity used by the board renderer (so only the chosen card turns over);
+    /// CardId is retained for the resolution panel even when the resolving effect moves the card.
+    /// </summary>
+    [System.Serializable]
+    public sealed class RevealedCardRef
+    {
+        public string InstanceId;
+        public string CardId;
+        public string OwnerSeat;
+        public string ZoneAtReveal;      // "hand" | "life" | "deck" | another source zone
+    }
+
+    /// <summary>
+    /// A public hidden-zone reveal that pauses the command stream until the observing player
+    /// acknowledges it.  Keeping this in GameState (rather than UI state) makes the pause,
+    /// ownership check, replay, bots, and both network clients deterministic.
+    /// </summary>
+    [System.Serializable]
+    public sealed class PublicRevealState
+    {
+        public string RevealId;
+        public string SourceSeat;
+        public string ConfirmSeat;
+        public string SourceInstanceId;
+        public string SourceCardId;
+        public string SourceName;
+        public string Reason;
+        public string EffectId;
+        public string ResumeMode;        // "effect" | "revealCost" | empty (acknowledgement only)
+        public string ContinuationText;
+        public bool RequiresConfirmation;
+        public bool AwaitingConfirmation;
+        public List<RevealedCardRef> Cards = new List<RevealedCardRef>();
+    }
+
+    /// <summary>A rest effect held while PRB02-006 (or a future rest-replacement card) decides whether
+    /// to rest another own Character instead. The original target is untouched until the choice resolves.</summary>
+    public sealed class DeferredRest
+    {
+        public string ChoiceEffectId;
+        public string RestEffectId;
+        public string TargetInstanceId;
+        public string TargetOwnerSeat;
+        public string GuardInstanceId;
+        public string RestingSeat;
+    }
+
     /// <summary>One player's board and resources.</summary>
     public sealed class PlayerState
     {
@@ -180,6 +229,11 @@ namespace OnePieceTcg.Engine
         // your hand", "up to 2 of your opponent's Characters ... cannot attack"). 0 = not yet
         // initialized; the resolver sets it to N on first entry and decrements per valid pick.
         public int SelectionsRemaining;
+        // Variable-count effects with two phases (for example P-059: return any number of
+        // Characters, then choose a battle-buff recipient). The phase is null for ordinary
+        // effects; "return" and "buff" keep the Skip/target flow explicit across commands.
+        public string VariableSelectionStage;
+        public int VariableSelectionCount;
         // Instance ids already CHOSEN during this multi-pick resolution — an "up to N Characters"
         // effect must target N DISTINCT cards, so a card here is excluded from the glow and rejected
         // if clicked again (prevents e.g. double-applying "give up to 2 opponent Characters −2000"
@@ -236,6 +290,9 @@ namespace OnePieceTcg.Engine
         // This is the body of an activated Life [Trigger]. When its final clause
         // finishes, resume any remaining damage from the same hit.
         public bool FinalizesActivatedTrigger;
+        // Set only after the opponent has acknowledged an explicit top-deck/Life reveal.  The
+        // resolving handler re-enters after confirmation and skips opening the same reveal again.
+        public bool PublicRevealConfirmed;
     }
 
     /// <summary>A serializable player action. Optional fields are used per command type.</summary>
@@ -311,13 +368,20 @@ namespace OnePieceTcg.Engine
         public BattleState Battle;
         public List<PendingEffect> PendingEffects = new List<PendingEffect>();
 
+        // Public reveal currently pinned open on both clients. While non-null, only the owner may
+        // continue selecting reveal-cost cards and only ConfirmSeat may acknowledge a completed
+        // reveal. All other game commands are rejected (concede remains universally available).
+        public PublicRevealState ActiveReveal;
+
         /// <summary>Removals held back while their owner decides whether to pay a "you may … instead"
         /// protection. Keyed by the EffectId of the decision offered to that player: answering Use pays
         /// the cost and the card stays, answering Skip (or the decision being retired) performs the
         /// removal that was postponed. Empty unless a seat opted into being asked — see
         /// an optional PendingEffect answered with Use/Skip.</summary>
         public List<DeferredRemoval> DeferredRemovals = new List<DeferredRemoval>();
+        public List<DeferredRest> DeferredRests = new List<DeferredRest>();
         public int EffectSequence;
+        public int RevealSequence;
         public List<GameCommand> CommandHistory = new List<GameCommand>();
         public List<LogEntry> EventLog = new List<LogEntry>();
         public Dictionary<string, PlayerState> Players = new Dictionary<string, PlayerState>();
@@ -476,7 +540,7 @@ namespace OnePieceTcg.Engine
         public string SourceInstanceId;
         public string SourceName;
         public string FeatureFilter;             // type-tag required to be eligible, e.g. "Supernovas"
-        public string NamedCardFilter;            // specific card name required, e.g. "Sanji" (ORed with CardTypeFilter below when both set — "[Sanji] or Event card" style effects)
+        public string NamedCardFilter;            // specific card name required, e.g. "Sanji" (ORed with CardTypeFilter or FeatureFilter when either is also set)
         public string Step;                       // "select" | "rearrange"
         public List<CardInstance> Cards = new List<CardInstance>();    // cards still pending placement
         public List<CardInstance> Ordered = new List<CardInstance>();  // bottom-of-deck order built during "rearrange"
@@ -520,6 +584,7 @@ namespace OnePieceTcg.Engine
         public bool RequireTrigger;  // eligibility: card must have printed [Trigger] text
         public int SelectCount = 1;  // how many picks the select step allows
         public bool SelectedAny;     // at least one looked card was added/played during this look
+        public bool RevealSelection; // the printed effect says to reveal the chosen card before adding it
         public bool ToTop;           // rearranged cards go to the TOP of the deck (ST17-003)
         public bool LifeMode;        // cards came from LIFE; confirmed order writes back to Life (ST13-012 Makino)
         public string LifeTargetSeat; // whose Life the looked cards belong to (for opponent's-Life peeks, e.g. OP03-099 Katakuri); null/empty = the looker's own Life

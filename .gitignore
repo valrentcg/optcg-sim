@@ -66,6 +66,9 @@ sysinfo.txt
 /Tools/Sim/bin/
 /Tools/Sim/obj/
 
+# Timestamped local evidence emitted by Tools/run_card_quality_gate.ps1.
+/Results/card-quality/
+
 # Sim self-play game dumps: 200MB+ of regenerable JSONL from a seeded, deterministic runner — the seeds
 # and configs are committed, so these can be rebuilt exactly. The small .log/.csv results ARE kept: they
 # are the experiment trail (win rates, CIs, ladders) and total ~0.2MB.

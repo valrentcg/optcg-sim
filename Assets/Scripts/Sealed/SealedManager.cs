@@ -46,6 +46,10 @@ namespace OnePieceTcg.Sealed
         private string leaderPickerSort = "name";
         private bool leaderPickerAscending = true;
         private bool timedBuild;
+        private int buildTimerMinutes = 50;
+        private const int MinBuildTimerMinutes = 5;
+        private const int MaxBuildTimerMinutes = 120;
+        private const int BuildTimerStepMinutes = 5;
         private bool leaderPickerOnly;
         private Action<string> leaderPickerChosen;
         private Action leaderPickerCancelled;
@@ -189,7 +193,7 @@ namespace OnePieceTcg.Sealed
             SealedUI.Fill(t.rectTransform);
             // A load that never finishes must not be a dead end - this screen has no other exit.
             if (networkBuild == null)
-                SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+                SealedUI.Button(screenRoot, "◂ MENU", SealedUI.BackAction, SealedUI.Ink, ExitToMenu)
                     .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
         }
 
@@ -217,7 +221,7 @@ namespace OnePieceTcg.Sealed
             SealedUI.Stretch(sub.rectTransform, new Vector2(0.04f, 0.855f), new Vector2(0.7f, 0.90f));
 
             if (networkBuild == null)
-                SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+                SealedUI.Button(screenRoot, "◂ MENU", SealedUI.BackAction, SealedUI.Ink, ExitToMenu)
                     .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
 
             if (SealedCatalog.Available().Count == 0)
@@ -308,10 +312,19 @@ namespace OnePieceTcg.Sealed
 
             // --- build timer ---
             Head("BUILD TIMER");
-            var t = SealedUI.Button(col, timedBuild ? "TOURNAMENT — 50:00" : "CASUAL — no timer",
+            var timerRow = SealedUI.Panel(col, "Build Timer Controls", Color.clear);
+            timerRow.gameObject.AddComponent<LayoutElement>().preferredHeight = 32f;
+            var less = SealedUI.Button(timerRow, "− 5", SealedUI.ChipOff, SealedUI.Ink,
+                () => AdjustBuildTimer(-BuildTimerStepMinutes), 11);
+            SealedUI.Stretch(less, new Vector2(0f, 0f), new Vector2(0.18f, 1f));
+            var t = SealedUI.Button(timerRow,
+                timedBuild ? $"ON — {buildTimerMinutes}:00" : "OFF — no timer",
                 timedBuild ? SealedUI.Accent : SealedUI.ChipOff, timedBuild ? SealedUI.BadgeInk : SealedUI.Ink,
                 () => { timedBuild = !timedBuild; ShowPicker(); }, 12, timedBuild);
-            t.gameObject.AddComponent<LayoutElement>().preferredHeight = 26f;
+            SealedUI.Stretch(t, new Vector2(0.20f, 0f), new Vector2(0.80f, 1f));
+            var more = SealedUI.Button(timerRow, "+ 5", SealedUI.ChipOff, SealedUI.Ink,
+                () => AdjustBuildTimer(BuildTimerStepMinutes), 11);
+            SealedUI.Stretch(more, new Vector2(0.82f, 0f), new Vector2(1f, 1f));
 
             // --- collation honesty ---
             if (chosenProduct != null && chosenProduct.Collation.RatesAreApproximate)
@@ -319,20 +332,6 @@ namespace OnePieceTcg.Sealed
                 Head("PACK ODDS");
                 Note("Box rates follow the published figures (~8 SR, ~1 SEC, ~12 Leaders, ~2 parallels per "
                    + "24-pack box). The exact per-pack common/uncommon split is derived, not official.");
-            }
-
-            // --- saved runs ---
-            var saved = SealedStore.All();
-            if (saved.Count > 0)
-            {
-                Head("CONTINUE A RUN");
-                foreach (var rec in saved.Take(6))
-                {
-                    var r = rec;
-                    var b = SealedUI.Button(col, $"{r.Label}   ({r.DeckCardIds.Count} kinds)",
-                        SealedUI.ChipOff, SealedUI.Ink, () => ResumeRun(r), 11, false);
-                    b.gameObject.AddComponent<LayoutElement>().preferredHeight = 24f;
-                }
             }
 
             // --- start ---
@@ -370,7 +369,7 @@ namespace OnePieceTcg.Sealed
             // pool was persisted above, so leaving here costs nothing - ResumeRun picks the run up
             // at the builder. Added after Begin so it layers over the opening's backdrop.
             SealedUI.Button(screenRoot, leaderPickerOnly || productPickerOnly ? "CANCEL" : "◂ MENU",
-                SealedUI.ChipOff, SealedUI.Ink, CancelPickerOrExit)
+                SealedUI.BackAction, SealedUI.Ink, CancelPickerOrExit)
                 .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
         }
 
@@ -401,7 +400,7 @@ namespace OnePieceTcg.Sealed
                 Destroy(builder);
                 SealedStore.Save(SealedStore.ToRecord(p, runId));
                 ShowReady();
-            }, timedBuild ? 50 * 60 : 0);
+            }, timedBuild ? buildTimerMinutes * 60 : 0);
 
             if (networkBuild != null)
             {
@@ -418,7 +417,7 @@ namespace OnePieceTcg.Sealed
             // out. An illegal pool that can't satisfy DONE therefore trapped the player here.
             // Added last so it layers above the builder's chrome. Not destructive: ExitToMenu
             // saves the pool on the way out, so the run is resumable exactly as it stands.
-            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.BackAction, SealedUI.Ink, ExitToMenu)
                 .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
         }
 
@@ -447,7 +446,7 @@ namespace OnePieceTcg.Sealed
             SealedUI.Stretch(sub.rectTransform, new Vector2(0.1f, 0.81f), new Vector2(0.9f, 0.86f));
 
             var col = SealedUI.ScrollColumn(screenRoot, "Actions", 8f);
-            SealedUI.Stretch(col.parent as RectTransform, new Vector2(0.34f, 0.20f), new Vector2(0.66f, 0.78f));
+            SealedUI.Stretch(col.parent as RectTransform, new Vector2(0.36f, 0.38f), new Vector2(0.64f, 0.69f));
 
             void Action(string label, Action act, bool enabled = true)
             {
@@ -459,25 +458,14 @@ namespace OnePieceTcg.Sealed
             }
 
             Action("PRACTICE vs A.I.", StartPracticeMatch, v.Ok);
-            Action(activeEvent == null ? "ENTER 8-PLAYER EVENT" : "RESUME EVENT", StartOrResumeEvent, v.Ok);
-            Action("EDIT DECK", ShowBuilder);
-            Action("VIEW POOL BY PACK", () =>
-            {
-                ShowBuilder();
-            });
             Action("EXPORT DECKLIST", () =>
             {
                 GUIUtility.systemCopyBuffer = pool.ExportText();
                 Toast("Decklist copied to clipboard");
             });
-            Action("SHARE SEED", () =>
-            {
-                GUIUtility.systemCopyBuffer = pool.Seed;
-                Toast($"Seed {pool.Seed} copied — anyone on {pool.SetCode} opens the same packs");
-            });
             Action("NEW RUN", () => { pool = null; ShowPicker(); });
 
-            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.ChipOff, SealedUI.Ink, ExitToMenu)
+            SealedUI.Button(screenRoot, "◂ MENU", SealedUI.BackAction, SealedUI.Ink, ExitToMenu)
                 .let(rt => SealedUI.Stretch(rt, new Vector2(0.90f, 0.915f), new Vector2(0.97f, 0.96f)));
         }
 

@@ -112,6 +112,17 @@ namespace OnePieceTcg.Engine.Bot.Search
                 || (state.PendingEffects.Count > 0 && !state.PendingEffects.Any(e => e.Seat == seat));
             if (otherSeatOwnsOpenDecision) return IntermediateBot.DecideOneCommand(state, seat, blacklist);
 
+            // OP17-001 Edward.Newgate may discard a card when the opponent attacks to give one of its
+            // Leader/Characters +4000 for the battle. Two exact advanced-bot reports
+            // (20260917-001429-532 / 20260917-001539-501) showed search paying that optional cost against a
+            // 1000-power attack that was already below the attacked card's 4000/5000 power, then sometimes
+            // targeting a different card. There is no judgement tradeoff in that narrow state: the attack
+            // cannot connect, so the discard and once-per-turn use have zero defensive value. Decline the
+            // INITIAL optional cost prompt before search. This is deliberately card-specific; it does not
+            // infer that other optional attack reactions lack a useful draw/removal/board side effect.
+            if (Op17NewgateDefensePolicy.TryDecline(state, seat, out var declineRedundantDefense))
+                return declineRedundantDefense;
+
             // 2. THIS seat has something queued: resolve it before touching the trigger step. Skipping this
             //    made the bot hand back `useTrigger` again — which never clears the queued effect, so it
             //    re-issued the same command every tick and the match hung with the bot apparently frozen.

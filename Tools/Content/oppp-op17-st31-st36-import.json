@@ -1,0 +1,2260 @@
+{
+  "source": "https://oppp.online/print",
+  "generatedAt": "2026-09-19",
+  "cardCount": 149,
+  "sets": {
+    "OP17": 119,
+    "ST31": 5,
+    "ST32": 5,
+    "ST33": 5,
+    "ST34": 5,
+    "ST35": 5,
+    "ST36": 5
+  },
+  "output": {
+    "format": "JPEG",
+    "dimensions": [
+      600,
+      838
+    ],
+    "quality": 94,
+    "subsampling": 0
+  },
+  "cards": [
+    {
+      "cardId": "OP17-001",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        329,
+        459
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "87e8881ee6695c0d4a4897a900f1980f414648164e2536466f3b2f3b135cc98a",
+      "mappingScore": 0.996668815612793
+    },
+    {
+      "cardId": "OP17-002",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        388,
+        542
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "1b07719ad6166a88f77f4e3743edc05e6e3110e84b76d192d5eac3ca1383b678",
+      "mappingScore": 0.9977327585220337
+    },
+    {
+      "cardId": "OP17-003",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        319,
+        446
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "8c667d520c7dbe5495bfea8e22cb82653fb059f5f38fc63d50a4a77595560428",
+      "mappingScore": 0.9988565444946289
+    },
+    {
+      "cardId": "OP17-004",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        362,
+        506
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "48fd655c801f108120a080863787b5c4b61dfb057d5d25748325ff3ebb9354f3",
+      "mappingScore": 0.9942401647567749
+    },
+    {
+      "cardId": "OP17-005",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        395,
+        551
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "93b9394829f64efa5d906d57de4c56521f61a0160bab1d0b7b384d95ae65db38",
+      "mappingScore": 0.9985921382904053
+    },
+    {
+      "cardId": "OP17-006",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        408,
+        570
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "a5723e2fdf3f3e60fa65fcdb4f2bef9e5f96106b84a729a407e1dddd8e21d953",
+      "mappingScore": 0.9999504089355469
+    },
+    {
+      "cardId": "OP17-007",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        397,
+        555
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "33fc5fa06512aa1c0f7e12eb222ea21075489ebe2b155b6eaea170960ee55853",
+      "mappingScore": 0.9988226890563965
+    },
+    {
+      "cardId": "OP17-008",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        342,
+        478
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0d4837536857640d1e0c4a04988c1bd3fef29522ec522972d2004b42294cccc0",
+      "mappingScore": 0.9999297857284546
+    },
+    {
+      "cardId": "OP17-009",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        385,
+        537
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "adde775509352256fc0847f0c2673401f96e06bae1fe62dd6e9967aa484d9e44",
+      "mappingScore": 0.9988197088241577
+    },
+    {
+      "cardId": "OP17-010",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        405,
+        565
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "cb24f911d433ffe7fce2ef8c7549c724077318f6bca4e4a71a0c73d458ee8f53",
+      "mappingScore": 0.9999182224273682
+    },
+    {
+      "cardId": "OP17-011",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        413,
+        578
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "f414eb0edb4f7da13c1375e9bb4c5993c1e6fd61b4841a3f87edb89ec957d1eb",
+      "mappingScore": 0.9988356828689575
+    },
+    {
+      "cardId": "OP17-012",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        346,
+        484
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "8574c308c7349f7f003732fe4580724cfd0fb8fbf4ad73f72f349a5c8022a3e5",
+      "mappingScore": 0.9999079704284668
+    },
+    {
+      "cardId": "OP17-013",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        351,
+        490
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "aa4bc7987e261335bfcfc5eeae649c3091b58d7cdf58997034a58116d32e12ca",
+      "mappingScore": 0.9966254234313965
+    },
+    {
+      "cardId": "OP17-014",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        372,
+        520
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "1d2bdde74ac7b975050cf22c00e9ec25693f36ca15ef668fa8a9bcfd811111a1",
+      "mappingScore": 0.9977107048034668
+    },
+    {
+      "cardId": "OP17-015",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        367,
+        513
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "457ae542bcc8b0d94a5bd7306228bfeeb487bc96f22a32f560f5e6f9f079fd21",
+      "mappingScore": 0.9988163709640503
+    },
+    {
+      "cardId": "OP17-016",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        386,
+        539
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "43b77198ac484d83b76a4234bf1a75969458f9975a48b009896cf7cad09c688b",
+      "mappingScore": 0.9977483749389648
+    },
+    {
+      "cardId": "OP17-017",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        383,
+        535
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "c90998dad7d95a6525410b3cadaf2c7a5b8527b240d940130177f0103fb42f11",
+      "mappingScore": 0.994468092918396
+    },
+    {
+      "cardId": "OP17-018",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        391,
+        546
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "c86f8c26925826e033d3cc4f762cf2ae61cc4ad3a646c50272981f18a28dfd77",
+      "mappingScore": 0.996651291847229
+    },
+    {
+      "cardId": "OP17-019",
+      "set": "OP17",
+      "source": "fullscale",
+      "sourceDimensions": [
+        379,
+        529
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "6faa131b7967aee3644603e5467cd53989b9434845c1f9d25870ad05dff443d2",
+      "mappingScore": 0.9302481412887573
+    },
+    {
+      "cardId": "OP17-020",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        332,
+        464
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "1ee9169f16292551898b54305415d4c08c6d447707fbb3dcc1bb89d07ab5e0a2",
+      "mappingScore": 0.9944583773612976
+    },
+    {
+      "cardId": "OP17-021",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        544,
+        759
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "7296fdf1645c57e8228c2b52b64fe258d9b386bdf269ae9d2022c3a2ba52fad6",
+      "mappingScore": 0.9988739490509033
+    },
+    {
+      "cardId": "OP17-022",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        390,
+        545
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "5264d6975eccf4462f70eeb4fbd1fd5c675dbadd00e1ba4560c8524daff4cab6",
+      "mappingScore": 0.9964886903762817
+    },
+    {
+      "cardId": "OP17-023",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        377,
+        527
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "d77049a1b76acb836d488637a1ea71e649048ed741fe82d3949ce2f94d74925b",
+      "mappingScore": 0.998820424079895
+    },
+    {
+      "cardId": "OP17-024",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        384,
+        537
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "c366fa41f1cc9273bba4d1de4ea030089064ad9b68126bc3f36e4c186fb1c671",
+      "mappingScore": 0.9999313354492188
+    },
+    {
+      "cardId": "OP17-025",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        413,
+        576
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "b133e67af50f5e831c4039e3d0c0152e9e689ba3ae7570401c2c6db0e0a2e61f",
+      "mappingScore": 0.9988152980804443
+    },
+    {
+      "cardId": "OP17-026",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        366,
+        511
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e69d13fac16681509517cd04832f27cf4462291c9592f18097996cd660d05bad",
+      "mappingScore": 0.9999175071716309
+    },
+    {
+      "cardId": "OP17-027",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        464,
+        648
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "24a0cf45354efc6a7bf08c323fe87b636049e045378722c3dae3769458a13513",
+      "mappingScore": 0.9987938404083252
+    },
+    {
+      "cardId": "OP17-028",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        346,
+        483
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "702197d49b93e93b95630e5f1749d7ef7d442837d776b6f580ccba988ebc606c",
+      "mappingScore": 0.9997190237045288
+    },
+    {
+      "cardId": "OP17-029",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        372,
+        519
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "8ffc9cc4d63c7ee2558afbee32b3e8073b0b06a12078012acfc067be977f225c",
+      "mappingScore": 0.9999128580093384
+    },
+    {
+      "cardId": "OP17-030",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        367,
+        514
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "43a03656b3bb7f2071141096ca0dfa35fe2721fbf7e83886d3a4db7742558278",
+      "mappingScore": 0.9988051652908325
+    },
+    {
+      "cardId": "OP17-031",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        409,
+        572
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "48c8c02aa8971f5ee337f8364c4d0edf2d14bc1c43945796b85641b56cde6bee",
+      "mappingScore": 0.995110034942627
+    },
+    {
+      "cardId": "OP17-032",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        391,
+        546
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "7c73cd521898fae4e9c3eee2c9f1831930161a7d047aa36f651a18716960300b",
+      "mappingScore": 0.9977349042892456
+    },
+    {
+      "cardId": "OP17-033",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        376,
+        525
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "ed02b347485c339e94987b4bab3ffb27b646019cf4f55578bba20dd8cbba612c",
+      "mappingScore": 0.9999055862426758
+    },
+    {
+      "cardId": "OP17-034",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        420,
+        587
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "562e3e83a1abc898935cb1b82b958fab670e0aa932bac6df2f4b557a353f4751",
+      "mappingScore": 0.9963716268539429
+    },
+    {
+      "cardId": "OP17-035",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        385,
+        538
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "660f6e65e1db5c07a5d5f77cbf17792972999b08a5c448e6c5e646d27209d133",
+      "mappingScore": 0.9988458156585693
+    },
+    {
+      "cardId": "OP17-036",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        404,
+        565
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "435644a9758a583bbc1a5d3973f094932129dac4a1fc917c9ad7c92d71600862",
+      "mappingScore": 0.9922850131988525
+    },
+    {
+      "cardId": "OP17-037",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        318,
+        444
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "1b6b89a15b52d35447e3e98afe5e1bfd8de1c0ff3fddcc228e044f8eaca2dbd6",
+      "mappingScore": 0.9955335855484009
+    },
+    {
+      "cardId": "OP17-038",
+      "set": "OP17",
+      "source": "fullscale",
+      "sourceDimensions": [
+        392,
+        548
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "60406586c1fe31ba262d211e7da16c8547bce64681a165914e115b4a27789da8",
+      "mappingScore": 0.9465899467468262
+    },
+    {
+      "cardId": "OP17-039",
+      "set": "OP17",
+      "source": "fullscale",
+      "sourceDimensions": [
+        340,
+        475
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "a79dc882a8c4ba877951c16f15b8783564cb9c1bb337165c58ff9048482c02b5",
+      "mappingScore": 0.12102898955345154
+    },
+    {
+      "cardId": "OP17-040",
+      "set": "OP17",
+      "source": "fullscale",
+      "sourceDimensions": [
+        305,
+        426
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "3f14099608b5476d2aad9372f231c011bcfcccb8042ef2552e7657675c6d5d57",
+      "mappingScore": 0.25115978717803955
+    },
+    {
+      "cardId": "OP17-041",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        410,
+        573
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "b70658308316c8783345f49b898440382ec815fe85da89c563fb82baa4397597",
+      "mappingScore": 0.9966404438018799
+    },
+    {
+      "cardId": "OP17-042",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        407,
+        569
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "95bdec47d697ff0f6c3cfff8cfac0d0045c1ab2a1d3ebc37d5b418e7e21cdd52",
+      "mappingScore": 0.998833179473877
+    },
+    {
+      "cardId": "OP17-043",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        395,
+        552
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "288e3d61c9d2d00e2deed03a55190b0f5fd0b021868062106954765ea3943259",
+      "mappingScore": 0.9977409839630127
+    },
+    {
+      "cardId": "OP17-044",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        388,
+        542
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e9cb3e3a2ed861b03d44701b028dec295aaf93a649e24632458b3e8abea0f77c",
+      "mappingScore": 0.9977116584777832
+    },
+    {
+      "cardId": "OP17-045",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        380,
+        532
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "42fcab81fb98c921792e0a6d5071b5ba2d847d3a23213d626e3b84f2537f4680",
+      "mappingScore": 0.9999473094940186
+    },
+    {
+      "cardId": "OP17-046",
+      "set": "OP17",
+      "source": "fullscale",
+      "sourceDimensions": [
+        337,
+        471
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "f134361959fb0ca1e8fb40817cf3bfc0bf2c3ecf77ae1308c2c9ddeeeaca0519",
+      "mappingScore": 0.9410953521728516
+    },
+    {
+      "cardId": "OP17-047",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        379,
+        529
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e546b7ea14bed795a2c72371cafcfa271dfb4782910912fcd1651b1f562dee74",
+      "mappingScore": 0.9977492094039917
+    },
+    {
+      "cardId": "OP17-048",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        303,
+        423
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0cad9578dfe13a2cd17bb1f044c97e192c7b8f5a63f3db0a377688ceb4e863ae",
+      "mappingScore": 0.9988399744033813
+    },
+    {
+      "cardId": "OP17-049",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        313,
+        438
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "89e116ecc753bc44072c9ae0755af36decf9fa8e2828ab0f759a0ebd09c707ee",
+      "mappingScore": 0.9977337121963501
+    },
+    {
+      "cardId": "OP17-050",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        419,
+        585
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "35471b8a9128ccb695c204a759acb89f14135666d15f8d9409ff5256a20df5b4",
+      "mappingScore": 0.9999368190765381
+    },
+    {
+      "cardId": "OP17-051",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        349,
+        487
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "f394ff799a00d95a42f13d2f5ca3e3271887bb5364c1529a36ed9b89368b457a",
+      "mappingScore": 0.9966522455215454
+    },
+    {
+      "cardId": "OP17-052",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        371,
+        518
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "4b0ee21b0f27211fc51c54cd710fb917668710f0465b35c1343cb0be2cccde94",
+      "mappingScore": 0.9999303817749023
+    },
+    {
+      "cardId": "OP17-053",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        366,
+        512
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "eac0a3e986719826109578b40975d0dab40d9d37df2f33926fce8bdd21c1d58a",
+      "mappingScore": 0.9988200664520264
+    },
+    {
+      "cardId": "OP17-054",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        314,
+        439
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "55b22c4e8841142ad3be84ae297a43548c9768ce18478de43dd6e1f0100ae91b",
+      "mappingScore": 0.9955452680587769
+    },
+    {
+      "cardId": "OP17-055",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        298,
+        416
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "a3ca10d7ceebe3bfc392f11292c849eac5df6a4ecd3e1bad3c7d5e60bcdcc2cb",
+      "mappingScore": 0.9965516328811646
+    },
+    {
+      "cardId": "OP17-056",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        320,
+        447
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "476c211e55c2acdee1e7488841007147834b0f35992d8acd40ec6106ca937a92",
+      "mappingScore": 0.9944480657577515
+    },
+    {
+      "cardId": "OP17-057",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        438,
+        612
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "5f4de53039a9434a16cf1212b8ff308776cda3d21fca1d1b5ee1ed27952f554b",
+      "mappingScore": 0.9977571964263916
+    },
+    {
+      "cardId": "OP17-058",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        314,
+        438
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0dd6084c2175f33ac6e83ffd2e9d9a8982d7668431f3b1024bbd4afe51f18070",
+      "mappingScore": 0.9988507032394409
+    },
+    {
+      "cardId": "OP17-059",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        370,
+        516
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "92af0942849ba18ed5cd4e73ef0a781c0459e4894b76644ab927b146905e5275",
+      "mappingScore": 0.9988695383071899
+    },
+    {
+      "cardId": "OP17-060",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        370,
+        518
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e6a537973342cb54552ea6c5b75117b2bf8ef4f23db293e9fa1535a98aa606f0",
+      "mappingScore": 0.9988576173782349
+    },
+    {
+      "cardId": "OP17-061",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        387,
+        540
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "5631a603d26ae0de73567988fc54a0ec7941ecc22ec2b4add968d16f6d785e83",
+      "mappingScore": 0.9966140985488892
+    },
+    {
+      "cardId": "OP17-062",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        352,
+        492
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "ce4272876042ddb11444676e59319edc37cb51179254238528fd7d0572f9015b",
+      "mappingScore": 0.9976024627685547
+    },
+    {
+      "cardId": "OP17-063",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        344,
+        480
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "feea7cbe716ba9aae7af716d33a2084ef7c989f36171834df16043f555a2720f",
+      "mappingScore": 0.9986470937728882
+    },
+    {
+      "cardId": "OP17-064",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        393,
+        549
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "89f2bd8428523ecbb90adac56452039baf6c00e595a05ce3987c192f5a689a48",
+      "mappingScore": 0.9987976551055908
+    },
+    {
+      "cardId": "OP17-065",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        409,
+        572
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "8ad235a61483718fca00524bc88d1ecf7ed2c24dbb0da4ef1ab49560c62c45dc",
+      "mappingScore": 0.9998666048049927
+    },
+    {
+      "cardId": "OP17-066",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        393,
+        549
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e535600eb712add19e34c083aa0d22656521adf0af4ed986d69a09551367ad22",
+      "mappingScore": 0.9998852014541626
+    },
+    {
+      "cardId": "OP17-067",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        386,
+        539
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "43c2b5903e58f6de538023db43b645d8b523de242b51318ab23f29974b65c97f",
+      "mappingScore": 0.9988514184951782
+    },
+    {
+      "cardId": "OP17-068",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        409,
+        572
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "28b264b761b57f47d962d018570d22922b374764cdfa16e18b01f71618dbb8b5",
+      "mappingScore": 0.9966096878051758
+    },
+    {
+      "cardId": "OP17-069",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        380,
+        531
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "591dee9ea1c00e1e73d6410b12ee15f60142be3fb7e22f9affbbea6dfc927727",
+      "mappingScore": 0.9999231100082397
+    },
+    {
+      "cardId": "OP17-070",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        382,
+        534
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e27a1a9dc7b336743aead177c382e5301a7af31f01f8f4693d0d2c86c6f1268a",
+      "mappingScore": 0.9988254308700562
+    },
+    {
+      "cardId": "OP17-071",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        384,
+        537
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "2dc50d9b286fe6f4e96bab912ece69e60d6c169c4008b80f91fc2b12dd98c59d",
+      "mappingScore": 0.996508002281189
+    },
+    {
+      "cardId": "OP17-072",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        363,
+        507
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0a76807df6388e3cec2a958d946bb698fa8c2f0c44be4eea23cae3e349098c25",
+      "mappingScore": 0.9986394643783569
+    },
+    {
+      "cardId": "OP17-073",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        380,
+        530
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "c3e2932412b525fe8acde8a60902436eed56939730fd9feea7a1a3bd66b2bec8",
+      "mappingScore": 0.9999336004257202
+    },
+    {
+      "cardId": "OP17-074",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        344,
+        480
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "096ef716941492e5491b8e53441375dc8f31c61cb5bce427683109615b4b7811",
+      "mappingScore": 0.9962213039398193
+    },
+    {
+      "cardId": "OP17-075",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        394,
+        550
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "132a4a78cdc695dff1bd362a0741d5bf088bd3878896c13593f32d73a4f746be",
+      "mappingScore": 0.9998953342437744
+    },
+    {
+      "cardId": "OP17-076",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        383,
+        535
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "cfc3a266731a15745d1e6314cbb3f23a2ee33b8c9263227e0c0f02c1fabf23f9",
+      "mappingScore": 0.9966491460800171
+    },
+    {
+      "cardId": "OP17-077",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        387,
+        541
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "64dca28e4f992cf85519c4b54394dae03d0e9a80c6f1d113cda991592dd78f31",
+      "mappingScore": 0.9987874031066895
+    },
+    {
+      "cardId": "OP17-078",
+      "set": "OP17",
+      "source": "fullscale",
+      "sourceDimensions": [
+        400,
+        559
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0b1fe453858e7f576202c846dc812554f79c7b5b1cf19ea9da3cea509a45c634",
+      "mappingScore": 0.8862700462341309
+    },
+    {
+      "cardId": "OP17-079",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        314,
+        438
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "eb5be63fba960dd5ed098d280725e49b38917e36373bcd364b2a22a2381b9cca",
+      "mappingScore": 0.9988541603088379
+    },
+    {
+      "cardId": "OP17-080",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        404,
+        565
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "4c2fbc02bbda50882bff476ce572f604924b0ea748752654038a09e31606b904",
+      "mappingScore": 0.9975793361663818
+    },
+    {
+      "cardId": "OP17-081",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        319,
+        446
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "987b3e1e052f55f412c44e8f2bfb008d1ecf7a531c15df87ae66d641dcad68a6",
+      "mappingScore": 0.9977636337280273
+    },
+    {
+      "cardId": "OP17-082",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        374,
+        522
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "06db7919e52400098c0447b2d2445459508340c223b1ee0d96c1cab5ba6df414",
+      "mappingScore": 0.9997862577438354
+    },
+    {
+      "cardId": "OP17-083",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        401,
+        560
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "23b48c893d94cb099aeade38d370957b5931b5f242408cd60790fdc2f1d8f8f1",
+      "mappingScore": 0.9941785335540771
+    },
+    {
+      "cardId": "OP17-084",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        394,
+        551
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "01ef1c3cf2611e9df2896c84d1b75b583078a66061aa2fbee2340ded41eed471",
+      "mappingScore": 0.995520830154419
+    },
+    {
+      "cardId": "OP17-085",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        323,
+        452
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "5e511f785387c108ff5cdabe93c078c43337c82c7f558fc77ace89484e39ac66",
+      "mappingScore": 0.9988566637039185
+    },
+    {
+      "cardId": "OP17-086",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        336,
+        470
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "1ce0f472bfd7f87376bb5c5e0906d45ee68b24e32d475d5ecbac2661504b37c4",
+      "mappingScore": 0.9966779947280884
+    },
+    {
+      "cardId": "OP17-087",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        411,
+        574
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "f361716e581680015fe6c6a1927ddd555868907fcc86ec7bd34db67fbdcff6e7",
+      "mappingScore": 0.9999175071716309
+    },
+    {
+      "cardId": "OP17-088",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        330,
+        461
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "82b69253581ec7fbd9b73403d44358389f5851c552885a5f238e07de003229a0",
+      "mappingScore": 0.9955892562866211
+    },
+    {
+      "cardId": "OP17-089",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        428,
+        598
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "b624766c1c30412a8e8e15bbce74ff970de0297f40f489e75a96596c3d0ee31f",
+      "mappingScore": 0.9966193437576294
+    },
+    {
+      "cardId": "OP17-090",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        378,
+        529
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "4b2e6e5021ba09d3123175469757981ca22675391b5e2d2f10d762e47388925a",
+      "mappingScore": 0.9953550696372986
+    },
+    {
+      "cardId": "OP17-091",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        410,
+        573
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "567c2c9d7b98f6f629a230ed423e73e8a61e17ac6c59aaf07d35199197527634",
+      "mappingScore": 0.9985586404800415
+    },
+    {
+      "cardId": "OP17-092",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        331,
+        462
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "39ec003f3a743c648c3e183dc6f9739c9f3cc905a5f7cdc377a680848dea4d3b",
+      "mappingScore": 0.998849630355835
+    },
+    {
+      "cardId": "OP17-093",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        306,
+        428
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "39a74b2331f0d16ecaf92c8a9a6da14c7afca6cbabbabca8d674575c7895d296",
+      "mappingScore": 0.9999234676361084
+    },
+    {
+      "cardId": "OP17-094",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        353,
+        493
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "b14a0d4b5449fa738384dc5e6952566b36c7b0b99a50051e2b040b69e0820b74",
+      "mappingScore": 0.9966849088668823
+    },
+    {
+      "cardId": "OP17-095",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        312,
+        436
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "a27076b1d614e680ac32a8e72ddf1fd9f70ce13d9b4cff205a01e621ff820e6d",
+      "mappingScore": 0.9933624863624573
+    },
+    {
+      "cardId": "OP17-096",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        338,
+        472
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "147896774346ca2a9957260b7f6bb3015b09332e4fc7c02649c65dc55d34a636",
+      "mappingScore": 0.9944720268249512
+    },
+    {
+      "cardId": "OP17-097",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        339,
+        473
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0a2855bd1c534bf370f9a55c6501ca1dd816d540960970e49ce41c8583e59186",
+      "mappingScore": 0.9988210201263428
+    },
+    {
+      "cardId": "OP17-098",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        346,
+        484
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "68db9e5f6bb71b0ccdc7f463178c1e489c0ad4df5d8c94b7f0173b8e73a8f2f3",
+      "mappingScore": 0.9988155364990234
+    },
+    {
+      "cardId": "OP17-099",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        328,
+        458
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0fc4f219f472d458de1be1e3a5b168e5c281bea54da70dd92c6e48feee09c6de",
+      "mappingScore": 0.9977415800094604
+    },
+    {
+      "cardId": "OP17-100",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        323,
+        451
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "879fcbfed8d862dfa0d7eccd5ea632c97930c8f71ced60f3cad63006d822366a",
+      "mappingScore": 0.9988757371902466
+    },
+    {
+      "cardId": "OP17-101",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        340,
+        475
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "3fd1753f458a3a8d8bf02512cccf708feec19b0f117836a32339f35e81ae3ab7",
+      "mappingScore": 0.996668815612793
+    },
+    {
+      "cardId": "OP17-102",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        394,
+        550
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "29491ffdac9f303cbcf44dec2b13dc1a958583b1fa7699b7f9b92b31d1fc4dc0",
+      "mappingScore": 0.983400821685791
+    },
+    {
+      "cardId": "OP17-103",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        390,
+        544
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "71236afdee7df07e1c58cbfc597889ade4e25081ff67dcbd956212c7b0ee9149",
+      "mappingScore": 0.9999444484710693
+    },
+    {
+      "cardId": "OP17-104",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        460,
+        642
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "146636209a2f648cd7b27b5cec71fd0a408e9504034b7d3885ff1f157689c29a",
+      "mappingScore": 0.9977600574493408
+    },
+    {
+      "cardId": "OP17-105",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        411,
+        574
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "7ccd6fc930f0a5b6af26772d4b607a1d85cc8b5256d8b7f7e2f976ce57aa3d4e",
+      "mappingScore": 0.9987548589706421
+    },
+    {
+      "cardId": "OP17-106",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        414,
+        579
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "93538dcaabaf208ef5fb90f56d6ccc5ee409bb5a79283ed4517532ae6e2e80fa",
+      "mappingScore": 0.9988009929656982
+    },
+    {
+      "cardId": "OP17-107",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        332,
+        464
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "253e19442365a337f17f9211321e89b518ae7f334a6cef07ed5883fdcfc829a7",
+      "mappingScore": 0.9999725818634033
+    },
+    {
+      "cardId": "OP17-108",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        332,
+        464
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "f9f8709e3b7483beceedbfeaa80bb837c0fa1a8599937e7f8ff0b15fbbd64f86",
+      "mappingScore": 0.9988645315170288
+    },
+    {
+      "cardId": "OP17-109",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        392,
+        548
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "065edab69ae3200ff56099c69798efe18a4864da00a3c65b0d26999977aadadd",
+      "mappingScore": 0.9976813793182373
+    },
+    {
+      "cardId": "OP17-110",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        322,
+        450
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "432d3f66a4c01ba0d096653d526c3dc4913a61498c23ea3ed12c92898bffaf65",
+      "mappingScore": 0.9999358654022217
+    },
+    {
+      "cardId": "OP17-111",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        340,
+        475
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "01aed4097640492e55f8904f6d508f7c7d7d501a9770df9bb0cbbb70e860553e",
+      "mappingScore": 0.9988657236099243
+    },
+    {
+      "cardId": "OP17-112",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        341,
+        477
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "01ba734456d1521524fb2d435a3c79613020f4f2fa4fd516c58f066b02d47cc5",
+      "mappingScore": 0.9973944425582886
+    },
+    {
+      "cardId": "OP17-113",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        328,
+        459
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "2ce827d39ba70800b12b81a24b02a64a6ceffdb630e6c1d060bc1626ebf47ff4",
+      "mappingScore": 0.9977377653121948
+    },
+    {
+      "cardId": "OP17-114",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        293,
+        409
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "f16cb26b750f88913fa0149b5e5827b8f1f91b0496b069ac75c4a97a7593d729",
+      "mappingScore": 0.999929666519165
+    },
+    {
+      "cardId": "OP17-115",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        317,
+        443
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "ba2ca0e23bc05d1bc138bd2294722170c4fd871d272a4f2b96d6f5fb6b5e2353",
+      "mappingScore": 0.9977399110794067
+    },
+    {
+      "cardId": "OP17-116",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        336,
+        470
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "53e2d0d58c13f2c0e962f7be0d1359b9c766a1797c47e7412d978c69c5d6e70a",
+      "mappingScore": 0.9966719150543213
+    },
+    {
+      "cardId": "OP17-117",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        335,
+        469
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "9e64487870dc7e0b991331f9c3bdfe56dcdc8bcdfcccce9ae05621d65e3a3b9e",
+      "mappingScore": 0.9955388903617859
+    },
+    {
+      "cardId": "OP17-118",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        378,
+        529
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "4a4b04c14abcc2dbbfceb855189e85d7edf4b57410b63dd7b0e01cbfbec17958",
+      "mappingScore": 0.9976991415023804
+    },
+    {
+      "cardId": "OP17-119",
+      "set": "OP17",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        304,
+        425
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e65bab384229922f255df1f34ad3dcf32646d9271b13edf01011af9b4839b121",
+      "mappingScore": 0.9999452829360962
+    },
+    {
+      "cardId": "ST31-001",
+      "set": "ST31",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        401,
+        561
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "1d2ebb690fb081c12beb169205ba847985d6c5bd40dc39daee13d00188bfa55f",
+      "mappingScore": 0.9995473623275757
+    },
+    {
+      "cardId": "ST31-002",
+      "set": "ST31",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        359,
+        502
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "320c6fd62cf1167fc96e33c62789fcda8c46d5f775ba0451c04b1d2fef0892fe",
+      "mappingScore": 0.998847246170044
+    },
+    {
+      "cardId": "ST31-003",
+      "set": "ST31",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        367,
+        513
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "fc8bc90a1afc72167bb9c16c4fbf9071a0fdae14d160fe9fb25a5297d581f9c7",
+      "mappingScore": 0.998834490776062
+    },
+    {
+      "cardId": "ST31-004",
+      "set": "ST31",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        356,
+        497
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "e77af92150b8e5928ed640a912427c9fb88a5e6e703c5002bbfe8f01837412de",
+      "mappingScore": 0.997745156288147
+    },
+    {
+      "cardId": "ST31-005",
+      "set": "ST31",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        405,
+        566
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "2907e39a3e0dc1098e15897ae3876dac459b8ff6417b8b427f3c6a9983fdfb5c",
+      "mappingScore": 0.9977467060089111
+    },
+    {
+      "cardId": "ST32-001",
+      "set": "ST32",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        381,
+        532
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "63fefdc0112c5ddde4f03e17c99da0af70a6eda188562ebc5d06a3916bb2680f",
+      "mappingScore": 0.9986667633056641
+    },
+    {
+      "cardId": "ST32-002",
+      "set": "ST32",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        342,
+        478
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "06a1dd3b77fd2c7ee14ca63aba0283d6150e23a7eef6a9809af7f8214171b9ce",
+      "mappingScore": 0.9997767210006714
+    },
+    {
+      "cardId": "ST32-003",
+      "set": "ST32",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        362,
+        506
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "173af75433bdb216996334090c7aca813c6b11976ca68433e91779c81419323c",
+      "mappingScore": 0.9974555969238281
+    },
+    {
+      "cardId": "ST32-004",
+      "set": "ST32",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        347,
+        485
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "eae1416510bdb4e6e615a1416538eef03f33315f4045003ef5970876318183e0",
+      "mappingScore": 0.9977041482925415
+    },
+    {
+      "cardId": "ST32-005",
+      "set": "ST32",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        375,
+        524
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "8404ff6775c3826b842d3bb2e8492a453d95d127d27f5f6f33001b575d78c7f5",
+      "mappingScore": 0.9977476596832275
+    },
+    {
+      "cardId": "ST33-001",
+      "set": "ST33",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        376,
+        526
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "45077d991f39810772578d9e77d80832840185762f7f84a4fa37b4679e0ac61b",
+      "mappingScore": 0.9996845722198486
+    },
+    {
+      "cardId": "ST33-002",
+      "set": "ST33",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        353,
+        494
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "3c1eb864a900a0b13b6f9b5c1baa39bcd4211fd6282b7ec2d7a18a2c9adee110",
+      "mappingScore": 0.9964760541915894
+    },
+    {
+      "cardId": "ST33-003",
+      "set": "ST33",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        364,
+        508
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "76ba864d342a9a4928e9d1d061191e6312dabd57bd1d0ba80a8f2cff291e9d81",
+      "mappingScore": 0.9987068176269531
+    },
+    {
+      "cardId": "ST33-004",
+      "set": "ST33",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        358,
+        500
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "2dff12fb01101efa9fa3ed28cc5c83a9a33ec145f433462dad9f364611c3490c",
+      "mappingScore": 0.9995812177658081
+    },
+    {
+      "cardId": "ST33-005",
+      "set": "ST33",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        352,
+        491
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "d9a918e011bc4da1a9a1337ac522dcbbdd7f3e56c2df1ad67718df829003763c",
+      "mappingScore": 0.999686598777771
+    },
+    {
+      "cardId": "ST34-001",
+      "set": "ST34",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        368,
+        514
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "9ef108f41a5b1a5750059c0dd363b107f8119eedb0a996f7844f2c50f9c7fc49",
+      "mappingScore": 0.9998301267623901
+    },
+    {
+      "cardId": "ST34-002",
+      "set": "ST34",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        377,
+        527
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "f056c638123d194eb9d0c239f3b626cba09891daf6c71b5caa75a9e766d1c3d7",
+      "mappingScore": 0.9974538087844849
+    },
+    {
+      "cardId": "ST34-003",
+      "set": "ST34",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        413,
+        577
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "17d89c298c0827dc9cfe9420eaf6a75b956b4a3f3006dfa87feca86173db8fd6",
+      "mappingScore": 0.9992361068725586
+    },
+    {
+      "cardId": "ST34-004",
+      "set": "ST34",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        351,
+        490
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "19bcd51717f608f29d266665cc0a1587e4bb33630363605cf61c390902a36f98",
+      "mappingScore": 0.9952154159545898
+    },
+    {
+      "cardId": "ST34-005",
+      "set": "ST34",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        415,
+        580
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "580335efa63d890cb49d4423ea15803ec9cdb38ff8156b8090ea0b7ab67c1d03",
+      "mappingScore": 0.9985181093215942
+    },
+    {
+      "cardId": "ST35-001",
+      "set": "ST35",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        350,
+        488
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "99739b0acc42fc5717098f0990ad9233e3a6635fd06f106e3f8d5d9ce3455524",
+      "mappingScore": 0.9988143444061279
+    },
+    {
+      "cardId": "ST35-002",
+      "set": "ST35",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        369,
+        516
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "0d7d977afcc6e67a4ce65d508f75d1cee3aa82d1251d5329f17f0a0b3c0f015c",
+      "mappingScore": 0.997736930847168
+    },
+    {
+      "cardId": "ST35-003",
+      "set": "ST35",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        348,
+        486
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "4a940d9a6619f8ea8f0b44b23daad22f87586300ec45ba409a3ec14d4b1c4256",
+      "mappingScore": 0.997734546661377
+    },
+    {
+      "cardId": "ST35-004",
+      "set": "ST35",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        344,
+        481
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "b40a8c1a2dcd8d251747750d4aec888c35fd5ff25fa7aa8f746520cee0020cfc",
+      "mappingScore": 0.9977179765701294
+    },
+    {
+      "cardId": "ST35-005",
+      "set": "ST35",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        385,
+        538
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "3c7ad57235eb1b3ea5a5ee77e999c75ffb1eeb7391c41d20259ff906beaec7ee",
+      "mappingScore": 0.9976420402526855
+    },
+    {
+      "cardId": "ST36-001",
+      "set": "ST36",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        361,
+        505
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "90c5fab84bd263137e78ac0f617996f54945e9bb0bc694d1d819ab056962a0cb",
+      "mappingScore": 0.9963542222976685
+    },
+    {
+      "cardId": "ST36-002",
+      "set": "ST36",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        353,
+        493
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "9b3950f0cf9545949cca472f8b5f9851f4e292efc6e434b83277411ff6fd89fc",
+      "mappingScore": 0.9963995218276978
+    },
+    {
+      "cardId": "ST36-003",
+      "set": "ST36",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        367,
+        513
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "7965df4592d0c3e620d50e19fbedc88b2a006a2e664f52b424f689652751fc32",
+      "mappingScore": 0.9997234344482422
+    },
+    {
+      "cardId": "ST36-004",
+      "set": "ST36",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        391,
+        547
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "a2e58ade8345e76ac33623631944efdbd0606bc4900688323712f2eac158227b",
+      "mappingScore": 0.9986331462860107
+    },
+    {
+      "cardId": "ST36-005",
+      "set": "ST36",
+      "source": "print-pdf",
+      "sourceDimensions": [
+        321,
+        449
+      ],
+      "outputDimensions": [
+        600,
+        838
+      ],
+      "sha256": "744937e775c17d0c473147b65f1a4f61da110542553dbc77e49d8db6dbaa8576",
+      "mappingScore": 0.9996892213821411
+    }
+  ]
+}

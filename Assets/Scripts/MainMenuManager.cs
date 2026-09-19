@@ -1422,6 +1422,39 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.39", "Card reveals, Sealed polish, and content refresh", "Sep 19, 2026", new (string, string[])[]
+        {
+            ("Reveals and hidden information", new[]
+            {
+                "Cards revealed from a hand, Life, or the top of a deck now remain face-up in their actual location and also appear in the right-side action panel until the required player confirms the reveal.",
+                "Effects that prove a searched or selected card reveal only the exact cards required by that effect. Computer opponents acknowledge required reveals automatically so solo games continue without an extra prompt.",
+                "Opponent hand cards no longer glow as playable based on the opponent's active DON!!, preventing private playability information from leaking through hover feedback.",
+            }),
+            ("Cards and deck selection", new[]
+            {
+                "Refreshed OP17 and ST31 through ST36 with the highest-quality clean artwork available from the OPPP library and retained the in-game rounded-corner presentation.",
+                "Added clean artwork and complete library entries for P-000, P-038, P-040, P-064, P-066, P-067, P-080, P-086, P-087, P-094, P-095, P-108, P-109, P-114, P-116, and P-118, plus a cleaner Rainbow Luffy image.",
+                "Expanded the Starter Deck hex roster so ST31 through ST36 and their populated deck lists remain visible and selectable.",
+            }),
+            ("OP17 and gameplay fixes", new[]
+            {
+                "Completed another OP17 interaction pass across shared costs, replacements, conditional effects, opponent choices, searches, and reveal requirements.",
+                "Improved command validation, replay restoration, and bot handling for newly supported choices so both seats resolve the same game state through the full interaction.",
+                "Fixed several reported edge cases around Life, DON!! payments, full Character areas, optional effects, and effects that continue across more than one choice.",
+            }),
+            ("Sealed presentation", new[]
+            {
+                "Build Timer now offers selectable deck-building durations when enabled. Starting a fresh run replaces the old continue-seed shortcut.",
+                "Centered Open 6 Packs, raised the pack stack, separated revealed cards from the wrapper art, and added a reveal-speed slider.",
+                "The completed-run screen now focuses on Practice vs A.I., Export Decklist, New Run, and Menu, with return actions using the standard muted-magenta treatment.",
+            }),
+            ("Social panel", new[]
+            {
+                "Refined the persistent Social panel with saved placement, reliable Friends and Requests tabs, corrected profile-image and text spacing, and clipping fixes at smaller window sizes.",
+                "Copy an entire conversation to the clipboard and paste text into the message composer. Lobby invitations follow the custom-room flow and remain queued while a match is in progress.",
+                "Added normalized notification sounds for friend messages and game invitations, with pending counts kept visible on the collapsed Social button.",
+            }),
+        }),
         ("v1.0.38", "Persistent social panel and menu polish", "Sep 19, 2026", new (string, string[])[]
         {
             ("Friends and messages", new[]

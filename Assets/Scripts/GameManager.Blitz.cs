@@ -199,7 +199,7 @@ public partial class GameManager
     // ── Increment (§5/§6/§7): award after the engine commits a real action ───
     private static readonly HashSet<string> BlitzActionCommands = new HashSet<string>
     {
-        "playCard", "activateMain", "declareAttack", "counterWithCard", "resolveEffect",
+        "playCard", "activateMain", "activateOpponentTurn", "declareAttack", "counterWithCard", "resolveEffect",
         "resolveChoice", "useTrigger", "takeLife", "attachDon", "deckLookSelect",
         "deckLookConfirmOrder", "deckLookScryConfirm",
     };

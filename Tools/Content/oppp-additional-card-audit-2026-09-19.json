@@ -1,0 +1,159 @@
+{
+  "source": "https://oppp.online/print",
+  "generatedAt": "2026-09-19",
+  "scan": {
+    "queryCount": 294,
+    "queryErrors": 0,
+    "runtimeLibraryRecords": 4826,
+    "runtimeUniqueCardIds": 2822,
+    "opppUniqueBaseCardIds": 2833,
+    "overlapCardIds": 2813,
+    "opppOnlyBaseCardIds": 20,
+    "overlapMissingCanonicalLocalArt": 0
+  },
+  "opppOnlyCandidates": [
+    {
+      "cardId": "EB05-010",
+      "classification": "future-set-preview",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "EB05-036",
+      "classification": "future-set-preview",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "EB05-056",
+      "classification": "future-set-preview",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "OP18-021",
+      "classification": "future-set-preview",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-000",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-038",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-040",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-064",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-066",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-067",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-080",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-086",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-087",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-094",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-095",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-108",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-109",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-114",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-116",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    },
+    {
+      "cardId": "P-118",
+      "classification": "promo-code-gap",
+      "status": "art-available-rules-metadata-required"
+    }
+  ],
+  "qualityFindings": {
+    "localPromoCardsBelow600x838": [
+      "P-120",
+      "P-122",
+      "P-123",
+      "P-124",
+      "P-125",
+      "P-126",
+      "P-127",
+      "P-128",
+      "P-129",
+      "P-130",
+      "P-131",
+      "P-132",
+      "P-133",
+      "P-134"
+    ],
+    "opppQualityDecision": "kept-local",
+    "reason": "The corresponding public OPPP ZIP sources measured only 353-400 px wide and 493-558 px high, below the local 522x729 files."
+  },
+  "rainbowLuffy": {
+    "runtimeCardId": "SEALED-RAINBOW-LUFFY",
+    "opppSearchMatches": 0,
+    "reference": "https://tcgbulk.com/card/634531/one-piece-one-piece-promotion-cards-monkeydluffy-release-event-leader-p",
+    "rulesCrossCheck": "https://buylist.coretcg.com/Products/198624/68/17675/MonkeyDLuffy-Release-Event-Leader",
+    "method": "built-in image edit; exact-card restoration with SAMPLE removal; printed rules, stats, icons, layout, and identity constrained",
+    "fullArt": {
+      "path": "Assets/StreamingAssets/Cards/OfficialById/SEALED/SEALED-RAINBOW-LUFFY.jpg",
+      "dimensions": [
+        716,
+        1000
+      ],
+      "sha256": "ec30dca70a9a01a47850de1514a492c023cb26d0048fa5a12f4986fb3b88082b"
+    },
+    "thumbnail": {
+      "path": "Assets/StreamingAssets/Cards/Thumbs/SEALED/SEALED-RAINBOW-LUFFY.jpg",
+      "dimensions": [
+        600,
+        838
+      ],
+      "sha256": "aedfee7692b05c525664fb765c33d739e92770d9fb9a32cd7a4adaa8335604fb"
+    }
+  }
+}

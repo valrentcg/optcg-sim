@@ -33,6 +33,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private static readonly Color ZoneFill = new Color32(18, 24, 34, 96);
     private static readonly Color Gold = new Color32(226, 190, 102, 255);
     private static readonly Color RedAccent = new Color32(230, 84, 84, 255);
+    private static readonly Color BackAction = new Color32(112, 63, 96, 245);
+    private static readonly Color BackActionBorder = new Color32(205, 123, 174, 190);
     // Cobalt theme (matches the design mock): cyan accent on dark navy/teal felt.
     private static readonly Color Accent   = new Color32(79, 195, 224, 255);   // #4fc3e0
     private static readonly Color Accent2  = new Color32(134, 214, 238, 255);  // #86d6ee
@@ -597,8 +599,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             && !coinFlipSpinning && Time.unscaledTime >= aiNextActionAt)
         {
             ApplyBotDifficultyKnobs();
-            bool acted = aiDifficulty == "advanced" ? AdvancedAiTick()
-                       : IntermediateAiTick();
+            bool acted;
+            if (state.ActiveReveal != null && state.ActiveReveal.RequiresConfirmation
+                && state.ActiveReveal.AwaitingConfirmation && state.ActiveReveal.ConfirmSeat == aiSeat)
+            {
+                Dispatch(new GameCommand { Type = "confirmReveal", Seat = aiSeat });
+                acted = true;
+            }
+            else
+            {
+                acted = aiDifficulty == "advanced" ? AdvancedAiTick()
+                      : IntermediateAiTick();
+            }
             if (acted) aiNextActionAt = Time.unscaledTime + 2.0f;                          // thinking pause
             else aiNextActionAt = Mathf.Max(aiNextActionAt, Time.unscaledTime + 0.25f);    // respect delays the tick set
         }
@@ -1055,7 +1067,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         replayCursor = Mathf.Clamp(index, 0, loadedReplay.CommandHistory.Count);
         state = GameEngine.CreateMatch(currentMatchConfig);
         for (int i = 0; i < replayCursor; i++)
-            state = GameEngine.ApplyCommand(state, loadedReplay.CommandHistory[i].ToCommand());
+            state = ReplayIndex.ApplyRecordedCommand(state, loadedReplay.CommandHistory[i].ToCommand(), loadedReplay.EngineVersion);
         selectedId = null;
         selectedSeat = null;
         Render();
@@ -1707,6 +1719,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         return GameEngine.ParseDonRestCost(pe.Text);
     }
 
+    private bool PendingAnyDonRestChoice(string seat)
+    {
+        if (state == null || state.PendingEffects.Count == 0) return false;
+        var pe = state.PendingEffects[0];
+        return pe.Seat == seat
+            && (pe.Text ?? "").IndexOf("rest any number of your DON!! cards", System.StringComparison.OrdinalIgnoreCase) >= 0
+            && (!isNetworked || seat == localSeat)
+            && (aiSeat == null || seat != aiSeat);
+    }
+
     private bool CanPayPendingDonRestCost(string seat)
     {
         int cost = PendingDonRestCost(seat);
@@ -1771,6 +1793,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             var peDon = state.PendingEffects[0];
             if (peDon.DonPaymentRemaining > 0 && peDon.Seat == seat)
+            {
+                Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId, Target = instanceId });
+                return;
+            }
+            if (!don.Rested && PendingAnyDonRestChoice(seat))
             {
                 Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId, Target = instanceId });
                 return;
@@ -2044,6 +2071,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         {
             // Valid pick for a "give rested DON!! to your Leader" effect — standard GREEN rim glow
             // (AddUsableGlow), matching every other valid target, not the gold selection outline.
+            AddUsableGlow(holder);
+            holder.SetAsLastSibling();
+        }
+        else if (!don.Rested && PendingAnyDonRestChoice(seat))
+        {
             AddUsableGlow(holder);
             holder.SetAsLastSibling();
         }
@@ -3599,7 +3631,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         var buttons = RowObject("Opponent Left Buttons", panel, 10, TextAnchor.MiddleCenter);
         Stretch(buttons, new Vector2(0.10f, 0.10f), new Vector2(0.90f, 0.46f), Vector2.zero, Vector2.zero);
-        AddButton(buttons, "MAIN MENU", ReturnToMenu);
+        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, true, true);
     }
 
     // The finished-match result screen (all modes; replays keep their own controls). Buttons
@@ -3718,8 +3750,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             else
                 AddButton(buttons, "REMATCH", RequestRematch);
         }
-        AddButton(buttons, "MAIN MENU", ReturnToMenu);
-        if (custom) AddButton(buttons, "CHANGE DECK", ReturnToLobby);   // back to lobby (swap deck + restart)
+        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, true, true);
+        if (custom) AddButton(buttons, "CHANGE DECK", ReturnToLobby, true, true, true);   // back to lobby (swap deck + restart)
         if (canAddOpp)
         {
             // Kick off the "are we already friends?" check once; it flips addFriendState and re-renders.
@@ -3764,7 +3796,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddButton(buttons, "NEXT PUZZLE", NextPuzzle, true, false);
         AddButton(buttons, "REPLAY", () => LoadPuzzle(puzzleIndex), true, false);
         AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); }, true, false);
-        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, false);
+        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, false, true);
     }
 
     // Puzzle fail screen: the player's turn ended without lethal. Counts a STRIKE; after 3 strikes it reveals
@@ -3821,7 +3853,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         AddButton(buttons, "TRY AGAIN", () => LoadPuzzle(puzzleIndex), true, false);
         AddButton(buttons, "NEXT PUZZLE", NextPuzzle, true, false);
         AddButton(buttons, "VIEW BOARD", () => { matchResultHidden = true; Render(); }, true, false);
-        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, false);
+        AddButton(buttons, "MAIN MENU", ReturnToMenu, true, false, true);
     }
 
     // Async check run once when the result overlay first appears: if the opponent is already a
@@ -4472,7 +4504,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         var toolsRow1 = MakeToolsRow(0.38f, 0.70f);
         AddCompactPill(toolsRow1, "Export Position", ExportReplayPosition);
-        AddCompactPill(toolsRow1, "Main Menu", () => ExitReplayToMenu());
+        AddCompactPill(toolsRow1, "Main Menu", () => ExitReplayToMenu(), true, true);
         var toolsRow2 = MakeToolsRow(0.02f, 0.34f);
         AddCompactPill(toolsRow2, "Expand All", () => { replayCollapsedTurns.Clear(); Render(); });
         AddCompactPill(toolsRow2, "Collapse All", () =>
@@ -5404,17 +5436,33 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // deck search it means the card meets the search criteria; otherwise it means the card is
     // playable now (enough active DON for its cost in main phase) or a valid counter this counter
     // step. All conditions come from the engine, so the glow can never lie about playability.
+    private bool IsLocallyControlledSeat(string seat)
+    {
+        if (string.IsNullOrEmpty(seat) || isReplayMode) return false;
+        if (isNetworked) return seat == localSeat;
+        if (isPuzzle) return seat == puzzleAttacker;
+        return aiSeat == null || seat != aiSeat;
+    }
+
     private bool IsCardUsableNow(CardInstance card)
     {
         if (card == null || state == null || state.Status != "active") return false;
-        if (state.DeckLook != null && state.DeckLook.Step == "select") return IsDeckLookSelectable(card);
+        if (state.DeckLook != null && state.DeckLook.Step == "select")
+            return IsLocallyControlledSeat(state.DeckLook.Seat) && IsDeckLookSelectable(card);
         // While an effect is choosing a target (e.g. a Trigger playing a card from hand), valid picks
-        // glow green just like normally-playable cards.
-        if (state.PendingEffects.Count > 0 && GameEngine.IsValidEffectTarget(state, state.PendingEffects[0], card))
-            return true;
+        // glow green just like normally-playable cards. Only the seat making that decision receives
+        // the affordance; otherwise hidden opponent-hand data can leak through the glow.
+        if (state.PendingEffects.Count > 0)
+        {
+            var pending = state.PendingEffects[0];
+            if (IsLocallyControlledSeat(pending.Seat) && GameEngine.IsValidEffectTarget(state, pending, card))
+                return true;
+        }
         // 6th-character replace: my own Characters are the "play over this one" picks.
         if (state.PendingCharReplace != null && IsCharReplaceTarget(card)) return true;
-        return !string.IsNullOrEmpty(card.Owner) && GameEngine.IsPlayableNow(state, card.Owner, card);
+        // A remote/AI hand card may be playable for its owner, but that is neither an action the local
+        // player can take nor public information. Never turn the opponent's card green for that reason.
+        return IsLocallyControlledSeat(card.Owner) && GameEngine.IsPlayableNow(state, card.Owner, card);
     }
 
     // True when the 6th-character replace prompt is up and belongs to the LOCAL (human) player, and
@@ -5435,7 +5483,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // IsCardUsableNow bail early). Used by every hover-glow + hover-preview path so a valid target reads
     // green consistently.
     internal bool IsGreenTargetNow(CardInstance card) =>
-        card != null && (IsCardUsableNow(card) || IsDeckLookSelectable(card));
+        card != null && (IsCardUsableNow(card)
+            || (state?.DeckLook != null && IsLocallyControlledSeat(state.DeckLook.Seat) && IsDeckLookSelectable(card)));
 
     // True when an effect is choosing a target, this card sits in that effect's target ZONE, but it is
     // not a legal pick - so the UI flags it with the red "invalid" glow on hover (matching attack targets).
@@ -7499,7 +7548,10 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var deckMax = top ? new Vector2(0.13f, 0.66f) : new Vector2(1.00f, 0.64f);
         var deck = MatZone(half, "DECK", deckMin, deckMax, new Color32(221, 226, 211, 225), top);
         var deckContent = ZoneContent(cardLayer, "DECK", deckMin, deckMax);
-        boardDeckPileRects[seat] = AddPileCardToZone(deckContent, "Deck", p.Deck.Count, true, null, top);
+        var publiclyRevealedDeckTop = p.Deck.Count > 0
+            && GameEngine.IsPubliclyRevealed(state, p.Deck[0].InstanceId) ? p.Deck[0] : null;
+        boardDeckPileRects[seat] = AddPileCardToZone(deckContent, "Deck", p.Deck.Count,
+            publiclyRevealedDeckTop == null, publiclyRevealedDeckTop, top);
         if (isNetworked) { presenceGlowRects["pile:deck:" + seat] = deckContent; deckContent.gameObject.AddComponent<ZoneHoverPresence>().Init(this, "pile:deck:" + seat); }
         var deckSz = FittedCardSize(deckContent);
         float deckDepth = p.Deck.Count > 0 ? StackDepth(p.Deck.Count) : 0f;
@@ -8583,7 +8635,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // Face-down normally. Show the FACE for a card an effect turned face-up (CardInstance
             // .FaceUp — e.g. Nami's [On K.O.] "turn 1 Life card face-up" cost) or when the whole Life
             // is revealed at end of match; fall back to the back sprite if the face isn't loaded yet.
-            bool faceUp = lifeCards != null && i < lifeCards.Count && (revealAll || lifeCards[i].FaceUp);
+            bool faceUp = lifeCards != null && i < lifeCards.Count
+                && (revealAll || lifeCards[i].FaceUp || GameEngine.IsPubliclyRevealed(state, lifeCards[i].InstanceId));
             Sprite lifeFace = faceUp ? GetCardSprite(lifeCards[i].CardId) : null;
             RoundedCardVisual(lifeFace != null ? "Life Face" : "Life Back", card, lifeFace ?? GetBackSprite(), out var img);
             img.raycastTarget = false;
@@ -8855,7 +8908,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             float top = 1f - margin - i * span;
             float bottom = top - (span - gap);
             var it = items[i];
-            AddMenuItem(menu, it.label, new Vector2(0.07f, bottom), new Vector2(0.93f, top), it.act);
+            AddMenuItem(menu, it.label, new Vector2(0.07f, bottom), new Vector2(0.93f, top), it.act,
+                it.label == "Main Menu");
         }
     }
 
@@ -9268,13 +9322,15 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Render();
     }
 
-    private void AddMenuItem(RectTransform parent, string label, Vector2 min, Vector2 max, UnityEngine.Events.UnityAction action)
+    private void AddMenuItem(RectTransform parent, string label, Vector2 min, Vector2 max,
+        UnityEngine.Events.UnityAction action, bool navigation = false)
     {
-        var item = PanelObject(label + " Item", parent, new Color32(34, 58, 78, 235));
+        var item = PanelObject(label + " Item", parent,
+            navigation ? BackAction : (Color)new Color32(34, 58, 78, 235));
         Stretch(item, min, max, Vector2.zero, Vector2.zero);
         Round(item);
-        AddRoundedCardBorder(item, MenuB, 1.1f);
-        var d = PanelObject("Dot", item, (Color)Accent);
+        AddRoundedCardBorder(item, navigation ? BackActionBorder : MenuB, 1.1f);
+        var d = PanelObject("Dot", item, navigation ? BackActionBorder : Accent);
         d.anchorMin = d.anchorMax = new Vector2(0f, 0.5f);
         d.pivot = new Vector2(0f, 0.5f);
         d.sizeDelta = new Vector2(6f, 6f);
@@ -9963,7 +10019,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // of counter cards doesn't force scrolling down to resolve. Reserve space at the bottom. Hidden
         // while a counter EVENT's effect is resolving (a pending effect/choice/look pivots the panel).
         bool counterFooter = CounterIsMine(state.Battle)
-            && state.DeckLook == null && state.PendingEffects.Count == 0 && state.ActiveChoice == null;
+            && state.ActiveReveal == null && state.DeckLook == null
+            && state.PendingEffects.Count == 0 && state.ActiveChoice == null;
         const float counterFooterH = 42f;
 
         var viewport = PanelObject("Action Viewport", panel, new Color(0, 0, 0, 0));
@@ -10012,10 +10069,20 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // never surfaced its Activate button, so the ability was unusable.
         if (isPuzzle)
         {
-            bool playerPending = state.DeckLook != null || state.ActiveChoice != null
+            bool playerPending = state.ActiveReveal != null || state.DeckLook != null || state.ActiveChoice != null
                 || state.PendingEffects.Count > 0 || state.PendingCharReplace != null;
             bool hasSelection = !string.IsNullOrEmpty(selectedId) || selectedDonIds.Count > 0 || trashViewSeat != null;
             if (!playerPending && !hasSelection) { DrawPuzzleActions(body); return; }
+        }
+
+        if (state.ActiveReveal != null)
+        {
+            selectedId = null;
+            selectedSeat = null;
+            DrawPublicRevealActions(body);
+            // Confirmation-gated reveals own the decision surface. Informational top-deck/Life
+            // reveals remain above the ordinary pending action until the next command clears them.
+            if (state.ActiveReveal.RequiresConfirmation) return;
         }
 
         if (state.DeckLook != null)
@@ -10189,7 +10256,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
 
         // ---- Board card selected -------------------------------------------------
-        if (!string.IsNullOrEmpty(selectedId) && !string.IsNullOrEmpty(selectedSeat) && selectedSeat == state.ActiveSeat
+        if (!string.IsNullOrEmpty(selectedId) && !string.IsNullOrEmpty(selectedSeat)
+            && (selectedSeat == state.ActiveSeat ||
+                (selectedSeat == localSeat && GameEngine.CanActivateOpponentTurn(state, selectedSeat, FindAny(selectedSeat, selectedId))))
             && (!isNetworked || selectedSeat == localSeat))
         {
             var selected = FindAny(selectedSeat, selectedId);
@@ -10231,6 +10300,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                         !abilUsed && canPayMainDonCost);
                 }
 
+                if (GameEngine.CanActivateOpponentTurn(state, selectedSeat, selected))
+                {
+                    AddEffectCardVisual(body, selected.CardId);
+                    AddScaledInfo(body, "[Opponent's Turn] You may trash 1 card from your hand: arm this Character.\nWhen this Character is K.O.'d by your opponent's effect, play this Character card from your trash rested.");
+                    AddButton(body, "Arm Marco (trash 1 card from hand)",
+                        () => Dispatch(new GameCommand { Type = "activateOpponentTurn", Seat = selectedSeat, Target = selectedId }));
+                }
+
                 // DON!! are attached by DRAGGING them onto a card, not from the action window — the
                 // "Attach 1 / Attach All DON!!" buttons were removed here per design.
 
@@ -10260,6 +10337,93 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 
+
+    private void DrawPublicRevealActions(RectTransform body)
+    {
+        var reveal = state?.ActiveReveal;
+        if (reveal == null) return;
+
+        AddInfo(body, $"PUBLIC REVEAL  ·  {reveal.SourceName}");
+        AddScaledInfo(body, string.IsNullOrWhiteSpace(reveal.Reason)
+            ? "A hidden card is being shown to both players."
+            : reveal.Reason);
+
+        var cards = reveal.Cards?.Where(c => c != null && !string.IsNullOrEmpty(c.CardId)).ToList()
+                    ?? new List<RevealedCardRef>();
+        if (cards.Count > 0)
+        {
+            int cols = Mathf.Min(3, cards.Count);
+            int rows = Mathf.CeilToInt(cards.Count / (float)cols);
+            const float rowH = 134f;
+            var grid = PanelObject("Revealed Cards", body, new Color(0, 0, 0, 0));
+            var gridLe = grid.gameObject.AddComponent<LayoutElement>();
+            gridLe.preferredHeight = rows * rowH;
+
+            for (int i = 0; i < cards.Count; i++)
+            {
+                int col = i % cols;
+                int row = i / cols;
+                var reference = cards[i];
+                var tile = PanelObject("Revealed " + reference.CardId, grid, new Color32(13, 34, 47, 210));
+                tile.anchorMin = new Vector2(col / (float)cols, 1f - (row + 1f) / rows);
+                tile.anchorMax = new Vector2((col + 1f) / cols, 1f - row / (float)rows);
+                tile.offsetMin = new Vector2(3f, 4f);
+                tile.offsetMax = new Vector2(-3f, -4f);
+                Round(tile);
+                AddRoundedCardBorder(tile, new Color(Accent.r, Accent.g, Accent.b, 0.5f), 1f);
+
+                var art = new GameObject("Revealed Card Art").AddComponent<RectTransform>();
+                art.SetParent(tile, false);
+                art.anchorMin = new Vector2(0.5f, 1f);
+                art.anchorMax = new Vector2(0.5f, 1f);
+                art.pivot = new Vector2(0.5f, 1f);
+                art.sizeDelta = new Vector2(68f, 95f);
+                art.anchoredPosition = new Vector2(0f, -5f);
+                RoundedCardVisual("Revealed Art", art, GetCardSprite(reference.CardId), out var image);
+                image.raycastTarget = true;
+                image.gameObject.AddComponent<LogCardLink>().Init(this, reference.CardId);
+
+                var def = CardData.GetCard(reference.CardId);
+                string zone = string.IsNullOrEmpty(reference.ZoneAtReveal) ? "hidden zone" : reference.ZoneAtReveal;
+                var label = TextObject("Reveal Label", tile,
+                    $"{(def?.Name ?? reference.CardId)}\n{zone}", 8, Ink, TextAnchor.UpperCenter);
+                label.horizontalOverflow = HorizontalWrapMode.Wrap;
+                label.resizeTextForBestFit = true;
+                label.resizeTextMinSize = 6;
+                label.resizeTextMaxSize = 8;
+                Stretch(label.rectTransform, new Vector2(0f, 0f), new Vector2(1f, 0f),
+                    new Vector2(3f, 3f), new Vector2(-3f, 31f));
+            }
+        }
+
+        if (!reveal.RequiresConfirmation)
+        {
+            AddInfo(body, "Revealed information — the effect continues automatically.");
+            return;
+        }
+
+        if (!reveal.AwaitingConfirmation)
+        {
+            var effect = state.PendingEffects.FirstOrDefault(e => e != null && e.EffectId == reveal.EffectId);
+            int remaining = effect?.SelectionsRemaining ?? 0;
+            AddInfo(body, remaining > 0
+                ? $"Choose {remaining} more highlighted card{(remaining == 1 ? "" : "s")} to complete the reveal."
+                : "Finish choosing the highlighted cards to complete the reveal.");
+            return;
+        }
+
+        bool botConfirms = aiSeat != null && reveal.ConfirmSeat == aiSeat;
+        bool remoteConfirms = isNetworked && reveal.ConfirmSeat != localSeat;
+        if (botConfirms || remoteConfirms)
+        {
+            AddInfo(body, $"Waiting for {state.Players[reveal.ConfirmSeat].Name} to confirm the reveal…");
+            return;
+        }
+
+        AddButton(body, "Confirm Reveal",
+            () => Dispatch(new GameCommand { Type = "confirmReveal", Seat = reveal.ConfirmSeat }),
+            true, false);
+    }
 
     private void DrawPendingEffectActions(RectTransform body)
     {
@@ -10294,6 +10458,14 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // target resolves the step — no separate wall-of-text "Resolve" bubble. If not, it's a
         // plain use/skip decision.
         bool donGive = DonGivePickActive(effect.Seat);
+        bool anyDonRest = PendingAnyDonRestChoice(effect.Seat);
+        if (anyDonRest)
+        {
+            AddInfo(body, "Rest any number of active DON!! cards, then continue to choose the power-buff target.");
+            AddButton(body, "Continue", () => Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId }), true);
+            AddButton(body, "Skip", () => Dispatch(new GameCommand { Type = "passEffect", Seat = effect.Seat, EffectId = effect.EffectId }), effect.Optional || GameEngine.IsEffectSkippable(effect));
+            return;
+        }
         int donRestCost = PendingDonRestCost(effect.Seat);
         if (donRestCost > 0)
         {
@@ -11075,7 +11247,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     {
                         if (c == null || c.Rested) continue;
                         var d = GameEngine.GetCard(c);
-                        if (d.Keywords.Contains("Blocker") && aiTriedThisTurn.Add("blk:" + c.InstanceId))
+                        // Use the state-aware rules predicate instead of imported keyword metadata.
+                        // Some cards mention [Blocker] only as a prohibition (for example P-097);
+                        // raw Keywords.Contains("Blocker") would make the bot attempt an illegal
+                        // block with them.
+                        if (GameEngine.HasBlocker(state, c) && aiTriedThisTurn.Add("blk:" + c.InstanceId))
                         {
                             Dispatch(new GameCommand { Type = "blockAttack", Seat = aiSeat, Blocker = c.InstanceId });
                             return true;
@@ -11347,9 +11523,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (state.PendingEffects.Count > 0)
             {
                 var peBattle = state.PendingEffects[0];
+                bool targetsOpponentHand = peBattle.Seat != handSeat
+                    && (peBattle.Text ?? "").IndexOf("from your opponent's hand", System.StringComparison.OrdinalIgnoreCase) >= 0;
                 if ((peBattle.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand ||
-                     peBattle.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
-                    && peBattle.Seat == handSeat)
+                      peBattle.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
+                    && (peBattle.Seat == handSeat || targetsOpponentHand))
                 {
                     Dispatch(new GameCommand
                     {
@@ -11379,6 +11557,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             if (state.PendingEffects.Count > 0)
             {
                 var pe = state.PendingEffects[0];
+                bool targetsOpponentHand = pe.Seat != handSeat
+                    && (pe.Text ?? "").IndexOf("from your opponent's hand", System.StringComparison.OrdinalIgnoreCase) >= 0;
                 // ...but only when the effect is THIS player's. The battle-step branch above already
                 // checks the seat; this one did not, so a pending effect owned by the OPPONENT turned a
                 // click on your own hand into a resolveEffect for THEIR effect — which the engine
@@ -11388,8 +11568,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // falling through would permit an out-of-sequence play. The click is simply no longer
                 // misattributed to the wrong seat's effect.
                 if ((pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand ||
-                     pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
-                    && pe.Seat == handSeat)
+                      pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any)
+                    && (pe.Seat == handSeat || targetsOpponentHand))
                 {
                     Dispatch(new GameCommand
                     {
@@ -11440,6 +11620,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 Dispatch(new GameCommand { Type = "blockAttack", Seat = seat, Blocker = card.InstanceId });
             else
                 Render();
+            return;
+        }
+
+        // An off-turn player may activate OP09-052 from their own board. This selection path is
+        // intentionally limited to the local player's card so it cannot interfere with attack targeting.
+        if (seat == localSeat && GameEngine.CanActivateOpponentTurn(state, seat, card))
+        {
+            selectedId = card.InstanceId;
+            selectedSeat = seat;
+            Render();
             return;
         }
 
@@ -11608,6 +11798,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (slotIndex < 0 || slotIndex >= area.Count) return false;
         if (area[slotIndex] == null) return true;        // empty slot - normal play
         return area.All(e => e != null);                 // occupied slot is droppable only when the board is full (replace)
+    }
+
+    private bool CanShowCharacterReplacementHint(string seat, int slotIndex)
+    {
+        if (!CanAcceptCharacterDrop(seat, slotIndex)) return false;
+        if (state == null || !state.Players.ContainsKey(seat)) return false;
+        if (string.IsNullOrEmpty(selectedId) || selectedSeat != seat + "-hand") return false;
+        var selected = state.Players[seat].Hand.FirstOrDefault(c => c != null && c.InstanceId == selectedId);
+        return selected != null && GameEngine.GetCard(selected)?.Type == "character"
+            && CanDragHandCard(selected, seat);
     }
 
     private bool CanReorderHandDrop(CardInstance card, string handSeat, string dropSeat)
@@ -13163,7 +13363,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 handFaceUp = RevealFinishedInfo()
                     || !(top && (isNetworked || aiSeat == TopSeat || isPuzzle));
             }
-            AddCard(holder, cards[i], seat, handFaceUp, Vector2.zero, true, top && !IsReplayRotated, count - 1 - i);
+            bool thisCardFaceUp = handFaceUp || GameEngine.IsPubliclyRevealed(state, cards[i].InstanceId);
+            AddCard(holder, cards[i], seat, thisCardFaceUp, Vector2.zero, true, top && !IsReplayRotated, count - 1 - i);
             holders[i] = holder;
             // Presence IN: remember the opponent's face-down hand holders (by hand index) so
             // PresenceReceived can lift the cards they're currently inspecting.
@@ -13425,21 +13626,28 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             && (!isNetworked || state.ActiveSeat == localSeat);   // no dead END TURN button off-turn in networked play
     }
 
-    private void AddButton(RectTransform parent, string label, UnityEngine.Events.UnityAction action, bool enabled = true, bool dot = true)
+    private void AddButton(RectTransform parent, string label, UnityEngine.Events.UnityAction action,
+        bool enabled = true, bool dot = true, bool navigation = false)
     {
         // Long labels (rethought effect descriptions) wrap onto extra lines: grow the
         // button instead of clipping, and let the text best-fit down a notch if needed.
         int estLines = 1 + (label != null ? label.Length : 0) / 30;
         float btnH = 34f + Mathf.Clamp(estLines - 1, 0, 2) * 13f;
-        var root = PanelObject(label + " Button", parent, enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
+        var root = PanelObject(label + " Button", parent,
+            enabled ? (navigation ? BackAction : (Color)new Color32(34, 58, 78, 235))
+                    : new Color32(24, 34, 44, 170));
         SetPreferred(root, new Vector2(118, btnH));
         root.sizeDelta = new Vector2(118, btnH);
         Round(root);
-        AddRoundedCardBorder(root, enabled ? MenuB : (Color)new Color32(50, 58, 74, 80), 1.1f);
+        AddRoundedCardBorder(root,
+            enabled ? (navigation ? BackActionBorder : MenuB)
+                    : (Color)new Color32(50, 58, 74, 80), 1.1f);
         Color textColor = enabled ? Ink : (Color)new Color32(120, 130, 146, 160);
         if (dot)
         {
-            var d = PanelObject("Dot", root, enabled ? Accent : (Color)new Color32(90, 100, 116, 160));
+            var d = PanelObject("Dot", root,
+                enabled ? (navigation ? BackActionBorder : Accent)
+                        : (Color)new Color32(90, 100, 116, 160));
             d.anchorMin = d.anchorMax = new Vector2(0f, 0.5f);
             d.pivot = new Vector2(0f, 0.5f);
             d.sizeDelta = new Vector2(6f, 6f);
@@ -13488,14 +13696,19 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     // Small text pill (mode/speed/desc toggles) — same idea as AddIconButton but for short
     // text instead of a single glyph, sized to fit the label rather than AddButton's fixed
     // 118px. Used by the condensed replay control bar's top strip.
-    private void AddCompactPill(RectTransform parent, string label, UnityEngine.Events.UnityAction action, bool enabled = true)
+    private void AddCompactPill(RectTransform parent, string label, UnityEngine.Events.UnityAction action,
+        bool enabled = true, bool navigation = false)
     {
         float w = Mathf.Clamp(label.Length * 6.2f + 16f, 40f, 220f);
-        var root = PanelObject(label + " Pill", parent, enabled ? new Color32(34, 58, 78, 235) : new Color32(24, 34, 44, 170));
+        var root = PanelObject(label + " Pill", parent,
+            enabled ? (navigation ? BackAction : (Color)new Color32(34, 58, 78, 235))
+                    : new Color32(24, 34, 44, 170));
         SetPreferred(root, new Vector2(w, 22f));
         root.sizeDelta = new Vector2(w, 22f);
         Round(root);
-        AddRoundedCardBorder(root, enabled ? MenuB : (Color)new Color32(50, 58, 74, 80), 1f);
+        AddRoundedCardBorder(root,
+            enabled ? (navigation ? BackActionBorder : MenuB)
+                    : (Color)new Color32(50, 58, 74, 80), 1f);
         var text = TextObject("Text", root, label, 9, enabled ? Ink : (Color)new Color32(120, 130, 146, 160), TextAnchor.MiddleCenter, monoFont);
         Stretch(text.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
         var button = root.gameObject.AddComponent<Button>();
@@ -13889,6 +14102,18 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                         AddOutline(bar.gameObject, new Color(0f, 0f, 0f, 0.75f), 1f);
                     }
                 }
+            }
+
+            // Full-board sixth-Character replacement is legal and already wired through both
+            // click and drag paths, but an occupied slot previously gave no visual affordance.
+            // Add this LAST so the replacement cue remains visible above the summoning-sick veil
+            // and any blocker shield overlay drawn above the card.
+            if (CanShowCharacterReplacementHint(seat, slotIndex))
+            {
+                AddDashedBorder(holder, new Color(1f, 0.78f, 0.24f, 0.92f));
+                var hint = AddBadge(holder, "REPLACE", new Vector2(0.08f, 0.025f), new Vector2(0.92f, 0.115f),
+                    new Color(1f, 0.78f, 0.24f));
+                hint.SetAsLastSibling();
             }
         }
         return slot;
@@ -16515,11 +16740,3 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     }
 
 }
-
-
-
-
-
-
-
-

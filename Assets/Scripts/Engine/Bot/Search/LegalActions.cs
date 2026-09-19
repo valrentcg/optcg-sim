@@ -15,6 +15,13 @@ namespace OnePieceTcg.Engine.Bot.Search
         {
             var list = new List<GameCommand>();
             if (state == null || !state.Players.ContainsKey(seat)) return list;
+            if (state.ActiveReveal != null && state.ActiveReveal.RequiresConfirmation
+                && state.ActiveReveal.AwaitingConfirmation)
+            {
+                if (state.ActiveReveal.ConfirmSeat == seat)
+                    list.Add(new GameCommand { Type = "confirmReveal", Seat = seat });
+                return list;
+            }
             var me = state.Players[seat];
 
             if (state.ActiveChoice != null && state.ActiveChoice.Seat == seat)
@@ -60,7 +67,7 @@ namespace OnePieceTcg.Engine.Bot.Search
                 {
                     case "block":
                         list.Add(new GameCommand { Type = "passBlock", Seat = seat });
-                        foreach (var c in me.CharacterArea.Where(c => c != null && !c.Rested && (GameEngine.GetCard(c)?.Keywords?.Contains("Blocker") ?? false)))
+                        foreach (var c in me.CharacterArea.Where(c => c != null && !c.Rested && GameEngine.HasBlocker(state, c)))
                             list.Add(new GameCommand { Type = "blockAttack", Seat = seat, Blocker = c.InstanceId });
                         break;
                     case "counter":

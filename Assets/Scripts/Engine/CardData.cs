@@ -1,4 +1,4 @@
-﻿// One Piece TCG - Engine: static card data.
+// One Piece TCG - Engine: static card data.
 // Pure C#, no UnityEngine dependency. Ported from packages/engine/index.js.
 // Drop this into Unity at: Assets/Scripts/Engine/CardData.cs
 
@@ -639,6 +639,88 @@ namespace OnePieceTcg.Engine
                     ("ST30-006", 4), ("ST30-007", 2), ("ST30-008", 4), ("ST30-009", 4),
                     ("ST30-010", 4), ("ST30-011", 2), ("ST30-012", 2), ("ST30-013", 4),
                     ("ST30-014", 2), ("ST30-015", 4), ("ST30-016", 2), ("ST30-017", 4),
+                },
+            },
+            // ST31-ST36 each contain five new cards plus ten reprints. Keep the
+            // gameplay ids on the original printings so the existing card rules
+            // remain authoritative while the starter product art can be resolved
+            // independently by the asset layer.
+            ["st31"] = new DeckDef
+            {
+                Id = "st31",
+                Name = "Monkey.D.Luffy",
+                Leader = "ST21-001",
+                List = new List<(string, int)>
+                {
+                    ("ST31-005", 2), ("ST31-004", 2), ("ST31-001", 2), ("ST31-002", 4),
+                    ("ST31-003", 4), ("OP01-016", 4), ("OP11-003", 4), ("OP11-009", 4),
+                    ("OP11-012", 4), ("OP14-015", 4), ("ST23-004", 4), ("P-101", 4),
+                    ("OP04-016", 4), ("OP13-021", 4),
+                },
+            },
+            ["st32"] = new DeckDef
+            {
+                Id = "st32",
+                Name = "Roronoa Zoro",
+                Leader = "OP12-020",
+                List = new List<(string, int)>
+                {
+                    ("OP12-028", 4), ("ST32-001", 4), ("ST32-002", 2), ("OP12-023", 4),
+                    ("ST32-003", 2), ("ST32-004", 4), ("ST32-005", 2), ("OP10-036", 4),
+                    ("OP12-026", 4), ("OP15-036", 4), ("OP12-031", 4), ("ST24-005", 4),
+                    ("OP12-027", 4), ("OP12-039", 4),
+                },
+            },
+            ["st33"] = new DeckDef
+            {
+                Id = "st33",
+                Name = "Kuzan",
+                Leader = "OP12-040",
+                List = new List<(string, int)>
+                {
+                    ("ST33-001", 4), ("ST33-002", 4), ("ST33-003", 2), ("ST33-004", 2),
+                    ("ST33-005", 2), ("EB04-026", 4), ("EB04-028", 4), ("OP12-043", 4),
+                    ("OP12-045", 4), ("OP12-047", 4), ("OP12-050", 4), ("OP12-052", 4),
+                    ("OP12-046", 4), ("OP12-057", 4),
+                },
+            },
+            ["st34"] = new DeckDef
+            {
+                Id = "st34",
+                Name = "Charlotte Katakuri",
+                Leader = "OP11-062",
+                List = new List<(string, int)>
+                {
+                    ("ST34-001", 2), ("ST34-002", 4), ("ST34-003", 2), ("ST34-004", 2),
+                    ("ST34-005", 4), ("EB03-032", 4), ("EB03-035", 4), ("OP11-065", 4),
+                    ("OP11-066", 4), ("OP11-068", 4), ("OP11-071", 4), ("OP11-079", 4),
+                    ("OP11-081", 4), ("P-090", 4),
+                },
+            },
+            ["st35"] = new DeckDef
+            {
+                Id = "st35",
+                Name = "Sabo",
+                Leader = "OP13-004",
+                List = new List<(string, int)>
+                {
+                    ("ST35-001", 4), ("ST35-002", 2), ("ST35-003", 4), ("ST35-004", 2),
+                    ("ST35-005", 2), ("OP13-081", 4), ("OP13-008", 4), ("OP12-090", 4),
+                    ("OP12-093", 4), ("OP12-098", 4), ("OP13-005", 4), ("P-105", 4),
+                    ("OP13-019", 4), ("OP13-017", 4),
+                },
+            },
+            ["st36"] = new DeckDef
+            {
+                Id = "st36",
+                Name = "Eustass\"Captain\"Kid",
+                Leader = "OP10-099",
+                List = new List<(string, int)>
+                {
+                    ("ST36-002", 2), ("ST36-005", 2), ("ST36-001", 4), ("ST36-003", 2),
+                    ("ST36-004", 4), ("OP13-116", 4), ("OP10-101", 4), ("OP10-103", 4),
+                    ("OP10-109", 4), ("OP10-111", 4), ("P-088", 4), ("P-085", 4),
+                    ("OP12-113", 4), ("OP10-114", 4),
                 },
             },
             // Learn Together Deck Set (LT-01, released 2025-10-03): three 2-player-intro

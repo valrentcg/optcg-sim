@@ -1,0 +1,3587 @@
+{
+  "schemaVersion": 1,
+  "generatedUtc": "2026-09-19T20:20:54.084891Z",
+  "set": "OP17",
+  "verificationLayer": "pure-csharp-engine-source-audit-and-headless-regressions",
+  "summary": {
+    "cards": 119,
+    "expectedCards": 119,
+    "numberingComplete": true,
+    "resolverOrCounterClauses": 121,
+    "triggerClauses": 21,
+    "cardsWithDirectTestReferences": 39,
+    "cardsWithSourceTextWarnings": 0,
+    "specializedCardsWithoutLiteralDirectTest": 29
+  },
+  "currentAggregateAudits": {
+    "libraryCards": 2838,
+    "resolverRouteBodies": 2141,
+    "resolverGapsAllSets": 0,
+    "resolverGapsOP17": 0,
+    "triggerRouteBodies": 509,
+    "triggerGapsAllSets": 0,
+    "triggerGapsOP17": 0,
+    "printedConditions": 331,
+    "unrecognizedConditionsAllSets": 0,
+    "unrecognizedConditionsOP17": 0
+  },
+  "staleAuditDisposition": {
+    "previousCardCount": 2822,
+    "previousOP17ResolverGaps": 8,
+    "status": "stale; all eight are recognized by the current resolver and covered by the new-content regression suite"
+  },
+  "sourceTextReconciliation": {
+    "status": "verified-against-official-english-card-list",
+    "sourceUrl": "https://en.onepiece-cardgame.com/cardlist/?series=569117",
+    "verifiedCards": [
+      "OP17-003",
+      "OP17-067",
+      "OP17-069",
+      "OP17-074",
+      "OP17-078",
+      "OP17-092",
+      "OP17-095",
+      "OP17-113"
+    ]
+  },
+  "historicalReports": [
+    {
+      "id": "20260821-023758-905",
+      "cards": [
+        "OP17-040",
+        "SEALED-RAINBOW-LUFFY"
+      ],
+      "status": "fixed-and-direct-regression-pass",
+      "note": "Board-card Leader-combat timing, nonstandard discard cost, type gate, and decline semantics."
+    },
+    {
+      "id": "20260821-025919-608",
+      "cards": [
+        "OP17-095",
+        "OP17-119"
+      ],
+      "status": "current-engine-behavior-validated",
+      "note": "Loki has effective cost +12; Zoro correctly observes effective cost 12+."
+    },
+    {
+      "id": "20260821-030329-911",
+      "cards": [
+        "OP17-095",
+        "OP17-119"
+      ],
+      "status": "current-engine-behavior-validated",
+      "note": "Second historical effective-cost/Loki report is covered by the same direct regression."
+    },
+    {
+      "id": "20260917-001429-532",
+      "cards": [
+        "OP17-001"
+      ],
+      "status": "fixed-and-deterministic-policy-regression-pass",
+      "note": "Exact replay proved both activation and decline were legal. Advanced now declines the optional OP17-001 cost when attack power is strictly below current defense."
+    },
+    {
+      "id": "20260917-001539-501",
+      "cards": [
+        "OP17-001"
+      ],
+      "status": "fixed-and-deterministic-policy-regression-pass",
+      "note": "Exact replay proved a 2000-counter card was discarded against an already harmless attack; the same narrow decline policy preserves it."
+    }
+  ],
+  "limitations": [
+    "A recognized parser/resolver route is not proof of every board-state permutation.",
+    "Literal test references vary in strength; evidenceLevel distinguishes direct tests from route recognition.",
+    "No Unity UI, packaged Windows player, transport, or live multiplayer behavior was exercised by this audit.",
+    "OP17-001 historical reports were resolver-capable policy defects; the exact harmless-attack class has deterministic bot-policy regressions.",
+    "The eight former source-text warnings were reconciled against Bandai's official English OP-17 card list."
+  ],
+  "cards": [
+    {
+      "id": "OP17-001",
+      "name": "Edward.Newgate",
+      "type": "leader",
+      "feature": "The Four Emperors/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Your Opponent's Attack] [Once Per Turn] You may trash 1 card from your hand: Up to 1 of your Leader or Character cards gains +4000 power during this battle.",
+          "tags": [
+            "On Your Opponent's Attack",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17NewgateDefensePolicyTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-002",
+      "name": "Atmos",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Opponent's Turn] This Character gains +3000 power",
+          "tags": [
+            "Opponent's Turn"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-003",
+      "name": "Izo",
+      "type": "character",
+      "feature": "Land of Wano/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Rush: Character]",
+          "tags": [
+            "Rush: Character"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If your Leader is [Edward.Newgate] or has the {Land of Wano} type, give up to 1 of your opponent's rested Characters −6000 power during this turn.",
+          "tags": [
+            "On Play",
+            "Edward.Newgate"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-004",
+      "name": "Inuarashi & Nekomamushi",
+      "type": "character",
+      "feature": "Land of Wano/Minks/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Up to 1 of your {Land of Wano} type Characters or up to 1 of your Characters with a type including \"Whitebeard Pirates\" gains Rush during this turn. (This card can attack on the turn in which it is played.)",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-005",
+      "name": "Edward.Newgate",
+      "type": "character",
+      "feature": "The Four Emperors/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If your opponent has a Character with 10000 power or more, give this card in your hand −4 cost.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Set the base power of your single-colored Leader to 8000, until the end of your opponent's next End Phase.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-006",
+      "name": "Kingdew",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-007",
+      "name": "Kouzuki Oden",
+      "type": "character",
+      "feature": "Kouzuki Clan/Land of Wano/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] If your Leader is [Edward Newgate] or has the {Land of Wano} type, play up to 1 Character card with a type including {Land of Wano} or \"Whitebeard Pirates\" with 6000 power or less from your hand.",
+          "tags": [
+            "On Play",
+            "Edward Newgate"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-008",
+      "name": "Jozu",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Your [Edward.Newgate] Leader's base power becomes 8000 until the end of your opponent's next End Phase.",
+          "tags": [
+            "On Play",
+            "Edward.Newgate"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-009",
+      "name": "Haruta",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Opponent's Turn] This Character gains +3000 power.",
+          "tags": [
+            "Opponent's Turn"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] K.O. up to 1 of your opponent's Characters with 2000 base power or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-010",
+      "name": "Fossa",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Activate: Main] [Once Per Turn] If your opponent has a Character with 10000 Power or more and you have no other [Fossa] Characters, this Character gains [Blocker] and +2000 power until the end of your opponent's next End Phase.",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn",
+            "Fossa",
+            "Blocker"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-011",
+      "name": "Blamenco",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[DON!! x2] [When Attacking] Give up to 1 of your opponent's Characters −4000 power during this turn.",
+          "tags": [
+            "DON!! x2",
+            "When Attacking"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-012",
+      "name": "Blenheim",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.)",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On K.O.] Play up to 1 card with a cost of 1 and a type including \"Whitebeard Pirates\" from your hand.",
+          "tags": [
+            "On K.O."
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-013",
+      "name": "Portgas.D.Ace",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If your opponent has a Character with 10000 power or more, give this card in your hand −2 cost.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If your Leader is [Edward Newgate], give up to 1 of your opponent's rested Characters −6000 power during this turn.",
+          "tags": [
+            "On Play",
+            "Edward Newgate"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-014",
+      "name": "Whitey Bay",
+      "type": "character",
+      "feature": "Whitebeard Pirates Allies",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] K.O up to 1 of your opponent's Characters with base power of 2000 or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Your Opponent's Attack] You may trash this Character: Up to 1 of your Leader gains +1000 power during this battle.",
+          "tags": [
+            "On Your Opponent's Attack"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-015",
+      "name": "Marco",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If one of your Characters would be removed from the field by your opponent's effect, you may K.O. this Character instead.",
+          "tags": [],
+          "route": "removal-replacement",
+          "recognition": "specialized-route"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On K.O.] You may trash 1 card with a type including \"Whitebeard Pirates\" from your hand: Play this Character card from your trash.",
+          "tags": [
+            "On K.O."
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: opponent-effect replacement plus typed On K.O. revival",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-016",
+      "name": "Rakuyo",
+      "type": "character",
+      "feature": "Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] K.O. up to 2 of your opponent's Characters with 2000 base power or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-017",
+      "name": "Gurararararara!",
+      "type": "event",
+      "feature": "The Four Emperors/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Counter] Up to 1 of your Leader or Character cards with a type including \"Whitebeard Pirates\" gains +2000 power during this battle. Then, give up to 1 of your opponent's Leader or Character cards −2000 power during this turn.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-018",
+      "name": "HAS THE POWER TO DESTROY THE WORLD!!",
+      "type": "event",
+      "feature": "The Four Emperors/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 2 of your DON!! cards: K.O. up to 1 of your opponent's Stages.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] If you have 2 or more Characters with 8000 base power or more, up to 1 of your Leader or Character cards gains +4000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NoLegalTargetTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-019",
+      "name": "I Don't Have Time to Chat with Snot-Nosed Brats",
+      "type": "event",
+      "feature": "The Four Emperors/Whitebeard Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] Look at 5 cards from the top of your deck; reveal up to 1 card with a type including \"Whitebeard Pirates\" and add it to your hand. Then, place the rest at the bottom of your deck in any order.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Your Leader gains +1000 power during this turn.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-020",
+      "name": "Shanks",
+      "type": "leader",
+      "feature": "Red-Haired Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Activate: Main] / [Once Per Turn] You may trash 1 card from your hand or rest 1 of your DON!! cards: up to 1 of your opponent's rested Characters will not become active in your opponent's next Refresh Phase.",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-021",
+      "name": "Crone Oli",
+      "type": "character",
+      "feature": "Red-Haired Pirates Allies",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If your Character with a type including \"Red-Haired Pirates\" would be removed from the field by your opponent's effect, you may rest 1 of your cards instead.",
+          "tags": [],
+          "route": "removal-replacement",
+          "recognition": "specialized-route"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-022",
+      "name": "Shanks",
+      "type": "character",
+      "feature": "Red-Haired Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Rush]",
+          "tags": [
+            "Rush"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Set up to 2 of your DON!! cards as active. Then, rest all of your opponent's Characters.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-023",
+      "name": "Nami",
+      "type": "character",
+      "feature": "East Blue/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If your {East Blue} or {Straw Hat Crew} Character would be K.O.'d, you may rest this Character instead.",
+          "tags": [],
+          "route": "removal-replacement",
+          "recognition": "specialized-route"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: either East Blue or Straw Hat Crew satisfies replacement type gate",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-024",
+      "name": "Howling Gab",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Banish] (When this card deals damage, the target card is trashed without activating its Trigger.)",
+          "tags": [
+            "Banish"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Rest up to 1 of your opponent's Characters.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-025",
+      "name": "Building Snake",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On K.O.] K.O. up to 1 of your opponent's rested Characters with a cost of 6 or less.",
+          "tags": [
+            "On K.O."
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Activate: Main] [Once Per Turn] Give up to 1 rested DON!! card to your [Shanks] Leader.",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn",
+            "Shanks"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-026",
+      "name": "Fugar",
+      "type": "character",
+      "feature": "Red-Haired Pirates Allies",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[When Attacking] If your Leader has the {Red-Haired Pirates} type, rest up to 1 of your opponent's Characters with a cost of 2 or less.",
+          "tags": [
+            "When Attacking"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On K.O.] Draw 1 card.",
+          "tags": [
+            "On K.O."
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-027",
+      "name": "Benn.Beckman",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Rush: Character] (this card can attack Characters on the turn it is played.)",
+          "tags": [
+            "Rush: Character"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If your Leader has the {Red-Haired Pirates} type, draw 1 card and rest up to 2 of your opponent's Characters.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-028",
+      "name": "Bonk Punch & Monster",
+      "type": "character",
+      "feature": "Animal/Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.)",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] K.O. up to 1 of your opponent's rested Characters with a cost of 6 or less",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-029",
+      "name": "Hongo",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker]",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Set up to 1 of your DON!! cards as active. Then, rest up to 2 of your opponent's Characters with a cost of 2 or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-030",
+      "name": "Monkey.D.Luffy",
+      "type": "character",
+      "feature": "East Blue/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] You may rest 1 of your DON!! cards: This Character gains [Rush] during this turn.",
+          "tags": [
+            "On Play",
+            "Rush"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Activate: Main] [Once Per Turn] If you have 5 or less cards in your hand, set up to 1 of your DON!! cards as active.",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-031",
+      "name": "Yasopp",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Draw 1 card and rest up to 1 of your opponent's Characters with a cost of 8 or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[End of Your Turn] Set up to 1 of your {Red Haired Pirates} type Characters as active.",
+          "tags": [
+            "End of Your Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-032",
+      "name": "Limejuice",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Look at 3 cards from the top of your deck; reveal up to 1 card with a type including \"Red-Haired Pirates\" and add it to your hand. Then place the rest at the bottom of your deck in any order.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-033",
+      "name": "Lucky.Roux",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Look at 3 cards from the top of your deck; reveal up to 1 card with a type including \"Red-Haired Pirates\" and add it to your hand. Then, place the rest at the bottom of your deck in any order.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Your Opponent's Attack] You may trash this Character: Rest up to 1 of your opponent's Leader or Characters.",
+          "tags": [
+            "On Your Opponent's Attack"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-034",
+      "name": "Rockstar",
+      "type": "character",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Activate: Main] [Once Per Turn] If your opponent's Leader has 6000 power or more, set up to 1 of your DON!! cards as active. Then, your {Red-Haired Pirates} type Leader's base power becomes 6000 until the end of your opponent's next End Phase.",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-035",
+      "name": "Roronoa Zoro",
+      "type": "character",
+      "feature": "East Blue/Straw Hat Crew",
+      "clauses": [],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-036",
+      "name": "Withdraw Now And Allow Me To Save Face",
+      "type": "event",
+      "feature": "Red-Haired Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 6 of your DON!! cards: Rest up to 1 of your opponent's Characters. Then, K.O. up to 2 of your opponent's rested Characters with a cost of 6 or less.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] Up to 1 of your [Shanks] gains +4000 power during this battle.",
+          "tags": [
+            "Counter",
+            "Shanks"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-037",
+      "name": "Are You That Afraid of the New Era?!!",
+      "type": "event",
+      "feature": "Red-Haired Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] Look at 5 cards from the top of your deck; reveal up to 1 card with a type including \"Red-Haired Pirates\" and add it to your hand. Then, place the rest at the bottom of your deck in any order.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] You may rest 1 of your cards: Up to 1 of your Leader or Characters gains +3000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-038",
+      "name": "I Think He's Seen An Ugly Future",
+      "type": "event",
+      "feature": "Red-Haired Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 4 of your cards: Rest up to 1 of your opponent's Characters.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] You may trash 1 card from your hand: Up to 1 of your Leader or Character cards gains +3000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-039",
+      "name": "Rocks.D.Xebec",
+      "type": "leader",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[When Attacking] You may trash 1 card from your hand: Reveal 1 card from the top of your deck. If the revealed card's type includes \"Rocks Pirates\", draw 2 cards.",
+          "tags": [
+            "When Attacking"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: attack cost, reveal-type condition, and draw-two payoff",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-040",
+      "name": "Edward.Newgate",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Draw 1 card.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Once Per Turn] When your Leader with a type including \"Rocks Pirates\" attacks or is attacked, you may trash 1 card from your hand to activate this effect. Your Leader gains +3000 power during this battle.",
+          "tags": [
+            "Once Per Turn"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs",
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-041",
+      "name": "Wang Zhi",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker]",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] You may trash 1 card from your hand: Place all of your opponent's Characters with a base cost of 1 at the bottom of the owner's deck in any order.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs",
+        "Tools/Sim/NoLegalTargetTest.cs",
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-042",
+      "name": "Kaido",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker]",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] You may reveal 3 cards with a type including \"Rocks Pirates\" from your hand: Give up to 1 of your opponent's Characters −3000 power during this turn.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-043",
+      "name": "Ganzui",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If this Character would be removed from the field, you may trash 2 cards from your hand instead.",
+          "tags": [],
+          "route": "removal-replacement",
+          "recognition": "specialized-route"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Your Leader's base power becomes 6000 until the end of your opponent's next End Phase.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: self-only removal replacement pays exactly two hand cards",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-044",
+      "name": "Captain John",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If your Leader's type includes \"Rocks Pirates\" and this Character is rested, your opponent cannot attack any card other than the Character [Captain John].",
+          "tags": [
+            "Captain John"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Activate: Main] You may rest this Character: Draw 1 card and trash 1 card from your hand.",
+          "tags": [
+            "Activate: Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-045",
+      "name": "Kyo",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If one of your Characters would be removed from the field by your opponent's effect, you may trash 2 cards from your hand instead.",
+          "tags": [],
+          "route": "removal-replacement",
+          "recognition": "specialized-route"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Draw 1 card.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs",
+        "Tools/Sim/Op17NewgateDefensePolicyTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: ally removal replacement pays exactly two hand cards",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-046",
+      "name": "Gloriosa",
+      "type": "character",
+      "feature": "Amazon Lily/Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker]",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Place up to 1 Character with a cost of 5 or less at the bottom of the owner's deck.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-047",
+      "name": "Shiki",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[End of Your Turn] If you have 2 or less cards in your hand, your opponent places 1 card from their hand at the bottom of their deck.",
+          "tags": [
+            "End of Your Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-048",
+      "name": "Shiki",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Rush: Character]",
+          "tags": [
+            "Rush: Character"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[When Attacking] / [On Your Opponent's Attack] [Once Per Turn] You may trash 1 card with a type including \"Rocks Pirates\" from your hand: Give up to 1 of your opponent's Characters −3000 power during this turn.",
+          "tags": [
+            "When Attacking",
+            "On Your Opponent's Attack",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-049",
+      "name": "Charlotte Linlin",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Your opponent chooses one:",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "•Draw 2 cards.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 2,
+          "text": "•Your opponent trashes 2 cards from their hand.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 3,
+          "text": "[On Your Opponent's Attack] [Once Per Turn] You may trash 1 card from your hand: Up to 1 of your Leader or Characters gains +1000 power during this battle.",
+          "tags": [
+            "On Your Opponent's Attack",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-050",
+      "name": "Streusen",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Look at 2 cards from the top of your deck, reorganize them in any order and place them at the top or bottom of your deck. Then, draw 1 card.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-051",
+      "name": "Jinbe",
+      "type": "character",
+      "feature": "Fish-Man/Impel Down/The Sun Pirates",
+      "clauses": [],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-052",
+      "name": "Don Marlon",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Add up to 1 Blue Event with a cost of 0 from your trash to your hand.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-053",
+      "name": "Barbell",
+      "type": "character",
+      "feature": "Fish-Man/Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On K.O.] Your opponent places 2 cards from their hand at the bottom of their deck in any order.",
+          "tags": [
+            "On K.O."
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Activate: Main][Once Per Turn] You may trash 1 card from your hand: This Character gains +3000 power during this turn.",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-054",
+      "name": "Miss Buckingham Stussy",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Up to 1 of your opponent's Characters with a base cost of 6 or less cannot attack until the end of your opponent's next End Phase.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Activate: Main] You may rest 3 of your DON!! cards and this Character:Up to 1 of your opponent's Characters cannot attack until the end of your opponent's next End Phase.",
+          "tags": [
+            "Activate: Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-055",
+      "name": "There's No Authority in the World That Lasts Forever!!!",
+      "type": "event",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 1 of your DON!! cards: Up to 1 of your [Rocks.D.Xebec] gains [Unblockable] during this turn.",
+          "tags": [
+            "Main",
+            "Rocks.D.Xebec",
+            "Unblockable"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] Up to 1 of your Leader with a type including \"Rocks Pirates\" or up to 1 of your Characters with a type including \"Rocks Pirates\" gains +2000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-056",
+      "name": "Rocks Pirates",
+      "type": "event",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 5 of your DON!! cards: Return up to 1 Character with a cost of 6 or less to the owner's hand.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] Up to 1 of your Leader with a type including \"Rocks Pirates\" or up to 1 of your Characters with a type including \"Rocks Pirates\" gains +2000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-057",
+      "name": "Fullalead",
+      "type": "stage",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Your Opponent's Attack] You may rest this stage and trash 1 card from your hand: Up to 1 of your Leader with a type including \"Rocks Pirates\" or up to 1 of your Characters with a type including \"Rocks Pirates\" gains +1000 power during this battle.",
+          "tags": [
+            "On Your Opponent's Attack"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-058",
+      "name": "Kaido",
+      "type": "leader",
+      "feature": "Animal Kingdom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[When Attacking]/[On Your Opponent's Attack] [Once Per Turn] DON!! −1: Up to 1 of your opponent's Characters gains −2000 power during this turn.",
+          "tags": [
+            "When Attacking",
+            "On Your Opponent's Attack",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs",
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-059",
+      "name": "Aramaki",
+      "type": "character",
+      "feature": "Admiral/Navy",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.)",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] DON!! −1: Draw 1 card and K.O. up to 2 of your opponent's Characters with a cost of 2 or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-060",
+      "name": "Ulti & Page One",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] If your Leader has the {Animal Kingdom Pirates} type, add up to 1 DON!! from your DON!! deck and set it as active. Then, K.O. up to 1 of your opponent's Characters with 3000 power or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-061",
+      "name": "Lead Performers",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/Fish-Man",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] DON!! −1: If your Leader has the {Animal Kingdom Pirates} type, add up to 1 card from the top of your deck to your Life cards.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Activate: Main] You may trash this Character: play up to 1 [King], [Queen], or [Jack] from your hand.",
+          "tags": [
+            "Activate: Main",
+            "King",
+            "Queen",
+            "Jack"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-062",
+      "name": "Kaido",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker]",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Your Turn] [Once Per Turn] When a DON!! card on your field is returned to your DON!! deck, add up to 1 DON!! card from your DON!! deck and set it as active. Then, set up to 1 of your DON!! cards as active.",
+          "tags": [
+            "Your Turn",
+            "Once Per Turn"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-063",
+      "name": "Kaido",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "All of your Character cards without a Counter have a +1000 Counter.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Activate: Main] [Once Per Turn] DON!! −1: If this Character was played on this turn, negate the effect of up to 1 of your opponent's Characters with a cost of 6 or less, and K.O. that Character.",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-064",
+      "name": "King",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/Lunarian",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker]",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Your Opponent's Attack] [Once Per Turn] You may trash 1 card from your hand: up to 1 of your Leader or Character cards gains +2000 power during this battle.",
+          "tags": [
+            "On Your Opponent's Attack",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-065",
+      "name": "Queen",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Banish]",
+          "tags": [
+            "Banish"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] DON!! −1: Draw 1 card, and up to 2 of your opponent's Characters with a cost of 5 or less cannot attack until the end of your opponent's next End Phase.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-066",
+      "name": "Kurozumi Orochi",
+      "type": "character",
+      "feature": "Kurozumi Clan/Land of Wano",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] DON!! −1: If you have a Character with a cost of 10 or more, draw 2 cards and trash 1 card from your hand.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-067",
+      "name": "Kurozumi Kanjuro",
+      "type": "character",
+      "feature": "Land of Wano/Kurozumi Clan",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] DON!! −1: If you have a Character with a cost of 10 or more, rest up to 1 of your opponent's Characters.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-068",
+      "name": "Sasaki",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[When Attacking] You may trash 2 cards from your hand: If your Leader has the {Animal Kingdom} type, add up to 2 DON!! cards from your DON!! deck and rest them.",
+          "tags": [
+            "When Attacking"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-069",
+      "name": "Jack",
+      "type": "character",
+      "feature": "Fish-Man/Animal Kingdom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Rush: Character] (This card can attack Characters on the turn in which it is played.)",
+          "tags": [
+            "Rush: Character"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] DON!! −1: If your Leader has the {Animal Kingdom Pirates} type, give up to 1 of your opponent's Characters −2000 power during this turn.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-070",
+      "name": "Scratchmen Apoo",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/On-Air Pirates",
+      "clauses": [],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-071",
+      "name": "Who's.Who",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/Former CP9",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] DON!! −1: K.O. up to 2 of your opponent's Characters with a cost of 2 or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-072",
+      "name": "Black Maria",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker]",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Your Opponent's Attack] [Once Per Turn] You may trash 1 card from your hand: Up to 1 of your Leader or Characters gains +1000 power during this battle",
+          "tags": [
+            "On Your Opponent's Attack",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-073",
+      "name": "Basil Hawkins",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/Hawkins Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] You may trash 1 card from your hand: If your Leader has the {Animal Kingdom Pirates} type, add up to 1 DON!! card from your DON!! deck and set it as active.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-074",
+      "name": "Yamato",
+      "type": "character",
+      "feature": "Land of Wano",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.)",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Add up to 1 DON!! card as rested from your DON!! deck.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-075",
+      "name": "X.Drake",
+      "type": "character",
+      "feature": "Animal Kingdom Pirates/Drake Pirates/Navy",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] DON!! −2: Trash 1 card from your opponent's hand.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17NewgateDefensePolicyTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-076",
+      "name": "Wo Ro Ro Ro Ro!! I Think I've Sobered Up!!",
+      "type": "event",
+      "feature": "Animal Kingdom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Counter] You may trash 1 card from your hand: up to 1 of your Leader or Character cards gains +3000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] DON!! −1: Draw 2 cards.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-077",
+      "name": "Gundari Meteor Shower",
+      "type": "event",
+      "feature": "Animal Kingdom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 3 of your DON!! cards and trash 2 cards from your hand: If your Leader has the {Animal Kingdom Pirates} type, add up to 3 DON!! cards from your DON!! deck and rest them.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] DON!! −1: Your Leader gains +4000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-078",
+      "name": "Drunken Dragon Bagua",
+      "type": "event",
+      "feature": "The Four Emperors/Animal Kingdom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 2 of your DON!! cards and trash 2 cards from your hand: If your Leader has the {Animal Kingdom Pirates} type, add up to 3 DON!! cards as rested from your DON!! deck.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] Up to 1 of your Leader or Characters gains +4000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-079",
+      "name": "Monkey.D.Luffy",
+      "type": "leader",
+      "feature": "Elbaph/Straw Hat Crew/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "All of your characters with a cost of 12 or more gain [Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack)",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/KeywordRulesTest.cs",
+        "Tools/Sim/NewContentMechanicsTest.cs",
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-080",
+      "name": "Usopp",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains +3000 power.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Look at 3 cards from the top of your deck; reveal up to 1 {Elbaph} type card, and add it to your hand. Then, trash the rest.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-081",
+      "name": "Gerd",
+      "type": "character",
+      "feature": "Elbaph/Giant/New Giant Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If your Leader has the {Elbaph} type, this Character gains +12 cost.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] You may trash 1 card from your hand: add up to 1 Character with a cost of 8 or less from your trash other than [Gerd] to your hand.",
+          "tags": [
+            "On Play",
+            "Gerd"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-082",
+      "name": "Sanji",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains +3000 power.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Draw 2 cards and trash 2 cards from your hand",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-083",
+      "name": "Jinbe",
+      "type": "character",
+      "feature": "Elbaph/Fish-Man/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains [Blocker] and +3000 power. (After your opponent declares an attack, you may rest this card to make it the new target of the attack.)",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-084",
+      "name": "Tony Tony.Chopper",
+      "type": "character",
+      "feature": "Animal/Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] If there is a Character with a cost of 12 or more, up to 1 of your Characters gains [Unblockable] during this turn.",
+          "tags": [
+            "On Play",
+            "Unblockable"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "(This card cannot be blocked.)",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-085",
+      "name": "Dorry",
+      "type": "character",
+      "feature": "Elbaph/Giant/Giant Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "This Character gains +12 cost.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If your Leader has the {Elbaph} type, play up to 1 [Brogy] with a cost of 5 or less from your hand or trash. Then, you cannot play Character cards during this turn.",
+          "tags": [
+            "On Play",
+            "Brogy"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs",
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-086",
+      "name": "Nami",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] You may trash 1 {Elbaph} type card from your hand: Draw 2 cards.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-087",
+      "name": "Nico Robin",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains +3000 power.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If there is a Character with a cost of 12 or more, up to 1 of your opponent's Characters gain −3000 power during this turn.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-088",
+      "name": "Hajrudin",
+      "type": "character",
+      "feature": "Elbaph/Giant/New Giant Pirates",
+      "clauses": [],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-089",
+      "name": "Jaguar.D.Saul",
+      "type": "character",
+      "feature": "Elbaph/Former Navy/Giant",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "This Character gains +12 cost.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Look at 3 cards from the top of your deck; reveal up to 1 {Elbaph} type card and add it to your hand. Then, trash the rest.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-090",
+      "name": "Franky",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains +3000 power.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If there is a Character with a cost of 12 or more, K.O. up to 1 of your opponent's Characters with a cost of 2 or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-091",
+      "name": "Brook",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains +3000 power.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If there is a Character with a cost of 12 or more, your opponent trashes 1 card from their hand.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-092",
+      "name": "Brogy",
+      "type": "character",
+      "feature": "Giant/Elbaph/Giant Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "This Character gains +12 cost.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] If your Leader has the {Elbaph} type, play up to 1 [Dorry] with a cost of 5 or less from your hand or trash. Then, you cannot play Character cards during this turn.",
+          "tags": [
+            "On Play",
+            "Dorry"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-093",
+      "name": "Monkey.D.Luffy",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains [Rush].",
+          "tags": [
+            "Rush"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Draw 1 card and play up to 1 Character card with a cost of 2 or less from your trash.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-094",
+      "name": "Rodo",
+      "type": "character",
+      "feature": "Elbaph/Giant/New Giant Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If your Leader has the {Elbaph} type, this Character gains +12 cost.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-095",
+      "name": "Roronoa Zoro",
+      "type": "character",
+      "feature": "Elbaph/Straw Hat Crew",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If there is a Character with a cost of 12 or more, this Character gains +3000 power.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "If one of your Characters would be removed from the field by your opponent's effect, you may place 3 cards from your trash at the bottom of your deck in any order instead.",
+          "tags": [],
+          "route": "removal-replacement",
+          "recognition": "specialized-route"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs",
+        "Tools/Sim/Op17InteractionAuditTest.cs",
+        "Tools/Sim/Op17NewgateDefensePolicyTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: effective-cost-12 passive and chosen three-trash replacement resources",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-096",
+      "name": "I'm Luffy!! The Man Who's Gonna Become the King of the Pirates!!",
+      "type": "event",
+      "feature": "Elbaph/Straw Hat Crew/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Counter] If you have a Character with a cost of 12 or more, up to 1 of your Leader or Character cards gains +4000 during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Add up to 1 {Elbaph} type card from your trash to your hand.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-097",
+      "name": "Instead I'll Feed on this Rage!! And Use It to Bring the World to Ruin!!",
+      "type": "event",
+      "feature": "Elbaph/Giant",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] Give all of your opponent's Characters −1 cost during this turn.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] Your Leader gains +3000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NoLegalTargetTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-098",
+      "name": "Gum-Gum Kong Pistol",
+      "type": "event",
+      "feature": "Elbaph/Straw Hat Crew/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 6 of your DON!! cards: If there is a Character with a cost of 12 or more, K.O. up to 2 of your opponent's Characters with a cost of 6 or less.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] Your Leader gains +3000 power during this battle.",
+          "tags": [
+            "Counter"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-099",
+      "name": "Charlotte Linlin",
+      "type": "leader",
+      "feature": "Big Mom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[When Attacking] You may trash 1 card from your hand: Your opponent chooses one of the following effects.",
+          "tags": [
+            "When Attacking"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "- Trash 1 card from your hand. Then, add up to 1 card from the top of your deck to the top of your Life cards.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 2,
+          "text": "- Trash 1 card from your opponent's hand.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-100",
+      "name": "Capone\"Gang\"Bege",
+      "type": "character",
+      "feature": "Firetank Pirates/Supernovas",
+      "clauses": [],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-101",
+      "name": "Caribou",
+      "type": "character",
+      "feature": "Caribou Pirates/Supernovas",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Activate: Main] [Once Per Turn] You may add 1 card from the top of your Life cards to your hand: Give up to 1 of your opponent's Characters −3000 power during this turn",
+          "tags": [
+            "Activate: Main",
+            "Once Per Turn"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] You may trash 1 card from your hand: K.O. up to 1 of your opponent's Characters with a cost of 5 or less.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-102",
+      "name": "Charlotte Oven",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On K.O.] Play up to 1 Character card with 4000 power or less other than [Charlotte Oven] from your trash.",
+          "tags": [
+            "On K.O.",
+            "Charlotte Oven"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-103",
+      "name": "Charlotte Katakuri",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Your Turn] [On Play] If your Leader has the {Big Mom Pirates} type, add up to 1 card from the top of your deck to the top of your Life cards. Then, give up to 1 of your opponent's Characters −3000 power during this turn.",
+          "tags": [
+            "Your Turn",
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-104",
+      "name": "Charlotte Cracker",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Your Turn] [On Play] You may rest 2 of your DON!! cards: If your Leader has the {Big Mom Pirates} type, add up to 1 card from the top of your deck to the top of your Life cards.",
+          "tags": [
+            "Your Turn",
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-105",
+      "name": "Charlotte Chiffon",
+      "type": "character",
+      "feature": "Firetank Pirates/Former Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] You may trash 1 card with a [Trigger] from your hand: Return up to 1 of your opponent's Characters with a [Trigger] to the owner's hand.",
+          "tags": [
+            "On Play",
+            "Trigger",
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-106",
+      "name": "Charlotte Smoothie",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Your Turn] [On Play] You may rest 2 of your DON!! cards: Add up to 1 card from the top of your deck to the top of your Life cards. Then, your opponent trashes 1 card from their hand.",
+          "tags": [
+            "Your Turn",
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-107",
+      "name": "Charlotte Daifuku",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-108",
+      "name": "Charlotte Brulee",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Blocker] (After your opponent declares an attack, you may rest this card to make it the new target of the attack.)",
+          "tags": [
+            "Blocker"
+          ],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Rest up to 1 of your opponent's Characters with a cost of 6 or less.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-109",
+      "name": "Charlotte Pudding",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] You may trash 1 card with a [Trigger] from your hand: Draw 3 cards.",
+          "tags": [
+            "On Play",
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Look at 5 cards from the top of your deck; reveal up to 1 {Big Mom Pirates} type card and add it to your hand. Then, place the rest at the bottom of your deck in any order.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-110",
+      "name": "Charlotte Perospero",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Your Turn] [On Play] Play up to 1 {Big Mom Pirates} type Character card with a cost of 6 or less from your hand. Then, this Character gains [Rush].",
+          "tags": [
+            "Your Turn",
+            "On Play",
+            "Rush"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-111",
+      "name": "Charlotte Mont-d'or",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] You may reveal 2 cards with a [Trigger] from your hand: K.O. up to 2 of your opponent's Characters with a cost of 1 or less.",
+          "tags": [
+            "On Play",
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-112",
+      "name": "Charlotte Linlin",
+      "type": "character",
+      "feature": "Big Mom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Your Turn] All of your Characters with 4000 base power and a [Trigger] become 8000 base power.",
+          "tags": [
+            "Your Turn",
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Draw 1 card and choose one of the following effects.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 2,
+          "text": "- Add up to 1 card from the top of your deck to the top of your Life cards.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 3,
+          "text": "- Add up to 1 card from the top of your opponent's Life cards to the owner's hand.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "manual-review-needed"
+    },
+    {
+      "id": "OP17-113",
+      "name": "Streusen",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[On Play] Look at 3 cards from the top of your deck; reveal up to 1 {Big Mom Pirates} type card and add it to your hand. Then, place the rest at the bottom of your deck in any order.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-114",
+      "name": "The 3 Sweet Commanders",
+      "type": "character",
+      "feature": "Big Mom Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Your Turn] / [On Play] You may rest 2 of your DON!! cards: Draw 1 card and add up to 1 card from the top of your deck to the top of your Life. Then, give up to 2 of your opponent's Characters −3000 power during this turn.",
+          "tags": [
+            "Your Turn",
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Play this card.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-115",
+      "name": "There's Still A Code Of Honour? You Clowns!",
+      "type": "event",
+      "feature": "Big Mom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] Your [Charlotte Linlin] Leader gains [Unblockable] during this turn.",
+          "tags": [
+            "Main",
+            "Charlotte Linlin",
+            "Unblockable"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] Up to 1 of your [Charlotte Linlin] gains +4000 power during this battle.",
+          "tags": [
+            "Counter",
+            "Charlotte Linlin"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-116",
+      "name": "Fulgora",
+      "type": "event",
+      "feature": "Big Mom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Main] You may rest 2 of your DON!! cards: K.O. up to 1 of your opponent's Stages.",
+          "tags": [
+            "Main"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[Counter] if you have 2 or more Characters with a [Trigger] up to 1 of your Leader or Characters gains +4000 power during this battle.",
+          "tags": [
+            "Counter",
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "route-recognition"
+    },
+    {
+      "id": "OP17-117",
+      "name": "Maser Saber",
+      "type": "event",
+      "feature": "Big Mom Pirates/The Four Emperors",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "[Counter] Up to one of your [Charlotte Linlin] cards gets +3000 power during this battle.",
+          "tags": [
+            "Counter",
+            "Charlotte Linlin"
+          ],
+          "route": "counter-route",
+          "recognition": "recognized"
+        },
+        {
+          "field": "trigger",
+          "index": 0,
+          "text": "[Trigger] Your opponent may trash 3 cards from their hand, if they do not, you may K.O. up to one of your opponent's characters with a cost of 6 or less.",
+          "tags": [
+            "Trigger"
+          ],
+          "route": "trigger-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/Op17InteractionAuditTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: opponent owns discard decision; decline enables capped K.O.",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-118",
+      "name": "Rocks.D.Xebec",
+      "type": "character",
+      "feature": "Rocks Pirates",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "If you only have Characters without a Counter, this card in your hand has a +2000 Counter.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] Draw 1 card and play up to 2 {Rocks Pirates} type cards with different card names and a total cost of 9 or less from your hand.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs",
+        "Tools/Sim/NoLegalTargetTest.cs"
+      ],
+      "staleHypothesisDisposition": "direct-regression-pass: counterless condition and different-name total-cost play budget",
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    },
+    {
+      "id": "OP17-119",
+      "name": "Loki",
+      "type": "character",
+      "feature": "Elbaph/Giant",
+      "clauses": [
+        {
+          "field": "effect",
+          "index": 0,
+          "text": "This Character gains +12 cost, and if it's your opponent's turn, this Character gains +3000 power.",
+          "tags": [],
+          "route": "passive-or-continuous",
+          "recognition": "specialized-or-state-query"
+        },
+        {
+          "field": "effect",
+          "index": 1,
+          "text": "[On Play] K.O. your opponent's Characters with a total cost of 4 or less.",
+          "tags": [
+            "On Play"
+          ],
+          "route": "resolver-route",
+          "recognition": "recognized"
+        }
+      ],
+      "testReferences": [
+        "Tools/Sim/NewContentMechanicsTest.cs"
+      ],
+      "staleHypothesisDisposition": null,
+      "sourceTextWarnings": [],
+      "evidenceLevel": "direct-regression"
+    }
+  ]
+}

@@ -58,7 +58,7 @@ public static class ReplayIndex
         for (int i = 0; i < record.CommandHistory.Count; i++)
         {
             var cmd = record.CommandHistory[i].ToCommand();
-            state = GameEngine.ApplyCommand(state, cmd);
+            state = ApplyRecordedCommand(state, cmd, record.EngineVersion);
 
             var action = new ReplayAction
             {
@@ -78,6 +78,39 @@ public static class ReplayIndex
             actions.Add(action);
         }
         return actions;
+    }
+
+    /// <summary>Applies one persisted command with only the compatibility behavior required by
+    /// the version that originally recorded it. Engine v2 introduced an explicit public-reveal
+    /// acknowledgement command. Older histories cannot contain that command, so acknowledge the
+    /// reveal immediately after the command that created it; otherwise the following recorded
+    /// command would be rejected by the new visibility barrier and the replay would stall.</summary>
+    public static GameState ApplyRecordedCommand(GameState state, GameCommand command, int engineVersion)
+    {
+        bool previousTriggerShim = GameEngine.LegacyTriggerAutoSkip;
+        try
+        {
+            GameEngine.LegacyTriggerAutoSkip = engineVersion < 1;
+            state = GameEngine.ApplyCommand(state, command);
+
+            if (engineVersion < 2)
+            {
+                int guard = 0;
+                while (state?.ActiveReveal != null && state.ActiveReveal.AwaitingConfirmation && guard++ < 8)
+                {
+                    state = GameEngine.ApplyCommand(state, new GameCommand
+                    {
+                        Type = "confirmReveal",
+                        Seat = state.ActiveReveal.ConfirmSeat,
+                    });
+                }
+            }
+            return state;
+        }
+        finally
+        {
+            GameEngine.LegacyTriggerAutoSkip = previousTriggerShim;
+        }
     }
 
     /// <summary>First cursor value belonging to each turn number — the jump target for
@@ -142,6 +175,7 @@ public static class ReplayIndex
             case "deckLookScryConfirm":
                 return "search";
             case "resolveChoice":
+            case "confirmReveal":
                 return "choice";
             case "trash":
                 return "zoneMove";

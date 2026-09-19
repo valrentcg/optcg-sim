@@ -120,7 +120,9 @@ namespace OnePieceTcg.Sealed
                 Line($"You finished {Ordinal(place?.Rank ?? 0)} of {ev.PlayerCount} at {ev.RecordText(me)}.",
                     SealedUI.Ink, 14);
                 Line("Your pool and deck are saved — you can revisit them any time from the Sealed menu.", SealedUI.Muted, 11);
-                Act("BACK TO POOL", () => { Cleanup(); onExit?.Invoke(); });
+                var back = SealedUI.Button(col, "BACK TO POOL", SealedUI.BackAction, SealedUI.Ink,
+                    () => { Cleanup(); onExit?.Invoke(); }, 13);
+                back.gameObject.AddComponent<LayoutElement>().preferredHeight = 38f;
                 return;
             }
 

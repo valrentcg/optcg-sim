@@ -421,6 +421,8 @@ public partial class DeckBuilderManager : MonoBehaviour
     };
     private static readonly Color ArchOther = new Color32(51, 65, 84, 255);
     private static readonly Color RedAccent  = new Color32(230,  84,  84, 255);
+    private static readonly Color BackAction = new Color32(112,  63,  96, 245);
+    private static readonly Color BackActionBorder = new Color32(205, 123, 174, 190);
     private static readonly Color GoodGreen  = new Color32( 79, 208, 138, 255);
     private static readonly Color MatTop     = new Color32( 13,  33,  60, 255);
     private static readonly Color MatBottom  = new Color32( 13,  38,  50, 255);
@@ -1202,12 +1204,12 @@ public partial class DeckBuilderManager : MonoBehaviour
         line.GetComponent<Image>().raycastTarget = false;
 
         // back button
-        var backBtn = Panel("Back", bar, new Color32(34, 58, 78, 235));
+        var backBtn = Panel("Back", bar, BackAction);
         backBtn.anchorMin = backBtn.anchorMax = new Vector2(0f, 0.5f);
         backBtn.pivot = new Vector2(0f, 0.5f);
         backBtn.sizeDelta = new Vector2(108f, 34f);
         backBtn.anchoredPosition = new Vector2(18f, 0f);
-        Round(backBtn); AddBorder(backBtn, MenuB, 1.1f);
+        Round(backBtn); AddBorder(backBtn, BackActionBorder, 1.1f);
         var bt = Text_("t", backBtn, "‹  BACK", 11, Ink, TextAnchor.MiddleCenter, monoFont);
         bt.fontStyle = FontStyle.Bold;
         Stretch(bt.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
@@ -1866,15 +1868,21 @@ public partial class DeckBuilderManager : MonoBehaviour
     // ── Center: hex roster (fixed, read-order, non-draggable) ──────────────────
     private void BuildStarterHexRoster(RectTransform parent, List<DeckDef> starterDecks)
     {
-        const int RINGS = 3;   // same visual size/shape as the movable deck roster
+        // A radius-three wheel has 36 usable cells after reserving the centre for
+        // RANDOM. ST31-ST36 take the catalog past that limit, so grow the wheel
+        // just enough to keep every starter selectable instead of silently
+        // dropping the final entries.
+        int rings = 3;
+        while (3 * rings * (rings + 1) < starterDecks.Count)
+            rings++;
 
         float availW = parent.rect.width, availH = parent.rect.height;
         if (availW <= 0f) availW = 1920f - 470f - 480f;
         if (availH <= 0f) availH = 1080f - 64f;
         availH -= 56f;
         float S = Mathf.Min(56f,
-            (availW - 24f) / (3f * RINGS + 2f),
-            availH / ((2f * RINGS + 1f) * Mathf.Sqrt(3f) + 0.6f));
+            (availW - 24f) / (3f * rings + 2f),
+            availH / ((2f * rings + 1f) * Mathf.Sqrt(3f) + 0.6f));
         hexFontScale = S / 72f;
 
         float HW = 2f * S;
@@ -1888,17 +1896,48 @@ public partial class DeckBuilderManager : MonoBehaviour
         container.anchoredPosition = new Vector2(0f, 18f);
 
         var cells = new List<(int q, int r, float x, float y)>();
-        for (int q = -RINGS; q <= RINGS; q++)
-            for (int r = -RINGS; r <= RINGS; r++)
+        for (int q = -rings; q <= rings; q++)
+            for (int r = -rings; r <= rings; r++)
             {
                 int s = -q - r;
-                if (Mathf.Max(Mathf.Abs(q), Mathf.Abs(r), Mathf.Abs(s)) <= RINGS)
+                if (Mathf.Max(Mathf.Abs(q), Mathf.Abs(r), Mathf.Abs(s)) <= rings)
                 {
                     float px = 1.5f * S * q;
                     float py = -HH * (r + q * 0.5f);
                     cells.Add((q, r, px, py));
                 }
             }
+
+        // Do not leave a mostly-empty outer ring when the catalog only just
+        // crosses a wheel boundary. Keep the complete inner wheel and add the
+        // exact number of evenly-spaced outer sockets needed by the new decks.
+        // With 39 starters this adds three balanced radius-four points to the
+        // existing 36 slots, so the expanded roster stays centred and full.
+        if (rings > 3)
+        {
+            int innerRings = rings - 1;
+            int innerCapacity = 3 * innerRings * (innerRings + 1);
+            int outerNeeded = starterDecks.Count - innerCapacity;
+            if (outerNeeded > 0 && outerNeeded < 6 * rings)
+            {
+                int Radius((int q, int r, float x, float y) c)
+                {
+                    int s = -c.q - c.r;
+                    return Mathf.Max(Mathf.Abs(c.q), Mathf.Abs(c.r), Mathf.Abs(s));
+                }
+
+                var innerCells = cells.Where(c => Radius(c) <= innerRings).ToList();
+                var outerCells = cells.Where(c => Radius(c) == rings)
+                    .OrderBy(c => Mathf.Atan2(c.y, c.x))
+                    .ToList();
+                for (int i = 0; i < outerNeeded; i++)
+                {
+                    int idx = Mathf.FloorToInt(i * outerCells.Count / (float)outerNeeded);
+                    innerCells.Add(outerCells[idx]);
+                }
+                cells = innerCells;
+            }
+        }
 
         // Reading order: topmost hex first, then down, left to right within a row -
         // NOT the "outward from center" order the movable deck-select grid uses. The

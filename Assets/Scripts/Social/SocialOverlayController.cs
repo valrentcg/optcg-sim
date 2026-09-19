@@ -92,6 +92,9 @@ public sealed class SocialOverlayController : MonoBehaviour
         EnsureCreated();
         if (Instance == null || Instance._context == context) return;
         Instance._context = context;
+        if (Instance.InviteSurfaceVisible)
+            foreach (var invite in Instance._invites)
+                SocialNotificationSfx.ObserveIncomingInvite(invite);
         Instance.Render();
     }
 
@@ -144,6 +147,13 @@ public sealed class SocialOverlayController : MonoBehaviour
     private float _toastUntil;
     private bool _inviteBusy;
     private Vector2 _lastScreen;
+    private const string DockXKey = "optcg.social.overlay.dock.x";
+    private const string DockYKey = "optcg.social.overlay.dock.y";
+    private const string DrawerXKey = "optcg.social.overlay.drawer.x";
+    private const string DrawerYKey = "optcg.social.overlay.drawer.y";
+    private bool _positionsLoaded;
+    private Vector2 _dockPosition = new Vector2(0.94f, 0.07f);
+    private Vector2 _drawerPosition = new Vector2(0.78f, 0.32f);
 
     // Game invitations stay queued while a match/replay is active, but they do
     // not render over the board or advertise themselves in the match dock.
@@ -161,6 +171,8 @@ public sealed class SocialOverlayController : MonoBehaviour
         try { _mono = Font.CreateDynamicFontFromOSFont(new[] { "JetBrains Mono", "Consolas", "Cascadia Mono", "Courier New" }, 14); }
         catch { _mono = _font; }
         BuildCanvas();
+        LoadPositions();
+        SocialNotificationSfx.EnsureRunning();
         FriendsManager.FriendsChanged += OnFriendsChanged;
         Render();
         StartPolling();
@@ -242,6 +254,7 @@ public sealed class SocialOverlayController : MonoBehaviour
             int previousUnread = _unreadTotal;
             if (unreadOk)
             {
+                SocialNotificationSfx.ObserveUnreadSnapshot(unreadRows);
                 var next = new Dictionary<string, int>();
                 foreach (var row in unreadRows)
                     if (!string.IsNullOrEmpty(row.fromId) && row.count > 0) next[row.fromId] = row.count;
@@ -278,6 +291,8 @@ public sealed class SocialOverlayController : MonoBehaviour
             if (this == null) return;
             if (SocialHttp.FailureCount == inviteFailures && !SameInvites(_invites, invites))
             {
+                if (InviteSurfaceVisible)
+                    foreach (var invite in invites) SocialNotificationSfx.ObserveIncomingInvite(invite);
                 _invites.Clear();
                 _invites.AddRange(invites);
                 changed = true;
@@ -289,6 +304,7 @@ public sealed class SocialOverlayController : MonoBehaviour
                 if (this == null) return;
                 if (tailOk && MergeMessages(thread, tail))
                 {
+                    SocialNotificationSfx.ObserveIncomingMessages(tail);
                     changed = true;
                     _ = MarkRead(thread.PlayerId);
                 }
@@ -568,19 +584,24 @@ public sealed class SocialOverlayController : MonoBehaviour
         bool compact = match || _context == SocialSurfaceContext.DeckBuilder || _context == SocialSurfaceContext.Sealed;
         int visibleInvites = InviteSurfaceVisible ? _invites.Count : 0;
         var dock = Panel("Social Dock", _root, Panel2, true);
+        dock.anchorMin = dock.anchorMax = new Vector2(0.5f, 0.5f);
+        dock.pivot = new Vector2(0.5f, 0.5f);
+        dock.anchoredPosition = ClampPosition(dock,
+            NormalizedToLocal(_dockPosition, _root), _root, 10f);
+        var drag = dock.gameObject.AddComponent<SocialOverlayDrag>();
+        drag.Configure(dock, _root, 10f, SaveDockPosition);
         if (compact)
         {
             // The match HUD and deck-building screens use every edge of the
             // window. A small tab on the content/action-rail seam stays reachable
             // without covering the clock, End Turn, deck cards, or footer actions.
-            dock.anchorMin = dock.anchorMax = new Vector2(match ? 0.83f : 1f, 0.5f);
-            dock.pivot = new Vector2(1f, 0.5f);
             dock.sizeDelta = new Vector2(48f, 48f);
-            dock.anchoredPosition = new Vector2(match ? -6f : -12f, 0f);
+            dock.anchoredPosition = ClampPosition(dock,
+                NormalizedToLocal(_dockPosition, _root), _root, 10f);
             AddBorder(dock, visibleInvites > 0 ? Gold : _unreadTotal > 0 ? Accent : Border, 1.2f);
             var compactButton = dock.gameObject.AddComponent<Button>();
             compactButton.transition = Selectable.Transition.ColorTint;
-            compactButton.onClick.AddListener(() => { _drawerOpen = true; Render(); });
+            compactButton.onClick.AddListener(() => { if (drag.ConsumeDrag()) return; _drawerOpen = true; Render(); });
             var compactTitle = Label("Title", dock, "S", 16, Ink, TextAnchor.MiddleCenter, true, _mono);
             Stretch(compactTitle.rectTransform, Vector2.zero, Vector2.one, Vector2.zero, Vector2.zero);
             int badgeCount = visibleInvites > 0 ? visibleInvites : _unreadTotal;
@@ -588,16 +609,15 @@ public sealed class SocialOverlayController : MonoBehaviour
             return;
         }
 
-        // Main-menu stages reserve the lower half of the navigation rail. Dock
-        // Social there so it never sits over Play tiles, lobby controls, or page content.
-        dock.anchorMin = dock.anchorMax = Vector2.zero;
-        dock.pivot = Vector2.zero;
+        // Default to the lower-right, beside the drawer it opens. Players can drag this
+        // launcher anywhere inside the safe canvas and the position survives relaunches.
         dock.sizeDelta = new Vector2(196f, 42f);
-        dock.anchoredPosition = new Vector2(30f, 18f);
+        dock.anchoredPosition = ClampPosition(dock,
+            NormalizedToLocal(_dockPosition, _root), _root, 10f);
         AddBorder(dock, visibleInvites > 0 ? Gold : _incoming.Count > 0 || _unreadTotal > 0 ? Accent : Border, 1.2f);
         var button = dock.gameObject.AddComponent<Button>();
         button.transition = Selectable.Transition.ColorTint;
-        button.onClick.AddListener(() => { _drawerOpen = true; Render(); });
+        button.onClick.AddListener(() => { if (drag.ConsumeDrag()) return; _drawerOpen = true; Render(); });
         var title = Label("Title", dock, "SOCIAL", 13, Ink, TextAnchor.MiddleLeft, true);
         Stretch(title.rectTransform, Vector2.zero, Vector2.one, new Vector2(16f, 0f), new Vector2(-132f, 0f));
         string statusText = visibleInvites > 0
@@ -618,14 +638,17 @@ public sealed class SocialOverlayController : MonoBehaviour
         float h = Mathf.Min(820f, availableH - 92f);
         float w = Mathf.Min(790f, Mathf.Max(620f, (_root.rect.width > 1f ? _root.rect.width : 1920f) * 0.52f));
         var drawer = Panel("Social Drawer", _root, PanelBg, true);
-        drawer.anchorMin = drawer.anchorMax = new Vector2(1f, match ? 1f : 0f);
-        drawer.pivot = new Vector2(1f, match ? 1f : 0f);
+        drawer.anchorMin = drawer.anchorMax = new Vector2(0.5f, 0.5f);
+        drawer.pivot = new Vector2(0.5f, 0.5f);
         drawer.sizeDelta = new Vector2(w, h);
-        drawer.anchoredPosition = new Vector2(-18f, match ? -72f : 18f);
+        drawer.anchoredPosition = ClampPosition(drawer,
+            NormalizedToLocal(_drawerPosition, _root), _root, 10f);
         AddBorder(drawer, Border, 1.2f);
 
         var head = Panel("Head", drawer, Panel2, true);
         Stretch(head, new Vector2(0f, 1f), Vector2.one, new Vector2(0f, -64f), Vector2.zero);
+        var drawerDrag = head.gameObject.AddComponent<SocialOverlayDrag>();
+        drawerDrag.Configure(drawer, _root, 10f, SaveDrawerPosition);
         var title = Label("Title", head, "SOCIAL", 19, Ink, TextAnchor.LowerLeft, true);
         Stretch(title.rectTransform, new Vector2(0f, 0.35f), new Vector2(0.5f, 1f), new Vector2(18f, 0f), Vector2.zero);
         int visibleInvites = InviteSurfaceVisible ? _invites.Count : 0;
@@ -841,6 +864,8 @@ public sealed class SocialOverlayController : MonoBehaviour
         Stretch(status.rectTransform, Vector2.zero, new Vector2(0.55f, 0.46f), new Vector2(70f, 4f), Vector2.zero);
         var menu = UnityEngine.Object.FindAnyObjectByType<MainMenuManager>();
         bool menuActions = menu != null && menu.SocialInviteActionsAvailable;
+        AddButton(head, "COPY", () => CopyConversation(thread), thread.Messages.Count > 0,
+            new Vector2(1f, 0.5f), new Vector2(72f, 32f), new Vector2(-194f, 0f), true);
         AddButton(head, "PROFILE", () => menu?.ShowFriendProfileFromSocial(thread.PlayerId), menu != null,
             new Vector2(1f, 0.5f), new Vector2(82f, 32f), new Vector2(-104f, 0f), true);
         AddButton(head, "INVITE", () => menu?.BeginFriendInviteFromSocial(thread.PlayerId, username),
@@ -864,6 +889,65 @@ public sealed class SocialOverlayController : MonoBehaviour
         Stretch(composer, new Vector2(0f, 0f), new Vector2(0.78f, 0f), new Vector2(10f, 12f), new Vector2(-2f, 56f));
         AddButton(pane, _busy ? "…" : "SEND", () => Send(thread), !_busy,
             new Vector2(1f, 0f), new Vector2(96f, 44f), new Vector2(-10f, 12f), true, AccentSoft);
+    }
+
+    private static void CopyConversation(ThreadState thread)
+    {
+        if (thread == null || thread.Messages.Count == 0) return;
+        GUIUtility.systemCopyBuffer = string.Join("\n", thread.Messages.Select(message =>
+            $"{(message.mine ? "You" : thread.Username)}: {message.body}"));
+    }
+
+    private void LoadPositions()
+    {
+        if (_positionsLoaded) return;
+        _positionsLoaded = true;
+        _dockPosition = new Vector2(
+            PlayerPrefs.GetFloat(DockXKey, _dockPosition.x),
+            PlayerPrefs.GetFloat(DockYKey, _dockPosition.y));
+        _drawerPosition = new Vector2(
+            PlayerPrefs.GetFloat(DrawerXKey, _drawerPosition.x),
+            PlayerPrefs.GetFloat(DrawerYKey, _drawerPosition.y));
+        _dockPosition = Clamp01(_dockPosition);
+        _drawerPosition = Clamp01(_drawerPosition);
+    }
+
+    private static Vector2 Clamp01(Vector2 value) =>
+        new Vector2(Mathf.Clamp01(value.x), Mathf.Clamp01(value.y));
+
+    private static Vector2 NormalizedToLocal(Vector2 normalized, RectTransform root) =>
+        new Vector2((normalized.x - 0.5f) * root.rect.width,
+                    (normalized.y - 0.5f) * root.rect.height);
+
+    private static Vector2 LocalToNormalized(Vector2 local, RectTransform root) =>
+        new Vector2(local.x / Mathf.Max(1f, root.rect.width) + 0.5f,
+                    local.y / Mathf.Max(1f, root.rect.height) + 0.5f);
+
+    private static Vector2 ClampPosition(RectTransform target, Vector2 value,
+        RectTransform bounds, float margin)
+    {
+        Rect rect = bounds.rect;
+        float halfW = target.rect.width * 0.5f;
+        float halfH = target.rect.height * 0.5f;
+        value.x = Mathf.Clamp(value.x, rect.xMin + halfW + margin, rect.xMax - halfW - margin);
+        value.y = Mathf.Clamp(value.y, rect.yMin + halfH + margin, rect.yMax - halfH - margin);
+        return value;
+    }
+
+    private void SaveDockPosition(Vector2 local)
+    {
+        _dockPosition = Clamp01(LocalToNormalized(local, _root));
+        PlayerPrefs.SetFloat(DockXKey, _dockPosition.x);
+        PlayerPrefs.SetFloat(DockYKey, _dockPosition.y);
+        PlayerPrefs.Save();
+    }
+
+    private void SaveDrawerPosition(Vector2 local)
+    {
+        _drawerPosition = Clamp01(LocalToNormalized(local, _root));
+        PlayerPrefs.SetFloat(DrawerXKey, _drawerPosition.x);
+        PlayerPrefs.SetFloat(DrawerYKey, _drawerPosition.y);
+        PlayerPrefs.Save();
     }
 
     private void BuildHistory(RectTransform area, ThreadState thread)

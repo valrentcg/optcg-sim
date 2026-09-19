@@ -94,7 +94,7 @@ public sealed class ReplayRecord
     // 0 (the default for any record written before this field existed) means "legacy": the reader
     // must enable the compatibility shims (GameEngine.LegacyTriggerAutoSkip, …) to reproduce it.
     // BUMP THIS whenever a change adds or removes a decision point, and add the matching shim.
-    public const int CurrentEngineVersion = 1;
+    public const int CurrentEngineVersion = 2;
     public int EngineVersion;
     public string Seed;
     public string SouthDeckId;     // deck-builder deck id; empty = starter default (st01)

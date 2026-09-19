@@ -21,10 +21,11 @@ namespace OnePieceTcg.Engine.Bot.Search
                 EndTurnStage = s.EndTurnStage, EndTurnSeat = s.EndTurnSeat,
                 CommandBatch = s.CommandBatch,
                 BattleReactionSeat = s.BattleReactionSeat,
-                EffectSequence = s.EffectSequence, LogSequence = s.LogSequence, BattleSequence = s.BattleSequence,
+                EffectSequence = s.EffectSequence, RevealSequence = s.RevealSequence, LogSequence = s.LogSequence, BattleSequence = s.BattleSequence,
                 Selected = s.Selected == null ? null : new SelectionRef { InstanceId = s.Selected.InstanceId, Seat = s.Selected.Seat },
                 Battle = CloneBattle(s.Battle),
                 DeckLook = CloneDeckLook(s.DeckLook),
+                ActiveReveal = CloneReveal(s.ActiveReveal),
                 PendingCharReplace = CloneCharReplace(s.PendingCharReplace),
                 ActiveChoice = CloneChoice(s.ActiveChoice),
                 DeferredActivatedTriggerSeat = s.DeferredActivatedTriggerSeat,
@@ -122,6 +123,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             DoneParts = e.DoneParts != null ? new System.Collections.Generic.List<string>(e.DoneParts) : new System.Collections.Generic.List<string>(),
             SkippedParts = e.SkippedParts != null ? new System.Collections.Generic.List<string>(e.SkippedParts) : new System.Collections.Generic.List<string>(),
             OnceKey = e.OnceKey, FinalizesActivatedTrigger = e.FinalizesActivatedTrigger,
+            PublicRevealConfirmed = e.PublicRevealConfirmed,
             DeclineContinuation = e.DeclineContinuation, DeclineSeat = e.DeclineSeat,
             // Mid-pick bookkeeping. A clone that drops these restarts the pick with a clean slate,
             // so a search rollout can re-choose a card the real game already spent or reach one the
@@ -156,8 +158,23 @@ namespace OnePieceTcg.Engine.Bot.Search
             Cards = CloneCards(d.Cards), Ordered = CloneCards(d.Ordered),
             SearchMode = d.SearchMode, MaxCost = d.MaxCost, CardTypeFilter = d.CardTypeFilter, TrashRest = d.TrashRest,
             PlayMode = d.PlayMode, PlayRested = d.PlayRested, MaxPower = d.MaxPower, TrashSelected = d.TrashSelected,
-            RequireTrigger = d.RequireTrigger, SelectCount = d.SelectCount, SelectedAny = d.SelectedAny, ToTop = d.ToTop, LifeMode = d.LifeMode,
+            RequireTrigger = d.RequireTrigger, SelectCount = d.SelectCount, SelectedAny = d.SelectedAny,
+            RevealSelection = d.RevealSelection, ToTop = d.ToTop, LifeMode = d.LifeMode,
             PostLookClause = d.PostLookClause,
+        };
+
+        private static PublicRevealState CloneReveal(PublicRevealState r) => r == null ? null : new PublicRevealState
+        {
+            RevealId = r.RevealId, SourceSeat = r.SourceSeat, ConfirmSeat = r.ConfirmSeat,
+            SourceInstanceId = r.SourceInstanceId, SourceCardId = r.SourceCardId,
+            SourceName = r.SourceName, Reason = r.Reason, EffectId = r.EffectId,
+            ResumeMode = r.ResumeMode, ContinuationText = r.ContinuationText,
+            RequiresConfirmation = r.RequiresConfirmation, AwaitingConfirmation = r.AwaitingConfirmation,
+            Cards = r.Cards == null ? new List<RevealedCardRef>() : r.Cards.Select(c => new RevealedCardRef
+            {
+                InstanceId = c.InstanceId, CardId = c.CardId, OwnerSeat = c.OwnerSeat,
+                ZoneAtReveal = c.ZoneAtReveal,
+            }).ToList(),
         };
     }
 }

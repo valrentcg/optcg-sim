@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.38",
-  "buildNumber": 37,
+  "buildVersion": "1.0.39",
+  "buildNumber": 38,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "SOCIAL PANEL\n\nOpen friends and conversations from menus, deck building, or a match. Search friends, view profiles, keep message history and drafts, and see unread messages or pending requests on the collapsed panel. Game invitations use compact accept and decline controls and wait until you return to a main menu if you are already playing.\n\nPLAY AND ROOMS\n\nRefined full-bleed Leader artwork, deck information, queue and match counts, display settings, navigation colors, room controls, rule scrolling, and the resizable public-table browser.\n\nUPDATER\n\nThe update screen now keeps the complete release notes inside a responsive scrollable panel with a visible scrollbar whenever the notes overflow.",
+  "notes": "CARD REVEALS AND GAMEPLAY\n\nRequired hand, Life, and deck reveals now stay face-up in their real location and in the right-side action panel until confirmation. Exact-card privacy is enforced, A.I. confirms automatically, and opponent cards no longer leak playability through hover glow. OP17, Life, DON!! payment, full-board, optional-effect, replay, and multi-choice interactions received another correction pass.\n\nCARDS AND DECKS\n\nRefreshed OP17 and ST31-ST36 artwork, added 16 requested promo cards and a cleaner Rainbow Luffy, and expanded the Starter Deck hex roster for ST31-ST36.\n\nSEALED\n\nChoose a build-timer duration, control card reveal speed, and use the cleaner pack and completion layouts with Practice vs A.I., Export Decklist, New Run, and Menu.\n\nSOCIAL\n\nThe movable Social panel remembers its position, improves tabs and spacing, can copy whole conversations and paste text into the composer, queues game invites during matches, and adds normalized sounds for messages and lobby invitations.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

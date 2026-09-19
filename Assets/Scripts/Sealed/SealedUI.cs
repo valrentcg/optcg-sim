@@ -20,6 +20,9 @@ namespace OnePieceTcg.Sealed
         public static readonly Color PanelBg = new Color32(16, 30, 46, 250);
         public static readonly Color PanelBg2 = new Color32(20, 34, 50, 235);
         public static readonly Color ChipOff = new Color32(34, 48, 66, 235);
+        // Navigation that leaves the current screen uses a distinct, restrained magenta so it
+        // cannot be mistaken for a forward/confirm action.
+        public static readonly Color BackAction = new Color32(112, 63, 96, 245);
         public static readonly Color Good = new Color32(96, 200, 130, 255);
         public static readonly Color Bad = new Color32(232, 120, 120, 255);
         public static readonly Color Gold = new Color32(226, 188, 74, 255);

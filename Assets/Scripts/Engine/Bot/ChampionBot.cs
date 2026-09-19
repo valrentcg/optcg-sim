@@ -30,6 +30,11 @@ namespace OnePieceTcg.Engine.Bot
         public static GameCommand DecideOneCommand(GameState state, string seat, HashSet<string> blacklist)
         {
             if (state == null || !state.Players.ContainsKey(seat)) return null;
+            if (state.ActiveReveal != null && state.ActiveReveal.RequiresConfirmation
+                && state.ActiveReveal.AwaitingConfirmation)
+                return state.ActiveReveal.ConfirmSeat == seat
+                    ? new GameCommand { Type = "confirmReveal", Seat = seat }
+                    : null;
             var me = state.Players[seat];
 
             // turn order
@@ -131,7 +136,7 @@ namespace OnePieceTcg.Engine.Bot
             var attacker = FindAny(state, b.AttackerSeat, b.AttackerId);
             int atkPow = attacker != null ? GameEngine.GetPower(state, attacker) : 0;
             var blockers = me.CharacterArea.Where(c => c != null && !c.Rested
-                && (GameEngine.GetCard(c)?.Keywords?.Contains("Blocker") ?? false)).ToList();
+                && GameEngine.HasBlocker(state, c)).ToList();
             if (blockers.Count == 0) return new GameCommand { Type = "passBlock", Seat = seat };
 
             bool lethal = b.TargetId == me.Leader?.InstanceId && me.Life.Count == 0;

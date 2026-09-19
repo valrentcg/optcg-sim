@@ -45,7 +45,9 @@ namespace OnePieceTcg.Sealed
         /// <summary>Kept so it can be re-raised above every pack stage. Each pack adds a FULL-SCREEN
         /// click catcher (the tap-to-open affordance) as a later sibling, which sat on top of SKIP and
         /// swallowed the click — the button was there and looked live but could never be pressed.</summary>
-        private readonly List<RectTransform> skipButtons = new List<RectTransform>();
+        private readonly List<RectTransform> overlayControls = new List<RectTransform>();
+        private float revealSpeed = 1f;
+        private Text revealSpeedValue;
 
         private static readonly Color Ink = new Color32(238, 242, 247, 255);
         private static readonly Color Muted = new Color32(159, 171, 190, 255);
@@ -78,12 +80,13 @@ namespace OnePieceTcg.Sealed
             SealedUI.AddStandardBackground(backdrop);
 
             var counter = Text(backdrop, "Pack Counter", "", 26, Muted, TextAnchor.UpperCenter);
-            Stretch(counter.rectTransform, new Vector2(0.1f, 0.90f), new Vector2(0.9f, 0.96f));
+            Stretch(counter.rectTransform, new Vector2(0.35f, 0.90f), new Vector2(0.65f, 0.96f));
 
-            // Two levels: drop the pack in front of you, or drop the ceremony entirely.
-            skipButtons.Clear();
-            skipButtons.Add(AddButton(backdrop, "SKIP PACK", new Vector2(0.705f, 0.03f), new Vector2(0.845f, 0.09f), SkipCurrentPack));
-            skipButtons.Add(AddButton(backdrop, "SKIP ALL", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip));
+            // Persistent controls are re-raised over each pack's full-screen swipe catcher.
+            overlayControls.Clear();
+            overlayControls.Add(AddRevealSpeedControl(backdrop));
+            overlayControls.Add(AddButton(backdrop, "SKIP PACK", new Vector2(0.705f, 0.03f), new Vector2(0.845f, 0.09f), SkipCurrentPack));
+            overlayControls.Add(AddButton(backdrop, "SKIP ALL", new Vector2(0.86f, 0.03f), new Vector2(0.98f, 0.09f), Skip));
 
             // PRELOAD every card's art before the first pack. The reveal draws a card the instant it
             // flips, so kicking an async load at that moment always lost the race and the card fell
@@ -120,14 +123,14 @@ namespace OnePieceTcg.Sealed
         {
             var stage = Panel(parent, "Pack Stage", new Color(0, 0, 0, 0));
             Stretch(stage, Vector2.zero, Vector2.one);
-            foreach (var b in skipButtons) if (b != null) b.SetAsLastSibling();   // above this pack's click catcher
+            foreach (var control in overlayControls) if (control != null) control.SetAsLastSibling();
 
             // ---- the pack itself ----
             var packSprite = SealedPackArt.For(pool.SetCode);
             AddUnopenedPackStack(stage, packSprite, unopenedAfter);
 
             var packRt = Panel(stage, "Pack", Color.white);
-            packRt.anchorMin = packRt.anchorMax = new Vector2(0.5f, 0.52f);
+            packRt.anchorMin = packRt.anchorMax = new Vector2(0.69f, 0.62f);
             packRt.pivot = new Vector2(0.5f, 0.5f);
             packRt.sizeDelta = new Vector2(430f, 601f);
             var packImg = packRt.GetComponent<Image>();
@@ -135,7 +138,7 @@ namespace OnePieceTcg.Sealed
             packImg.preserveAspect = true;
 
             var hint = Text(stage, "Hint", "SWIPE TO OPEN THE PACK", 18, Ink, TextAnchor.MiddleCenter);
-            Stretch(hint.rectTransform, new Vector2(0.3f, 0.10f), new Vector2(0.7f, 0.16f));
+            Stretch(hint.rectTransform, new Vector2(0.55f, 0.13f), new Vector2(0.83f, 0.19f));
 
             // Pocket-style input: the wrapper does not deform with the pointer. The swipe is only
             // recognised as a gesture; after release the narrow heat-seal ribbon animates away.
@@ -215,10 +218,10 @@ namespace OnePieceTcg.Sealed
             {
                 if (SkipNow) break;
                 yield return StartCoroutine(RevealCard(stage, card, landed));
-                if (!SkipNow) yield return WaitUnscaled(0.18f);
+                if (!SkipNow) yield return StartCoroutine(WaitReveal(0.18f));
             }
 
-            if (!SkipNow) yield return WaitUnscaled(0.20f);
+            if (!SkipNow) yield return StartCoroutine(WaitReveal(0.20f));
             HideCardPreview();
             if (stage != null) Destroy(stage.gameObject);
         }
@@ -327,15 +330,15 @@ namespace OnePieceTcg.Sealed
             if (tearLine != null) Destroy(tearLine.gameObject);
         }
 
-        /// <summary>One card rises out of the pack, flips face-up, celebrates if it is a hit, then
-        /// tucks into the growing stack at the bottom of the screen.</summary>
+        /// <summary>One card enters the inspection lane beside the pack, flips face-up, celebrates
+        /// if it is a hit, then tucks into the growing stack at the bottom of the screen.</summary>
         private IEnumerator RevealCard(RectTransform stage, PulledCard card, List<RectTransform> landed)
         {
             var holder = Panel(stage, "Card " + card.CardId, new Color(0, 0, 0, 0));
-            holder.anchorMin = holder.anchorMax = new Vector2(0.5f, 0.52f);
+            holder.anchorMin = holder.anchorMax = new Vector2(0.5f, 0.58f);
             holder.pivot = new Vector2(0.5f, 0.5f);
             holder.sizeDelta = new Vector2(400f, 559f);
-            holder.anchoredPosition = new Vector2(0f, -30f);
+            holder.anchoredPosition = new Vector2(-320f, -40f);
 
             // Face-DOWN to begin with: a card coming out of a pack is a card back until it turns over.
             // Previously this was a flat navy rectangle, which lost the whole "what did I pull" moment.
@@ -346,22 +349,24 @@ namespace OnePieceTcg.Sealed
             if (backSprite != null) { faceImg.sprite = backSprite; faceImg.preserveAspect = true; }
             else faceImg.color = new Color32(24, 36, 52, 255);
 
-            // Rise out of the pack.
+            // Rise into the inspection lane. The fixed left offset keeps the full pack art visible.
             float t = 0f;
-            while (t < 0.10f)
+            const float riseDuration = 0.10f;
+            while (t < riseDuration)
             {
-                t += Time.unscaledDeltaTime;
-                float k = Mathf.Clamp01(t / 0.10f);
-                holder.anchoredPosition = new Vector2(0f, Mathf.Lerp(-60f, 60f, Ease(k)));
+                t += Time.unscaledDeltaTime * CurrentRevealSpeed;
+                float k = Mathf.Clamp01(t / riseDuration);
+                holder.anchoredPosition = new Vector2(-320f, Mathf.Lerp(-60f, 60f, Ease(k)));
                 yield return null;
             }
 
             // Flip: squash to zero width, swap in the face, expand back.
             t = 0f;
-            while (t < 0.11f)
+            const float flipInDuration = 0.11f;
+            while (t < flipInDuration)
             {
-                t += Time.unscaledDeltaTime;
-                holder.localScale = new Vector3(1f - Mathf.Clamp01(t / 0.11f), 1f, 1f);
+                t += Time.unscaledDeltaTime * CurrentRevealSpeed;
+                holder.localScale = new Vector3(1f - Mathf.Clamp01(t / flipInDuration), 1f, 1f);
                 yield return null;
             }
 
@@ -377,10 +382,11 @@ namespace OnePieceTcg.Sealed
             if (card.IsParallel) AddFoilTint(face);
 
             t = 0f;
-            while (t < 0.13f)
+            const float flipOutDuration = 0.13f;
+            while (t < flipOutDuration)
             {
-                t += Time.unscaledDeltaTime;
-                holder.localScale = new Vector3(Mathf.Clamp01(t / 0.13f), 1f, 1f);
+                t += Time.unscaledDeltaTime * CurrentRevealSpeed;
+                holder.localScale = new Vector3(Mathf.Clamp01(t / flipOutDuration), 1f, 1f);
                 yield return null;
             }
             holder.localScale = Vector3.one;
@@ -406,10 +412,11 @@ namespace OnePieceTcg.Sealed
             var target = new Vector2(-742f + idx * 135f, -352f);
             Vector2 from = holder != null ? holder.anchoredPosition : Vector2.zero;
             float t = 0f;
-            while (t < 0.14f && holder != null)
+            const float tuckDuration = 0.14f;
+            while (t < tuckDuration && holder != null)
             {
-                t += Time.unscaledDeltaTime;
-                float k = Ease(Mathf.Clamp01(t / 0.14f));
+                t += Time.unscaledDeltaTime * CurrentRevealSpeed;
+                float k = Ease(Mathf.Clamp01(t / tuckDuration));
                 holder.anchoredPosition = Vector2.Lerp(from, target, k);
                 holder.localScale = Vector3.one * Mathf.Lerp(1f, 0.31f, k);
                 yield return null;
@@ -429,8 +436,8 @@ namespace OnePieceTcg.Sealed
 
             if (tier == HitTier.Parallel)
             {
-                StartCoroutine(SealedPackFx.Glint(card, 0.42f, 0.75f));
-                yield return WaitUnscaled(0.38f);
+                StartCoroutine(SealedPackFx.Glint(card, 0.42f / CurrentRevealSpeed, 0.75f));
+                yield return StartCoroutine(HoldRevealed(0.38f));
                 yield break;
             }
 
@@ -438,24 +445,24 @@ namespace OnePieceTcg.Sealed
             var tint = TierColour(tier);
             StartCoroutine(SealedPackFx.SoftGlow(stage, at, tint,
                 secret ? 240f : 210f, secret ? 980f : 680f,
-                secret ? 1.10f : 0.76f, secret ? 0.34f : 0.23f));
+                (secret ? 1.10f : 0.76f) / CurrentRevealSpeed, secret ? 0.34f : 0.23f));
             if (secret)
                 StartCoroutine(SealedPackFx.SoftGlow(stage, at, new Color(1f, 0.93f, 0.62f, 1f),
-                    180f, 720f, 0.88f, 0.24f));
+                    180f, 720f, 0.88f / CurrentRevealSpeed, 0.24f));
 
             var rays = SealedPackFx.Rays(stage, at, new Color(tint.r, tint.g, tint.b, 1f),
                 secret ? 14 : 9, secret ? 1180f : 880f);
             rays.SetAsFirstSibling();
             StartCoroutine(SealedPackFx.SpinAndFade(rays, secret ? 20f : 12f,
-                secret ? 1.12f : 0.78f, secret ? 0.24f : 0.16f));
-            StartCoroutine(SealedPackFx.GlintTinted(card, secret ? 0.82f : 0.58f,
+                (secret ? 1.12f : 0.78f) / CurrentRevealSpeed, secret ? 0.24f : 0.16f));
+            StartCoroutine(SealedPackFx.GlintTinted(card, (secret ? 0.82f : 0.58f) / CurrentRevealSpeed,
                 secret ? 0.72f : 0.58f, tint));
 
             float life = secret ? 1.08f : 0.74f;
             float t = 0f;
             while (t < life)
             {
-                t += Time.unscaledDeltaTime;
+                t += Time.unscaledDeltaTime * CurrentRevealSpeed;
                 if (card != null)
                 {
                     float pop = 1f + Mathf.Sin(Mathf.Clamp01(t / 0.3f) * Mathf.PI) * (secret ? 0.12f : 0.07f);
@@ -497,9 +504,9 @@ namespace OnePieceTcg.Sealed
                 hover.OnExit = HideCardPreview;
             }
 
-            // The skip buttons must stay reachable over the grid, or skipping one pack would
-            // leave you unable to skip the next.
-            foreach (var b in skipButtons) if (b != null) b.SetAsLastSibling();
+            // Controls must stay reachable over the grid, or skipping one pack would leave you
+            // unable to control the next reveal.
+            foreach (var control in overlayControls) if (control != null) control.SetAsLastSibling();
 
             yield return WaitUnscaled(hold);
             HideCardPreview();
@@ -511,7 +518,9 @@ namespace OnePieceTcg.Sealed
             HideCardPreview();
             var sprite = GetSprite(cardId);
             cardPreview = SealedUI.Panel(root, "Opening Card Preview", Color.clear);
-            cardPreview.anchorMin = cardPreview.anchorMax = new Vector2(0.875f, 0.51f);
+            // Keep the optional hover enlargement in the left inspection lane as well. A preview on
+            // the right edge would cover the raised pack stack that the player is still opening.
+            cardPreview.anchorMin = cardPreview.anchorMax = new Vector2(0.12f, 0.51f);
             cardPreview.pivot = new Vector2(0.5f, 0.5f);
             cardPreview.sizeDelta = new Vector2(315f, 441f);
             cardPreview.SetAsLastSibling();
@@ -666,7 +675,7 @@ namespace OnePieceTcg.Sealed
             for (int layer = visible; layer >= 1; layer--)
             {
                 var back = Panel(stage, $"Unopened Pack {layer}", new Color(0.82f, 0.85f, 0.90f, 0.96f));
-                back.anchorMin = back.anchorMax = new Vector2(0.5f, 0.52f);
+                back.anchorMin = back.anchorMax = new Vector2(0.69f, 0.62f);
                 back.pivot = new Vector2(0.5f, 0.5f);
                 back.sizeDelta = new Vector2(430f, 601f);
                 back.anchoredPosition = new Vector2(layer * 12f, -layer * 5f);
@@ -684,6 +693,8 @@ namespace OnePieceTcg.Sealed
 
         private static float Ease(float k) => 1f - Mathf.Pow(1f - Mathf.Clamp01(k), 3f);
 
+        private float CurrentRevealSpeed => Mathf.Clamp(revealSpeed, 0.5f, 2.5f);
+
         /// <summary>Hold on a revealed card, but bail the instant SKIP is pressed. A plain wait would
         /// make the button feel dead for up to a second on every card.</summary>
         private IEnumerator HoldRevealed(float seconds)
@@ -691,7 +702,17 @@ namespace OnePieceTcg.Sealed
             float t = 0f;
             while (t < seconds && !SkipNow)
             {
-                t += Time.unscaledDeltaTime;
+                t += Time.unscaledDeltaTime * CurrentRevealSpeed;
+                yield return null;
+            }
+        }
+
+        private IEnumerator WaitReveal(float seconds)
+        {
+            float t = 0f;
+            while (t < seconds && !SkipNow)
+            {
+                t += Time.unscaledDeltaTime * CurrentRevealSpeed;
                 yield return null;
             }
         }
@@ -834,6 +855,54 @@ namespace OnePieceTcg.Sealed
             Stretch(t.rectTransform, Vector2.zero, Vector2.one);
             rt.gameObject.AddComponent<Button>().onClick.AddListener(() => onClick?.Invoke());
             return rt;
+        }
+
+        private RectTransform AddRevealSpeedControl(RectTransform parent)
+        {
+            var panel = Panel(parent, "Reveal Speed Control", new Color32(20, 34, 50, 242));
+            Stretch(panel, new Vector2(0.035f, 0.84f), new Vector2(0.30f, 0.895f));
+
+            var title = Text(panel, "Title", "REVEAL SPEED", 11, Muted, TextAnchor.MiddleLeft);
+            Stretch(title.rectTransform, new Vector2(0.045f, 0f), new Vector2(0.34f, 1f));
+
+            var sliderRoot = Panel(panel, "Speed Slider", Color.clear);
+            Stretch(sliderRoot, new Vector2(0.35f, 0.18f), new Vector2(0.84f, 0.82f));
+
+            var track = Panel(sliderRoot, "Track", new Color32(40, 54, 72, 255));
+            Stretch(track, new Vector2(0f, 0.39f), new Vector2(1f, 0.61f));
+            track.GetComponent<Image>().raycastTarget = true;
+
+            var fillArea = Panel(sliderRoot, "Fill Area", Color.clear);
+            Stretch(fillArea, new Vector2(0f, 0.39f), new Vector2(1f, 0.61f));
+            var fill = Panel(fillArea, "Fill", Accent);
+            Stretch(fill, Vector2.zero, Vector2.one);
+
+            var handleArea = Panel(sliderRoot, "Handle Area", Color.clear);
+            Stretch(handleArea, Vector2.zero, Vector2.one);
+            var handle = Panel(handleArea, "Handle", Ink);
+            handle.anchorMin = handle.anchorMax = new Vector2(0.5f, 0.5f);
+            handle.pivot = new Vector2(0.5f, 0.5f);
+            handle.sizeDelta = new Vector2(18f, 18f);
+            handle.GetComponent<Image>().raycastTarget = true;
+
+            var slider = sliderRoot.gameObject.AddComponent<Slider>();
+            slider.minValue = 0.5f;
+            slider.maxValue = 2.5f;
+            slider.wholeNumbers = false;
+            slider.direction = Slider.Direction.LeftToRight;
+            slider.fillRect = fill;
+            slider.handleRect = handle;
+            slider.targetGraphic = handle.GetComponent<Image>();
+            slider.value = revealSpeed;
+
+            revealSpeedValue = Text(panel, "Value", $"{revealSpeed:0.0}×", 12, Ink, TextAnchor.MiddleCenter);
+            Stretch(revealSpeedValue.rectTransform, new Vector2(0.85f, 0f), new Vector2(0.98f, 1f));
+            slider.onValueChanged.AddListener(value =>
+            {
+                revealSpeed = value;
+                if (revealSpeedValue != null) revealSpeedValue.text = $"{value:0.0}×";
+            });
+            return panel;
         }
     }
 }

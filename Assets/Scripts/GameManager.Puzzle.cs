@@ -213,6 +213,6 @@ public partial class GameManager
             AddButton(body, "Restart", () => LoadPuzzle(puzzleIndex), true, false);
             AddButton(body, "Next Puzzle", NextPuzzle, true, false);
         }
-        AddButton(body, "Exit to Menu", ReturnToMenu, true, false);
+        AddButton(body, "Exit to Menu", ReturnToMenu, true, false, true);
     }
 }

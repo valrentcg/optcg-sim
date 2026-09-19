@@ -1,0 +1,363 @@
+{
+  "identitySource": "https://oppp.online/print",
+  "metadataSource": "https://oplaytcg.com/en/cards/{cardId}",
+  "requestedIds": [
+    "P-000",
+    "P-038",
+    "P-040",
+    "P-064",
+    "P-066",
+    "P-067",
+    "P-080",
+    "P-086",
+    "P-087",
+    "P-094",
+    "P-095",
+    "P-108",
+    "P-109",
+    "P-114",
+    "P-116",
+    "P-118"
+  ],
+  "importedCount": 16,
+  "libraryRecordsBefore": 4842,
+  "libraryRecordsAfter": 4842,
+  "artwork": [
+    {
+      "cardId": "P-000",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-000.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-000.png",
+      "selectedArtSource": "visually verified clean OPlay master",
+      "selectedArtUrl": "https://cards.oplaytcg.com/PROMO/en/P-000.webp",
+      "sourceDimensions": [
+        600,
+        838
+      ],
+      "dimensions": [
+        600,
+        838
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-000.jpg",
+      "fullArtSha256": "581426322d06cab4c279d039076cee587205c015781ae0cb3dcdce8ad06fb7f6",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-000.jpg",
+      "thumbnailSha256": "e68e0bc60e90af80ee693034519aa760d78a368ac6f79b9c0644c75ca5859655"
+    },
+    {
+      "cardId": "P-038",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-038.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-038.png",
+      "selectedArtSource": "OPPP clean thumbnail fallback",
+      "selectedArtUrl": "https://oppp.online/static/thumbs/P/P-038.png",
+      "sourceDimensions": [
+        143,
+        200
+      ],
+      "dimensions": [
+        600,
+        839
+      ],
+      "resampled": true,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-038.jpg",
+      "fullArtSha256": "442752fa58ab9838cd1ddf738096198a28433c68d3ef9d1b89ede4de01e7f056",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-038.jpg",
+      "thumbnailSha256": "584b67a3b31c1f17a9ab61906d988bb142d5de5da44e8e840cbc726d97986449"
+    },
+    {
+      "cardId": "P-040",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-040.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-040.png",
+      "selectedArtSource": "visually verified clean TCGplayer scan",
+      "selectedArtUrl": "https://tcgplayer-cdn.tcgplayer.com/product/709539_in_1000x1000.jpg",
+      "sourceDimensions": [
+        716,
+        1000
+      ],
+      "dimensions": [
+        716,
+        1000
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-040.jpg",
+      "fullArtSha256": "3d390be00c344895be170142c6e9ce7ea250c4eaf43c98098eb4a5c3321337a6",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-040.jpg",
+      "thumbnailSha256": "15185c2113219137cebbc5da952862d2468c1e0594d1556fc820a0d38093838f"
+    },
+    {
+      "cardId": "P-064",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-064.jpg",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-064.jpg",
+      "selectedArtSource": "verified clean local OPPP master",
+      "selectedArtUrl": "C:\\Users\\Nperr\\One Piece TCG Simulator\\Assets\\StreamingAssets\\Cards\\OfficialById\\P\\P-064.jpg",
+      "sourceDimensions": [
+        3358,
+        4692
+      ],
+      "dimensions": [
+        3358,
+        4692
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-064.jpg",
+      "fullArtSha256": "8ab1b90f5495cc50ecf60b787a7c1c252308daad06c9ef97c1d038a04c2a6beb",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-064.jpg",
+      "thumbnailSha256": "d8fe844b1710d82bdafb95fba346832134e5c4f9a2aa74ebdb9944a3eca15c74"
+    },
+    {
+      "cardId": "P-066",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-066.jpg",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-066.jpg",
+      "selectedArtSource": "verified clean local OPPP master",
+      "selectedArtUrl": "C:\\Users\\Nperr\\One Piece TCG Simulator\\Assets\\StreamingAssets\\Cards\\OfficialById\\P\\P-066.jpg",
+      "sourceDimensions": [
+        3358,
+        4692
+      ],
+      "dimensions": [
+        3358,
+        4692
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-066.jpg",
+      "fullArtSha256": "f5afe853f84da1bbdd2fd03a2130f44a1ab1deed4c27d58b163076e7a35b11f2",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-066.jpg",
+      "thumbnailSha256": "8656e9145f09c49e6531e4b84b11c617c670bdc8f651f7593e4c58f140a7ffdf"
+    },
+    {
+      "cardId": "P-067",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-067.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-067.png",
+      "selectedArtSource": "OPPP clean thumbnail fallback",
+      "selectedArtUrl": "https://oppp.online/static/thumbs/P/P-067.png",
+      "sourceDimensions": [
+        143,
+        200
+      ],
+      "dimensions": [
+        600,
+        839
+      ],
+      "resampled": true,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-067.jpg",
+      "fullArtSha256": "300b03a8ab789e3a4eef13743f613dd5223abe5f02a103b1588c1f1aebd51bdb",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-067.jpg",
+      "thumbnailSha256": "02eab2229dd0d0ee7f15ba0695639af19c5013e4c67dc6f3c0c6852a915eccf4"
+    },
+    {
+      "cardId": "P-080",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-080.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-080.png",
+      "selectedArtSource": "visually verified clean TCGplayer scan",
+      "selectedArtUrl": "https://tcgplayer-cdn.tcgplayer.com/product/580056_in_1000x1000.jpg",
+      "sourceDimensions": [
+        716,
+        1000
+      ],
+      "dimensions": [
+        716,
+        1000
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-080.jpg",
+      "fullArtSha256": "2f8e60a48cda72f300e6e59efbfda5902e8969affd76599f0496ae979e25eedb",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-080.jpg",
+      "thumbnailSha256": "94528a2e04c011cd0b6a6e855e07c0d2ee64d656c51f73f37792e059af023083"
+    },
+    {
+      "cardId": "P-086",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-086.jpg",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-086.jpg",
+      "selectedArtSource": "OPPP clean thumbnail fallback",
+      "selectedArtUrl": "https://oppp.online/static/thumbs/P/P-086.png",
+      "sourceDimensions": [
+        143,
+        200
+      ],
+      "dimensions": [
+        600,
+        839
+      ],
+      "resampled": true,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-086.jpg",
+      "fullArtSha256": "7f97eaeb2689573fe9a94f565a76e04e2a4b8c156d64b7383c6eaacd29f49054",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-086.jpg",
+      "thumbnailSha256": "5666a76de3fb31a23511aa70f123d99bb71182492986249491ada8c6e56768b2"
+    },
+    {
+      "cardId": "P-087",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-087.jpg",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-087.jpg",
+      "selectedArtSource": "OPPP clean thumbnail fallback",
+      "selectedArtUrl": "https://oppp.online/static/thumbs/P/P-087.png",
+      "sourceDimensions": [
+        143,
+        200
+      ],
+      "dimensions": [
+        600,
+        839
+      ],
+      "resampled": true,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-087.jpg",
+      "fullArtSha256": "f8e1c78a909c5c9b3a5cc15c7d98ab17aa3f7f7a8764bc032fff0e6a816f403a",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-087.jpg",
+      "thumbnailSha256": "b0f2a38bbb567e3de9963c10f59d2a91bd7bfb3fc3d4546e916703724ffcd4f8"
+    },
+    {
+      "cardId": "P-094",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-094.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-094.png",
+      "selectedArtSource": "visually verified clean OPlay master",
+      "selectedArtUrl": "https://cards.oplaytcg.com/PROMO/en/P-094.webp",
+      "sourceDimensions": [
+        486,
+        680
+      ],
+      "dimensions": [
+        486,
+        680
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-094.jpg",
+      "fullArtSha256": "2adbd047afb2cfbf6b0b815f0841c7556485ae79991383874dacdb45c0ca7744",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-094.jpg",
+      "thumbnailSha256": "227d980ec302d928e8b8c4548ece4de28cba48561e89b2fc7c34efb875ace6dc"
+    },
+    {
+      "cardId": "P-095",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-095.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-095.png",
+      "selectedArtSource": "visually verified clean OPlay master",
+      "selectedArtUrl": "https://cards.oplaytcg.com/PROMO/en/P-095.webp",
+      "sourceDimensions": [
+        486,
+        680
+      ],
+      "dimensions": [
+        486,
+        680
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-095.jpg",
+      "fullArtSha256": "c29602e638ac5c19b733572a237f79ae99d6eb35935cefef8de7c056e32bdfb9",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-095.jpg",
+      "thumbnailSha256": "35e4c613fdd60092359f68ef5315b6abbb14b9bcaaea26c867c0461e473cb83d"
+    },
+    {
+      "cardId": "P-108",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-108.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-108.png",
+      "selectedArtSource": "visually verified clean TCGplayer scan",
+      "selectedArtUrl": "https://tcgplayer-cdn.tcgplayer.com/product/709561_in_1000x1000.jpg",
+      "sourceDimensions": [
+        716,
+        1000
+      ],
+      "dimensions": [
+        716,
+        1000
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-108.jpg",
+      "fullArtSha256": "bd7617ef33379751e47deedf01e7452b908aeb34575b0c3baa45485bbd33f1ff",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-108.jpg",
+      "thumbnailSha256": "9eea5b9cd832a533adbeac77b70d3b888f9101377b7392a9c6a2ab7f737472a8"
+    },
+    {
+      "cardId": "P-109",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-109.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-109.png",
+      "selectedArtSource": "visually verified clean OPlay master",
+      "selectedArtUrl": "https://cards.oplaytcg.com/PROMO/en/P-109.webp",
+      "sourceDimensions": [
+        522,
+        729
+      ],
+      "dimensions": [
+        522,
+        729
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-109.jpg",
+      "fullArtSha256": "8fa6798156abd8a8ba76ada5438af8ce6727dff7f21108ea562fc504a7653fa5",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-109.jpg",
+      "thumbnailSha256": "91550015d8207469e123f949f6f833ca6b0e0ff4bdce199be738ae56dc69e37c"
+    },
+    {
+      "cardId": "P-114",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-114.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-114.png",
+      "selectedArtSource": "OPPP clean thumbnail fallback",
+      "selectedArtUrl": "https://oppp.online/static/thumbs/P/P-114.png",
+      "sourceDimensions": [
+        143,
+        200
+      ],
+      "dimensions": [
+        600,
+        839
+      ],
+      "resampled": true,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-114.jpg",
+      "fullArtSha256": "a3f32e8766eb62163d0ebd1b951f8878afe0328c18d46b870af3f0925a3d983b",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-114.jpg",
+      "thumbnailSha256": "1e401aa3c991740bc80d921a316ed4da740fae34c937b3533ac7e20456bfe80a"
+    },
+    {
+      "cardId": "P-116",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-116.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-116.png",
+      "selectedArtSource": "visually verified clean TCGplayer scan",
+      "selectedArtUrl": "https://tcgplayer-cdn.tcgplayer.com/product/709566_in_1000x1000.jpg",
+      "sourceDimensions": [
+        716,
+        1000
+      ],
+      "dimensions": [
+        716,
+        1000
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-116.jpg",
+      "fullArtSha256": "3edbfd03b3f7db78035fbd863b2dd41b457347352f2765c3e8571437b5a24815",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-116.jpg",
+      "thumbnailSha256": "b4f127d63941e538a21be3b79fbc6a4f47961b83c1b0ce83f1396395f2cd3a40"
+    },
+    {
+      "cardId": "P-118",
+      "opppSourcePath": "StreamingAssets/Cards/P/P-118.png",
+      "opppSourceUrl": "https://oppp.online/api/download-fullscale/StreamingAssets/Cards/P/P-118.png",
+      "selectedArtSource": "visually verified clean TCGplayer scan",
+      "selectedArtUrl": "https://tcgplayer-cdn.tcgplayer.com/product/709632_in_1000x1000.jpg",
+      "sourceDimensions": [
+        716,
+        1000
+      ],
+      "dimensions": [
+        716,
+        1000
+      ],
+      "resampled": false,
+      "sampleWatermark": false,
+      "fullArt": "Assets/StreamingAssets/Cards/OfficialById/P/P-118.jpg",
+      "fullArtSha256": "4e8f2d48da64aabaf17eefd3ec75a4d8b6013c6de45c8159aadf9a010b1e98c6",
+      "thumbnail": "Assets/StreamingAssets/Cards/Thumbs/P/P-118.jpg",
+      "thumbnailSha256": "081383c4723e41410031a2620261f3065b819aa4b64ae5801dc1f6612fd3b845"
+    }
+  ]
+}

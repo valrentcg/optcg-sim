@@ -177,7 +177,7 @@ public partial class GameManager
             Stretch(err.rectTransform, new Vector2(0.08f, 0.45f), new Vector2(0.92f, 0.8f), Vector2.zero, Vector2.zero);
             var back = RowObject("Restore Back Row", panel, 8, TextAnchor.MiddleCenter);
             Stretch(back, new Vector2(0.2f, 0.12f), new Vector2(0.8f, 0.3f), Vector2.zero, Vector2.zero);
-            AddButton(back, "Main Menu", ReturnToMenu);
+            AddButton(back, "Main Menu", ReturnToMenu, true, true, true);
             return;
         }
 
@@ -195,7 +195,7 @@ public partial class GameManager
         var row2 = RowObject("Restore Row2", panel, 10, TextAnchor.MiddleCenter);
         Stretch(row2, new Vector2(0.06f, 0.18f), new Vector2(0.94f, 0.36f), Vector2.zero, Vector2.zero);
         AddButton(row2, "Hotseat (both seats)", () => StartRestoredPlay("south", false));
-        AddButton(row2, "Main Menu", ReturnToMenu);
+        AddButton(row2, "Main Menu", ReturnToMenu, true, true, true);
     }
 
     private string southNameOrDefault() => string.IsNullOrEmpty(southDisplayName) ? "South" : southDisplayName;

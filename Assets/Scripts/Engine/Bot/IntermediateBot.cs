@@ -252,7 +252,7 @@ namespace OnePieceTcg.Engine.Bot
                     || kind == OnePieceTcg.Engine.Bot.Search.RemovalKind.Freeze;
                 string e = (def.Effect ?? "").ToLowerInvariant();
                 bool lifeGain = e.Contains("to the top of your life") || (e.Contains("add") && e.Contains("life card"));
-                bool blocker = def.Type == "character" && (def.Keywords?.Contains("Blocker") ?? false);
+                bool blocker = def.Type == "character" && GameEngine.HasBlocker(state, card);
                 if ((disable || lifeGain || blocker) && def.Cost <= budget) proactive++;
             }
             return blockers + counters + Math.Min(proactive, budget);   // proactive plays are bounded by my DON!!
@@ -403,6 +403,12 @@ namespace OnePieceTcg.Engine.Bot
         private static GameCommand DecideNextCommand(GameState state, string seat, HashSet<string> blacklist)
         {
             if (state == null || !state.Players.ContainsKey(seat)) return null;
+
+            if (state.ActiveReveal != null && state.ActiveReveal.RequiresConfirmation
+                && state.ActiveReveal.AwaitingConfirmation)
+                return state.ActiveReveal.ConfirmSeat == seat
+                    ? Try(blacklist, new GameCommand { Type = "confirmReveal", Seat = seat })
+                    : null;
 
             if (state.Status == "coinflip")
             {
@@ -879,7 +885,7 @@ namespace OnePieceTcg.Engine.Bot
                     int attackPower = attacker != null ? GameEngine.GetPower(state, attacker) : 0;
                     var blockers = me.CharacterArea
                         .Where(c => c != null && !c.Rested
-                            && (GameEngine.GetCard(c)?.Keywords?.Contains("Blocker") ?? false))
+                            && GameEngine.HasBlocker(state, c))
                         .ToList();
                     if (blockers.Count == 0)
                         return new GameCommand { Type = "passBlock", Seat = seat };

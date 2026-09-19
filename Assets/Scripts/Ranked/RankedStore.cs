@@ -209,6 +209,33 @@ public static class RankedStore
     /// <summary>Cached profile if one is already loaded, else null.</summary>
     public static RankedProfile Cached => _cache;
 
+    /// <summary>Loads another player's public ranked profile for the social profile card.
+    /// Unlike LoadAsync this never touches the signed-in player's cache.</summary>
+    public static async Task<RankedProfile> LoadPlayerAsync(string playerId)
+    {
+        if (!Configured || string.IsNullOrWhiteSpace(playerId)) return null;
+        try
+        {
+            string url = $"{WorkerBase}/profile?playerId={UnityWebRequest.EscapeURL(playerId.Trim())}";
+            using var req = UnityWebRequest.Get(url);
+            req.SetRequestHeader("X-App-Secret", AppSecret);
+            req.timeout = 15;
+            await SendAsync(req);
+            if (req.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning($"Public profile load failed: {req.error}");
+                return null;
+            }
+            var wrap = JsonUtility.FromJson<ProfileResponse>(req.downloadHandler.text);
+            return wrap?.profile;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"Public profile load exception: {ex.Message}");
+            return null;
+        }
+    }
+
     // ── Write API: report a finished PvP match (authenticated dual-report) ──────
 
     /// <summary>Reports the local player's half of a finished networked match to the

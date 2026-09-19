@@ -42,8 +42,8 @@ namespace OnePieceTcg.Engine.Bot.Search
             int myPow = me.CharacterArea.Where(c => c != null).Sum(c => GameEngine.GetPower(s, c));
             int opPow = op.CharacterArea.Where(c => c != null).Sum(c => GameEngine.GetPower(s, c));
             int myChars = me.CharacterArea.Count(c => c != null), opChars = op.CharacterArea.Count(c => c != null);
-            int myBlock = me.CharacterArea.Count(c => c != null && (GameEngine.GetCard(c)?.Keywords?.Contains("Blocker") ?? false));
-            int opBlock = op.CharacterArea.Count(c => c != null && (GameEngine.GetCard(c)?.Keywords?.Contains("Blocker") ?? false));
+            int myBlock = me.CharacterArea.Count(c => c != null && GameEngine.HasBlocker(s, c));
+            int opBlock = op.CharacterArea.Count(c => c != null && GameEngine.HasBlocker(s, c));
             int restedOpp = op.CharacterArea.Count(c => c != null && c.Rested);
             int counterReserve = me.Hand.Sum(c => GameEngine.GetCounterPower(c));
             double aggro = System.Math.Max(0, 5 - op.Life.Count);
@@ -58,7 +58,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             int myLeaderReach = me.CharacterArea.Count(c => c != null && !c.Rested && GameEngine.GetPower(s, c) >= opLeadPow); // my attackers that connect to opp leader
             int oppLeaderThreat = op.CharacterArea.Count(c => c != null && GameEngine.GetPower(s, c) >= myLeadPow);           // opp bodies that threaten my leader
             int myUnrested = me.CharacterArea.Count(c => c != null && !c.Rested);
-            double iHaveBlockerUp = me.CharacterArea.Any(c => c != null && !c.Rested && (GameEngine.GetCard(c)?.Keywords?.Contains("Blocker") ?? false)) ? 1 : 0;
+            double iHaveBlockerUp = me.CharacterArea.Any(c => c != null && !c.Rested && GameEngine.HasBlocker(s, c)) ? 1 : 0;
             return new double[]
             {
                 (myPow - opPow) / 1000.0,
