@@ -661,7 +661,10 @@ public partial class MainMenuManager : MonoBehaviour
     // _updateProgress; Update() applies it on the main thread via ApplyUpdateSplashProgress().
     private static GameObject _updateSplash;
     private static Text _updateSplashTitle, _updateSplashVersion, _updateSplashPercent, _updateSplashNotes;
+    private static Text _updateSplashScrollHint;
     private static ScrollRect _updateSplashNotesScroll;
+    private static RectTransform _updateSplashNotesContent;
+    private static GameObject _updateSplashScrollbarObject;
     private static string _updateSplashLastNotes;
     private static RectTransform _updateSplashBarFill;
     private static float _updateBarShown;                          // smoothed 0..1 bar fill
@@ -709,7 +712,7 @@ public partial class MainMenuManager : MonoBehaviour
     private static void BuildUpdateNotesScroller(Transform panel)
     {
         var viewport = SplashImage(panel, new Color32(8, 18, 31, 210), Vector2.zero, Vector2.one,
-            new Vector2(UpdateBarInset, 28f), new Vector2(-UpdateBarInset - 18f, -218f));
+            new Vector2(UpdateBarInset, 48f), new Vector2(-UpdateBarInset - 22f, -220f));
         viewport.gameObject.name = "Patch Notes Viewport";
         viewport.raycastTarget = true;
         viewport.gameObject.AddComponent<RectMask2D>();
@@ -722,6 +725,7 @@ public partial class MainMenuManager : MonoBehaviour
         content.pivot = new Vector2(0.5f, 1f);
         content.anchoredPosition = Vector2.zero;
         content.sizeDelta = Vector2.zero;
+        _updateSplashNotesContent = content;
 
         var layout = contentGo.AddComponent<VerticalLayoutGroup>();
         layout.padding = new RectOffset(12, 12, 10, 10);
@@ -734,15 +738,17 @@ public partial class MainMenuManager : MonoBehaviour
         contentFitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
         contentFitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
-        _updateSplashNotes = SplashText(content, 13, new Color32(206, 218, 230, 255), TextAnchor.UpperLeft,
+        _updateSplashNotes = SplashText(content, 14, new Color32(206, 218, 230, 255), TextAnchor.UpperLeft,
             new Vector2(0f, 1f), new Vector2(1f, 1f), Vector2.zero, Vector2.zero, wrap: true);
+        _updateSplashNotes.lineSpacing = 1.15f;
         _updateSplashNotes.verticalOverflow = VerticalWrapMode.Overflow;
         _updateSplashNotes.raycastTarget = false;
 
         var track = SplashImage(panel, new Color32(24, 42, 60, 255), new Vector2(1f, 0f), new Vector2(1f, 1f),
-            new Vector2(-UpdateBarInset - 10f, 28f), new Vector2(-UpdateBarInset, -218f));
+            new Vector2(-UpdateBarInset - 14f, 48f), new Vector2(-UpdateBarInset, -220f));
         track.gameObject.name = "Patch Notes Scrollbar";
         track.raycastTarget = true;
+        _updateSplashScrollbarObject = track.gameObject;
         var handle = SplashImage(track.transform, new Color32(79, 195, 224, 230), Vector2.zero, Vector2.one,
             new Vector2(2f, 2f), new Vector2(-2f, -2f));
         handle.gameObject.name = "Handle";
@@ -760,7 +766,13 @@ public partial class MainMenuManager : MonoBehaviour
         _updateSplashNotesScroll.movementType = ScrollRect.MovementType.Clamped;
         _updateSplashNotesScroll.scrollSensitivity = 30f;
         _updateSplashNotesScroll.verticalScrollbar = scrollbar;
-        _updateSplashNotesScroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
+        _updateSplashNotesScroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+        _updateSplashScrollbarObject.SetActive(false);
+
+        _updateSplashScrollHint = SplashText(panel, 10, new Color32(120, 150, 175, 255), TextAnchor.MiddleCenter,
+            Vector2.zero, new Vector2(1f, 0f), new Vector2(UpdateBarInset, 16f), new Vector2(-UpdateBarInset, 40f));
+        _updateSplashScrollHint.text = "SCROLL TO READ ALL  •  MOUSE WHEEL OR DRAG THE BAR";
+        _updateSplashScrollHint.gameObject.SetActive(false);
     }
 
     private static void ShowUpdateSplash()
@@ -772,6 +784,11 @@ public partial class MainMenuManager : MonoBehaviour
         var canvas = _updateSplash.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
         canvas.sortingOrder = 32000;   // above every menu canvas
+        var scaler = _updateSplash.AddComponent<CanvasScaler>();
+        scaler.uiScaleMode = CanvasScaler.ScaleMode.ScaleWithScreenSize;
+        scaler.referenceResolution = new Vector2(1600f, 900f);
+        scaler.screenMatchMode = CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
+        scaler.matchWidthOrHeight = 0.5f;
         _updateSplash.AddComponent<GraphicRaycaster>();
 
         // Deep-navy ground matching the menu.
@@ -780,7 +797,7 @@ public partial class MainMenuManager : MonoBehaviour
         // Centered card panel with an accent top rule.
         var panel = SplashImage(_updateSplash.transform, new Color32(14, 28, 46, 255),
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
-        panel.rectTransform.sizeDelta = new Vector2(720f, 520f);
+        panel.rectTransform.sizeDelta = new Vector2(820f, 650f);
         SplashImage(panel.transform, new Color32(79, 195, 224, 255), new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -4), Vector2.zero);
 
         SplashText(panel.transform, 13, new Color32(120, 150, 175, 255), TextAnchor.UpperCenter,
@@ -814,7 +831,10 @@ public partial class MainMenuManager : MonoBehaviour
         if (_updateSplash != null) UnityEngine.Object.Destroy(_updateSplash);
         _updateSplash = null;
         _updateSplashTitle = _updateSplashVersion = _updateSplashPercent = _updateSplashNotes = null;
+        _updateSplashScrollHint = null;
         _updateSplashNotesScroll = null;
+        _updateSplashNotesContent = null;
+        _updateSplashScrollbarObject = null;
         _updateSplashLastNotes = null;
         _updateSplashBarFill = null;
         _updateProgress = null;
@@ -843,7 +863,18 @@ public partial class MainMenuManager : MonoBehaviour
             _updateSplashLastNotes = pr.notes;
             _updateSplashNotes.text = FormatUpdateNotes(pr.notes);
             Canvas.ForceUpdateCanvases();
-            if (_updateSplashNotesScroll != null) _updateSplashNotesScroll.verticalNormalizedPosition = 1f;
+            if (_updateSplashNotesContent != null)
+                LayoutRebuilder.ForceRebuildLayoutImmediate(_updateSplashNotesContent);
+            Canvas.ForceUpdateCanvases();
+            if (_updateSplashNotesScroll != null)
+            {
+                bool overflow = _updateSplashNotesContent != null &&
+                    _updateSplashNotesContent.rect.height > _updateSplashNotesScroll.viewport.rect.height + 1f;
+                _updateSplashNotesScroll.vertical = overflow;
+                if (_updateSplashScrollbarObject != null) _updateSplashScrollbarObject.SetActive(overflow);
+                if (_updateSplashScrollHint != null) _updateSplashScrollHint.gameObject.SetActive(overflow);
+                _updateSplashNotesScroll.verticalNormalizedPosition = 1f;
+            }
         }
     }
 
