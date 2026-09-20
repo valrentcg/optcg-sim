@@ -202,23 +202,6 @@ public partial class GameManager
         Clear(rewindRoot);
         rewindRoot.SetAsLastSibling();
 
-        // The rewind control bar (top-left of the board). Hidden while the result screen is up.
-        if (RewindAvailable && !ResultScreenActive())
-        {
-            var bar = PanelObject("Rewind Bar", rewindRoot, (Color)new Color32(14, 26, 40, 235));
-            bar.anchorMin = bar.anchorMax = new Vector2(0f, 1f);
-            bar.pivot = new Vector2(0f, 1f);
-            bar.sizeDelta = new Vector2(268f, 40f);
-            bar.anchoredPosition = new Vector2(12f, -12f);
-            Round(bar);
-            AddRoundedCardBorder(bar, Accent, 1.2f);
-            var row = RowObject("Rewind Row", bar, 6, TextAnchor.MiddleCenter);
-            Stretch(row, Vector2.zero, Vector2.one, new Vector2(6, 4), new Vector2(-6, -4));
-            bool idle = !rewindWaiting && !rewindPromptOpen;
-            AddButton(row, "↶ Action", () => RequestRewind("action"), idle, false);
-            AddButton(row, "↶ Turn", () => RequestRewind("turn"), idle, false);
-        }
-
         // Waiting-for-approval overlay (we asked).
         if (rewindWaiting)
         {
@@ -276,5 +259,25 @@ public partial class GameManager
             var tt = TextObject("t", toast, rewindNote, 11, Accent2, TextAnchor.MiddleCenter, monoFont);
             Stretch(tt.rectTransform, Vector2.zero, Vector2.one, new Vector2(10, 0), new Vector2(-10, 0));
         }
+    }
+
+    // Compact rewind transport belongs beside the combat log, where it cannot cover either
+    // player's identity card. The distinct symbols keep the controls readable at HUD scale:
+    // a single back-step rewinds the latest action; the circular arrow rewinds the turn.
+    private void DrawRewindLogControls(RectTransform parent)
+    {
+        if (!RewindAvailable || ResultScreenActive()) return;
+
+        var row = RowObject("Rewind Log Controls", parent, 4f, TextAnchor.MiddleCenter);
+        Stretch(row, new Vector2(0.55f, 0.421f), new Vector2(0.78f, 0.449f), Vector2.zero, Vector2.zero);
+        var layout = row.GetComponent<HorizontalLayoutGroup>();
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = false;
+        layout.childForceExpandHeight = true;
+
+        bool idle = !rewindWaiting && !rewindPromptOpen;
+        AddIconButton(row, "↶", () => RequestRewind("action"), idle, 27f);
+        AddIconButton(row, "⟲", () => RequestRewind("turn"), idle, 27f);
     }
 }

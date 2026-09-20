@@ -601,8 +601,8 @@ public sealed class SocialOverlayController : MonoBehaviour
         if (AccountManager.HasClaimedIdentity)
         {
             if (_drawerOpen) BuildDrawer();
-            else if (_context != SocialSurfaceContext.MainMenu &&
-                !(_context == SocialSurfaceContext.Match && GameManager.MatchChatOpen)) BuildDockButton();
+            else if (_context != SocialSurfaceContext.MainMenu && _context != SocialSurfaceContext.Match)
+                BuildDockButton();
             BuildNotifications();
         }
         if (!string.IsNullOrEmpty(focusName)) StartCoroutine(RestoreFocus(focusName, caret));
@@ -690,8 +690,9 @@ public sealed class SocialOverlayController : MonoBehaviour
 
     private void BuildDrawer()
     {
+        bool match = _context == SocialSurfaceContext.Match;
         bool fixedToUpperRight = _context == SocialSurfaceContext.MainMenu ||
-            _context == SocialSurfaceContext.Match || _context == SocialSurfaceContext.Replay;
+            _context == SocialSurfaceContext.Replay;
         float availableH = _root.rect.height > 1f ? _root.rect.height : 1080f;
         float availableW = _root.rect.width > 1f ? _root.rect.width : 1920f;
         float h = Mathf.Max(340f, Mathf.Min(820f, availableH - 112f));
@@ -699,7 +700,15 @@ public sealed class SocialOverlayController : MonoBehaviour
         w = Mathf.Min(w, availableW - 36f);
         var drawer = Panel("Social Drawer", _root, PanelBg, true);
         drawer.sizeDelta = new Vector2(w, h);
-        if (fixedToUpperRight)
+        if (match)
+        {
+            // Match Social expands upward from the communications bay. The persistent entry point
+            // stays in the lower HUD tabs, so nothing sits over the opponent player card.
+            drawer.anchorMin = drawer.anchorMax = Vector2.one;
+            drawer.pivot = Vector2.one;
+            drawer.anchoredPosition = new Vector2(-18f, -(availableH - h - 92f));
+        }
+        else if (fixedToUpperRight)
         {
             drawer.anchorMin = drawer.anchorMax = Vector2.one;
             drawer.pivot = Vector2.one;

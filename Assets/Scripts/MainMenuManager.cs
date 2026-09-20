@@ -1422,6 +1422,15 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.44", "In-match HUD and communications polish", "Sep 20, 2026", new (string, string[])[]
+        {
+            ("Match HUD", new[]
+            {
+                "Rewind Action and Rewind Turn are now compact icon controls beside the combat log, keeping them clear of the opponent player card.",
+                "Match Chat, Messages, Friends, and Requests now share the lower communications bay. The separate upper-right Chat & Social launcher has been removed during matches.",
+                "Social views expand from the communications area, and typed match-chat drafts remain intact while game state updates.",
+            }),
+        }),
         ("v1.0.43", "State integrity and reveal flow fixes", "Sep 20, 2026", new (string, string[])[]
         {
             ("Gameplay fixes", new[]

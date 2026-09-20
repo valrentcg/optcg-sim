@@ -2516,7 +2516,6 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         }
         leftRoot.gameObject.SetActive(!isReplayMode);
         sideRoot.gameObject.SetActive(!isReplayMode);
-        if (isNetworked && !isReplayMode) DrawMatchChatPanel();
         // In every live match, not just networked ones: auto-draw and confirm-end-turn matter in solo
         // too. Hidden in replay, where none of it applies (playback dispatches nothing).
         if (!isReplayMode) DrawMatchSettingsPanel();
@@ -7956,7 +7955,8 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void DrawCombatLogPanel()
     {
         var logLabel = TextObject("Combat Log Label", leftRoot, "COMBAT LOG", 9, Muted, TextAnchor.LowerLeft, monoFont);
-        Stretch(logLabel.rectTransform, new Vector2(0.06f, 0.425f), new Vector2(0.94f, 0.443f), Vector2.zero, Vector2.zero);
+        Stretch(logLabel.rectTransform, new Vector2(0.06f, 0.425f), new Vector2(0.52f, 0.443f), Vector2.zero, Vector2.zero);
+        DrawRewindLogControls(leftRoot);
         // Copy the full combat history to the clipboard (right end of the label band).
         AddCopyChip(leftRoot, "Copy", BuildCombatLogText, new Vector2(0.80f, 0.421f), new Vector2(0.94f, 0.447f));
 
@@ -8895,8 +8895,9 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         Stretch(actionPanel, new Vector2(0.085f, 0.35f), new Vector2(0.915f, 0.852f), Vector2.zero, Vector2.zero);
         DrawContextActions(actionPanel);
 
-        // Networked matches use the unified fixed communications drawer (DrawMatchChatPanel) instead.
-        if (!isNetworked) DrawChatPanel();
+        // Match chat and Social share this fixed HUD bay. Social tabs may expand a drawer from the
+        // same lower-right origin, but the old upper-right launcher no longer covers the player card.
+        DrawChatPanel();
         DrawPlayerPlate(sideRoot, state.Players.ContainsKey(BottomSeat) ? state.Players[BottomSeat] : null, BottomSeat, state.ActiveSeat == BottomSeat, new Vector2(0.06f, 0.094f), new Vector2(0.94f, 0.138f));
         AddEndTurnPanel();
 
@@ -9981,19 +9982,37 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         var panel = PanelObject("Chat Panel", sideRoot, new Color(0, 0, 0, 0));
         Stretch(panel, new Vector2(0.06f, 0.15f), new Vector2(0.94f, 0.325f), Vector2.zero, Vector2.zero);
 
-        var title = TextObject("Chat Title", panel, "CHAT", 9, Muted, TextAnchor.LowerLeft, monoFont);
+        var title = TextObject("Chat Title", panel, isNetworked ? "COMMUNICATIONS" : "CHAT", 9, Muted, TextAnchor.LowerLeft, monoFont);
         Stretch(title.rectTransform, new Vector2(0.0f, 0.94f), new Vector2(0.95f, 1.0f), Vector2.zero, Vector2.zero);
+
+        float bubbleTop = 0.90f;
+        float viewportTop = 0.87f;
+        if (isNetworked)
+        {
+            var tabs = PanelObject("Embedded Communications Tabs", panel, Color.clear);
+            Stretch(tabs, new Vector2(0f, 0.74f), new Vector2(1f, 0.92f), Vector2.zero, Vector2.zero);
+            AddMatchCommsTab(tabs, "CHAT", 0f, 0.24f, true, null, chatUnread ? 1 : 0);
+            AddMatchCommsTab(tabs, "MESSAGES", 0.245f, 0.50f, false,
+                () => SocialOverlayController.OpenDrawer("messages"));
+            AddMatchCommsTab(tabs, "FRIENDS", 0.505f, 0.75f, false,
+                () => SocialOverlayController.OpenDrawer("friends"));
+            AddMatchCommsTab(tabs, "REQUESTS", 0.755f, 1f, false,
+                () => SocialOverlayController.OpenDrawer("requests"));
+            bubbleTop = 0.70f;
+            viewportTop = 0.67f;
+            chatUnread = false;
+        }
 
         // Bubble behind the message list - a small gap under the CHAT label (matching the combat-log
         // label spacing), filling down to the input.
         var chatBubble = PanelObject("Chat Bubble", panel, LogBgDark);
-        Stretch(chatBubble, new Vector2(0.0f, 0.22f), new Vector2(1.0f, 0.90f), Vector2.zero, Vector2.zero);
+        Stretch(chatBubble, new Vector2(0.0f, 0.22f), new Vector2(1.0f, bubbleTop), Vector2.zero, Vector2.zero);
         RoundBig(chatBubble);
         AddRoundedCardBorder(chatBubble, MenuB, 1f);
 
         // Scrollable message list (same viewport/ScrollRect pattern as the combat log).
         var viewport = PanelObject("Chat Viewport", panel, new Color(0, 0, 0, 0));
-        Stretch(viewport, new Vector2(0.05f, 0.25f), new Vector2(0.95f, 0.87f), Vector2.zero, Vector2.zero);
+        Stretch(viewport, new Vector2(0.05f, 0.25f), new Vector2(0.95f, viewportTop), Vector2.zero, Vector2.zero);
         viewport.gameObject.AddComponent<RectMask2D>();
 
         var content = new GameObject("Chat Content").AddComponent<RectTransform>();
@@ -10053,7 +10072,11 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         field.textComponent = txt;
         field.placeholder = ph;
         field.lineType = InputField.LineType.SingleLine;
+        field.characterLimit = MatchNetworkSync.MaxChatLength;
+        field.text = chatDraft ?? "";
+        field.onValueChanged.AddListener(v => chatDraft = v);
         field.onEndEdit.AddListener(v => { if (Input.GetKeyDown(KeyCode.Return) || Input.GetKeyDown(KeyCode.KeypadEnter)) SendChat(v); });
+        chatInputField = field;
 
         var sendGo = PanelObject("Send Button", panel, Accent);
         Stretch(sendGo, new Vector2(0.72f, 0.02f), new Vector2(1.0f, 0.17f), Vector2.zero, Vector2.zero);

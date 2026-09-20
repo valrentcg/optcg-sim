@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.43",
-  "buildNumber": 40,
+  "buildVersion": "1.0.44",
+  "buildNumber": 41,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "STATE INTEGRITY AND REVEAL FLOW FIXES\n\nReveal-from-hand costs now remain synchronized until the opposing player confirms the shown card, then continue the paid effect correctly.\n\nAdvanced AI planning, Sandbox undo and redo, and puzzle simulations now preserve deferred replacements, winner and outcome data, reveal progress, modal selection progress, and turn-level match facts when cloning a position.\n\nExpanded regression coverage verifies reveal costs, Life-damage privacy, optional once-per-turn effects, full-board replacement choices, and recorded playtest cases.",
+  "notes": "IN-MATCH HUD AND COMMUNICATIONS POLISH\n\nRewind Action and Rewind Turn are now compact icon controls beside the combat log, keeping them clear of the opponent player card.\n\nMatch Chat, Messages, Friends, and Requests now share the lower communications bay. The separate upper-right Chat & Social launcher has been removed during matches.\n\nSocial views expand from the communications area, and typed match-chat drafts remain intact while game state updates.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"
