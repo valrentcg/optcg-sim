@@ -1422,6 +1422,15 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.41", "Social moves into the main navigation", "Sep 19, 2026", new (string, string[])[]
+        {
+            ("Social navigation", new[]
+            {
+                "Social now appears as a standard left-menu destination directly beneath Friends on every main-menu page. The separate upper-right main-menu launcher has been removed.",
+                "The Social row uses the same selected treatment as other destinations and shows pending lobby invitations, friend requests, or unread-message counts while collapsed.",
+                "Selecting another menu page closes the Social drawer and highlights the chosen destination normally. The fixed Chat & Social control used during matches is unchanged.",
+            }),
+        }),
         ("v1.0.40", "Unified match chat and social navigation", "Sep 19, 2026", new (string, string[])[]
         {
             ("In-game communications", new[]
@@ -4829,9 +4838,19 @@ public partial class MainMenuManager : MonoBehaviour
     private string FriendsOnlineSubtitle()
     {
         int online = friendsList.Count(f => f.Online);
+        return online == 1 ? "1 online" : $"{online} online";
+    }
+
+    private string SocialActivityTag()
+    {
+        int invites = SocialOverlayController.PendingInviteCount;
+        if (invites > 0) return invites == 1 ? "1 invite" : $"{invites} invites";
+
+        int requests = SocialOverlayController.IncomingRequestCount;
+        if (requests > 0) return requests == 1 ? "1 request" : $"{requests} requests";
+
         int unread = SocialOverlayController.UnreadTotal;
-        string text = online == 1 ? "1 online" : $"{online} online";
-        return unread > 0 ? $"{text}  ·  {unread} unread" : text;
+        return unread > 0 ? $"{unread} unread" : null;
     }
 
     private void OpenFriends()
@@ -9045,31 +9064,36 @@ public partial class MainMenuManager : MonoBehaviour
         hLE.preferredHeight = 22f;
         hLE.minHeight = 22f;
 
-        // Nav rows
+        // Nav rows. Social is a first-class destination in this persistent rail;
+        // its drawer can still be opened from every main-menu page without a
+        // separate launcher occupying the stage header.
+        bool socialActive = SocialOverlayController.DrawerOpen;
         var rows = new (string title, string subtitle, string tag, bool active)[]
         {
-            ("Play",     "Game modes",          null,       !showingAccountSettings && !showingReplays && !showingLocalReplays && !showingFriends && !showingProfile && !showingProfileIcon && !showingLeaderboard && !showingPatchNotes),
+            ("Play",     "Game modes",          null,       !socialActive && !showingAccountSettings && !showingReplays && !showingLocalReplays && !showingFriends && !showingProfile && !showingProfileIcon && !showingLeaderboard && !showingPatchNotes),
             ("Decks",    "Build & edit",        null,       false),
-            ("Match History", "Watch past matches", null,   showingReplays),
-            ("Replays",  "Local files & import", null,      showingLocalReplays),
-            ("Friends",  "Crew & invites",      FriendsOnlineSubtitle(), showingFriends),
-            ("Most Wanted", "Bounty leaderboard", null,     showingLeaderboard),
-            ("Patch Notes", "What's new",       null,       showingPatchNotes),
-            ("Settings", "Preferences & audio", null,       showingAccountSettings),
+            ("Match History", "Watch past matches", null,   !socialActive && showingReplays),
+            ("Replays",  "Local files & import", null,      !socialActive && showingLocalReplays),
+            ("Friends",  "Crew & invites",      FriendsOnlineSubtitle(), !socialActive && showingFriends),
+            ("Social",   "Chat & notifications", SocialActivityTag(), socialActive),
+            ("Most Wanted", "Bounty leaderboard", null,     !socialActive && showingLeaderboard),
+            ("Patch Notes", "What's new",       null,       !socialActive && showingPatchNotes),
+            ("Settings", "Preferences & audio", null,       !socialActive && showingAccountSettings),
         };
 
         UnityEngine.Events.UnityAction[] actions =
         {
-            () => { ClearPrimaryMenuStage(); RenderMenu(); },
-            () => OpenDeckBuilder(),
-            () => { ClearPrimaryMenuStage();
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); ClearPrimaryMenuStage(); RenderMenu(); },
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); OpenDeckBuilder(); },
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); ClearPrimaryMenuStage();
                     showingReplays = true; selectedMatchId = null; matchHistory = null; RenderMenu(); },
-            () => { ClearPrimaryMenuStage(); importReplayError = null; cloudSearchActiveUsername = null;
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); ClearPrimaryMenuStage(); importReplayError = null; cloudSearchActiveUsername = null;
                     showingLocalReplays = true; RenderMenu(); },
-            OpenFriends,
-            OpenLeaderboard,
-            () => { ClearPrimaryMenuStage(); showingPatchNotes = true; RenderMenu(); },
-            OpenAccountSettings,
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); OpenFriends(); },
+            () => { if (AccountManager.HasClaimedIdentity) SocialOverlayController.OpenDrawer("messages"); else OpenFriends(); },
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); OpenLeaderboard(); },
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); ClearPrimaryMenuStage(); showingPatchNotes = true; RenderMenu(); },
+            () => { SocialOverlayController.CloseDrawerForMenuNavigation(); OpenAccountSettings(); },
         };
 
         for (int i = 0; i < rows.Length; i++)

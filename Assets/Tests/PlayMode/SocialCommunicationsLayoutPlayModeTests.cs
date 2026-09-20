@@ -10,7 +10,7 @@ using UnityEngine.UI;
 public sealed class SocialCommunicationsLayoutPlayModeTests
 {
     [UnityTest]
-    public IEnumerator LauncherDrawerAndProfileHeaderStayInsideTheirFixedLayout()
+    public IEnumerator MainMenuUsesLeftRailSocialNavigationAndProfileHeaderStaysInsideDrawer()
     {
         var socialType = Type.GetType("SocialOverlayController, Assembly-CSharp");
         Assert.That(socialType, Is.Not.Null, "The production Social overlay was not compiled.");
@@ -21,34 +21,59 @@ public sealed class SocialCommunicationsLayoutPlayModeTests
         Assert.That(instance, Is.Not.Null);
         var root = (RectTransform)socialType.GetField("_root", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(instance);
         var contextField = socialType.GetField("_context", BindingFlags.Instance | BindingFlags.NonPublic);
+        var drawerOpenField = socialType.GetField("_drawerOpen", BindingFlags.Instance | BindingFlags.NonPublic);
         var tabField = socialType.GetField("_tab", BindingFlags.Instance | BindingFlags.NonPublic);
         var buildDock = socialType.GetMethod("BuildDockButton", BindingFlags.Instance | BindingFlags.NonPublic);
         var buildDrawer = socialType.GetMethod("BuildDrawer", BindingFlags.Instance | BindingFlags.NonPublic);
+        var render = socialType.GetMethod("Render", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.That(root, Is.Not.Null);
         Assert.That(buildDock, Is.Not.Null);
         Assert.That(buildDrawer, Is.Not.Null);
+        Assert.That(render, Is.Not.Null);
 
         object mainContext = Enum.Parse(contextField.FieldType, "MainMenu");
         object matchContext = Enum.Parse(contextField.FieldType, "Match");
 
         Clear(root);
         contextField.SetValue(instance, mainContext);
-        buildDock.Invoke(instance, null);
-        var dock = root.Find("Social Dock") as RectTransform;
-        Assert.That(dock, Is.Not.Null);
-        Assert.That(dock.anchorMin, Is.EqualTo(Vector2.one));
-        Assert.That(dock.anchorMax, Is.EqualTo(Vector2.one));
-        Assert.That(dock.pivot, Is.EqualTo(Vector2.one));
-        Assert.That(dock.anchoredPosition.x, Is.LessThan(0f));
-        Assert.That(dock.anchoredPosition.y, Is.LessThan(-70f));
-        Assert.That(dock.GetComponents<Component>().Any(c => c.GetType().Name == "SocialOverlayDrag"), Is.False,
-            "The main-menu Social launcher must remain locked in the upper-right.");
-        Assert.That(dock.Find("Title").GetComponent<Text>().text, Is.EqualTo("SOCIAL"));
+        drawerOpenField.SetValue(instance, false);
+        render.Invoke(instance, null);
+        yield return null;
+        Assert.That(root.Find("Social Dock"), Is.Null,
+            "Main-menu Social must launch from the left navigation, not a floating upper-right button.");
+
+        var menuType = Type.GetType("MainMenuManager, Assembly-CSharp");
+        Assert.That(menuType, Is.Not.Null);
+        menuType.GetMethod("EnsureMenu", BindingFlags.Static | BindingFlags.Public).Invoke(null, null);
+        yield return null;
+        var menu = UnityEngine.Object.FindObjectsByType<MonoBehaviour>()
+            .FirstOrDefault(candidate => candidate.GetType() == menuType);
+        Assert.That(menu, Is.Not.Null);
+        var menuRoot = (RectTransform)menuType.GetField("menuRoot", BindingFlags.Instance | BindingFlags.NonPublic)
+            .GetValue(menu);
+        var friendsRow = menuRoot.GetComponentsInChildren<RectTransform>(true)
+            .FirstOrDefault(rect => rect.name == "Friends Row");
+        var socialRow = menuRoot.GetComponentsInChildren<RectTransform>(true)
+            .FirstOrDefault(rect => rect.name == "Social Row");
+        Assert.That(friendsRow, Is.Not.Null);
+        Assert.That(socialRow, Is.Not.Null);
+        Assert.That(socialRow.GetSiblingIndex(), Is.EqualTo(friendsRow.GetSiblingIndex() + 1),
+            "Social should sit directly beneath Friends in the left rail.");
+        socialRow.GetComponent<Button>().onClick.Invoke();
+        yield return null;
+        Assert.That((bool)socialType.GetProperty("DrawerOpen", BindingFlags.Static | BindingFlags.Public).GetValue(null), Is.True);
+        Assert.That(root.Find("Social Drawer"), Is.Not.Null);
+        Assert.That(root.Find("Social Dock"), Is.Null);
+        socialRow = menuRoot.GetComponentsInChildren<RectTransform>(true)
+            .FirstOrDefault(rect => rect.name == "Social Row");
+        Assert.That(socialRow.Find("Active Bar"), Is.Not.Null,
+            "The left-rail Social destination should show the same active treatment as other pages.");
 
         Clear(root);
         contextField.SetValue(instance, matchContext);
+        drawerOpenField.SetValue(instance, false);
         buildDock.Invoke(instance, null);
-        dock = root.Find("Social Dock") as RectTransform;
+        var dock = root.Find("Social Dock") as RectTransform;
         Assert.That(dock, Is.Not.Null);
         Assert.That(dock.sizeDelta.x, Is.GreaterThan(150f), "In-game communications regressed to a bubble.");
         Assert.That(dock.Find("Title").GetComponent<Text>().text, Is.EqualTo("CHAT & SOCIAL"));

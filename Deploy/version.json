@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.40",
+  "buildVersion": "1.0.41",
   "buildNumber": 38,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "CHAT AND SOCIAL\n\nIn-game chat now opens as a fixed communications drawer instead of a floating bubble. Switch between Match Chat, Messages, Friends, and Requests without leaving the match, while only one communications surface is open at a time.\n\nLAYOUT POLISH\n\nThe main-menu Social launcher is locked in the upper-right. Profile images, player names, status text, tabs, borders, and scroll rows now use consistent spacing and remain inside their panels at supported window sizes.\n\nNOTIFICATIONS\n\nCollapsed Social continues to show unread messages, friend requests, and pending lobby invitations. Invitations remain queued and unavailable for acceptance until the active match ends.",
+  "notes": "SOCIAL NAVIGATION\n\nSocial now appears as a standard left-menu destination directly beneath Friends on every main-menu page. The separate upper-right main-menu launcher has been removed.\n\nThe Social row uses the same active treatment as other destinations and shows pending lobby invitations, friend requests, or unread-message counts while collapsed. Selecting another page closes the drawer and highlights the chosen destination normally.\n\nThe fixed CHAT & SOCIAL control used during matches is unchanged.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

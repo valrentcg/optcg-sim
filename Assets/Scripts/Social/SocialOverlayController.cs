@@ -60,6 +60,11 @@ public sealed class SocialOverlayController : MonoBehaviour
 
     public static int UnreadTotal => Instance?._unreadTotal ?? 0;
     public static int OnlineCount => Instance?._friends.Count(f => f.Online) ?? 0;
+    public static int IncomingRequestCount => Instance?._incoming.Count ?? 0;
+    public static int PendingInviteCount => Instance != null && Instance.InviteSurfaceVisible
+        ? Instance._invites.Count
+        : 0;
+    public static bool DrawerOpen => Instance?._drawerOpen ?? false;
     public static int UnreadFor(string playerId)
     {
         if (Instance == null || string.IsNullOrEmpty(playerId)) return 0;
@@ -113,6 +118,15 @@ public sealed class SocialOverlayController : MonoBehaviour
             GameManager.CloseMatchChatForSocial();
         Instance._drawerOpen = true;
         Instance._tab = tab;
+        Instance.NotifyAndRender();
+    }
+
+    // Main-menu navigation closes the overlay before changing pages. The page action
+    // repaints the rail immediately afterward, so this avoids a redundant menu rebuild.
+    public static void CloseDrawerForMenuNavigation()
+    {
+        if (Instance == null || !Instance._drawerOpen) return;
+        Instance._drawerOpen = false;
         Instance.Render();
     }
 
@@ -412,7 +426,7 @@ public sealed class SocialOverlayController : MonoBehaviour
         _toastPeerId = null; _toastBody = null; _toastUntil = 0f;
         var thread = GetThread(playerId);
         thread.Username = ResolveName(playerId);
-        Render();
+        NotifyAndRender();
         if (!thread.Loaded) LoadHistory(thread);
         else _ = MarkRead(playerId);
     }
@@ -587,7 +601,8 @@ public sealed class SocialOverlayController : MonoBehaviour
         if (AccountManager.HasClaimedIdentity)
         {
             if (_drawerOpen) BuildDrawer();
-            else if (!(_context == SocialSurfaceContext.Match && GameManager.MatchChatOpen)) BuildDockButton();
+            else if (_context != SocialSurfaceContext.MainMenu &&
+                !(_context == SocialSurfaceContext.Match && GameManager.MatchChatOpen)) BuildDockButton();
             BuildNotifications();
         }
         if (!string.IsNullOrEmpty(focusName)) StartCoroutine(RestoreFocus(focusName, caret));
@@ -610,8 +625,7 @@ public sealed class SocialOverlayController : MonoBehaviour
     private void BuildDockButton()
     {
         bool match = _context == SocialSurfaceContext.Match;
-        bool fixedToUpperRight = _context == SocialSurfaceContext.MainMenu || match ||
-            _context == SocialSurfaceContext.Replay;
+        bool fixedToUpperRight = match || _context == SocialSurfaceContext.Replay;
         bool compact = !fixedToUpperRight;
         int visibleInvites = InviteSurfaceVisible ? _invites.Count : 0;
         var dock = Panel("Social Dock", _root, Panel2, true);
@@ -658,7 +672,7 @@ public sealed class SocialOverlayController : MonoBehaviour
         if (compact)
         {
             // Deck building and Sealed keep the user's saved movable compact launcher.
-            // Main menus and matches use a fixed, labelled upper-right launcher instead.
+            // Main menus launch Social from the left rail; matches use the fixed label.
             dock.sizeDelta = new Vector2(48f, 48f);
             dock.anchoredPosition = ClampPosition(dock,
                 NormalizedToLocal(_dockPosition, _root), _root, 10f);
@@ -716,7 +730,7 @@ public sealed class SocialOverlayController : MonoBehaviour
         var subtitle = Label("Subtitle", head, subtitleText, 10,
             visibleInvites > 0 ? Gold : _unreadTotal > 0 ? Accent : Muted, TextAnchor.UpperLeft, false, _mono);
         Stretch(subtitle.rectTransform, Vector2.zero, new Vector2(0.72f, 0.42f), new Vector2(18f, 2f), Vector2.zero);
-        AddButton(head, "—", () => { _drawerOpen = false; Render(); }, true,
+        AddButton(head, "—", () => { _drawerOpen = false; NotifyAndRender(); }, true,
             new Vector2(1f, 0.5f), new Vector2(38f, 32f), new Vector2(-14f, 0f), false);
 
         var nav = Panel("Navigation", drawer, Panel2, true);
