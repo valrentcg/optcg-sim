@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.42",
-  "buildNumber": 39,
+  "buildVersion": "1.0.43",
+  "buildNumber": 40,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "PLAYTEST RULES AND SEQUENCING FIXES\n\nNested On Play, On K.O., and combat decisions now finish before their parent effect continues. Full Character areas now offer a replacement when an effect plays from trash.\n\nCorrected OP17-112 Charlotte Linlin's draw, Life choice, and 4000-to-8000 Trigger aura; OP17-119 Loki's optional stopping point; and OP13-003 Gol D. Roger's automatic DON!! attachment.\n\nTop-deck reveals remain visible at the deck until confirmed, and deck-to-trash mills now play card-movement audio.",
+  "notes": "STATE INTEGRITY AND REVEAL FLOW FIXES\n\nReveal-from-hand costs now remain synchronized until the opposing player confirms the shown card, then continue the paid effect correctly.\n\nAdvanced AI planning, Sandbox undo and redo, and puzzle simulations now preserve deferred replacements, winner and outcome data, reveal progress, modal selection progress, and turn-level match facts when cloning a position.\n\nExpanded regression coverage verifies reveal costs, Life-damage privacy, optional once-per-turn effects, full-board replacement choices, and recorded playtest cases.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

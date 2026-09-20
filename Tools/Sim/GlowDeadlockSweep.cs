@@ -72,9 +72,12 @@ namespace OnePieceTcg.Sim
                         b.Apply(new GameCommand
                         { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId });
 
-                        // Only a BOARD pick counts. A deck-look or an A/B choice has its own UI and
-                        // never depended on the glow filter.
-                        if (b.St.DeckLook != null || b.St.ActiveChoice != null) continue;
+                        // Only a BOARD pick counts. A deck-look, A/B choice, or public reveal has its
+                        // own UI and never depended on the board-card glow filter. In particular,
+                        // audited top-deck reveals can leave their source effect pending while the
+                        // reveal confirmation panel owns input; scoring that as a frozen board prompt
+                        // mistakes a working modal barrier for an inert card-selection step.
+                        if (b.St.DeckLook != null || b.St.ActiveChoice != null || b.St.ActiveReveal != null) continue;
                         pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
                         if (pe == null) continue;
                         waiting++;

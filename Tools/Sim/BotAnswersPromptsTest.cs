@@ -112,8 +112,24 @@ namespace OnePieceTcg.Sim
             b.Hand("north", film); b.Hand("north", film);   // two legal reveals => a real choice
             GameEngine.QueueClauseForTest(b.St, "north", b.Character("north", "ST29-010"), "main",
                 "You may reveal 1 {FILM} type card from your hand: Draw 1 card.");
+            var pick = IntermediateBot.DecideOneCommand(b.St, "north", new HashSet<string>());
+            if (pick == null)
+            {
+                Check("bot answers the reveal-from-hand cost prompt", false,
+                    "the bot returned no card-selection command");
+                return;
+            }
+            b.St = GameEngine.ApplyCommand(b.St, pick);
+            bool waitingForObserver = b.St.ActiveReveal?.AwaitingConfirmation == true
+                && b.St.ActiveReveal.ConfirmSeat == "south";
+            if (waitingForObserver)
+                b.St = GameEngine.ApplyCommand(b.St,
+                    new GameCommand { Type = "confirmReveal", Seat = "south" });
             Check("bot answers the reveal-from-hand cost prompt",
-                  BotClearsItsDecision(b.St, "north", out string why), why);
+                  pick.Type == "resolveEffect" && !b.St.PendingEffects.Any(e => e != null && e.Seat == "north"),
+                  !waitingForObserver
+                      ? "the bot did not advance to the opponent-confirmation barrier"
+                      : "the paid effect remained pending after the observer confirmed it");
         }
 
         /// <summary>The newest prompt is the first one the bot does not OWN by controlling the source:

@@ -35,13 +35,16 @@ namespace OnePieceTcg.Sim.Search
             {
                 Version = s.Version, Seed = s.Seed, FirstPlayer = s.FirstPlayer, CoinFlipWinner = s.CoinFlipWinner,
                 Status = s.Status, ActiveSeat = s.ActiveSeat, Phase = s.Phase, TurnNumber = s.TurnNumber,
+                WinnerSeat = s.WinnerSeat, OutcomeType = s.OutcomeType,
                 EndTurnStage = s.EndTurnStage, EndTurnSeat = s.EndTurnSeat,
                 CommandBatch = s.CommandBatch,
                 BattleReactionSeat = s.BattleReactionSeat,
-                EffectSequence = s.EffectSequence, LogSequence = s.LogSequence, BattleSequence = s.BattleSequence,
+                EffectSequence = s.EffectSequence, RevealSequence = s.RevealSequence, LogSequence = s.LogSequence, BattleSequence = s.BattleSequence,
                 Selected = s.Selected == null ? null : new SelectionRef { InstanceId = s.Selected.InstanceId, Seat = s.Selected.Seat },
                 Battle = CloneBattle(s.Battle),
                 DeckLook = CloneDeckLook(s.DeckLook),
+                ActiveReveal = CloneReveal(s.ActiveReveal),
+                PendingCharReplace = CloneCharReplace(s.PendingCharReplace),
                 ActiveChoice = CloneChoice(s.ActiveChoice),
                 DeferredActivatedTriggerSeat = s.DeferredActivatedTriggerSeat,
             };
@@ -73,6 +76,12 @@ namespace OnePieceTcg.Sim.Search
                 EffectId = d.EffectId, VictimSeat = d.VictimSeat, VictimInstanceId = d.VictimInstanceId,
                 GuardInstanceId = d.GuardInstanceId, Kind = d.Kind, ByBattleKo = d.ByBattleKo,
             }).ToList();
+            g.DeferredRests = s.DeferredRests.Select(d => new DeferredRest
+            {
+                ChoiceEffectId = d.ChoiceEffectId, RestEffectId = d.RestEffectId,
+                TargetInstanceId = d.TargetInstanceId, TargetOwnerSeat = d.TargetOwnerSeat,
+                GuardInstanceId = d.GuardInstanceId, RestingSeat = d.RestingSeat,
+            }).ToList();
             g.ActivatedEventIds = new List<string>(s.ActivatedEventIds);
             g.ActivatedTriggerIds = new List<string>(s.ActivatedTriggerIds);
             g.NoPlayCharBaseCostAtLeast = new Dictionary<string, int>(s.NoPlayCharBaseCostAtLeast);
@@ -82,6 +91,8 @@ namespace OnePieceTcg.Sim.Search
             g.NoPlayFromHandThisTurn = new HashSet<string>(s.NoPlayFromHandThisTurn);
             g.CannotAttackLeaderThisTurn = new HashSet<string>(s.CannotAttackLeaderThisTurn);
             g.NoAddLifeToHandThisTurn = new HashSet<string>(s.NoAddLifeToHandThisTurn);
+            g.LifeRemovedThisTurn = new HashSet<string>(s.LifeRemovedThisTurn);
+            g.HandTrashedByEffectThisTurn = new HashSet<string>(s.HandTrashedByEffectThisTurn);
             g.NoSetDonActiveViaCharThisTurn = new HashSet<string>(s.NoSetDonActiveViaCharThisTurn);
             g.RestedKoProtectionPaid = new HashSet<string>(s.RestedKoProtectionPaid);
             g.BattleKoTrashSaveSeats = new HashSet<string>(s.BattleKoTrashSaveSeats);
@@ -131,6 +142,7 @@ namespace OnePieceTcg.Sim.Search
             EffectId = e.EffectId, Seat = e.Seat, ParentEffectId = e.ParentEffectId, QueuedBatch = e.QueuedBatch, SourceInstanceId = e.SourceInstanceId, SourceCardId = e.SourceCardId,
             Timing = e.Timing, Text = e.Text, Optional = e.Optional, Scope = e.Scope, TargetZone = e.TargetZone,
             DonPaymentRemaining = e.DonPaymentRemaining, SelectionsRemaining = e.SelectionsRemaining,
+            VariableSelectionStage = e.VariableSelectionStage, VariableSelectionCount = e.VariableSelectionCount,
             PlayedPickIds = e.PlayedPickIds == null ? null : new List<string>(e.PlayedPickIds),
             RemainingBudget = e.RemainingBudget, FirstPickId = e.FirstPickId, PendingContinuation = e.PendingContinuation,
             FinalizesActivatedTrigger = e.FinalizesActivatedTrigger,
@@ -148,6 +160,7 @@ namespace OnePieceTcg.Sim.Search
             PickedInstanceIds = e.PickedInstanceIds == null ? null : new List<string>(e.PickedInstanceIds),
             CostPaidRefs = e.CostPaidRefs == null ? null : new List<string>(e.CostPaidRefs),
             EligibleInstanceIds = e.EligibleInstanceIds == null ? null : new List<string>(e.EligibleInstanceIds),
+            PublicRevealConfirmed = e.PublicRevealConfirmed,
             DoneParts = e.DoneParts == null ? null : new List<string>(e.DoneParts),
             SkippedParts = e.SkippedParts == null ? null : new List<string>(e.SkippedParts),
         };
@@ -162,6 +175,26 @@ namespace OnePieceTcg.Sim.Search
         {
             Seat = c.Seat, ControllerSeat = c.ControllerSeat, SourceInstanceId = c.SourceInstanceId,
             SourceCardId = c.SourceCardId, Timing = c.Timing, OptionA = c.OptionA, OptionB = c.OptionB,
+        };
+
+        private static CharReplaceState CloneCharReplace(CharReplaceState c) => c == null ? null : new CharReplaceState
+        {
+            Seat = c.Seat, Held = CloneCard(c.Held), Rested = c.Rested,
+            SourceName = c.SourceName, ReturnZone = c.ReturnZone,
+        };
+
+        private static PublicRevealState CloneReveal(PublicRevealState r) => r == null ? null : new PublicRevealState
+        {
+            RevealId = r.RevealId, SourceSeat = r.SourceSeat, ConfirmSeat = r.ConfirmSeat,
+            SourceInstanceId = r.SourceInstanceId, SourceCardId = r.SourceCardId,
+            SourceName = r.SourceName, Reason = r.Reason, EffectId = r.EffectId,
+            ResumeMode = r.ResumeMode, ContinuationText = r.ContinuationText,
+            RequiresConfirmation = r.RequiresConfirmation, AwaitingConfirmation = r.AwaitingConfirmation,
+            Cards = r.Cards?.Select(x => new RevealedCardRef
+            {
+                InstanceId = x.InstanceId, CardId = x.CardId,
+                OwnerSeat = x.OwnerSeat, ZoneAtReveal = x.ZoneAtReveal,
+            }).ToList() ?? new List<RevealedCardRef>(),
         };
 
         private static DeckLookState CloneDeckLook(DeckLookState d) => d == null ? null : new DeckLookState

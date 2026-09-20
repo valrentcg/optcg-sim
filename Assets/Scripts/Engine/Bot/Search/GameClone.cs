@@ -18,6 +18,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             {
                 Version = s.Version, Seed = s.Seed, FirstPlayer = s.FirstPlayer, CoinFlipWinner = s.CoinFlipWinner,
                 Status = s.Status, ActiveSeat = s.ActiveSeat, Phase = s.Phase, TurnNumber = s.TurnNumber,
+                WinnerSeat = s.WinnerSeat, OutcomeType = s.OutcomeType,
                 EndTurnStage = s.EndTurnStage, EndTurnSeat = s.EndTurnSeat,
                 CommandBatch = s.CommandBatch,
                 BattleReactionSeat = s.BattleReactionSeat,
@@ -57,6 +58,12 @@ namespace OnePieceTcg.Engine.Bot.Search
             {
                 EffectId = d.EffectId, VictimSeat = d.VictimSeat, VictimInstanceId = d.VictimInstanceId,
                 GuardInstanceId = d.GuardInstanceId, Kind = d.Kind, ByBattleKo = d.ByBattleKo,
+            }).ToList();
+            g.DeferredRests = s.DeferredRests.Select(d => new DeferredRest
+            {
+                ChoiceEffectId = d.ChoiceEffectId, RestEffectId = d.RestEffectId,
+                TargetInstanceId = d.TargetInstanceId, TargetOwnerSeat = d.TargetOwnerSeat,
+                GuardInstanceId = d.GuardInstanceId, RestingSeat = d.RestingSeat,
             }).ToList();
             g.ActivatedEventIds = new List<string>(s.ActivatedEventIds);
             g.ActivatedTriggerIds = new List<string>(s.ActivatedTriggerIds);
@@ -117,6 +124,7 @@ namespace OnePieceTcg.Engine.Bot.Search
             EffectId = e.EffectId, Seat = e.Seat, ParentEffectId = e.ParentEffectId, QueuedBatch = e.QueuedBatch, SourceInstanceId = e.SourceInstanceId, SourceCardId = e.SourceCardId,
             Timing = e.Timing, Text = e.Text, Optional = e.Optional, Scope = e.Scope, TargetZone = e.TargetZone,
             DonPaymentRemaining = e.DonPaymentRemaining, SelectionsRemaining = e.SelectionsRemaining,
+            VariableSelectionStage = e.VariableSelectionStage, VariableSelectionCount = e.VariableSelectionCount,
             PlayedPickIds = e.PlayedPickIds == null ? null : new List<string>(e.PlayedPickIds),
             RemainingBudget = e.RemainingBudget, FirstPickId = e.FirstPickId, PendingContinuation = e.PendingContinuation,
             OriginalText = e.OriginalText,

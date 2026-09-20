@@ -1422,6 +1422,18 @@ public partial class MainMenuManager : MonoBehaviour
     // the GitHub Releases page (github.com/valrentcg/optcg-sim/releases).
     private static readonly (string ver, string title, string date, (string head, string[] items)[] sections)[] PatchNotesData =
     {
+        ("v1.0.43", "State integrity and reveal flow fixes", "Sep 20, 2026", new (string, string[])[]
+        {
+            ("Gameplay fixes", new[]
+            {
+                "Reveal-from-hand costs now remain synchronized until the opposing player confirms the shown card, then continue the paid effect correctly instead of silently stopping.",
+                "Advanced AI planning, Sandbox undo and redo, and puzzle simulations now preserve deferred replacements, match winner and outcome data, reveal progress, modal selection progress, and turn-level match facts when cloning a position.",
+            }),
+            ("Verification", new[]
+            {
+                "Expanded regression coverage verifies reveal costs, Life-damage privacy, optional once-per-turn effects, full-board replacement choices, and all recorded playtest cases.",
+            }),
+        }),
         ("v1.0.42", "Playtest rules and sequencing fixes", "Sep 20, 2026", new (string, string[])[]
         {
             ("Gameplay fixes", new[]

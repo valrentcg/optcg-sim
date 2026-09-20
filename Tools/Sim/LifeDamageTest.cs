@@ -50,6 +50,7 @@ namespace OnePieceTcg.Sim
             int life0 = b.S.Life.Count;
 
             b.AttackLeaderAndLetItThrough();
+            b.PassTriggerIfWaiting();
 
             bool tookOne = b.S.Life.Count == life0 - 1;
             bool tookTheTop = b.S.Hand.Any(c => c.InstanceId == top);
@@ -61,13 +62,15 @@ namespace OnePieceTcg.Sim
 
         private static void PlainLifeCardAsksNothing()
         {
-            // Control: a Life card with no [Trigger] must NOT stop the game to ask. Without this, an
-            // engine that prompted on every single damage would pass the trigger tests below.
+            // Hidden Life uses the same privacy-safe decision step for every card, so the attacker
+            // cannot infer whether the revealed card carries a Trigger before the defender answers.
             var b = new Board();
             b.Life(3, topCardId: "ST01-005");            // no [Trigger] text
             b.AttackLeaderAndLetItThrough();
-            Check("a Life card with no [Trigger] goes straight to hand, no question asked",
-                  b.St.Battle == null && b.S.Hand.Count == 1,
+            bool privacyGate = b.St.Battle?.Step == "trigger";
+            b.PassTriggerIfWaiting();
+            Check("a Life card with no [Trigger] uses the privacy-safe gate, then goes to hand",
+                  privacyGate && b.St.Battle == null && b.S.Hand.Count == 1,
                   $"battle={(b.St.Battle == null ? "over" : b.St.Battle.Step)} hand={b.S.Hand.Count}");
         }
 
@@ -125,6 +128,7 @@ namespace OnePieceTcg.Sim
             var b = new Board();
             b.Life(1, topCardId: "ST01-005");
             b.AttackLeaderAndLetItThrough();             // takes the last card
+            b.PassTriggerIfWaiting();
             int life0 = b.S.Life.Count;
             b.AttackLeaderAndLetItThrough();             // now there is nothing left to take
 
@@ -181,6 +185,12 @@ namespace OnePieceTcg.Sim
                 // included - a resolveAttack from the attacker's seat is silently ignored, which
                 // left the battle parked on "damage" and failed all six checks at once.
                 if (St.Battle?.Step == "damage") Apply(new GameCommand { Type = "resolveAttack", Seat = "south" });
+            }
+
+            public void PassTriggerIfWaiting()
+            {
+                if (St.Battle?.Step == "trigger")
+                    Apply(new GameCommand { Type = "passTrigger", Seat = "south" });
             }
 
             public void Apply(GameCommand c) => St = GameEngine.ApplyCommand(St, c);

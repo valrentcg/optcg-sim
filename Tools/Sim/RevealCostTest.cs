@@ -95,12 +95,13 @@ namespace OnePieceTcg.Sim
             GameEngine.QueueClauseForTest(b.St, "south", b.Character("ST29-010"), "main", CLAUSE);
             var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
             if (pe == null) { Check("one match is forced", false, "nothing was queued"); return; }
-            b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId });
+            b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = only.InstanceId });
+            b.ConfirmReveal();
 
             bool drew = b.S.Hand.Any(c => c.CardId != only.CardId && c.CardId != "ST29-004")
                      || b.S.Hand.Count > 2;
             Check("with exactly 1 legal reveal, it pays outright and the body runs",
-                  drew, $"hand={b.S.Hand.Count} - the body (\"Draw 1 card\") should have run");
+                  drew, $"hand={b.S.Hand.Count} - the body (\"Draw 1 card\") should have run; {b.StateDetail()}");
         }
 
         private static void NoMatchCannotPay()
@@ -153,17 +154,19 @@ namespace OnePieceTcg.Sim
 
             var b = new Board();
             b.Hand(film);                                 // the SECOND tag only - no {Music} at all
+            var shown = b.S.Hand[0];
             int hand0 = b.S.Hand.Count;
             GameEngine.QueueClauseForTest(b.St, "south", b.Character("ST29-010"), "main",
                 "You may reveal 1 {Music} or {FILM} type card from your hand: Draw 1 card.");
             var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
             if (pe == null) { Check("either type of a disjunction pays", false, "nothing was queued"); return; }
-            b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId });
+            b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = shown.InstanceId });
+            b.ConfirmReveal();
 
             Check("a {A} or {B} cost is payable with the SECOND type alone",
                   b.S.Hand.Count > hand0,
                   $"hand {hand0}->{b.S.Hand.Count} - the body (\"Draw 1 card\") never ran, so the "
-                  + "cost was read as unpayable with a legal card in hand");
+                  + $"cost was read as unpayable with a legal card in hand; {b.StateDetail()}");
         }
 
         /// <summary>The property that makes a reveal a REVEAL: the card is shown and STAYS. Nothing
@@ -181,7 +184,8 @@ namespace OnePieceTcg.Sim
             GameEngine.QueueClauseForTest(b.St, "south", b.Character("ST29-010"), "main", CLAUSE);
             var pe = b.St.PendingEffects.FirstOrDefault(e => e != null && e.Seat == "south");
             if (pe == null) { Check("a reveal keeps the card", false, "nothing was queued"); return; }
-            b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId });
+            b.Apply(new GameCommand { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = shown.InstanceId });
+            b.ConfirmReveal();
 
             Check("the revealed card is still in hand afterwards (a reveal is not a discard)",
                   b.S.Hand.Any(x => x.InstanceId == shown.InstanceId),
@@ -206,6 +210,7 @@ namespace OnePieceTcg.Sim
             int logBefore = b.St.EventLog.Count;
             b.Apply(new GameCommand
             { Type = "resolveEffect", Seat = "south", EffectId = pe.EffectId, Target = second.InstanceId });
+            b.ConfirmReveal();
 
             // Both cards share a CardId, so the log cannot distinguish them — the observable is that
             // the pick was accepted (the effect advanced) and BOTH cards are still in hand.
@@ -244,6 +249,21 @@ namespace OnePieceTcg.Sim
             { var c = Card(id, "character"); S.CharacterArea[slot++] = c; return c; }
 
             public void Apply(GameCommand c) => St = GameEngine.ApplyCommand(St, c);
+
+            public void ConfirmReveal()
+            {
+                if (St.ActiveReveal?.AwaitingConfirmation == true)
+                    Apply(new GameCommand { Type = "confirmReveal", Seat = St.ActiveReveal.ConfirmSeat });
+            }
+
+            public string StateDetail()
+            {
+                string pending = string.Join(" | ", St.PendingEffects.Select(e =>
+                    $"{e.EffectId}:{e.Seat}:{e.ParentEffectId}:{e.Text}"));
+                string log = string.Join(" | ", St.EventLog.TakeLast(6).Select(e => e.Message));
+                return $"reveal={(St.ActiveReveal == null ? "none" : St.ActiveReveal.ResumeMode)} "
+                    + $"pending=[{pending}] log=[{log}]";
+            }
 
             private CardInstance Card(string id, string zone) => new CardInstance
             {

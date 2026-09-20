@@ -181,7 +181,10 @@ namespace OnePieceTcg.Sim
                 for (int i = 0; i < 4 && St.Battle != null; i++)
                 {
                     int before = St.EventLog.Count;
-                    Apply(new GameCommand { Type = "resolveAttack", Seat = "north" });
+                    if (St.Battle.Step == "trigger")
+                        Apply(new GameCommand { Type = "passTrigger", Seat = "north" });
+                    else
+                        Apply(new GameCommand { Type = "resolveAttack", Seat = "north" });
                     if (St.EventLog.Count == before) break;
                 }
                 // A [Trigger] or on-damage decision may be waiting on north; answer it so play resumes.

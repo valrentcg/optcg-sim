@@ -13823,6 +13823,14 @@ namespace OnePieceTcg.Engine
                             reveal = BeginPublicReveal(state, effect.Seat, sourceCard,
                                 "Revealed from hand as an effect cost", null, true,
                                 effect.EffectId, "revealCost", bodyText);
+                            // Reveal-as-cost is itself an information payment, so it always needs
+                            // the opposing seat's acknowledgement. BeginPublicReveal normally limits
+                            // confirmation to the audited per-card reveal lists; that policy is for
+                            // effect results, not costs. Without this override the panel said it was
+                            // waiting for the opponent, but the next command cleared the reveal as
+                            // informational-only and the paid body never ran.
+                            reveal.RequiresConfirmation = true;
+                            reveal.ConfirmSeat = OtherSeat(effect.Seat);
                             // More cards may still need to be selected. The command gate lets only this
                             // effect continue until the required set is complete.
                             reveal.AwaitingConfirmation = false;
