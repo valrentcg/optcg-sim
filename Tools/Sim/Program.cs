@@ -87,6 +87,9 @@ if (args.Contains("--sick-aware"))
 
 switch (mode)
 {
+    case "playtestregression":
+        return OnePieceTcg.Sim.PlaytestRegressionTest.Run();
+
     case "reportedcards":
         return OnePieceTcg.Sim.ReportedCardsProbe.Run();
 

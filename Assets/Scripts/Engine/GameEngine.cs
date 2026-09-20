@@ -186,6 +186,7 @@ namespace OnePieceTcg.Engine
         }
 
         [ThreadStatic] private static int _applyDepth;
+        [ThreadStatic] private static string _resolvingEffectId;
 
         // OPTCGSim 1.43a uses an explicit, non-cancellable "Confirm Revealed Card" gate for
         // these cards. The two sets below come from the shipped card/action definitions rather
@@ -376,6 +377,21 @@ namespace OnePieceTcg.Engine
                 && !(state.DeckLook != null && (command.Type == "deckLookSelect"
                     || command.Type == "deckLookConfirmOrder" || command.Type == "deckLookScryConfirm")))
                 return state;
+
+            // Player decisions are hard synchronization barriers. A parent effect used to remain
+            // clickable while a nested choice/reveal/replacement/trigger was waiting, which let the
+            // parent continue into later targets or plays before the nested action had resolved.
+            // Keep the priority order explicit and enforce it in the engine (the network authority),
+            // not only in the UI. Concede was handled above and always remains available.
+            if (_applyDepth == 0 && state.ActiveReveal == null)
+            {
+                if (state.PendingCharReplace != null && command.Type != "charReplace") return state;
+                if (state.ActiveChoice != null && command.Type != "resolveChoice") return state;
+                if (state.DeckLook != null && command.Type != "deckLookSelect"
+                    && command.Type != "deckLookConfirmOrder" && command.Type != "deckLookScryConfirm") return state;
+                if (state.PendingEffects.Count > 0 && command.Type != "resolveEffect"
+                    && command.Type != "passEffect" && command.Type != "charReplace") return state;
+            }
 
             // A public reveal is a synchronized information barrier.  While the revealing player is
             // choosing multiple proof cards only that effect may continue; once complete, only the
@@ -647,6 +663,28 @@ namespace OnePieceTcg.Engine
                             System.Text.RegularExpressions.RegexOptions.IgnoreCase);
                         if (sclCond.Success && !EvaluateCondition(state, bc.Owner, sclCond.Groups[1].Value.Trim(), bc.InstanceId)) continue;
                         power = int.Parse(sm.Groups[2].Value);
+                    }
+                }
+            }
+            // OP17-112 Charlotte Linlin: a live, turn-gated base-power aura with a compound
+            // recipient filter (printed 4000 base power AND a Trigger). This wording says
+            // "become" rather than the older "set the base power" template above.
+            if (owner != null && GetCard(instance)?.Type == "character")
+            {
+                foreach (var aura in owner.CharacterArea)
+                {
+                    if (aura == null || IsEffectNegated(state, aura)) continue;
+                    foreach (var line in (GetCard(aura)?.Effect ?? "").Split('\n'))
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(line,
+                            @"All of your Characters with (\d{3,5}) base power and a \[Trigger\] become (\d{3,5}) base power",
+                            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                        if (!m.Success) continue;
+                        if (HasTiming(line, "Your Turn") && state.ActiveSeat != instance.Owner) continue;
+                        if (HasTiming(line, "Opponent's Turn") && state.ActiveSeat == instance.Owner) continue;
+                        var def = GetCard(instance);
+                        if (def.Power == int.Parse(m.Groups[1].Value) && !string.IsNullOrEmpty(def.Trigger))
+                            power = int.Parse(m.Groups[2].Value);
                     }
                 }
             }
@@ -2885,7 +2923,21 @@ namespace OnePieceTcg.Engine
             if (state.TurnNumber != 1) DrawCard(state, seat, true);
             state.Phase = "don";
             int donToDraw = state.TurnNumber == 1 ? 1 : 2;
+            bool givePlacedDonToLeader = p.Leader != null && TotalFieldDon(p) > 0
+                && ContainsAll(GetCard(p.Leader)?.Effect ?? "",
+                    "DON!! card placed during your DON!! Phase is given to your Leader");
+            int donBeforePlacement = p.CostArea.Count;
             DrawDon(state, seat, donToDraw, true);
+            if (givePlacedDonToLeader && p.CostArea.Count > donBeforePlacement)
+            {
+                // The first DON!! placed by this phase is immediately given to the Leader. It is
+                // removed from the cost area exactly like a manual attachment, so total field DON!!
+                // stays unchanged while the Leader receives its +1000 for the turn.
+                var placed = p.CostArea[donBeforePlacement];
+                p.CostArea.RemoveAt(donBeforePlacement);
+                p.Leader.AttachedDonIds.Add(placed.InstanceId);
+                Log(state, seat, $"{NameId(GetCard(p.Leader))}: 1 DON!! placed in the DON!! Phase is given to the Leader.");
+            }
             state.Phase = "main";
             // Delayed "opponent rests N DON!! at the start of their next Main Phase" (PRB02-005): now that
             // this player's DON have refreshed to active, rest that many of them, then clear the markers.
@@ -3788,6 +3840,7 @@ namespace OnePieceTcg.Engine
                     EffectScope.Instant, InferTargetZone(heldDef.Effect));
             FireOnYouPlayCharacter(state, seat, held, fromHand: cr.ReturnZone == "hand");
             FireOnOpponentPlaysCharacter(state, seat, held);
+            if (cr.ReturnZone == "trash") FireOnPlayedFromTrash(state, seat, held);
         }
 
         private static void StartDeckSearch(GameState state, string seat, CardInstance source,
@@ -8114,7 +8167,11 @@ namespace OnePieceTcg.Engine
                 return;
             }
             var dlBefore = state.DeckLook;
-            var result = TryResolveKnownEffect(state, effect, targetId);
+            var priorResolvingEffectId = _resolvingEffectId;
+            EffectResolution result;
+            _resolvingEffectId = effect.EffectId;
+            try { result = TryResolveKnownEffect(state, effect, targetId); }
+            finally { _resolvingEffectId = priorResolvingEffectId; }
             // A pick that leaves the effect still WAITING (multi-pick continues) and whose target is a real
             // in-play card was consumed — record it so it can't be picked twice (and the UI stops glowing it).
             if (result == EffectResolution.WaitingForTarget)
@@ -8552,6 +8609,10 @@ namespace OnePieceTcg.Engine
                 if (inTrash != null) return inTrash;
                 var inHand = p.Hand.FirstOrDefault(c => c.InstanceId == instanceId);
                 if (inHand != null) return inHand;
+                var inLife = p.Life.FirstOrDefault(c => c.InstanceId == instanceId);
+                if (inLife != null) return inLife;
+                var inDeck = p.Deck.FirstOrDefault(c => c.InstanceId == instanceId);
+                if (inDeck != null) return inDeck;
             }
             return null;
         }
@@ -9682,7 +9743,14 @@ namespace OnePieceTcg.Engine
         {
             if (state.PendingEffects.Count == 0) return null;
             if (!string.IsNullOrEmpty(effectId))
-                return state.PendingEffects.FirstOrDefault(e => e.EffectId == effectId && e.Seat == seat);
+            {
+                var requested = state.PendingEffects.FirstOrDefault(e => e.EffectId == effectId && e.Seat == seat);
+                if (requested == null) return null;
+                // Only a real child blocks its parent. Unrelated effects whose timings were fulfilled
+                // together remain freely orderable; using list position as a stack deadlocked those.
+                if (state.PendingEffects.Any(e => e.ParentEffectId == requested.EffectId)) return null;
+                return requested;
+            }
             // NEVER fall back across seats. The id-supplied path above checks Seat, but this one used to
             // end in "?? state.PendingEffects[0]" — whoever queued first, regardless of who is asking. So
             // a resolveEffect from the OPPONENT with no EffectId resolved YOUR decision: it paid your
@@ -9690,7 +9758,29 @@ namespace OnePieceTcg.Engine
             // player-facing resolve and pass paths, so a seat that owns no pending effect has nothing to
             // answer and must get null. Reachable without any malice — a client with a single pending
             // effect has no reason to send the id at all.
-            return state.PendingEffects.FirstOrDefault(e => e.Seat == seat);
+            return NextPendingEffect(state, seat);
+        }
+
+        /// <summary>The pending decision the action surface should present. Unrelated effects keep
+        /// their original freely-selectable order; a child created during resolution is walked ahead
+        /// of its parent so the parent cannot continue past it.</summary>
+        public static PendingEffect NextPendingEffect(GameState state, string seat = null)
+        {
+            if (state?.PendingEffects == null || state.PendingEffects.Count == 0) return null;
+            // A seat-scoped caller must never receive a parent that is blocked by a child owned by
+            // the other seat. Scan for the first decision this seat can actually answer.
+            if (!string.IsNullOrEmpty(seat))
+                return state.PendingEffects.FirstOrDefault(e => e.Seat == seat
+                    && !state.PendingEffects.Any(child => child.ParentEffectId == e.EffectId));
+
+            var current = state.PendingEffects[0];
+            if (current == null) return null;
+            while (true)
+            {
+                var child = state.PendingEffects.FirstOrDefault(e => e.ParentEffectId == current.EffectId);
+                if (child == null) return current;
+                current = child;
+            }
         }
 
         // An effect is genuinely optional when its text says so ("You may …", "up to N", a
@@ -9705,7 +9795,10 @@ namespace OnePieceTcg.Engine
         /// opponent doesnt have selectable characters".</summary>
         public static bool IsEffectSkippable(PendingEffect effect) =>
             effect != null
-            && (effect.Optional || IsOptionalEffectText(effect.Text) || effect.SelectionsRemaining > 0);
+            && (effect.Optional || IsOptionalEffectText(effect.Text) || effect.SelectionsRemaining > 0
+                // OP17-119 chooses a subset whose TOTAL cost is at most 4. After one legal
+                // K.O. the player may stop even when another Character fits the unused budget.
+                || (effect.SourceCardId == "OP17-119" && effect.RemainingBudget >= 0));
 
         /// <summary>Can the player decline this effect? An ACTIVATION COST always makes it declinable.
         ///
@@ -10041,10 +10134,11 @@ namespace OnePieceTcg.Engine
                 return;
             }
             state.EffectSequence += 1;
-            state.PendingEffects.Add(new PendingEffect
+            var queued = new PendingEffect
             {
                 EffectId = $"effect-{state.EffectSequence}",
                 Seat = seat,
+                ParentEffectId = _resolvingEffectId,
                 QueuedBatch = state.CommandBatch,
                 SourceInstanceId = source.InstanceId,
                 SourceCardId = source.CardId,
@@ -10062,7 +10156,8 @@ namespace OnePieceTcg.Engine
                 DoneParts = doneParts != null ? new List<string>(doneParts) : new List<string>(),
                 SkippedParts = skippedParts != null ? new List<string>(skippedParts) : new List<string>(),
                 FinalizesActivatedTrigger = finalizesActivatedTrigger,
-            });
+            };
+            state.PendingEffects.Add(queued);
             Log(state, seat, $"{NameId(GetCard(source))} {TimingLabel(timing)} effect is pending.");
         }
 
@@ -10141,7 +10236,8 @@ namespace OnePieceTcg.Engine
             if (AuditLegacyWholeTextAutoResolveGate) lead = text ?? "";
             if (lead.IndexOf("you may", StringComparison.OrdinalIgnoreCase) >= 0) return;
             if (!IsAutomatedEffectPattern(lead)) return;
-            var queued = state.PendingEffects[state.PendingEffects.Count - 1];
+            var queued = state.PendingEffects.FirstOrDefault(e => e.EffectId == $"effect-{state.EffectSequence}");
+            if (queued == null) return;
             ResolveEffect(state, seat, queued.EffectId, null);
         }
 
@@ -10927,21 +11023,11 @@ namespace OnePieceTcg.Engine
             var costM = System.Text.RegularExpressions.Regex.Match(origin ?? "",
                 @"You (?:may|can) (?<cost>[^:]+):", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
             if (costM.Success) done.Add(costM.Groups["cost"].Value.Trim());
-            int beforeCount = state.PendingEffects.Count;
             QueueAndAutoResolve(state, parent.Seat, src, parent.Timing, norm,
                 IsOptionalEffectText(norm), parent.Scope, InferTargetZone(bodyText),
                 origin, done, parent.SkippedParts);
-            // If the body was queued and still needs a decision (exactly one new pending effect), move it to
-            // the FRONT of the queue. Otherwise a "You may <cost>: <body>" effect that just paid its cost would
-            // resolve its body only AFTER any sibling effects queued earlier — e.g. five {Five Elders} played
-            // at once by OP13-082 would interleave (Mars pays its trash cost, then Saturn's draw fires, THEN
-            // Mars's K.O. body). Fronting the body keeps each card's On-Play fully resolving before the next.
-            if (state.PendingEffects.Count == beforeCount + 1)
-            {
-                var body = state.PendingEffects[state.PendingEffects.Count - 1];
-                state.PendingEffects.RemoveAt(state.PendingEffects.Count - 1);
-                state.PendingEffects.Insert(0, body);
-            }
+            // QueueEffect links the appended body to its parent. NextPendingEffect walks that link,
+            // so the body stays above its parent without changing the order of unrelated effects.
         }
 
         // Returns true if `def` satisfies the feature-tag requirement stated in `effectText`.
@@ -13125,6 +13211,32 @@ namespace OnePieceTcg.Engine
                 && !System.Text.RegularExpressions.Regex.IsMatch(text, @"^You may [^:]+:",
                         System.Text.RegularExpressions.RegexOptions.Singleline))
             {
+                // OP17-112 combines a mandatory draw with a modal introduced by prose ending in a
+                // period ("choose one of the following effects.") rather than the usual colon. The
+                // generic choice parser deliberately owns only colon templates; letting this fall
+                // through made the opponent-Life option fire automatically and dropped the draw.
+                if (string.Equals(effect.SourceCardId, "OP17-112", StringComparison.OrdinalIgnoreCase))
+                {
+                    DrawCard(state, effect.Seat);
+                    var choices = System.Text.RegularExpressions.Regex.Split(text, @"(?:\r?\n)\s*-\s+")
+                        .Skip(1).Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                    if (choices.Count >= 2)
+                    {
+                        state.ActiveChoice = new ChoiceState
+                        {
+                            Seat = effect.Seat,
+                            ControllerSeat = effect.Seat,
+                            SourceInstanceId = effect.SourceInstanceId,
+                            SourceCardId = effect.SourceCardId,
+                            Timing = effect.Timing,
+                            OptionA = choices[0],
+                            OptionB = choices[1],
+                        };
+                        state.PendingEffects.Remove(effect);
+                        Log(state, effect.Seat, $"{sourceName}: drew 1 card; choose one Life effect.");
+                        return EffectResolution.Resolved;
+                    }
+                }
                 // Leading "If <cond>, choose one: …" gates the WHOLE modal (OP12-060 multicolored, OP15-054/ST11-003
                 // Leader-name, OP06-065/OP06-093 board/hand counts). The general leadIf block above skips "Choose
                 // one" cards, and TryParseChoiceEffect ignores the leading If → the choice was offered even when the
@@ -20966,8 +21078,17 @@ namespace OnePieceTcg.Engine
                     int openSlot2 = p4.CharacterArea.FindIndex(s => s == null);
                     if (openSlot2 < 0)
                     {
-                        p4.Trash.Insert(trashIdx, trashCard);
-                        Log(state, effect.Seat, $"No open slot — {NameId(trashDef)} stays in trash.");
+                        trashCard.Zone = "limbo";
+                        trashCard.Rested = ContainsAll(text, "from your trash rested") || ContainsAll(text, "from the trash rested");
+                        state.PendingCharReplace = new CharReplaceState
+                        {
+                            Seat = effect.Seat,
+                            Held = trashCard,
+                            Rested = trashCard.Rested,
+                            SourceName = sourceName,
+                            ReturnZone = "trash",
+                        };
+                        Log(state, effect.Seat, $"Choose a Character to trash to play {NameId(trashDef)} from trash, or skip.");
                         return EffectResolution.Resolved;
                     }
                     trashCard.Zone = "character";

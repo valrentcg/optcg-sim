@@ -1,9 +1,9 @@
 {
-  "buildVersion": "1.0.41",
-  "buildNumber": 38,
+  "buildVersion": "1.0.42",
+  "buildNumber": 39,
   "minSupportedBuildNumber": 6,
   "assetsVersion": 1,
-  "notes": "SOCIAL NAVIGATION\n\nSocial now appears as a standard left-menu destination directly beneath Friends on every main-menu page. The separate upper-right main-menu launcher has been removed.\n\nThe Social row uses the same active treatment as other destinations and shows pending lobby invitations, friend requests, or unread-message counts while collapsed. Selecting another page closes the drawer and highlights the chosen destination normally.\n\nThe fixed CHAT & SOCIAL control used during matches is unchanged.",
+  "notes": "PLAYTEST RULES AND SEQUENCING FIXES\n\nNested On Play, On K.O., and combat decisions now finish before their parent effect continues. Full Character areas now offer a replacement when an effect plays from trash.\n\nCorrected OP17-112 Charlotte Linlin's draw, Life choice, and 4000-to-8000 Trigger aura; OP17-119 Loki's optional stopping point; and OP13-003 Gol D. Roger's automatic DON!! attachment.\n\nTop-deck reveals remain visible at the deck until confirmed, and deck-to-trash mills now play card-movement audio.",
   "downloads": {
     "windows": "https://github.com/valrentcg/optcg-sim/releases/latest",
     "mac": "https://github.com/valrentcg/optcg-sim/releases/latest"

@@ -1728,7 +1728,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private bool DonMinusPaymentActive(string seat)
     {
         if (state == null || state.PendingEffects.Count == 0) return false;
-        var pe = state.PendingEffects[0];
+        var pe = GameEngine.NextPendingEffect(state);
         return pe.DonPaymentRemaining > 0 && pe.Seat == seat && (!isNetworked || seat == localSeat);
     }
 
@@ -1737,7 +1737,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private bool DonGivePickActive(string seat)
     {
         if (state == null || state.PendingEffects.Count == 0) return false;
-        var pe = state.PendingEffects[0];
+        var pe = GameEngine.NextPendingEffect(state);
         if (pe.Seat != seat || (isNetworked && seat != localSeat)) return false;
         if (aiSeat != null && seat == aiSeat) return false;
         string t = pe.Text ?? "";
@@ -1760,7 +1760,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private int PendingDonRestCost(string seat)
     {
         if (state == null || state.PendingEffects.Count == 0) return 0;
-        var pe = state.PendingEffects[0];
+        var pe = GameEngine.NextPendingEffect(state);
         if (pe.Seat != seat) return 0;
         // [Activate: Main] commits and pays from the selected-card action before its body is queued.
         if (string.Equals(pe.Timing, "activateMain", System.StringComparison.OrdinalIgnoreCase)) return 0;
@@ -1778,7 +1778,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private bool PendingAnyDonRestChoice(string seat)
     {
         if (state == null || state.PendingEffects.Count == 0) return false;
-        var pe = state.PendingEffects[0];
+        var pe = GameEngine.NextPendingEffect(state);
         return pe.Seat == seat
             && (pe.Text ?? "").IndexOf("rest any number of your DON!! cards", System.StringComparison.OrdinalIgnoreCase) >= 0
             && (!isNetworked || seat == localSeat)
@@ -1821,7 +1821,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void ReturnAttachedDon(string seat, string donId)
     {
         if (!DonMinusPaymentActive(seat) || string.IsNullOrEmpty(donId)) return;
-        var pe = state.PendingEffects[0];
+        var pe = GameEngine.NextPendingEffect(state);
         Dispatch(new GameCommand { Type = "resolveEffect", Seat = pe.Seat, EffectId = pe.EffectId, Target = donId });
     }
 
@@ -1847,7 +1847,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // (the player chooses active vs rested DON!!, which matters for the rest of the turn).
         if (state.PendingEffects.Count > 0)
         {
-            var peDon = state.PendingEffects[0];
+            var peDon = GameEngine.NextPendingEffect(state);
             if (peDon.DonPaymentRemaining > 0 && peDon.Seat == seat)
             {
                 Dispatch(new GameCommand { Type = "resolveEffect", Seat = peDon.Seat, EffectId = peDon.EffectId, Target = instanceId });
@@ -3321,6 +3321,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             int lifeDealt = 0;
             int handDrawSeq = 0;   // staggers multi-card draws so each flies + sounds one at a time
             int lifeFlipSeq = 0;   // same, for several Life cards leaving in one command
+            int deckTrashSeq = 0;  // multi-card mills need an audible card movement for each card
             // Per-PASS, not per-match: a Character can be bounced back to hand and played again,
             // and a match-lifetime guard would silently skip the impact on every replay.
             boardReactedIds.Clear();
@@ -3442,6 +3443,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                 // Life setup (deck → Life): deal bottom-of-Life first, staggered upward.
                 float moveDelay = 0f;
                 bool isHandDraw = old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("hand:");
+                bool isDeckTrash = old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("trash:");
                 if (isLifeDeal)
                 {
                     var lifeOwner = state.Players[kv.Value.owner];
@@ -3456,10 +3458,16 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
                     moveDelay = 0.22f * handDrawSeq;
                     handDrawSeq++;
                 }
+                else if (isDeckTrash)
+                {
+                    moveDelay = 0.13f * deckTrashSeq;
+                    deckTrashSeq++;
+                }
                 bool flare = old.zone.StartsWith("hand:") && kv.Value.zone.StartsWith("trash:");
-                // Card-draw sound: deck → hand, Life → hand (damage/effects) and the
-                // Life setup deal (deck → Life), timed with each card's flight.
+                // Card movement sound: deck → hand/trash, Life → hand, and the Life setup deal
+                // (deck → Life), timed with each card's flight.
                 if ((old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("hand:"))
+                    || isDeckTrash
                     || (old.zone.StartsWith("life:") && kv.Value.zone.StartsWith("hand:"))
                     || (old.zone.StartsWith("deck:") && kv.Value.zone.StartsWith("life:")))
                     PlayCardDrawSfx(moveDelay);
@@ -4973,7 +4981,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         PendingEffect trashEffect = null;
         if (state.PendingEffects.Count > 0)
         {
-            var pe = state.PendingEffects[0];
+            var pe = GameEngine.NextPendingEffect(state);
             bool wantsTrash = pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash
                 || (pe.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Any
                     && (pe.Text ?? "").IndexOf("trash", System.StringComparison.OrdinalIgnoreCase) >= 0);
@@ -5510,7 +5518,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         // the affordance; otherwise hidden opponent-hand data can leak through the glow.
         if (state.PendingEffects.Count > 0)
         {
-            var pending = state.PendingEffects[0];
+            var pending = GameEngine.NextPendingEffect(state);
             if (IsLocallyControlledSeat(pending.Seat) && GameEngine.IsValidEffectTarget(state, pending, card))
                 return true;
         }
@@ -5547,7 +5555,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     public bool IsInvalidEffectTarget(CardInstance card)
     {
         if (card == null || state == null || state.PendingEffects.Count == 0) return false;
-        var pe = state.PendingEffects[0];
+        var pe = GameEngine.NextPendingEffect(state);
         if (GameEngine.IsValidEffectTarget(state, pe, card)) return false;
         switch (pe.TargetZone)
         {
@@ -8242,7 +8250,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         if (state.PendingEffects.Count > 0)
         {
-            var effect = state.PendingEffects[0];
+            var effect = GameEngine.NextPendingEffect(state);
             if (!string.IsNullOrEmpty(effect.SourceInstanceId))
                 cardTargetRects.TryGetValue(effect.SourceInstanceId, out source);
         }
@@ -10502,7 +10510,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
     private void DrawPendingEffectActions(RectTransform body)
     {
-        var effect = state.PendingEffects[0];
+        var effect = GameEngine.NextPendingEffect(state);
         var source = CardData.GetCard(effect.SourceCardId);
 
         // Glowing pending card + timing header + the effect text written out — shown to BOTH
@@ -11276,7 +11284,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         //    then a bare resolve; skip when nothing is legal.
         if (state.PendingEffects.Count > 0)
         {
-            var pe = state.PendingEffects[0];
+            var pe = GameEngine.NextPendingEffect(state);
             if (pe.Seat != aiSeat) return false;
             if (pe.DonPaymentRemaining > 0)
             {
@@ -11579,7 +11587,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
         if (card != null && card.Zone == "trash" && seat != null)
         {
             bool trashTargeting = state.PendingEffects.Count > 0
-                && state.PendingEffects[0].TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash;
+                && GameEngine.NextPendingEffect(state).TargetZone == OnePieceTcg.Engine.EffectTargetZone.Trash;
             if (!trashTargeting)
             {
                 trashViewSeat = trashViewSeat == card.Owner ? null : card.Owner;
@@ -11597,7 +11605,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // during the block step, and their cost is paid by clicking a hand card.
             if (state.PendingEffects.Count > 0)
             {
-                var peBattle = state.PendingEffects[0];
+                var peBattle = GameEngine.NextPendingEffect(state);
                 bool targetsOpponentHand = peBattle.Seat != handSeat
                     && (peBattle.Text ?? "").IndexOf("from your opponent's hand", System.StringComparison.OrdinalIgnoreCase) >= 0;
                 if ((peBattle.TargetZone == OnePieceTcg.Engine.EffectTargetZone.Hand ||
@@ -11631,7 +11639,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // route the click to resolveEffect instead of the normal play-card flow.
             if (state.PendingEffects.Count > 0)
             {
-                var pe = state.PendingEffects[0];
+                var pe = GameEngine.NextPendingEffect(state);
                 bool targetsOpponentHand = pe.Seat != handSeat
                     && (pe.Text ?? "").IndexOf("from your opponent's hand", System.StringComparison.OrdinalIgnoreCase) >= 0;
                 // ...but only when the effect is THIS player's. The battle-step branch above already
@@ -11684,7 +11692,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
 
         if (state.PendingEffects.Count > 0)
         {
-            var effect = state.PendingEffects[0];
+            var effect = GameEngine.NextPendingEffect(state);
             Dispatch(new GameCommand { Type = "resolveEffect", Seat = effect.Seat, EffectId = effect.EffectId, Target = card.InstanceId });
             return;
         }
@@ -13197,7 +13205,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
             // hover treatment (CardHover). Only shown to the deciding seat's client.
             if (state != null && state.PendingEffects.Count > 0)
             {
-                var pending = state.PendingEffects[0];
+                var pending = GameEngine.NextPendingEffect(state);
                 if ((!isNetworked || pending.Seat == localSeat) && GameEngine.IsValidEffectTarget(state, pending, card))
                     AddUsableGlow(cardBody);
             }
@@ -13613,7 +13621,7 @@ perr\Documents\Codex\2026-06-23\can\work\MOOgiwara\MOOgiwara-main\client\public\
     private void MaybeAddLifeTargetPicker(RectTransform lifeZone, PlayerState p, string seat)
     {
         if (lifeZone == null || state == null || state.PendingEffects.Count == 0 || p.Life.Count == 0) return;
-        var pe = state.PendingEffects[0];
+        var pe = GameEngine.NextPendingEffect(state);
         string peText = pe.Text ?? "";
         // The effect's controller (pe.Seat) makes the pick — never the AI or a remote player.
         string controller = pe.Seat;

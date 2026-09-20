@@ -50,7 +50,7 @@ namespace OnePieceTcg.Engine.Bot.Search
                 return list;
             }
 
-            var myEffect = state.PendingEffects.FirstOrDefault(e => e.Seat == seat);
+            var myEffect = GameEngine.NextPendingEffect(state, seat);
             if (myEffect != null)
             {
                 foreach (var id in TargetCandidates(state, seat))

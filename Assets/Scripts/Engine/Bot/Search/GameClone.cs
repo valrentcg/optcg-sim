@@ -114,7 +114,7 @@ namespace OnePieceTcg.Engine.Bot.Search
 
         private static PendingEffect ClonePE(PendingEffect e) => new PendingEffect
         {
-            EffectId = e.EffectId, Seat = e.Seat, QueuedBatch = e.QueuedBatch, SourceInstanceId = e.SourceInstanceId, SourceCardId = e.SourceCardId,
+            EffectId = e.EffectId, Seat = e.Seat, ParentEffectId = e.ParentEffectId, QueuedBatch = e.QueuedBatch, SourceInstanceId = e.SourceInstanceId, SourceCardId = e.SourceCardId,
             Timing = e.Timing, Text = e.Text, Optional = e.Optional, Scope = e.Scope, TargetZone = e.TargetZone,
             DonPaymentRemaining = e.DonPaymentRemaining, SelectionsRemaining = e.SelectionsRemaining,
             PlayedPickIds = e.PlayedPickIds == null ? null : new List<string>(e.PlayedPickIds),

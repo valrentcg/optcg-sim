@@ -208,6 +208,10 @@ namespace OnePieceTcg.Engine
     {
         public string EffectId;
         public string Seat;
+        // When this decision was created while resolving another pending effect, identify that
+        // parent. The child must resolve first, while unrelated simultaneous effects remain freely
+        // orderable under rule 6-6-1-1-3/4.
+        public string ParentEffectId;
         /// <summary>GameState.CommandBatch at the moment this effect was queued. Two effects sharing a
         /// batch had their activation timing fulfilled "at the same time" in the sense of rule 8-6-1,
         /// which is what lets the engine make the turn player resolve first WITHOUT ordering effects

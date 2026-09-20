@@ -471,7 +471,7 @@ namespace OnePieceTcg.Engine.Bot
             if (state.DeckLook != null && state.DeckLook.Seat == seat)
                 return DecideDeckLook(state, seat, blacklist);
 
-            var myEffect = state.PendingEffects.FirstOrDefault(e => e.Seat == seat);
+            var myEffect = GameEngine.NextPendingEffect(state, seat);
             if (myEffect != null)
                 return DecideEffect(state, seat, myEffect, blacklist);
             if (state.PendingEffects.Count > 0) return null; // some other seat's effect is blocking everyone.

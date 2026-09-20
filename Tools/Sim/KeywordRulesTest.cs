@@ -154,12 +154,16 @@ namespace OnePieceTcg.Sim
             b.OpenTrigger(attacker);
             bool firstDamagePaused = b.St.Battle?.Step == "trigger" && b.N.Life.Count == 1;
             b.St = GameEngine.ApplyCommand(b.St, new GameCommand { Type = "useTrigger", Seat = "north" });
+            // The second Life card has no [Trigger], but the live engine still enters the Trigger
+            // step so the attacker cannot infer hidden information from whether the game paused.
+            bool secondDamagePausedPrivately = b.St.Battle?.Step == "trigger" && b.N.Life.Count == 0;
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand { Type = "passTrigger", Seat = "north" });
             if (!(firstDamagePaused && b.N.Life.Count == 0 && b.St.Status == "active"
                 && b.St.Battle == null && b.N.Trash.Any(c => c.CardId == "EB02-030")))
                 Console.WriteLine($"        detail paused={firstDamagePaused} life={b.N.Life.Count} status={b.St.Status} " +
                     $"battle={b.St.Battle?.Step ?? "-"} trashTrigger={b.N.Trash.Any(c => c.CardId == "EB02-030")}");
             Check("[Trigger] resolves between [Double Attack]'s first and second damage",
-                firstDamagePaused && b.N.Life.Count == 0 && b.St.Status == "active"
+                firstDamagePaused && secondDamagePausedPrivately && b.N.Life.Count == 0 && b.St.Status == "active"
                 && b.St.Battle == null && b.N.Trash.Any(c => c.CardId == "EB02-030"));
         }
 
@@ -170,9 +174,11 @@ namespace OnePieceTcg.Sim
             b.Life("north", "ST01-003", "ST01-002"); // ST01-002 Trigger: Play this card
             b.OpenTrigger(attacker);
             b.St = GameEngine.ApplyCommand(b.St, new GameCommand { Type = "useTrigger", Seat = "north" });
+            bool secondDamagePausedPrivately = b.St.Battle?.Step == "trigger" && b.N.Life.Count == 0;
+            b.St = GameEngine.ApplyCommand(b.St, new GameCommand { Type = "passTrigger", Seat = "north" });
             Check("a play-this-card [Trigger] finishes before [Double Attack] continues",
                 b.N.CharacterArea.Any(c => c?.CardId == "ST01-002")
-                && b.N.Life.Count == 0 && b.St.Status == "active" && b.St.Battle == null);
+                && secondDamagePausedPrivately && b.N.Life.Count == 0 && b.St.Status == "active" && b.St.Battle == null);
         }
 
         private static void PrintedUnblockablePreventsBlocker()
